@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
-import { sharingMessages } from '@/core/messages/sharing';
+import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({ listWorkspaceMembers: vi.fn(), listShares: vi.fn(), grantShare: vi.fn(), getDocument: vi.fn() }));
 vi.mock('@/modules/knowledge/api', async (original) => ({ ...(await original<typeof import('@/modules/knowledge/api')>()), ...api }));
@@ -27,7 +27,7 @@ describe('BriefShareButton', () => {
   it('links only the owner-visible documents listed by a 409 brief_evidence_not_shared', async () => {
     api.grantShare.mockRejectedValue(new ApiError(409, 'x', { code: 'brief_evidence_not_shared', document_ids: ['doc-1'] }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sharing: sharingMessages['en-us'] }}><BriefShareButton brief={{ id: 'b1', revision: 2 }} /></NextIntlClientProvider></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sharing: getCatalog('en-us', 'sharing') }}><BriefShareButton brief={{ id: 'b1', revision: 2 }} /></NextIntlClientProvider></QueryClientProvider>);
     await userEvent.click(screen.getByRole('button', { name: 'Share' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Share with m@example.com' }));
     const link = await screen.findByRole('link', { name: 'Evidence doc' });

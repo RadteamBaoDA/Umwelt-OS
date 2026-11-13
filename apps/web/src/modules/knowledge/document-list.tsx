@@ -20,7 +20,7 @@ export function DocumentList() {
   const s0 = useDocumentListController();
   const { t, d, realtime, consumeUpdates, setAdding, setUploading, refreshingUpdates, isOwner } = s0;
   const vm: DocumentListVm = s0;
-  return <section className="rounded-lg border bg-card p-6"><div className="section-heading"><div><h1>{d('listTitle')}</h1><p className="text-muted-foreground">{d('listIntro')}</p></div><div className="form-actions">{(realtime.newDocumentCount > 0 || realtime.documentRefreshRequired) && <Button variant="outline" disabled={refreshingUpdates} onClick={() => void consumeUpdates()}>{refreshingUpdates ? t('reconnecting') : realtime.newDocumentCount > 0 ? t('newDocumentUpdates', { count: realtime.newDocumentCount }) : t('refreshDocumentList')}</Button>}{isOwner && <><Button variant="outline" onClick={() => setUploading((value) => !value)}>{d('uploadFile')}</Button><Button onClick={() => setAdding(true)}>{d('newDocument')}</Button></>}</div></div>
+  return <section className="rounded-lg border bg-card p-6"><div className="section-heading"><div><h1>{d('list.title')}</h1><p className="text-muted-foreground">{d('list.intro')}</p></div><div className="form-actions">{(realtime.newDocumentCount > 0 || realtime.documentRefreshRequired) && <Button variant="outline" disabled={refreshingUpdates} onClick={() => void consumeUpdates()}>{refreshingUpdates ? t('reconnecting') : realtime.newDocumentCount > 0 ? t('newDocumentUpdates', { count: realtime.newDocumentCount }) : t('refreshDocumentList')}</Button>}{isOwner && <><Button variant="outline" onClick={() => setUploading((value) => !value)}>{d('uploadFile')}</Button><Button onClick={() => setAdding(true)}>{d('newDocument')}</Button></>}</div></div>
 <DocumentListControls vm={vm} />
 <DocumentListResults vm={vm} />
   </section>;
@@ -47,11 +47,11 @@ function DocumentListResults({ vm }: { vm: DocumentListVm }) {
   const { d, display, documents, items } = vm;
   return (
 <>
-    {documents.isPending && <div className="skeleton" aria-label={d('loadingDocuments')} />}
-    {documents.isError && <p className="error" role="alert">{d('listLoadFailed')} <Button variant="outline" onClick={() => documents.refetch()}>{d('retry')}</Button></p>}
-    {documents.isSuccess && items.length === 0 && <p className="empty-state">{d('listEmpty')}</p>}
-    {items.length > 0 && <ul className="record-list">{items.map((document) => <li key={document.id} className="record-row"><div className="min-w-0"><Link href={`/knowledge/documents/${document.id}`}><strong>{document.title}</strong></Link><p className="meta text-muted-foreground m-0">{d(document.current_version > 1 ? 'versionUpdated' : 'updatedOn', { version: document.current_version, updated: formatDateTime(document.updated_at, display.locale, display.timezone) })}</p></div></li>)}</ul>}
-    {documents.hasNextPage && <Button variant="outline" disabled={documents.isFetchingNextPage} onClick={() => documents.fetchNextPage()}>{d('loadMore')}</Button>}
+    {documents.isPending && <div className="skeleton" aria-label={d('loading.documents')} />}
+    {documents.isError && <p className="error" role="alert">{d('list.loadFailed')} <Button variant="outline" onClick={() => documents.refetch()}>{d('retry')}</Button></p>}
+    {documents.isSuccess && items.length === 0 && <p className="empty-state">{d('list.empty')}</p>}
+    {items.length > 0 && <ul className="record-list">{items.map((document) => <li key={document.id} className="record-row"><div className="min-w-0"><Link href={`/knowledge/documents/${document.id}`}><strong>{document.title}</strong></Link><p className="meta text-muted-foreground m-0">{d(document.current_version > 1 ? 'version.updated' : 'updatedOn', { version: document.current_version, updated: formatDateTime(document.updated_at, display.locale, display.timezone) })}</p></div></li>)}</ul>}
+    {documents.hasNextPage && <Button variant="outline" disabled={documents.isFetchingNextPage} onClick={() => documents.fetchNextPage()}>{d('load.more')}</Button>}
 </>
   );
 }

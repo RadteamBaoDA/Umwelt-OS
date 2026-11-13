@@ -88,7 +88,7 @@ function TopicListPanel({ vm }: { vm: TopicSettingsVm }) {
 <>
       <div className="flex justify-end"><Button type="button" onClick={() => beginEdit(null)} disabled={isPending}>{t('add')}</Button></div>
       {topicsQuery.isLoading ? <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p> : null}
-      {topicsQuery.error && !topicsQuery.data ? <p role="alert" className="text-sm text-destructive">{t('loadFailed')}</p> : null}
+      {topicsQuery.error && !topicsQuery.data ? <p role="alert" className="text-sm text-destructive">{t('load.failed')}</p> : null}
       {topics.length > 0 && <p className="text-xs text-muted-foreground">{t('totalCount', { loaded: topics.length, total: totalTopics })}</p>}
       {!topicsQuery.isLoading && !topicsQuery.error && topics.length === 0 ? <p className="text-sm text-muted-foreground">{t('empty')}</p> : null}
       <ul className="flex flex-col gap-2">
@@ -98,12 +98,12 @@ function TopicListPanel({ vm }: { vm: TopicSettingsVm }) {
               <Checkbox checked={topic.is_active} disabled={activeMutation.isPending} aria-label={t('activeFor', { name: topic.name })} onCheckedChange={() => activeMutation.mutate(topic)} />
               <div className="min-w-0"><p className="font-medium">{topic.name}</p><p className="text-xs text-muted-foreground">{t('importanceValue', { value: topic.weight })}</p>{topic.description && <p className="text-sm text-muted-foreground">{topic.description}</p>}<p className="text-xs text-muted-foreground">{topic.keywords.join(', ')}</p></div>
             </div>
-            <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => beginEdit(topic)} disabled={isPending}>{t('edit')}</Button><Button type="button" variant="ghost" onClick={() => setDeleteTarget(topic)} disabled={isPending}>{t('delete')}</Button></div>
+            <div className="flex gap-2"><Button type="button" variant="outline" onClick={() => beginEdit(topic)} disabled={isPending}>{t('edit')}</Button><Button type="button" variant="ghost" onClick={() => setDeleteTarget(topic)} disabled={isPending}>{t('delete.label')}</Button></div>
           </li>
         ))}
       </ul>
-      {topicsQuery.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('loadMoreFailed')}</p>}
-      {topicsQuery.hasNextPage && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void topicsQuery.fetchNextPage()} disabled={topicsQuery.isFetchingNextPage}>{topicsQuery.isFetchingNextPage ? t('loadingMore') : topicsQuery.isFetchNextPageError ? t('retryLoadMore') : t('loadMore')}</Button></div>}
+      {topicsQuery.isFetchNextPageError && <p role="alert" className="text-sm text-destructive">{t('load.moreFailed')}</p>}
+      {topicsQuery.hasNextPage && <div className="flex justify-center"><Button type="button" variant="outline" onClick={() => void topicsQuery.fetchNextPage()} disabled={topicsQuery.isFetchingNextPage}>{topicsQuery.isFetchingNextPage ? t('loadingMore') : topicsQuery.isFetchNextPageError ? t('retryLoadMore') : t('load.more')}</Button></div>}
       {activeMutation.error && <p role="alert" className="text-sm text-destructive">{activeMutation.error instanceof ApiError && activeMutation.error.status === 409 ? t('conflict') : t('saveFailed')}</p>}
 </>
   );
@@ -134,8 +134,8 @@ function DeleteTopicDialog({ vm }: { vm: TopicSettingsVm }) {
   return (
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open && !deleteMutation.isPending) { setDeleteTarget(null); deleteMutation.reset(); } }}>
         <AlertDialogContent onEscapeKeyDown={(event) => { if (deleteMutation.isPending) event.preventDefault(); }}>
-          <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteDescription', { name: deleteTarget?.name ?? '' })}</AlertDialogDescription></AlertDialogHeader>
-          {deleteMutation.error && <p role="alert" className="text-sm text-destructive">{deleteMutation.error instanceof ApiError && deleteMutation.error.status === 409 ? t('conflict') : t('deleteFailed')}</p>}
+          <AlertDialogHeader><AlertDialogTitle>{t('delete.title')}</AlertDialogTitle><AlertDialogDescription>{t('delete.description', { name: deleteTarget?.name ?? '' })}</AlertDialogDescription></AlertDialogHeader>
+          {deleteMutation.error && <p role="alert" className="text-sm text-destructive">{deleteMutation.error instanceof ApiError && deleteMutation.error.status === 409 ? t('conflict') : t('delete.failed')}</p>}
           <AlertDialogFooter><AlertDialogCancel disabled={deleteMutation.isPending}>{t('cancel')}</AlertDialogCancel><Button variant="destructive" disabled={!deleteTarget || deleteMutation.isPending} onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}>{deleteMutation.isPending ? t('deleting') : t('confirmDelete')}</Button></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

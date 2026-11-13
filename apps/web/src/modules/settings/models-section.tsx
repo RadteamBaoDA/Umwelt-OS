@@ -1,5 +1,6 @@
 'use client';
 
+import type { useTranslations } from 'next-intl';
 import { TablePagination, usePagination } from '@/components/ui/pagination';
 import { Check, Info, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
@@ -15,7 +16,14 @@ import { guessModelType, mappingProviderId, modelTestKey, ModelTestChip, openRou
 import { FieldGrid } from '@/components/settings-layout';
 import { BareButton } from '@/components/bare-button';
 
-type Translate = (key: string, values?: Record<string, string | number>) => string;
+/** Literal catalog key per model type (no runtime key building). */
+const MODEL_TYPE_KEYS = {
+  llm: 'type.llm', embedding: 'type.embedding', reranker: 'type.reranker', decision: 'type.decision', background: 'type.background',
+  vision: 'type.vision', asr: 'type.asr', tts: 'type.tts', image: 'type.image', video: 'type.video', speech: 'type.speech',
+  audio: 'type.audio', transcription: 'type.transcription',
+} as const satisfies Record<ModelType, string>;
+
+type Translate = ReturnType<typeof useTranslations<'aiSettings'>>;
 /** Stored mapping: which provider model serves one role. */
 export type Mapping = { model: string; version: string | null; destination: 'unknown' | 'remote'; provider_id?: string | null; dimensions?: number | null; reasoning_effort?: ReasoningEffort; max_output_tokens?: number | null };
 /** Chat-role reasoning effort; `off` sends nothing to the provider. */
@@ -23,6 +31,8 @@ export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high';
 /** Hosted clouds that choose their own output limit; the Max output tokens field is hidden for them and the server discards any value. Mirrors `PROVIDER_KINDS_WITHOUT_MAX_TOKENS` in `core/model_gateway/schemas.py`. */
 export const kindsWithoutMaxTokens: readonly string[] = ['anthropic', 'openai', 'groq'];
 const efforts: readonly ReasoningEffort[] = ['off', 'low', 'medium', 'high'];
+/** Literal catalog key per reasoning effort (no runtime key building). */
+const EFFORT_KEYS = { off: 'effort.off', low: 'effort.low', medium: 'effort.medium', high: 'effort.high' } as const satisfies Record<ReasoningEffort, string>;
 /** Role the owner can pick a default model for. */
 export type DefaultSlot = 'chat' | 'brief' | 'background' | 'embedding' | 'reranker' | 'vision';
 /** Role defaults as stored by the backend; `null` leaves a role unset (brief/background then fall back). */
@@ -70,35 +80,35 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
   const patch = (id: string, models: ProviderModel[]) => onChange(providers.map((item) => (item.id === id ? { ...item, models } : item)));
   return <div className="flex flex-col gap-3">
     <div className="grid items-end gap-2 sm:grid-cols-[minmax(0,10rem)_minmax(9rem,1fr)_minmax(0,11rem)_auto]">
-      <div className="field"><span className="label">{t('providerColumn')}</span>
-        <Select disabled={disabled || providers.length === 0} value={provider?.id ?? ''} onValueChange={(id) => { setProviderId(id); setPending(''); setType('llm'); }}><SelectTrigger aria-label={t('providerColumn')} aria-describedby={noProviderNote}><SelectValue placeholder={t('providersNone')} /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></div>
+      <div className="field"><span className="label">{t('provider.column')}</span>
+        <Select disabled={disabled || providers.length === 0} value={provider?.id ?? ''} onValueChange={(id) => { setProviderId(id); setPending(''); setType('llm'); }}><SelectTrigger aria-label={t('provider.column')} aria-describedby={noProviderNote}><SelectValue placeholder={t('providers.none')} /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></div>
       {/* minmax(0,1fr): let the model picker shrink inside its track instead of overflowing into Type at tablet widths. */}
-      <div className="field grid-cols-[minmax(0,1fr)]"><span className="label">{t('modelColumn')}</span>
-        {browsing ? <p className="text-muted-foreground m-0 break-all text-sm" aria-live="polite">{pending || t('selectModel')}</p> : <SearchableSelect aria-label={t('modelColumn')} aria-describedby={noProviderNote} value={pending} options={options} disabled={disabled || options.length === 0} placeholder={t('selectModel')} searchLabel={t('modelPickerSearch')} emptyLabel={t('modelPickerEmpty')} onValueChange={(id) => {
+      <div className="field grid-cols-[minmax(0,1fr)]"><span className="label">{t('model.column')}</span>
+        {browsing ? <p className="text-muted-foreground m-0 break-all text-sm" aria-live="polite">{pending || t('selectModel')}</p> : <SearchableSelect aria-label={t('model.column')} aria-describedby={noProviderNote} value={pending} options={options} disabled={disabled || options.length === 0} placeholder={t('selectModel')} searchLabel={t('model.pickerSearch')} emptyLabel={t('model.pickerEmpty')} onValueChange={(id) => {
           // Legacy guesses (vision/asr/tts) fold into Chat; a vision-looking id also pre-ticks the vision flag.
           const guess = guessModelType(id);
           setPending(id); setType((selectableModelTypes as readonly string[]).includes(guess) ? guess : 'llm'); setVision(guess === 'vision');
         }} />}</div>
-      <div className="field"><span className="label">{t('typeColumn')}</span>
-        <Select disabled={disabled || noProvider} value={type} onValueChange={(next) => setType(next as ModelType)}><SelectTrigger aria-label={t('typeColumn')} aria-describedby={noProviderNote}><SelectValue /></SelectTrigger><SelectContent>{typeChoices.map((item) => <SelectItem key={item} value={item}>{t(`type_${item}`)}</SelectItem>)}</SelectContent></Select></div>
-      <Button type="button" variant="outline" disabled={disabled || !provider || !pending} onClick={() => { patch(provider!.id, [...(provider!.models ?? []), type === 'llm' && vision ? { id: pending, type, vision: true } : { id: pending, type }]); setPending(''); setVision(false); }}><Plus className="size-4" aria-hidden="true" /> {t('modelAdd')}</Button>
-      {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled || noProvider} aria-describedby={noProviderNote} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('modelVision')}</label>}
+      <div className="field"><span className="label">{t('type.column')}</span>
+        <Select disabled={disabled || noProvider} value={type} onValueChange={(next) => setType(next as ModelType)}><SelectTrigger aria-label={t('type.column')} aria-describedby={noProviderNote}><SelectValue /></SelectTrigger><SelectContent>{typeChoices.map((item) => <SelectItem key={item} value={item}>{t(MODEL_TYPE_KEYS[item])}</SelectItem>)}</SelectContent></Select></div>
+      <Button type="button" variant="outline" disabled={disabled || !provider || !pending} onClick={() => { patch(provider!.id, [...(provider!.models ?? []), type === 'llm' && vision ? { id: pending, type, vision: true } : { id: pending, type }]); setPending(''); setVision(false); }}><Plus className="size-4" aria-hidden="true" /> {t('model.add')}</Button>
+      {type === 'llm' && <label className="flex items-center gap-2 text-sm sm:col-span-4"><Checkbox disabled={disabled || noProvider} aria-describedby={noProviderNote} checked={vision} onCheckedChange={(next) => setVision(next === true)} />{t('model.vision')}</label>}
     </div>
     {browsing && provider && <OpenRouterModelBrowser providerId={provider.id} browse={browseOpenRouter!(provider)} excluded={added} disabled={disabled} t={t} onPick={(model, picked) => { setPending(model.id); setType(picked); setVision(model.input_modalities.includes('image') && picked === 'llm'); }} />}
-    {rows.length === 0 ? <p id={noProvider ? 'models-no-provider-note' : undefined} className="text-muted-foreground m-0">{t(providers.length === 0 ? 'modelsNoProvider' : 'modelsEmpty')}</p> : <TooltipProvider delayDuration={200}><div><Table aria-label={t('modelsTable')}>
-      <TableHeader><TableRow><TableHead>{t('providerColumn')}</TableHead><TableHead>{t('modelColumn')}</TableHead><TableHead>{t('typeColumn')}</TableHead><TableHead>{t('visionColumn')}</TableHead><TableHead>{t('actionsColumn')}</TableHead></TableRow></TableHeader>
+    {rows.length === 0 ? <p id={noProvider ? 'models-no-provider-note' : undefined} className="text-muted-foreground m-0">{t(providers.length === 0 ? 'models.noProvider' : 'models.empty')}</p> : <TooltipProvider delayDuration={200}><div><Table aria-label={t('models.table')}>
+      <TableHeader><TableRow><TableHead>{t('provider.column')}</TableHead><TableHead>{t('model.column')}</TableHead><TableHead>{t('type.column')}</TableHead><TableHead>{t('visionColumn')}</TableHead><TableHead>{t('actionsColumn')}</TableHead></TableRow></TableHeader>
       <TableBody>{pager.pageItems.map(({ provider: owner, model }) => {
         const state = modelTests[modelTestKey(owner.id, model.id)];
         return <TableRow key={modelTestKey(owner.id, model.id)}>
           <TableCell>{owner.label || owner.id}</TableCell>
           <TableCell className="break-all whitespace-normal">{model.id}</TableCell>
-          <TableCell>{t(`type_${model.type}`)}</TableCell>
-          <TableCell>{model.vision ? <><Check className="size-4" aria-hidden="true" /><span className="sr-only">{t('modelVision')}</span></> : <span className="text-muted-foreground" aria-hidden="true">–</span>}</TableCell>
+          <TableCell>{t(MODEL_TYPE_KEYS[model.type])}</TableCell>
+          <TableCell>{model.vision ? <><Check className="size-4" aria-hidden="true" /><span className="sr-only">{t('model.vision')}</span></> : <span className="text-muted-foreground" aria-hidden="true">–</span>}</TableCell>
           <TableCell><div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" disabled={disabled || state === 'pending' || !testRoleByType[model.type] || !owner.base_url} aria-label={t('modelTestAria', { id: model.id })} onClick={() => onTestModel(owner, model)}>{t('modelTest')}</Button>
-            <Button type="button" variant="outline" disabled={disabled} aria-label={t('modelRemove', { id: model.id })} onClick={() => patch(owner.id, (owner.models ?? []).filter((item) => item.id !== model.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
+            <Button type="button" variant="outline" disabled={disabled || state === 'pending' || !testRoleByType[model.type] || !owner.base_url} aria-label={t('model.testAria', { id: model.id })} onClick={() => onTestModel(owner, model)}>{t('model.test')}</Button>
+            <Button type="button" variant="outline" disabled={disabled} aria-label={t('model.remove', { id: model.id })} onClick={() => patch(owner.id, (owner.models ?? []).filter((item) => item.id !== model.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
             <ModelTestChip state={state} t={t} />
-            {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-sm">{t('modelCheckedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
+            {state && state !== 'pending' && checkedAt[modelTestKey(owner.id, model.id)] && <span className="text-muted-foreground text-sm">{t('model.checkedAt', { time: new Date(checkedAt[modelTestKey(owner.id, model.id)]).toLocaleString() })}</span>}
             {state && state !== 'pending' && state !== 'supported' && details[modelTestKey(owner.id, model.id)] && <Tooltip>
               <TooltipTrigger asChild><BareButton type="button" className="text-destructive inline-flex" aria-label={details[modelTestKey(owner.id, model.id)]}><Info className="size-4" aria-hidden="true" /></BareButton></TooltipTrigger>
               <TooltipContent className="max-w-sm break-words">{details[modelTestKey(owner.id, model.id)]}</TooltipContent>
@@ -107,7 +117,7 @@ export function ModelsPanel({ providers, discovered, modelTests, checkedAt = {},
         </TableRow>;
       })}</TableBody>
     </Table><TablePagination {...pager} /></div></TooltipProvider>}
-    <p className="text-muted-foreground m-0 text-sm">{t('modelTypesHelp')}</p>
+    <p className="text-muted-foreground m-0 text-sm">{t('model.typesHelp')}</p>
   </div>;
 }
 
@@ -146,21 +156,21 @@ export function ModelDefaults({ providers, defaults, disabled, embeddingStatus, 
       {maxTokensField('chat', t('chatModel'))}
       {onEffort && <label className="field"><span className="label">{t('reasoningEffort')}</span>
         <Select disabled={disabled || !defaults.chat?.model} value={defaults.chat?.reasoning_effort ?? 'off'} onValueChange={(next) => onEffort(next as ReasoningEffort)}><SelectTrigger aria-label={t('reasoningEffort')}><SelectValue /></SelectTrigger><SelectContent>
-          {efforts.map((item) => <SelectItem key={item} value={item}>{t(`effort${item[0].toUpperCase()}${item.slice(1)}`)}</SelectItem>)}
+          {efforts.map((item) => <SelectItem key={item} value={item}>{t(EFFORT_KEYS[item])}</SelectItem>)}
         </SelectContent></Select>
         <span className="text-muted-foreground text-sm">{t('reasoningEffortHelp')}</span></label>}
       {field('brief', t('briefModel'), chats, { id: same, label: t('sameAsChat') })}
       {maxTokensField('brief', t('briefModel'))}
       {field('background', t('backgroundModel'), entries((m) => m.type === 'background' || m.type === 'llm'), { id: same, label: t('sameAsBrief') })}
       {maxTokensField('background', t('backgroundModel'))}
-      {field('embedding', t('embeddingModel'), entries((m) => m.type === 'embedding'))}
+      {field('embedding', t('embedding.model'), entries((m) => m.type === 'embedding'))}
       {field('reranker', t('rerankerModel'), entries((m) => m.type === 'reranker'), { id: none, label: t('noneOption') })}
       {field('vision', t('visionModel'), entries((m) => m.type === 'llm' && m.vision === true), { id: none, label: t('noneOption') })}
       {maxTokensField('vision', t('visionModel'))}
     </FieldGrid>
     <div role="status" aria-live="polite">
-      {embeddingStatus === 'checking' && <p className="text-muted-foreground m-0 text-sm">{t('embeddingChecking')}</p>}
-      {embeddingStatus === 'error' && <p className="error m-0 text-sm" role="alert">{t('embeddingProbeFailed')}</p>}
+      {embeddingStatus === 'checking' && <p className="text-muted-foreground m-0 text-sm">{t('embedding.checking')}</p>}
+      {embeddingStatus === 'error' && <p className="error m-0 text-sm" role="alert">{t('embedding.probeFailed')}</p>}
     </div>
   </div>;
 }

@@ -360,7 +360,7 @@ function ActiveMemories({ vm }: { vm: MemoryListVm }) {
                     className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                     onClick={() => setForgetItem(item)}
                   >
-                    {t('forget')}
+                    {t('forget.label')}
                   </Button>
                 </div>
               </li>
@@ -431,14 +431,14 @@ function ForgetMemoryDialog({ vm }: { vm: MemoryListVm }) {
       <Dialog open={forgetItem !== null} onOpenChange={(open) => { if (!open && !forgetMutation.isPending) { setForgetItem(null); forgetMutation.reset(); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{t('forgetName')}</DialogTitle>
-            <DialogDescription>{t('forgetConfirm')}</DialogDescription>
+            <DialogTitle>{t('forget.name')}</DialogTitle>
+            <DialogDescription>{t('forget.confirm')}</DialogDescription>
           </DialogHeader>
           {forgetItem && <p className="break-words rounded-md border border-border p-3 text-sm">{forgetItem.content}</p>}
-          {forgetMutation.error && <p className="text-destructive text-sm" role="alert">{forgetMutation.error instanceof ApiError ? forgetMutation.error.message : t('forgetFailed')}</p>}
+          {forgetMutation.error && <p className="text-destructive text-sm" role="alert">{forgetMutation.error instanceof ApiError ? forgetMutation.error.message : t('forget.failed')}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={forgetMutation.isPending} onClick={() => setForgetItem(null)}>{t('cancel')}</Button>
-            <Button type="button" variant="destructive" disabled={forgetMutation.isPending} onClick={() => { if (forgetItem) forgetMutation.mutate(forgetItem.id); }}>{forgetMutation.isPending ? t('loading') : t('forget')}</Button>
+            <Button type="button" variant="destructive" disabled={forgetMutation.isPending} onClick={() => { if (forgetItem) forgetMutation.mutate(forgetItem.id); }}>{forgetMutation.isPending ? t('loading') : t('forget.label')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

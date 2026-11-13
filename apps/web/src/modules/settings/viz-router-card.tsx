@@ -13,6 +13,21 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { CheckboxField, FieldGrid, SecretField, SettingsActions, SettingsSection } from '@/components/settings-layout';
 
+/** Literal catalog key per router test error code (no runtime key building); unknown codes read as the unknown error. */
+const TEST_ERROR_KEYS = {
+  internal_router: 'test.errorInternalRouter',
+  consent_required: 'test.errorConsentRequired',
+  credential_required: 'test.errorCredentialRequired',
+  network_denied: 'test.errorNetworkDenied',
+  auth_error: 'test.errorAuthError',
+  timeout: 'test.errorTimeout',
+  invalid_category: 'test.errorInvalidCategory',
+  mode_unsupported: 'test.errorModeUnsupported',
+  provider_error: 'test.errorProviderError',
+  privacy_denied: 'test.errorPrivacyDenied',
+  unknown: 'test.errorUnknown',
+} as const;
+
 type Kind = 'internal' | 'llm' | 'typesafe' | 'openrouter' | 'cloudflare';
 type Mode = 'json_schema' | 'forced_tool';
 type Api = 'chat' | 'decisions';
@@ -104,7 +119,7 @@ function VizRouterLlmFields({ vm }: { vm: VizRouterCardVm }) {
   return (
       view.kind === 'llm' ? (providers.length === 0 ? <p className="m-0 text-xs text-muted-foreground">{t('noProvider')}</p> : <FieldGrid>
         <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={provider?.id} onValueChange={(id) => choose({ provider_id: id, model: '' })}><SelectTrigger aria-label={t('provider')}><SelectValue /></SelectTrigger><SelectContent>{providers.map((item) => <SelectItem key={item.id} value={item.id}>{item.label || item.id}</SelectItem>)}</SelectContent></Select></label>
-        <div className="field"><span className="label">{t('model')}</span><SearchableSelect aria-label={t('model')} disabled={save.isPending || models.length === 0} value={view.model} options={models} placeholder={models.length === 0 ? t('noModel') : t('modelPlaceholder')} searchLabel={t('modelSearch')} emptyLabel={t('modelEmpty')} onValueChange={(model) => set({ model })} /></div>
+        <div className="field"><span className="label">{t('model.label')}</span><SearchableSelect aria-label={t('model.label')} disabled={save.isPending || models.length === 0} value={view.model} options={models} placeholder={models.length === 0 ? t('noModel') : t('model.placeholder')} searchLabel={t('model.search')} emptyLabel={t('model.empty')} onValueChange={(model) => set({ model })} /></div>
         <label className="field"><span className="label">{t('mode')}</span><Select disabled={save.isPending} value={view.mode} onValueChange={(mode) => set({ mode: mode as Mode })}><SelectTrigger aria-label={t('mode')}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="json_schema">{t('modeJsonSchema')}</SelectItem><SelectItem value="forced_tool">{t('modeForcedTool')}</SelectItem></SelectContent></Select></label>
       </FieldGrid>) : null
   );
@@ -122,7 +137,7 @@ function VizRouterOwnEndpointFields({ vm }: { vm: VizRouterCardVm }) {
             <label className="field"><span className="label">{t('accountId')}</span><Input disabled={save.isPending} value={accountId} placeholder="0123456789abcdef0123456789abcdef" aria-invalid={accountId.trim() !== '' && !CLOUDFLARE_ACCOUNT.test(accountId.trim())} onChange={(event) => set({ account_id: event.target.value })} /></label>
             <label className="field"><span className="label">{t('gatewayUrl')}</span><Input disabled={save.isPending} value={gatewayUrl} placeholder="https://gateway.ai.cloudflare.com/v1/…" onChange={(event) => set({ gateway_url: event.target.value })} /></label>
           </> : null}
-          <label className="field"><span className="label">{t('model')}</span><Input disabled={save.isPending} list={`viz-router-models-${view.kind}`} value={view.model} placeholder={t('modelFreeText')} onChange={(event) => set({ model: event.target.value })} /><datalist id={`viz-router-models-${view.kind}`}>{modelOptions.map((id) => <option key={id} value={id} />)}</datalist></label>
+          <label className="field"><span className="label">{t('model.label')}</span><Input disabled={save.isPending} list={`viz-router-models-${view.kind}`} value={view.model} placeholder={t('model.freeText')} onChange={(event) => set({ model: event.target.value })} /><datalist id={`viz-router-models-${view.kind}`}>{modelOptions.map((id) => <option key={id} value={id} />)}</datalist></label>
           {view.kind === 'openrouter' ? <label className="field"><span className="label">{t('api')}</span><Select disabled={save.isPending} value={view.api} onValueChange={(api) => set({ api: api as Api })}><SelectTrigger aria-label={t('api')}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="decisions">{t('apiDecisions')}</SelectItem><SelectItem value="chat">{t('apiChat')}</SelectItem></SelectContent></Select></label> : null}
           {decisions ? null : <label className="field"><span className="label">{t('mode')}</span><Select disabled={save.isPending} value={view.mode} onValueChange={(mode) => set({ mode: mode as Mode })}><SelectTrigger aria-label={t('mode')}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="json_schema">{t('modeJsonSchema')}</SelectItem><SelectItem value="forced_tool">{t('modeForcedTool')}</SelectItem></SelectContent></Select></label>}
         </FieldGrid>
@@ -157,9 +172,9 @@ function VizRouterConsentAndTest({ vm }: { vm: VizRouterCardVm }) {
         {needsConsent ? <CheckboxField><Checkbox id="viz-router-allow" disabled={save.isPending} checked={view.allow_remote_visualization_routing} onCheckedChange={(checked) => set({ allow_remote_visualization_routing: checked === true })} /><label htmlFor="viz-router-allow">{t('allowRemote')}</label></CheckboxField> : null}
         <p className="m-0 text-xs text-muted-foreground">{t('privacyNote')}</p>
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" variant="outline" disabled={test.isPending || dirty || saved.kind === 'internal'} onClick={() => test.mutate()}>{test.isPending ? t('testing') : t('test')}</Button>
-          {dirty ? <p className="m-0 text-xs text-muted-foreground">{t('testSaveFirst')}</p> : null}
-          {result ? <p className={result.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{result.ok ? (result.mode ? t('testOkMode', { mode: result.mode === 'json_schema' ? t('modeJsonSchema') : t('modeForcedTool'), category: result.category ?? '' }) : t('testOk', { category: result.category ?? '' })) : errorText(result.error)}</p> : null}
+          <Button type="button" variant="outline" disabled={test.isPending || dirty || saved.kind === 'internal'} onClick={() => test.mutate()}>{test.isPending ? t('testing') : t('test.label')}</Button>
+          {dirty ? <p className="m-0 text-xs text-muted-foreground">{t('test.saveFirst')}</p> : null}
+          {result ? <p className={result.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{result.ok ? (result.mode ? t('test.okMode', { mode: result.mode === 'json_schema' ? t('modeJsonSchema') : t('modeForcedTool'), category: result.category ?? '' }) : t('test.ok', { category: result.category ?? '' })) : errorText(result.error)}</p> : null}
           {test.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(test.error) ?? 'requestFailed')}</p> : null}
         </div>
       </> : null
@@ -235,7 +250,8 @@ function buildVizRouterView(p: ReturnType<typeof useVizRouterState>, saved: NonN
   // Consent is bound to the destination it was given for: any kind/provider change starts unchecked.
   const choose = (patch: Draft) => { setKey(''); setRemoved(false); setDecisionModels([]); loadModels.reset(); set({ ...patch, allow_remote_visualization_routing: false }); };
   const result = test.data;
-  const errorText = (code: string | null) => t(`testError_${code ?? 'unknown'}` as 'testError_unknown');
+  const errorText = (code: string | null) =>
+    t(code !== null && Object.hasOwn(TEST_ERROR_KEYS, code) ? TEST_ERROR_KEYS[code as keyof typeof TEST_ERROR_KEYS] : 'test.errorUnknown');
 
   return { ...p, saved, view, dirty, provider, models, ownEndpoint, decisions, modelOptions, canLoadModels, needsConsent, keyConfigured, keyOk, accountId, gatewayUrl, cloudflareOk, valid, set, choose, result, errorText };
 }

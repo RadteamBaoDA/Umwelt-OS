@@ -1,0 +1,9 @@
+{
+  "errorTitle": "Đã xảy ra lỗi",
+  "errorBody": "Không thể hiển thị trang này. Hãy thử lại hoặc tải lại nếu sự cố vẫn tiếp diễn.",
+  "retry": "Thử lại",
+  "notFoundTitle": "Không tìm thấy trang",
+  "notFoundBody": "Trang bạn mở không tồn tại hoặc đã được chuyển.",
+  "home": "Quay lại Umwelt-OS",
+  "loading": "Đang tải…"
+}

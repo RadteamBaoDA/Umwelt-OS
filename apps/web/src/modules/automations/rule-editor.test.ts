@@ -7,13 +7,13 @@ const caps = { triggers: [{ type: 'task_due', module: 'tasks', available: true, 
 describe('toDefinition', () => {
   it('reports missing trigger parameters, then missing actions, de-duplicated and in order', () => {
     const draft: Draft = { name: 'r', trigger: { type: 'schedule', cron: '  ' }, conditions: [], actions: [] };
-    expect(toDefinition(draft, caps).errors).toEqual(['errCron', 'errNoActions']);
-    expect(toDefinition({ ...draft, trigger: { type: 'webhook' } }, caps).errors).toEqual(['errWebhookAlias', 'errNoActions']);
+    expect(toDefinition(draft, caps).errors).toEqual(['err.cron', 'err.noActions']);
+    expect(toDefinition({ ...draft, trigger: { type: 'webhook' } }, caps).errors).toEqual(['err.webhookAlias', 'err.noActions']);
   });
 
   it('flags incomplete actions once regardless of how many are incomplete', () => {
     const draft: Draft = { name: 'r', trigger: { type: 'task_due', lead_minutes: 5 }, conditions: [], actions: [{ type: 'run_agent', profile_id: 'knowledge', instruction: ' ' }, { type: 'create_task', title: '' }, { type: 'call_webhook', alias: '', event: 'x' }, { type: 'generate_brief', scope: 'daily' }] };
-    expect(toDefinition(draft, caps).errors).toEqual(['errAction']);
+    expect(toDefinition(draft, caps).errors).toEqual(['err.action']);
   });
 
   it('parses typed condition values and list operands, rejecting unparsable ones', () => {
@@ -25,7 +25,7 @@ describe('toDefinition', () => {
       { field: 'done', operator: 'eq', value: true },
       { field: 'title', operator: 'in', value: ['a', 'b'] },
     ]);
-    expect(toDefinition({ ...base, conditions: [{ field: 'priority', operator: 'gt', value: 'abc' }] }, caps).errors).toEqual(['errCondition']);
+    expect(toDefinition({ ...base, conditions: [{ field: 'priority', operator: 'gt', value: 'abc' }] }, caps).errors).toEqual(['err.condition']);
   });
 
   it('trims the schedule cron in the produced definition', () => {

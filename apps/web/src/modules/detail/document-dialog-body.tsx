@@ -30,7 +30,7 @@ export function DocumentDialogBody({ documentId }: { documentId: string }) {
     <header className="grid gap-1">
       <div className="flex items-start gap-2">
         <h2 id="document-dialog-title" className="flex-1 text-xl font-semibold leading-snug">{value.title}</h2>
-        {safeHttpUrl(value.canonical_url) ? <a href={safeHttpUrl(value.canonical_url)} target="_blank" rel="noopener noreferrer" aria-label={d('openOriginal')} title={d('openOriginal')} className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"><ExternalLink aria-hidden="true" className="size-4" /></a> : null}
+        {safeHttpUrl(value.canonical_url) ? <a href={safeHttpUrl(value.canonical_url)} target="_blank" rel="noopener noreferrer" aria-label={d('open.original')} title={d('open.original')} className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"><ExternalLink aria-hidden="true" className="size-4" /></a> : null}
       </div>
       <p className="text-xs text-muted-foreground">
         {value.observed_at ? `${d('observedAt')} ${formatDateTime(value.observed_at, display.locale, display.timezone)}` : d('observedUnknown')} · {d('currentVersion', { version: value.current_version })} · {display.timezone}
@@ -43,7 +43,7 @@ export function DocumentDialogBody({ documentId }: { documentId: string }) {
       <blockquote className="whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-relaxed">{content.slice(0, PREVIEW_LIMIT)}{content.length > PREVIEW_LIMIT ? '…' : ''}</blockquote>
     </div>}
     <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
-      <Button asChild variant="outline"><Link href={`/knowledge/documents/${value.id}`}>{d('openFullDocument')}</Link></Button>
+      <Button asChild variant="outline"><Link href={`/knowledge/documents/${value.id}`}>{d('open.fullDocument')}</Link></Button>
     </footer>
   </section>;
 }

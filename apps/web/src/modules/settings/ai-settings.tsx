@@ -45,6 +45,16 @@ type Privacy = {
   embedding_destinations: string[];
   web_search_destinations: string[];
 };
+/** Literal catalog key per capability kind (no runtime key building); unknown kinds render raw. */
+const CAPABILITY_KEYS = {
+  chat: 'capability.chat',
+  streaming: 'capability.streaming',
+  embeddings: 'capability.embeddings',
+  structured: 'capability.structured',
+  tools: 'capability.tools',
+  reranking: 'capability.reranking',
+} as const;
+
 type Capability = { role: string; capability: string; result: string; expires_at: string; dimensions?: number; detail?: string };
 type AISettings = {
   configuration_revision: number;
@@ -162,7 +172,7 @@ export function AISettingsWorkspace() {
         <AiSettingsFooter vm={vm} />
       </form>
       <details className={advancedClass}>
-        <summary className={summaryClass}>{t('agentsAutomations')}</summary>
+        <summary className={summaryClass}>{t('agents.automations')}</summary>
         <div className="pb-5">
           <AgentSettingsWorkspace />
           <AutomationSettings />
@@ -180,16 +190,16 @@ function CapabilityChip({
 }: {
   status: string | null;
   label: string;
-  t: (key: 'capPassed' | 'capFailed' | 'capUnsupported' | 'capNotChecked') => string;
+  t: (key: 'cap.passed' | 'cap.failed' | 'cap.unsupported' | 'cap.notChecked') => string;
 }) {
   const [Icon, key] =
     status === 'supported'
-      ? [Check, 'capPassed' as const]
+      ? [Check, 'cap.passed' as const]
       : status === 'failed'
-        ? [AlertCircle, 'capFailed' as const]
+        ? [AlertCircle, 'cap.failed' as const]
         : status === 'unsupported'
-          ? [X, 'capUnsupported' as const]
-          : [Minus, 'capNotChecked' as const];
+          ? [X, 'cap.unsupported' as const]
+          : [Minus, 'cap.notChecked' as const];
   return (
     <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs">
       <Icon className="size-3" aria-hidden="true" />
@@ -200,9 +210,13 @@ function CapabilityChip({
 }
 
 /** Localized failure text plus the HTTP status and server detail when the API supplied them. */
-function describeError(error: unknown, t: (key: never) => string, fallback: string): string {
+function describeError(
+  error: unknown,
+  t: ReturnType<typeof useTranslations<'aiSettings'>>,
+  fallback: 'loadFailed' | 'save.failed' | 'discoveryFailed',
+): string {
   /** Resolves a user-facing message for an API error, falling back to the given key. */
-  const base = (t as (key: string) => string)(apiFailureKey(error) ?? fallback);
+  const base = t(apiFailureKey(error) ?? fallback);
   if (!(error instanceof ApiError)) return base;
   const detail = error.message && error.message !== String(error.status) ? `: ${error.message}` : '';
   return `${base} (HTTP ${error.status}${detail})`;
@@ -239,7 +253,7 @@ function ProvidersAndModelsSections({ vm }: { vm: AISettingsWorkspaceVm }) {
   } = vm;
   return (
     <>
-      <SettingsSection title={t('providersSection')} description={t('providersHelp')}>
+      <SettingsSection title={t('providers.section')} description={t('providers.help')}>
         <ProviderEditor
           providers={saved.providers}
           savedIds={savedIds}
@@ -248,7 +262,7 @@ function ProvidersAndModelsSections({ vm }: { vm: AISettingsWorkspaceVm }) {
           discoveringId={discoveringId}
           discoverError={discoverError}
           discovered={discovered}
-          t={t as never}
+          t={t}
           onChange={(providers) => set({ providers })}
           onSecret={(id, secret) => setSecrets({ ...secrets, [id]: secret })}
           onDiscover={(provider) => discover.mutate(provider)}
@@ -256,7 +270,7 @@ function ProvidersAndModelsSections({ vm }: { vm: AISettingsWorkspaceVm }) {
       </SettingsSection>
       {/* Models need a provider; with none, only the Providers block (and its empty state) is shown. */}
       {saved.providers.length > 0 && (
-        <SettingsSection title={t('modelsSection')} description={t('modelsHelp')}>
+        <SettingsSection title={t('models.section')} description={t('models.help')}>
           <ModelsPanel
             providers={saved.providers}
             discovered={discovered}
@@ -267,7 +281,7 @@ function ProvidersAndModelsSections({ vm }: { vm: AISettingsWorkspaceVm }) {
             onChange={changeModels}
             onTestModel={(provider, model) => testModel.mutate({ provider, model })}
             browseOpenRouter={browseOpenRouter}
-            t={t as never}
+            t={t}
           />
           <ModelDefaults
             providers={saved.providers}
@@ -277,7 +291,7 @@ function ProvidersAndModelsSections({ vm }: { vm: AISettingsWorkspaceVm }) {
             onPick={pickDefault}
             onEffort={pickEffort}
             onMaxTokens={pickMaxTokens}
-            t={t as never}
+            t={t}
           />
           {embeddingDimsChanged && (
             <p className="error m-0 text-sm" role="status">
@@ -306,12 +320,12 @@ function EmbeddingsDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
   } = vm;
   return (
     <details className={advancedClass}>
-      <summary className={summaryClass}>{t('embeddingsTitle')}</summary>
+      <summary className={summaryClass}>{t('embeddings.title')}</summary>
       <div className="flex flex-col gap-3 pb-5">
-        <p className="text-muted-foreground m-0">{t('embeddingsPurpose')}</p>
-        <p className="text-muted-foreground m-0 text-sm">{t('embeddingsWhyShown')}</p>
+        <p className="text-muted-foreground m-0">{t('embeddings.purpose')}</p>
+        <p className="text-muted-foreground m-0 text-sm">{t('embeddings.whyShown')}</p>
         {embeddingMapping?.model && (
-          <p className="m-0">{t('embeddingsModel', { model: embeddingMapping.model, dimensions: embeddingMapping.dimensions ?? 0 })}</p>
+          <p className="m-0">{t('embeddings.model', { model: embeddingMapping.model, dimensions: embeddingMapping.dimensions ?? 0 })}</p>
         )}
         {embeddingsAvailable ? (
           <>
@@ -324,18 +338,18 @@ function EmbeddingsDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
                 disabled={save.isPending || dirty || embeddingProbe.isPending}
                 onClick={() => embeddingProbe.mutate()}
               >
-                {t('modelTest')}
+                {t('model.test')}
               </Button>
             </div>
-            <p className="text-muted-foreground m-0 text-sm">{t('embeddingsTestHelp')}</p>
+            <p className="text-muted-foreground m-0 text-sm">{t('embeddings.testHelp')}</p>
           </>
         ) : (
           <>
-            <p className="label m-0">{t('embeddingsUnavailable')}</p>
+            <p className="label m-0">{t('embeddings.unavailable')}</p>
             <p className="text-muted-foreground m-0">
-              {t(embeddingMapping?.model ? 'embeddingsReasonConsent' : 'embeddingsReasonNoModel')}
+              {t(embeddingMapping?.model ? 'embeddings.reasonConsent' : 'embeddings.reasonNoModel')}
             </p>
-            <p className="text-muted-foreground m-0">{t('embeddingsLexicalFallback')}</p>
+            <p className="text-muted-foreground m-0">{t('embeddings.lexicalFallback')}</p>
           </>
         )}
       </div>
@@ -383,7 +397,7 @@ function PrivacyDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
             checked={saved.privacy.allow_remote_reasoning}
             onCheckedChange={(checked) => setPrivacy({ allow_remote_reasoning: checked === true })}
           />
-          <label htmlFor="ai-remote-reasoning">{t('allowRemoteReasoning')}</label>
+          <label htmlFor="ai-remote-reasoning">{t('allow.remoteReasoning')}</label>
         </CheckboxField>
         <CheckboxField>
           <Checkbox
@@ -392,7 +406,7 @@ function PrivacyDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
             checked={saved.privacy.allow_remote_embeddings}
             onCheckedChange={(checked) => setPrivacy({ allow_remote_embeddings: checked === true })}
           />
-          <label htmlFor="ai-remote-embeddings">{t('allowRemoteEmbeddings')}</label>
+          <label htmlFor="ai-remote-embeddings">{t('allow.remoteEmbeddings')}</label>
         </CheckboxField>
         <CheckboxField>
           <Checkbox
@@ -401,7 +415,7 @@ function PrivacyDetails({ vm }: { vm: AISettingsWorkspaceVm }) {
             checked={saved.privacy.allow_widget_remote_media}
             onCheckedChange={(checked) => setPrivacy({ allow_widget_remote_media: checked === true })}
           />
-          <label htmlFor="ai-widget-media">{t('allowWidgetRemoteMedia')}</label>
+          <label htmlFor="ai-widget-media">{t('allow.widgetRemoteMedia')}</label>
         </CheckboxField>
         <p className="text-muted-foreground m-0">
           {t('historyStorage')} <a href="/settings/memory">{t('memoryPrivacyLink')}</a>
@@ -423,13 +437,13 @@ function AiSettingsFooter({ vm }: { vm: AISettingsWorkspaceVm }) {
       )}
       {save.error && (
         <p className="error m-0" role="alert">
-          {describeError(save.error, t, 'saveFailed')}
+          {describeError(save.error, t, 'save.failed')}
         </p>
       )}
       {/* Success stays visible next to the (now disabled) button until the next edit makes the form dirty again. */}
       {save.isSuccess && !dirty && (
         <p className="m-0 text-sm text-accent" role="status">
-          {t('saveSuccess')}
+          {t('save.success')}
         </p>
       )}
       <SettingsActions>
@@ -437,7 +451,7 @@ function AiSettingsFooter({ vm }: { vm: AISettingsWorkspaceVm }) {
           {t('cancelChanges')}
         </Button>
         <Button type="submit" disabled={save.isPending || !dirty || embeddingStatus !== 'idle'}>
-          {t('saveButton')}
+          {t('save.button')}
         </Button>
       </SettingsActions>
     </>
@@ -940,7 +954,8 @@ function buildAiSettingsView(p: ReturnType<typeof useAiModelActions>, saved: Non
     setDiscoverError(null);
   };
   /** Localizes a capability kind name. */
-  const capabilityLabel = (kind: string) => t(`capability${kind[0].toUpperCase()}${kind.slice(1)}` as 'capabilityChat');
+  const capabilityLabel = (kind: string) =>
+    Object.hasOwn(CAPABILITY_KEYS, kind) ? t(CAPABILITY_KEYS[kind as keyof typeof CAPABILITY_KEYS]) : kind;
   // The backend requires embedding dimensions, so a chosen embedding model blocks Save until its probe supplies them.
   const embeddingStatus = embeddingProbeStatus(embeddingMapping, draftProbe.isPending);
   const savedDimensions = query.data?.defaults?.embedding?.dimensions ?? null;

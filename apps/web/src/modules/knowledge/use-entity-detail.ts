@@ -135,7 +135,7 @@ function useEntityMutations(p: DraftQueries) {
       const source = entity.data!;
       const destination = selectedMergeTarget;
       if (!destination || destination.id === source.id) throw new Error(t('chooseMergeTarget'));
-      if (destination.type !== source.type) throw new Error(t('mergeTargetTypeChanged'));
+      if (destination.type !== source.type) throw new Error(t('merge.targetTypeChanged'));
       if (values.targetId !== destination.id) throw new Error(t('chooseMergeTarget'));
       const preview = await previewMergeEntity(source.id, { into_id: destination.id, expected_revision: source.revision, expected_into_revision: destination.revision, reason: values.reason });
       return { preview, intoId: destination.id, intoRevision: destination.revision, targetName: destination.name ?? t('unnamedEntity'), sourceRevision: source.revision, reason: values.reason };

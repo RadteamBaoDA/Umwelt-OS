@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { globalSettingsMessages } from '@/core/messages/global-settings';
+import { getCatalog } from '@locales';
 import { ProviderReviewTable } from './provider-review';
 
 const api = vi.hoisted(() => ({ request: vi.fn() }));
@@ -34,7 +34,11 @@ describe('ProviderReviewTable', () => {
   it('lists the row, keeps Approve disabled without evidence, and submits the unchanged payload', async () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <NextIntlClientProvider locale="en-US" messages={{ globalSettings: globalSettingsMessages['en-us'] }} onError={() => undefined}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ globalSettings: getCatalog('en-us', 'globalSettings') }}
+          onError={() => undefined}
+        >
           <ProviderReviewTable rows={[row]} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -70,7 +74,11 @@ describe('ProviderReviewTable', () => {
     };
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <NextIntlClientProvider locale="en-US" messages={{ globalSettings: globalSettingsMessages['en-us'] }} onError={() => undefined}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ globalSettings: getCatalog('en-us', 'globalSettings') }}
+          onError={() => undefined}
+        >
           <ProviderReviewTable rows={[live]} />
         </NextIntlClientProvider>
       </QueryClientProvider>,

@@ -85,8 +85,8 @@ function GoogleLinkControls({ vm }: { vm: GoogleLinkVm }) {
             <p className="error" role="alert">
               {t(
                 error instanceof ApiError && error.code === 'password_incorrect'
-                  ? 'passwordIncorrect'
-                  : (apiFailureKey(error) ?? 'changeFailed'),
+                  ? 'password.incorrect'
+                  : (apiFailureKey(error) ?? 'change.failed'),
               )}
             </p>
           )}

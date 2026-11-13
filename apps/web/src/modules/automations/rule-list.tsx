@@ -7,6 +7,7 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { Button } from '@/components/ui/button';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { deleteAutomation, errorMessageKey, listAutomations, patchAutomation, runAutomation, type Automation } from './api';
+import { triggerLabel } from './message-keys';
 import { RuleEditor } from './rule-editor';
 import { RunDetail } from './run-detail';
 import { uuid7 } from '@/core/uuid7';
@@ -24,7 +25,7 @@ export function AutomationSettings() {
   const rules = useQuery({ queryKey: ['automations'], queryFn: listAutomations });
   const refresh = () => { void client.invalidateQueries({ queryKey: ['automations'] }); };
   /** Maps a failed mutation to a localized notice by error code. */
-  const fail = (error: unknown) => { setNotice(t(errorMessageKey(error, 'actionFailed'))); refresh(); };
+  const fail = (error: unknown) => { setNotice(t(errorMessageKey(error, 'action.failed'))); refresh(); };
 
   // Enabling is the only way a rule starts; pausing appends a revision that invalidates queued work.
   const toggle = useMutation({
@@ -33,7 +34,7 @@ export function AutomationSettings() {
   });
   const runNow = useMutation({
     mutationFn: (rule: Automation) => runAutomation(rule.id, rule.revision, uuid7(), csrfToken),
-    onSuccess: (_run, rule) => { setNotice(t('runQueued')); setView({ kind: 'runs', ruleId: rule.id }); }, onError: fail,
+    onSuccess: (_run, rule) => { setNotice(t('run.queued')); setView({ kind: 'runs', ruleId: rule.id }); }, onError: fail,
   });
   const remove = useMutation({
     mutationFn: (rule: Automation) => deleteAutomation(rule.id, rule.revision, csrfToken),
@@ -55,13 +56,13 @@ export function AutomationSettings() {
       <ul className="space-y-3">{items.map((rule) => <li key={rule.id} className="space-y-2 rounded-lg border border-border bg-surface p-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0"><h3 className="font-semibold">{rule.name}</h3>
-            <p className="text-sm text-muted-foreground">{t(`trigger_${rule.trigger.type}`)} · {t('actionCount', { count: rule.actions.length })} · {t('revision', { revision: rule.revision })}</p></div>
+            <p className="text-sm text-muted-foreground">{triggerLabel(t, rule.trigger.type)} · {t('action.count', { count: rule.actions.length })} · {t('revision', { revision: rule.revision })}</p></div>
           <span className="rounded-full bg-muted px-2 py-1 text-xs">{rule.enabled ? t('enabled') : t('disabled')}</span>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => { setNotice(null); setView({ kind: 'edit', rule }); }}>{t('edit')}</Button>
           <Button type="button" variant="outline" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate(rule)}>{rule.enabled ? t('disable') : t('enable')}</Button>
-          <Button type="button" variant="outline" size="sm" disabled={!rule.enabled || runNow.isPending} onClick={() => runNow.mutate(rule)}>{t('runNow')}</Button>
+          <Button type="button" variant="outline" size="sm" disabled={!rule.enabled || runNow.isPending} onClick={() => runNow.mutate(rule)}>{t('run.now')}</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => { setNotice(null); setView({ kind: 'runs', ruleId: rule.id }); }}>{t('history')}</Button>
           <Button type="button" variant="outline" size="sm" onClick={() => setRemoving(rule)}>{t('delete')}</Button>
         </div>

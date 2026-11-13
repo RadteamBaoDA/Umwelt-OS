@@ -2,12 +2,13 @@
 
 import { useTranslations } from 'next-intl';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { REFERENCE_TEXT_KEYS, SOURCE_NAME_KEYS } from './message-keys';
 import type { LandingSourceId } from './source-canvas';
 
 /** Side sheet showing the sample reference text for the opened citation; closed when `reference` is null. */
 export function DemoReferenceSheet({ reference, onClose }: { reference: LandingSourceId | null; onClose: () => void }) {
   const t = useTranslations('landing');
-  const activeReference = reference ? t(`sourceNames.${reference}`) : '';
+  const activeReference = reference ? t(SOURCE_NAME_KEYS[reference]) : '';
   return (
     <Sheet
       open={reference !== null}
@@ -20,7 +21,7 @@ export function DemoReferenceSheet({ reference, onClose }: { reference: LandingS
           <SheetTitle>{reference ? t('referenceTitle', { source: activeReference }) : t('citationsTitle')}</SheetTitle>
           <SheetDescription>{t('citationsTitle')}</SheetDescription>
         </SheetHeader>
-        {reference && <div className="p-5 text-sm leading-7 text-foreground">{t(`referenceText.${reference}`)}</div>}
+        {reference && <div className="p-5 text-sm leading-7 text-foreground">{t(REFERENCE_TEXT_KEYS[reference])}</div>}
       </SheetContent>
     </Sheet>
   );

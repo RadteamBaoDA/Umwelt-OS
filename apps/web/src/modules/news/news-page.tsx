@@ -31,7 +31,7 @@ export function NewsPage() {
       <Dialog open={storyId !== null} onOpenChange={(open) => { if (!open) setStoryId(null); }}>
         <DialogContent closeLabel={d('close')} onCloseAutoFocus={(e) => { e.preventDefault(); if (trigger.current?.isConnected) trigger.current.focus(); }}
           className="h-[85dvh] max-w-4xl overflow-hidden">
-          <DialogHeader><DialogTitle>{d('title_story')}</DialogTitle><DialogDescription className="sr-only">{d('title_story')}</DialogDescription></DialogHeader>
+          <DialogHeader><DialogTitle>{d('title.story')}</DialogTitle><DialogDescription className="sr-only">{d('title.story')}</DialogDescription></DialogHeader>
           {storyId && <StoryDetail storyId={storyId} sourceIds={sourceIds} onBack={() => setStoryId(null)} />}
         </DialogContent>
       </Dialog>

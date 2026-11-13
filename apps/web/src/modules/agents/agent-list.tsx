@@ -14,13 +14,13 @@ export interface AgentListProps {
 /** Lists the fixed specialist roster and keeps capability state visible beside each profile. */
 export function AgentList({ profiles, selectedId, onSelect }: AgentListProps) {
   const t = useTranslations('aiSettings');
-  const titleKeys: Record<string, 'agentProfileSupervisor' | 'agentProfileKnowledge' | 'agentProfileResearch' | 'agentProfilePersonal' | 'agentProfileProject' | 'agentProfileNews' | 'agentProfilePlanning' | 'agentProfileAutomation'> = {
-    supervisor: 'agentProfileSupervisor', knowledge: 'agentProfileKnowledge', research: 'agentProfileResearch',
-    personal: 'agentProfilePersonal', project: 'agentProfileProject', news: 'agentProfileNews',
-    planning: 'agentProfilePlanning', automation: 'agentProfileAutomation',
+  const titleKeys: Record<string, 'agent.profileSupervisor' | 'agent.profileKnowledge' | 'agent.profileResearch' | 'agent.profilePersonal' | 'agent.profileProject' | 'agent.profileNews' | 'agent.profilePlanning' | 'agent.profileAutomation'> = {
+    supervisor: 'agent.profileSupervisor', knowledge: 'agent.profileKnowledge', research: 'agent.profileResearch',
+    personal: 'agent.profilePersonal', project: 'agent.profileProject', news: 'agent.profileNews',
+    planning: 'agent.profilePlanning', automation: 'agent.profileAutomation',
   };
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" aria-label={t('agentsTitle')}>
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" aria-label={t('agents.title')}>
       {profiles.map((profile) => (
         <Button
           key={profile.id}
@@ -29,10 +29,10 @@ export function AgentList({ profiles, selectedId, onSelect }: AgentListProps) {
           onClick={() => onSelect(profile.id)}
           className={`secondary h-auto w-full justify-start rounded-lg p-3 text-left font-normal transition-colors ${selectedId === profile.id ? 'border-primary bg-secondary' : 'border-border bg-background hover:bg-secondary'}`}
         >
-          <span className="block font-medium text-foreground">{t(titleKeys[profile.id] ?? 'agentProfileKnowledge')}</span>
+          <span className="block font-medium text-foreground">{t(titleKeys[profile.id] ?? 'agent.profileKnowledge')}</span>
           <span className="mt-1 block text-xs text-muted-foreground">
-            {profile.capability === 'available' ? t('agentAvailable') : profile.capability === 'partial' ? t('agentPartial') : t('agentUnavailable')}
-            {!profile.enabled ? ` · ${t('agentDisabled')}` : ''}
+            {profile.capability === 'available' ? t('agent.available') : profile.capability === 'partial' ? t('agent.partial') : t('agent.unavailable')}
+            {!profile.enabled ? ` · ${t('agent.disabled')}` : ''}
           </span>
         </Button>
       ))}

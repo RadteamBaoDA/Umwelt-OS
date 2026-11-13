@@ -146,5 +146,6 @@
   "draftRetained": "Your unsaved draft is preserved for review.",
   "reloadDiscard": "Reload server version and discard draft",
   "copyAcknowledgement": "I have securely saved this token and understand it cannot be recovered.",
-  "token.ackRequired": "A one-time token is still visible. Acknowledge secure storage and dismiss it before leaving this page."
+  "token.ackRequired": "A one-time token is still visible. Acknowledge secure storage and dismiss it before leaving this page.",
+  "notApplicable": "Not applicable"
 }

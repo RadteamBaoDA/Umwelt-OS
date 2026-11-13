@@ -30,6 +30,15 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import type { AppLocaleId } from '@/core/i18n';
 import type { LandingSourceId } from './source-canvas';
 import { useSession } from '@/core/session';
+import {
+  ANSWER_KEYS,
+  EVIDENCE_KEYS,
+  QUESTION_KEYS,
+  SOURCE_GROUP_KEYS,
+  SOURCE_NAME_KEYS,
+  SOURCE_TYPE_KEYS,
+  type DemoQuestion,
+} from './message-keys';
 
 const SourceCanvas = dynamic(() => import('./source-canvas').then((module) => module.SourceCanvas), { ssr: false });
 // The Radix sheet loads only after the first citation is opened, keeping it out of the landing first-load bundle.
@@ -122,7 +131,6 @@ const SOURCE_CATALOG = [
   { id: 'jobs', icon: BriefcaseBusinessIcon, items: ['We Work Remotely', 'VietnamWorks', 'ITviec'] },
   { id: 'imports', icon: DatabaseIcon, items: ['Markdown', 'OFX', 'CSV'] },
 ] as const;
-type DemoQuestion = 'latest' | 'summarize' | 'compare';
 
 /** Reads only the current sign-in status; workspace content and readiness never gate the public page. */
 export function LandingEntry() {
@@ -168,7 +176,7 @@ function DemoSourcesPane({ activeSources, selectedCount, pulseSource, onToggle }
   return (
     <div className="min-w-0 bg-muted p-5 sm:p-7 lg:border-r lg:border-border">
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-base font-semibold text-foreground">{t('sourcesTitle')}</h3>
+        <h3 className="text-base font-semibold text-foreground">{t('sources.title')}</h3>
         <p aria-live="polite" className="text-[13px] text-muted-foreground">
           {t('sourceCount', { count: selectedCount })}
         </p>
@@ -197,7 +205,7 @@ function DemoSourcesPane({ activeSources, selectedCount, pulseSource, onToggle }
           Umwelt-OS
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label={t('sourcesTitle')}>
+      <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label={t('sources.title')}>
         {SOURCE_IDS.map((id) => {
           const Icon = SOURCE_ICONS[id];
           const selected = activeSources.includes(id);
@@ -212,7 +220,7 @@ function DemoSourcesPane({ activeSources, selectedCount, pulseSource, onToggle }
               className="min-h-11 min-w-32 flex-1 justify-start text-[13px]"
             >
               <Icon aria-hidden="true" className="size-4" />
-              <span>{t(`sourceTypes.${id}`)}</span>
+              <span>{t(SOURCE_TYPE_KEYS[id])}</span>
               {selected && <CheckIcon aria-hidden="true" className="ml-auto size-4" />}
             </Button>
           );
@@ -239,7 +247,7 @@ function DemoAnswerPane({ question, onQuestion, selectedSources, onOpenReference
       ? t('emptySources')
       : question === 'compare' && selectedSources.length < 2
         ? t('compareNeedsSources')
-        : t(`answers.${question}`, { sources: selectedSources.map((id) => t(`sourceNames.${id}`)).join(', ') });
+        : t(ANSWER_KEYS[question], { sources: selectedSources.map((id) => t(SOURCE_NAME_KEYS[id])).join(', ') });
   return (
     <div className="flex min-w-0 flex-col p-5 sm:p-7">
       <div className="mb-4 flex items-center gap-3 text-foreground">
@@ -258,7 +266,7 @@ function DemoAnswerPane({ question, onQuestion, selectedSources, onOpenReference
             aria-pressed={question === id}
             onClick={() => onQuestion(id)}
           >
-            {t(`questions.${id}`)}
+            {t(QUESTION_KEYS[id])}
           </Button>
         ))}
       </div>
@@ -277,7 +285,7 @@ function DemoAnswerPane({ question, onQuestion, selectedSources, onOpenReference
             {selectedSources.map((id) => (
               <li key={id} className="flex gap-3">
                 <span aria-hidden="true" className="mt-2 size-1.5 shrink-0 rounded-full bg-data" />
-                {t(`answerEvidenceBySource.${question}.${id}`)}
+                {t(EVIDENCE_KEYS[question][id])}
               </li>
             ))}
           </ul>
@@ -293,11 +301,11 @@ function DemoAnswerPane({ question, onQuestion, selectedSources, onOpenReference
                     variant="outline"
                     size="sm"
                     className="gap-1.5 bg-background text-[13px]"
-                    aria-label={t('openReference', { source: t(`sourceNames.${id}`) })}
+                    aria-label={t('openReference', { source: t(SOURCE_NAME_KEYS[id]) })}
                     onClick={() => onOpenReference(id)}
                   >
                     <FileTextIcon aria-hidden="true" className="size-3.5" />
-                    {t(`sourceNames.${id}`)}
+                    {t(SOURCE_NAME_KEYS[id])}
                     <ArrowRightIcon aria-hidden="true" className="size-3" />
                   </Button>
                 </li>
@@ -439,10 +447,10 @@ function LandingHero({ authenticated, language }: SectionProps) {
     <section className="px-4 pb-12 pt-12 sm:px-6 sm:pb-16 sm:pt-20 lg:px-8">
       <div className="mx-auto max-w-4xl text-center">
         <h1 className="text-4xl font-semibold leading-[1.08] tracking-tight text-foreground sm:text-6xl">
-          {t('heroFirst')}
-          <span className="mt-2 block text-data">{t('heroSecond')}</span>
+          {t('hero.first')}
+          <span className="mt-2 block text-data">{t('hero.second')}</span>
         </h1>
-        <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">{t('heroDescription')}</p>
+        <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">{t('hero.description')}</p>
         <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
           <Button asChild size="lg">
             <Link href={authenticated ? '/dashboard' : `/login?lang=${language}`}>
@@ -473,8 +481,8 @@ function LandingSources({ authenticated, language }: SectionProps) {
       <div className="mx-auto max-w-7xl">
         <div className="flex flex-wrap items-end justify-between gap-6">
           <div>
-            <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('sourcesHeading')}</h2>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">{t('sourcesBody')}</p>
+            <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('sources.heading')}</h2>
+            <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">{t('sources.body')}</p>
           </div>
           <Button asChild>
             <Link href={authenticated ? '/settings/sources' : `/login?lang=${language}`}>
@@ -490,7 +498,7 @@ function LandingSources({ authenticated, language }: SectionProps) {
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-data">
                   <Icon aria-hidden="true" className="size-5" />
                 </span>
-                <h3 className="text-base font-semibold">{t(`sourceGroups.${id}`)}</h3>
+                <h3 className="text-base font-semibold">{t(SOURCE_GROUP_KEYS[id])}</h3>
               </div>
               <ul className="mt-4 flex flex-wrap gap-2">
                 {items.map((item) => (
@@ -502,7 +510,7 @@ function LandingSources({ authenticated, language }: SectionProps) {
             </article>
           ))}
         </div>
-        <p className="mt-5 max-w-4xl text-sm leading-6 text-muted-foreground">{t('sourcesAvailability')}</p>
+        <p className="mt-5 max-w-4xl text-sm leading-6 text-muted-foreground">{t('sources.availability')}</p>
       </div>
     </section>
   );
@@ -530,7 +538,7 @@ function LandingHowItWorks({ language }: Pick<SectionProps, 'language'>) {
           <div>
             <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('howHeading')}</h2>
             <ol className="mt-6 grid gap-4">
-              {(['stepOne', 'stepTwo', 'stepThree'] as const).map((key, index) => (
+              {(['step.one', 'step.two', 'step.three'] as const).map((key, index) => (
                 <li key={key} className="flex items-start gap-3">
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-[13px] font-semibold">
                     {index + 1}
@@ -564,12 +572,18 @@ function LandingFaq() {
   return (
     <section className="px-4 py-14 sm:px-6 sm:py-20 lg:px-8">
       <div className="mx-auto max-w-5xl">
-        <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('faqHeading')}</h2>
+        <h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">{t('faq.heading')}</h2>
         <div className="mt-7 divide-y divide-border border-y border-border">
-          {(['faqSources', 'faqGoogle', 'faqAi'] as const).map((key) => (
-            <article key={key} className="py-5">
-              <h3 className="text-base font-semibold">{t(`${key}Question`)}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t(`${key}Answer`)}</p>
+          {(
+            [
+              ['faq.sourcesQuestion', 'faq.sourcesAnswer'],
+              ['faq.googleQuestion', 'faq.googleAnswer'],
+              ['faq.aiQuestion', 'faq.aiAnswer'],
+            ] as const
+          ).map(([question, answer]) => (
+            <article key={question} className="py-5">
+              <h3 className="text-base font-semibold">{t(question)}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t(answer)}</p>
             </article>
           ))}
         </div>

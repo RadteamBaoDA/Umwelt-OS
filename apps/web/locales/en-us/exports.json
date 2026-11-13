@@ -1,0 +1,9 @@
+{
+  "title": "Data export",
+  "description": "Exports include your documents (with their saved versions) and eligible chat history. Passwords, API keys, original files and workflow secrets are not included. This is a copy of your content, not a full backup you can restore from.",
+  "json": "Download JSON",
+  "markdown": "Download Markdown",
+  "csv": "Download CSV",
+  "downloading": "Preparing download…",
+  "downloadFailed": "The export could not be prepared. Owner data may have changed; retry the download."
+}

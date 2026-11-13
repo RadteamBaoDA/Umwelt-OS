@@ -1,5 +1,6 @@
 'use client';
 
+import type { useTranslations } from 'next-intl';
 import { AlertCircle, Check, Minus, Plus, Trash2, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,11 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FieldGrid } from '@/components/settings-layout';
 
+/** Literal catalog key per provider kind (no runtime key building). */
+const PROVIDER_KIND_KEYS = {
+  openai: 'kind.openai', openrouter: 'kind.openrouter', groq: 'kind.groq', gemini: 'kind.gemini',
+  anthropic: 'kind.anthropic', ollama: 'kind.ollama', lmstudio: 'kind.lmstudio', custom: 'kind.custom',
+} as const;
 export const providerKinds = ['openai', 'openrouter', 'groq', 'gemini', 'anthropic', 'ollama', 'lmstudio', 'custom'] as const;
 export type ProviderKind = (typeof providerKinds)[number];
 export type CredentialAction = 'unchanged' | 'replaced' | 'removed';
@@ -99,7 +105,7 @@ export function parseDraftSnapshot<T extends { providers?: ProviderRead[] }>(raw
   }
 }
 
-type Translate = (key: string, values?: Record<string, string | number>) => string;
+type Translate = ReturnType<typeof useTranslations<'aiSettings'>>;
 type Props = {
   providers: ProviderRead[];
   savedIds: string[];
@@ -116,7 +122,7 @@ type Props = {
 
 /** Result chip for one model test; pairs an icon with text so state never depends on color. */
 export function ModelTestChip({ state, t }: { state: ModelTestState | undefined; t: Translate }) {
-  const [Icon, key] = state === 'supported' ? [Check, 'capPassed'] : state === 'failed' ? [AlertCircle, 'capFailed'] : state === 'unsupported' ? [X, 'capUnsupported'] : [Minus, state === 'pending' ? 'checkingConnection' : 'capNotChecked'];
+  const [Icon, key] = state === 'supported' ? [Check, 'cap.passed' as const] : state === 'failed' ? [AlertCircle, 'cap.failed' as const] : state === 'unsupported' ? [X, 'cap.unsupported' as const] : [Minus, state === 'pending' ? ('checkingConnection' as const) : ('cap.notChecked' as const)];
   return <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"><Icon className="size-3" aria-hidden="true" />{t(key)}</span>;
 }
 
@@ -124,7 +130,7 @@ export function ModelTestChip({ state, t }: { state: ModelTestState | undefined;
 export function ProviderEditor({ providers, savedIds, secrets, disabled, discoveringId, discoverError, discovered, onChange, onSecret, onDiscover, t }: Props) {
   const patch = (id: string, change: Partial<ProviderRead>) => onChange(providers.map((item) => (item.id === id ? { ...item, ...change } : item)));
   return <div className="flex flex-col gap-4">
-    {providers.length === 0 && <p className="text-muted-foreground m-0">{t('providersEmpty')}</p>}
+    {providers.length === 0 && <p className="text-muted-foreground m-0">{t('providers.empty')}</p>}
     {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
     {providers.map((provider) => {
       const secret = secrets[provider.id] ?? { key: '', action: 'unchanged' as const };
@@ -134,12 +140,12 @@ export function ProviderEditor({ providers, savedIds, secrets, disabled, discove
       return <div key={provider.id} className="flex flex-col gap-3 rounded-lg border border-border p-4" data-testid={`provider-${provider.id}`}>
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="m-0 mr-auto text-base font-semibold">{provider.label || provider.id}</h3>
-          {provider.local && <Badge variant="outline">{t('providerLocal')}</Badge>}
-          {provider.policy_denied && <Badge variant="destructive">{t('providerPolicyDenied')}</Badge>}
-          <Button type="button" variant="outline" disabled={disabled} aria-label={t('providerDelete', { label: provider.label || provider.id })} onClick={() => onChange(providers.filter((item) => item.id !== provider.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
+          {provider.local && <Badge variant="outline">{t('provider.local')}</Badge>}
+          {provider.policy_denied && <Badge variant="destructive">{t('provider.policyDenied')}</Badge>}
+          <Button type="button" variant="outline" disabled={disabled} aria-label={t('provider.delete', { label: provider.label || provider.id })} onClick={() => onChange(providers.filter((item) => item.id !== provider.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
         </div>
         <FieldGrid>
-          <label className="field"><span className="label">{t('providerKind')}</span>
+          <label className="field"><span className="label">{t('provider.kind')}</span>
             <Select disabled={disabled} value={provider.kind} onValueChange={(value) => {
               const kind = value as ProviderKind;
               const old = providerPresets[provider.kind];
@@ -147,25 +153,25 @@ export function ProviderEditor({ providers, savedIds, secrets, disabled, discove
               // Hosted kinds always take the preset endpoint (drops any typed URL); self-hosted keeps a custom URL unless it still equals the old preset.
               const keep = !isHostedKind(kind) && !isHostedKind(provider.kind) && provider.base_url && provider.base_url !== old.baseUrl;
               patch(provider.id, { kind, local: preset.local, base_url: keep ? provider.base_url : preset.baseUrl || null });
-            }}><SelectTrigger aria-label={t('providerKind')}><SelectValue /></SelectTrigger><SelectContent>{providerKinds.map((kind) => <SelectItem key={kind} value={kind}>{t(`kind_${kind}`)}</SelectItem>)}</SelectContent></Select></label>
-          <label className="field"><span className="label">{t('providerLabel')}</span><Input disabled={disabled} maxLength={80} value={provider.label} onChange={(event) => patch(provider.id, { label: event.target.value })} /></label>
+            }}><SelectTrigger aria-label={t('provider.kind')}><SelectValue /></SelectTrigger><SelectContent>{providerKinds.map((kind) => <SelectItem key={kind} value={kind}>{t(PROVIDER_KIND_KEYS[kind])}</SelectItem>)}</SelectContent></Select></label>
+          <label className="field"><span className="label">{t('provider.label')}</span><Input disabled={disabled} maxLength={80} value={provider.label} onChange={(event) => patch(provider.id, { label: event.target.value })} /></label>
           {hosted
-            ? <div className="field"><span className="label">{t('providerEndpoint')}</span><p className="text-muted-foreground m-0 break-all text-sm">{provider.base_url ?? providerPresets[provider.kind].baseUrl}</p><span className="text-muted-foreground text-xs">{t('providerEndpointFixed')}</span></div>
-            : <label className="field"><span className="label">{t('providerBaseUrl')}</span><Input type="url" disabled={disabled} value={provider.base_url ?? ''} onChange={(event) => patch(provider.id, { base_url: event.target.value || null })} placeholder={providerPresets[provider.kind].baseUrl || 'https://gateway.example/v1'} /></label>}
-          <label className="field"><span className="label">{t('providerKey')}</span><PasswordInput disabled={disabled || secret.action === 'removed'} autoComplete="new-password" value={secret.key} onChange={(event) => onSecret(provider.id, { key: event.target.value, action: event.target.value ? 'replaced' : 'unchanged' })} placeholder={provider.local ? t('providerKeyOptional') : t('gatewayCredentialHelp')} /></label>
+            ? <div className="field"><span className="label">{t('provider.endpoint')}</span><p className="text-muted-foreground m-0 break-all text-sm">{provider.base_url ?? providerPresets[provider.kind].baseUrl}</p><span className="text-muted-foreground text-xs">{t('provider.endpointFixed')}</span></div>
+            : <label className="field"><span className="label">{t('provider.baseUrl')}</span><Input type="url" disabled={disabled} value={provider.base_url ?? ''} onChange={(event) => patch(provider.id, { base_url: event.target.value || null })} placeholder={providerPresets[provider.kind].baseUrl || 'https://gateway.example/v1'} /></label>}
+          <label className="field"><span className="label">{t('provider.key')}</span><PasswordInput disabled={disabled || secret.action === 'removed'} autoComplete="new-password" value={secret.key} onChange={(event) => onSecret(provider.id, { key: event.target.value, action: event.target.value ? 'replaced' : 'unchanged' })} placeholder={provider.local ? t('provider.keyOptional') : t('gatewayCredentialHelp')} /></label>
         </FieldGrid>
-        {hostHint && <p className="text-muted-foreground m-0 text-xs">{t('providerDockerHint')}</p>}
-        <p className="text-muted-foreground m-0 text-xs">{t('credential')} {secret.action === 'removed' ? t('providerKeyWillRemove') : provider.credential_configured ? t('configured') : t('notConfigured')}{provider.destination_id ? ` · ${provider.destination_id}` : ''}. {t('credentialNeverShown')}</p>
+        {hostHint && <p className="text-muted-foreground m-0 text-xs">{t('provider.dockerHint')}</p>}
+        <p className="text-muted-foreground m-0 text-xs">{t('credential')} {secret.action === 'removed' ? t('provider.keyWillRemove') : provider.credential_configured ? t('configured') : t('notConfigured')}{provider.destination_id ? ` · ${provider.destination_id}` : ''}. {t('credentialNeverShown')}</p>
         {provider.policy_denied && <p className="error m-0" role="alert">{t('blockedEndpoint')}</p>}
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" disabled={disabled || discoveringId === provider.id || (!hosted && !provider.base_url) || (isNew && !provider.local && !secret.key)} onClick={() => onDiscover(provider)}>{discoveringId === provider.id ? t('checkingConnection') : t('providerDiscover')}</Button>
-          {provider.credential_configured && <Button type="button" variant="outline" disabled={disabled} onClick={() => onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })}>{secret.action === 'removed' ? t('providerKeyKeep') : t('removeGatewayCredential')}</Button>}
+          <Button type="button" variant="outline" disabled={disabled || discoveringId === provider.id || (!hosted && !provider.base_url) || (isNew && !provider.local && !secret.key)} onClick={() => onDiscover(provider)}>{discoveringId === provider.id ? t('checkingConnection') : t('provider.discover')}</Button>
+          {provider.credential_configured && <Button type="button" variant="outline" disabled={disabled} onClick={() => onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })}>{secret.action === 'removed' ? t('provider.keyKeep') : t('removeGatewayCredential')}</Button>}
         </div>
-        <div role="status" aria-live="polite">{(discovered[provider.id]?.length ?? 0) > 0 && <p className="text-muted-foreground m-0"><Check className="inline size-4" aria-hidden="true" /> {t('modelsAvailable', { count: discovered[provider.id].length })}</p>}</div>
+        <div role="status" aria-live="polite">{(discovered[provider.id]?.length ?? 0) > 0 && <p className="text-muted-foreground m-0"><Check className="inline size-4" aria-hidden="true" /> {t('models.available', { count: discovered[provider.id].length })}</p>}</div>
         {discoverError?.id === provider.id && <p className="error m-0" role="alert"><X className="inline size-4" aria-hidden="true" /> {discoverError.text}</p>}
       </div>;
     })}
-    <div><Button type="button" variant="outline" disabled={disabled || providers.length >= maxProviders} onClick={() => onChange([...providers, newProvider('openai', providers)])}><Plus className="size-4" aria-hidden="true" /> {t('providerAdd')}</Button>
-      {providers.length >= maxProviders && <p className="text-muted-foreground m-0 mt-2 text-xs">{t('providerMax', { max: maxProviders })}</p>}</div>
+    <div><Button type="button" variant="outline" disabled={disabled || providers.length >= maxProviders} onClick={() => onChange([...providers, newProvider('openai', providers)])}><Plus className="size-4" aria-hidden="true" /> {t('provider.add')}</Button>
+      {providers.length >= maxProviders && <p className="text-muted-foreground m-0 mt-2 text-xs">{t('provider.max', { max: maxProviders })}</p>}</div>
   </div>;
 }

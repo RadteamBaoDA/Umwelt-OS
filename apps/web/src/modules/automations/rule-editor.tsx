@@ -16,6 +16,7 @@ import {
   type Action, type ActionType, type Automation, type Capabilities, type Condition, type Definition,
   type Operator, type PreviewResult, type Scalar, type Trigger, type TriggerType,
 } from './api';
+import { actionLabel, operatorLabel, outcomeLabel, triggerLabel, type AutomationFormErrorKey } from './message-keys';
 import { useResetOnChange } from '@/modules/shared';
 
 const operators: Operator[] = ['eq', 'ne', 'in', 'gt', 'gte', 'lt', 'lte'];
@@ -62,29 +63,29 @@ function actionIsIncomplete(action: Action): boolean {
 }
 
 /** Collects message keys for a trigger missing its required parameter (schedule cron, webhook alias). */
-function triggerErrors(trigger: Trigger): string[] {
-  if (trigger.type === 'schedule' && !(trigger.cron ?? '').trim()) return ['errCron'];
-  if (trigger.type === 'webhook' && !trigger.hook) return ['errWebhookAlias'];
+function triggerErrors(trigger: Trigger): AutomationFormErrorKey[] {
+  if (trigger.type === 'schedule' && !(trigger.cron ?? '').trim()) return ['err.cron'];
+  if (trigger.type === 'webhook' && !trigger.hook) return ['err.webhookAlias'];
   return [];
 }
 
 /** Parses the condition rows against the trigger's field types; unparsable values add `errCondition` to `errors`. */
-function parseConditions(draft: Draft, fields: Record<string, string>, errors: string[]): Condition[] {
+function parseConditions(draft: Draft, fields: Record<string, string>, errors: AutomationFormErrorKey[]): Condition[] {
   return draft.conditions.map((item) => {
     const kind = fields[item.field] ?? 'string';
     const parts = item.operator === 'in' ? item.value.split(',').map((part) => parseScalar(part, kind)) : [parseScalar(item.value, kind)];
-    if (parts.some((part) => part === null)) errors.push('errCondition');
+    if (parts.some((part) => part === null)) errors.push('err.condition');
     return { field: item.field, operator: item.operator, value: item.operator === 'in' ? parts as Scalar[] : (parts[0] ?? '') as Scalar };
   });
 }
 
 /** Converts the form draft into the API definition; returns message keys instead when invalid. */
-export function toDefinition(draft: Draft, caps: Capabilities): { definition?: Definition; errors: string[] } {
-  const errors: string[] = triggerErrors(draft.trigger);
+export function toDefinition(draft: Draft, caps: Capabilities): { definition?: Definition; errors: AutomationFormErrorKey[] } {
+  const errors: AutomationFormErrorKey[] = triggerErrors(draft.trigger);
   const fields = caps.triggers.find((item) => item.type === draft.trigger.type)?.fields ?? {};
   const conditions = parseConditions(draft, fields, errors);
-  if (draft.actions.length === 0) errors.push('errNoActions');
-  if (draft.actions.some(actionIsIncomplete)) errors.push('errAction');
+  if (draft.actions.length === 0) errors.push('err.noActions');
+  if (draft.actions.some(actionIsIncomplete)) errors.push('err.action');
   const trigger = { ...draft.trigger, ...(draft.trigger.type === 'schedule' ? { cron: draft.trigger.cron?.trim() } : {}) };
   return errors.length ? { errors: [...new Set(errors)] } : { definition: { trigger, conditions, actions: draft.actions }, errors };
 }
@@ -155,11 +156,11 @@ function TriggerFieldset({ vm }: { vm: RuleEditorVm }) {
   const { t, draft, setDraft, triggerCap, capsData } = vm;
   return (
     <fieldset className="space-y-3 rounded-lg border border-border bg-surface p-4">
-      <legend className="px-1 text-sm font-semibold">{t('trigger')}</legend>
+      <legend className="px-1 text-sm font-semibold">{t('trigger.label')}</legend>
       <Select value={draft.trigger.type} onValueChange={(value) => setDraft({ ...draft, trigger: defaultTrigger(value as TriggerType), conditions: [] })}>
-        <SelectTrigger aria-label={t('trigger')}><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={t('trigger.label')}><SelectValue /></SelectTrigger>
         <SelectContent>{capsData.triggers.map((item) => <SelectItem key={item.type} value={item.type} disabled={!item.available}>
-          {t(`trigger_${item.type}`)}{item.available ? '' : ` · ${t('unavailable')}`}</SelectItem>)}</SelectContent>
+          {triggerLabel(t, item.type)}{item.available ? '' : ` · ${t('unavailable')}`}</SelectItem>)}</SelectContent>
       </Select>
       {triggerCap && !triggerCap.available && <p role="status" className="text-sm text-destructive">{t('moduleDisabled')}</p>}
       {draft.trigger.type === 'schedule' && <ScheduleTriggerFields vm={vm} />}
@@ -196,7 +197,7 @@ function ActionsFieldset({ vm }: { vm: RuleEditorVm }) {
       <Select value="" onValueChange={(value) => setDraft({ ...draft, actions: [...draft.actions, defaultAction(value as ActionType)] })}>
         <SelectTrigger aria-label={t('addAction')}><SelectValue placeholder={t('addAction')} /></SelectTrigger>
         <SelectContent>{capsData.actions.map((item) => <SelectItem key={item.type} value={item.type} disabled={!item.available || draft.actions.length >= 10}>
-          {t(`action_${item.type}`)}{item.available ? '' : ` · ${t('moduleDisabled')}`}</SelectItem>)}</SelectContent>
+          {actionLabel(t, item.type)}{item.available ? '' : ` · ${t('moduleDisabled')}`}</SelectItem>)}</SelectContent>
       </Select>
     </fieldset>
   );
@@ -206,11 +207,11 @@ function ActionsFieldset({ vm }: { vm: RuleEditorVm }) {
 function ScopeSummary({ vm }: { vm: RuleEditorVm }) {
   const { t, draft, targets, approvals } = vm;
   return (
-    <section aria-label={t('scope')} className="space-y-1 rounded-lg border border-border bg-surface p-4 text-sm">
-      <h3 className="font-semibold">{t('scope')}</h3>
-      <p>{t('scopeSummary', { actions: draft.actions.length, approvals, limit: maxRunsPerHour })}</p>
-      <p>{targets.length ? t('scopeTargets', { targets: [...new Set(targets)].join(', ') }) : t('scopeNoTargets')}</p>
-      {draft.actions.some((a) => a.type === 'run_agent') && <p>{t('scopeModelSpend')}</p>}
+    <section aria-label={t('scope.label')} className="space-y-1 rounded-lg border border-border bg-surface p-4 text-sm">
+      <h3 className="font-semibold">{t('scope.label')}</h3>
+      <p>{t('scope.summary', { actions: draft.actions.length, approvals, limit: maxRunsPerHour })}</p>
+      <p>{targets.length ? t('scope.targets', { targets: [...new Set(targets)].join(', ') }) : t('scope.noTargets')}</p>
+      {draft.actions.some((a) => a.type === 'run_agent') && <p>{t('scope.modelSpend')}</p>}
       <p className="text-muted-foreground">{t('startsDisabled')}</p>
     </section>
   );
@@ -221,16 +222,16 @@ function PreviewSection({ vm }: { vm: RuleEditorVm }) {
   const { t, sample, setSample, preview, fields, defined, dry, runPreview } = vm;
   return (
     <section className="space-y-2 rounded-lg border border-border bg-surface p-4">
-      <h3 className="text-sm font-semibold">{t('preview')}</h3>
-      <p className="text-xs text-muted-foreground">{t('previewHelp')}</p>
+      <h3 className="text-sm font-semibold">{t('preview.label')}</h3>
+      <p className="text-xs text-muted-foreground">{t('preview.help')}</p>
       <div className="grid gap-2 sm:grid-cols-2">{Object.entries(fields).map(([name, kind]) => <label key={name} className="block space-y-1 text-sm"><span>{name} · {kind}</span>
         <Input value={sample[name] ?? ''} onChange={(e) => setSample({ ...sample, [name]: e.target.value })} /></label>)}</div>
-      <Button type="button" variant="outline" disabled={dry.isPending || defined.errors.length > 0} onClick={runPreview}>{t('runPreview')}</Button>
-      {dry.error && <p role="alert" className="text-sm text-destructive">{t('previewFailed')}</p>}
+      <Button type="button" variant="outline" disabled={dry.isPending || defined.errors.length > 0} onClick={runPreview}>{t('run.preview')}</Button>
+      {dry.error && <p role="alert" className="text-sm text-destructive">{t('preview.failed')}</p>}
       {preview && <div role="status" className="space-y-1 text-sm">
-        <p className="font-medium">{preview.matched ? t('previewMatched') : t('previewNotMatched')}</p>
-        <ul className="list-disc pl-5">{preview.reasons.map((r) => <li key={r.index}>{r.field} {t(`op_${r.operator}`)} · {t(`outcome_${r.outcome}`)}</li>)}</ul>
-        {preview.planned_actions.length > 0 && <ul className="list-disc pl-5">{preview.planned_actions.map((a, i) => <li key={i}>{t(`action_${a.type}`)} · {a.module}{a.requires_approval ? ` · ${t('needsApprovalShort')}` : ''}</li>)}</ul>}
+        <p className="font-medium">{preview.matched ? t('preview.matched') : t('preview.notMatched')}</p>
+        <ul className="list-disc pl-5">{preview.reasons.map((r) => <li key={r.index}>{r.field} {operatorLabel(t, r.operator)} · {outcomeLabel(t, r.outcome)}</li>)}</ul>
+        {preview.planned_actions.length > 0 && <ul className="list-disc pl-5">{preview.planned_actions.map((a, i) => <li key={i}>{actionLabel(t, a.type)} · {a.module}{a.requires_approval ? ` · ${t('needsApprovalShort')}` : ''}</li>)}</ul>}
       </div>}
     </section>
   );
@@ -262,7 +263,7 @@ function useRuleEditorState(props: RuleEditorProps) {
   const [sample, setSample] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [webhookCredential, setWebhookCredential] = useState<{ token: string; endpoint: string; expires_at: string } | null>(null);
-  const [formErrors, setFormErrors] = useState<string[]>([]);
+  const [formErrors, setFormErrors] = useState<AutomationFormErrorKey[]>([]);
   const [cleared, setCleared] = useState(0);
 
   return { t, display, client, caps, draft, setDraft, sample, setSample, preview, setPreview, webhookCredential, setWebhookCredential, formErrors, setFormErrors, cleared, setCleared, rule, csrfToken, onDone };
@@ -283,7 +284,7 @@ function useRuleEditorDerived(p: ReturnType<typeof useRuleEditorState>) {
 
   const triggerCap = caps.data?.triggers.find((item) => item.type === draft.trigger.type);
   const fields = triggerCap?.fields ?? {};
-  const defined = useMemo(() => (caps.data ? toDefinition(draft, caps.data) : { errors: ['errCondition'] }), [draft, caps.data]);
+  const defined = useMemo(() => (caps.data ? toDefinition(draft, caps.data) : { errors: ['err.condition'] }), [draft, caps.data]);
   const targets = draft.actions.filter((item) => item.type === 'call_webhook' && item.alias).map((item) => item.alias as string);
   const approvals = draft.actions.filter((item) => item.type === 'call_webhook' || item.type === 'run_agent').length;
 
@@ -327,14 +328,14 @@ function useRuleEditorActions(p: ReturnType<typeof useRuleEditorMutations>) {
   const { caps, draft, setDraft, setFormErrors, save, dry } = p;
   /** Validates locally, then runs a server dry preview (no queue, webhook, task or model call). */
   const runPreview = () => {
-    const result = caps.data ? toDefinition(draft, caps.data) : { errors: ['errCondition'] as string[], definition: undefined };
+    const result = caps.data ? toDefinition(draft, caps.data) : { errors: ['err.condition'] as AutomationFormErrorKey[], definition: undefined };
     setFormErrors(result.errors);
     if (result.definition) dry.mutate(result.definition);
   };
   /** Validates locally and saves; server-side validation errors are shown beneath the form. */
   const submit = () => {
-    const result = caps.data ? toDefinition(draft, caps.data) : { errors: ['errCondition'] as string[], definition: undefined };
-    const errors = draft.name.trim() ? result.errors : [...result.errors, 'errName'];
+    const result = caps.data ? toDefinition(draft, caps.data) : { errors: ['err.condition'] as AutomationFormErrorKey[], definition: undefined };
+    const errors: AutomationFormErrorKey[] = draft.name.trim() ? result.errors : [...result.errors, 'err.name'];
     setFormErrors(errors);
     if (!errors.length && result.definition) save.mutate(result.definition);
   };
@@ -366,10 +367,10 @@ function WebhookTriggerFields({ vm }: { vm: RuleEditorVm }) {
   const { t, display, draft, setDraft, webhookCredential, setWebhookCredential, rotateWebhookCredential, revokeInboundCredential } = vm;
   return (
     <div className="space-y-2">
-        <label className="block space-y-1 text-sm"><span>{t('webhookAlias')}</span>
-          <Input aria-label={t('webhookAlias')} placeholder={t('webhookAliasHint')} maxLength={40}
+        <label className="block space-y-1 text-sm"><span>{t('webhook.alias')}</span>
+          <Input aria-label={t('webhook.alias')} placeholder={t('webhook.aliasHint')} maxLength={40}
             value={draft.trigger.hook ?? ''} onChange={(e) => { setDraft({ ...draft, trigger: { ...draft.trigger, hook: e.target.value } }); setWebhookCredential(null); }} /></label>
-        <p className="text-xs text-muted-foreground">{t('webhookInboundHelp')}</p>
+        <p className="text-xs text-muted-foreground">{t('webhook.inboundHelp')}</p>
         <Button type="button" variant="outline" disabled={!draft.trigger.hook || rotateWebhookCredential.isPending || revokeInboundCredential.isPending}
           onClick={() => { if (draft.trigger.hook) { setWebhookCredential(null); rotateWebhookCredential.mutate(draft.trigger.hook); } }}>{t('rotateWebhookCredential')}</Button>
         <Button type="button" variant="outline" disabled={!draft.trigger.hook || rotateWebhookCredential.isPending || revokeInboundCredential.isPending}
@@ -377,9 +378,9 @@ function WebhookTriggerFields({ vm }: { vm: RuleEditorVm }) {
         {rotateWebhookCredential.isError && <p role="alert" className="text-sm text-destructive">{t('credentialIssueFailed')}</p>}
         {revokeInboundCredential.isError && <p role="alert" className="text-sm text-destructive">{t('credentialRevokeFailed')}</p>}
         {webhookCredential && <p role="status" className="break-all text-xs text-muted-foreground">
-          {t('webhookCredentialOnce')} <code>{webhookCredential.token}</code><br />
-          {t('webhookEndpoint')} <code>{webhookCredential.endpoint}</code><br />
-          {t('webhookCredentialExpires')} {formatDateTime(webhookCredential.expires_at, display.locale, display.timezone)}
+          {t('webhook.credentialOnce')} <code>{webhookCredential.token}</code><br />
+          {t('webhook.endpoint')} <code>{webhookCredential.endpoint}</code><br />
+          {t('webhook.credentialExpires')} {formatDateTime(webhookCredential.expires_at, display.locale, display.timezone)}
         </p>}
       </div>
   );
@@ -406,7 +407,7 @@ function ConditionRow({ vm, cond, index }: { vm: RuleEditorVm; cond: CondForm; i
           <SelectContent>{Object.keys(fields).map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}</SelectContent></Select>
         <Select value={cond.operator} onValueChange={(value) => setCondition(index, { operator: value as Operator })}>
           <SelectTrigger aria-label={t('operator')}><SelectValue /></SelectTrigger>
-          <SelectContent>{operators.filter((op) => fields[cond.field] === 'number' || !['gt', 'gte', 'lt', 'lte'].includes(op)).map((op) => <SelectItem key={op} value={op}>{t(`op_${op}`)}</SelectItem>)}</SelectContent></Select>
+          <SelectContent>{operators.filter((op) => fields[cond.field] === 'number' || !['gt', 'gte', 'lt', 'lte'].includes(op)).map((op) => <SelectItem key={op} value={op}>{operatorLabel(t, op)}</SelectItem>)}</SelectContent></Select>
         {fields[cond.field] === 'boolean' && cond.operator !== 'in'
           ? <Select value={cond.value || undefined} onValueChange={(value) => setCondition(index, { value })}>
             <SelectTrigger aria-label={t('value')}><SelectValue placeholder={t('value')} /></SelectTrigger>
@@ -423,7 +424,7 @@ function ActionRow({ vm, action, index }: { vm: RuleEditorVm; action: Action; in
   return (
     <div className="space-y-2 rounded-md border border-border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <strong className="text-sm">{index + 1}. {t(`action_${action.type}`)}</strong>
+          <strong className="text-sm">{index + 1}. {actionLabel(t, action.type)}</strong>
           <div className="flex gap-2">
             <Button type="button" size="sm" variant="outline" disabled={index === 0} onClick={() => move(index, -1)}>{t('moveUp')}</Button>
             <Button type="button" size="sm" variant="outline" disabled={index === draft.actions.length - 1} onClick={() => move(index, 1)}>{t('moveDown')}</Button>
@@ -464,9 +465,9 @@ function WebhookActionParams({ vm, action, index }: { vm: RuleEditorVm; action: 
   return (
     <div className="grid gap-2 sm:grid-cols-2">
           <Select value={action.alias || undefined} onValueChange={(value) => setAction(index, { alias: value })}>
-            <SelectTrigger aria-label={t('webhookAlias')}><SelectValue placeholder={capsData.webhook_aliases.length ? t('webhookAlias') : t('noAliases')} /></SelectTrigger>
+            <SelectTrigger aria-label={t('webhook.alias')}><SelectValue placeholder={capsData.webhook_aliases.length ? t('webhook.alias') : t('noAliases')} /></SelectTrigger>
             <SelectContent>{capsData.webhook_aliases.map((alias) => <SelectItem key={alias} value={alias}>{alias}</SelectItem>)}</SelectContent></Select>
           <Input aria-label={t('eventName')} placeholder={t('eventName')} maxLength={100} value={action.event ?? ''} onChange={(e) => setAction(index, { event: e.target.value })} />
-          <p className="text-xs text-muted-foreground sm:col-span-2">{t('webhookHelp')}</p></div>
+          <p className="text-xs text-muted-foreground sm:col-span-2">{t('webhook.help')}</p></div>
   );
 }

@@ -49,30 +49,30 @@ export function AgentPicker({ value, disabled, onChange, profiles, onOpen }: Age
         }}
       >
         <SelectTrigger
-          aria-label={tAgents('agentSelect')}
+          aria-label={tAgents('agent.select')}
           data-testid="chat-agent-picker"
           aria-describedby={disabled ? reasonId : undefined}
           title={disabled ? t('agentPickerBusyHint') : undefined}
           className="h-8 w-auto max-w-32 shrink-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
         >
-          <SelectValue placeholder={tAgents('agentSelect')} />
+          <SelectValue placeholder={tAgents('agent.select')} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
+          <SelectItem value="assistant">{tAgents('agent.assistant')}</SelectItem>
           {/* A disabled option keeps the listbox valid (no non-option child) while still announcing the pending load. */}
           {opened && !profiles && (
             <SelectItem value="__loading" disabled>
               <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-              {tAgents('agentProfilesLoading')}
+              {tAgents('agent.profilesLoading')}
             </SelectItem>
           )}
           {(profiles ?? []).map((profile) => (
             <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
-              {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}
+              {tAgents(profileTitleKeys[profile.id] ?? 'agent.profileKnowledge')}
               {profile.capability === 'partial'
-                ? ` · ${tAgents('agentPartial')}`
+                ? ` · ${tAgents('agent.partial')}`
                 : profile.capability === 'unavailable'
-                  ? ` · ${tAgents('agentUnavailable')}`
+                  ? ` · ${tAgents('agent.unavailable')}`
                   : ''}
             </SelectItem>
           ))}

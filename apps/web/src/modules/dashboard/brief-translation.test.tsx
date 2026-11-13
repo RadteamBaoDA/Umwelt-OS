@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { translationsMessages } from '@/core/messages/translations';
+import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({ fetchTranslationSettings: vi.fn(), submitTranslationBatch: vi.fn(), readTranslationBatch: vi.fn() }));
 vi.mock('@/modules/translations/api', () => api);
@@ -32,7 +32,7 @@ const brief = (revision: number, content = 'Original text') => ({
 });
 const view = (b: ReturnType<typeof brief>) => (
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={{ translations: translationsMessages['en-us'] }}>
+    <NextIntlClientProvider locale="en-US" messages={{ translations: getCatalog('en-us', 'translations') }}>
       <BriefText brief={b} />
     </NextIntlClientProvider>
   </QueryClientProvider>
@@ -85,7 +85,7 @@ describe('Daily Brief translation', () => {
         <NextIntlClientProvider
           locale="en-US"
           messages={{
-            translations: translationsMessages['en-us'],
+            translations: getCatalog('en-us', 'translations'),
             sharing: { sharedBriefs: 'Shared briefs', loading: '…', noSharedBriefs: '-', briefMeta: 'r{revision} {time}' },
           }}
         >

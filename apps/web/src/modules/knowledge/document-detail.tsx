@@ -39,15 +39,15 @@ export function DocumentDetail(props: DocumentDetailProps) {
 
   // Render the retained receipt before deleted-document pending or 404 branches can replace this route.
   if (visibleDeletionOperationId) return <DocumentDeletionReceiptPanel operationId={visibleDeletionOperationId} />;
-  if (document.isPending) return <div className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loadingDocument')} />;
-  if (document.isError) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error" role="alert">{t(apiFailureKey(document.error) ?? 'loadFailed')}</p><Button variant="outline" onClick={() => document.refetch()}>{t('retry')}</Button></section>;
+  if (document.isPending) return <div className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading.document')} />;
+  if (document.isError) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error" role="alert">{t(apiFailureKey(document.error) ?? 'load.failed')}</p><Button variant="outline" onClick={() => document.refetch()}>{t('retry')}</Button></section>;
 
   const doc = document.data;
   const vm: DocumentDetailVm = { ...s1, doc };
   return <section className="rounded-lg border bg-card p-6"><Link href="/knowledge/documents">{t('back')}</Link>
 <DocumentHeader vm={vm} />
 
-    {remove.error && <p className="error" role="alert">{t(apiFailureKey(remove.error) ?? 'deleteFailed')}</p>}
+    {remove.error && <p className="error" role="alert">{t(apiFailureKey(remove.error) ?? 'delete.failed')}</p>}
     {citationTarget.isError && <p className="error" role="alert">{t('citedUnavailable')}</p>}
     {citationTarget.data && <section className="sub-panel" id="cited-chunk"><h2>{t('citedChunk', { version: citationTarget.data.version_number })}</h2><pre>{citationTarget.data.excerpt}</pre></section>}
     <div className="detail-grid"><div>
@@ -70,10 +70,10 @@ function DocumentHeader({ vm }: { vm: DocumentDetailVm }) {
   return (
 <>
 <div className="section-heading"><div><h1>{doc.title}</h1><p className="text-muted-foreground">{t('sourceLine', { source: source.data?.name ?? doc.source_id ?? '', version: doc.current_version, updated: formatDateTime(doc.updated_at, display.locale, display.timezone) })}</p>{Array.isArray(doc.metadata?.warnings) && doc.metadata.warnings.includes('parsed_text_truncated') && <p className="text-muted-foreground rounded-md border border-border p-3 text-sm" role="note">{t('parsedTextTruncated')}</p>}{(doc.raw_uri || doc.has_raw) && <Button type="button" variant="link" className="h-auto p-0" onClick={() => { setDownloadFailed(false); downloadRawDocument(doc.id, doc.title).catch(() => setDownloadFailed(true)); }}>{t('inspectOriginal')}</Button>}{downloadFailed && <p className="error" role="alert">{tSharing('downloadFailed')}</p>}</div>{isOwner && <div className="flex gap-2"><DocumentShareButton documentId={doc.id} currentVersion={doc.current_version} /><AlertDialog>
-        <AlertDialogTrigger asChild><Button variant="outline" aria-disabled={remove.isPending} onClick={(event) => { if (remove.isPending) event.preventDefault(); }}>{t('deleteDocument')}</Button></AlertDialogTrigger>
+        <AlertDialogTrigger asChild><Button variant="outline" aria-disabled={remove.isPending} onClick={(event) => { if (remove.isPending) event.preventDefault(); }}>{t('delete.document')}</Button></AlertDialogTrigger>
         <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>{t('deleteTitle', { title: doc.title })}</AlertDialogTitle><AlertDialogDescription>{t('deleteBody')}</AlertDialogDescription></AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => remove.mutate(id)}>{t('deleteDocument')}</AlertDialogAction></AlertDialogFooter>
+          <AlertDialogHeader><AlertDialogTitle>{t('delete.title', { title: doc.title })}</AlertDialogTitle><AlertDialogDescription>{t('delete.body')}</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => remove.mutate(id)}>{t('delete.document')}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog></div>}</div>
 </>
@@ -84,12 +84,12 @@ function DocumentHeader({ vm }: { vm: DocumentDetailVm }) {
 function DocumentContentPanel({ vm }: { vm: DocumentDetailVm }) {
   const { t, document, current, content, setContent, expectedVersion, setExpectedVersion, isOwner, saveContent } = vm;
   return (
-<section className="sub-panel"><h2>{t('content')}</h2>{current.isPending && <p className="text-muted-foreground">{t('loadingContent')}</p>}{current.isError && <p className="error" role="alert">{t('contentLoadFailed')} <Button variant="outline" onClick={() => current.refetch()}>{t('retry')}</Button></p>}
+<section className="sub-panel"><h2>{t('content')}</h2>{current.isPending && <p className="text-muted-foreground">{t('loading.content')}</p>}{current.isError && <p className="error" role="alert">{t('contentLoadFailed')} <Button variant="outline" onClick={() => current.refetch()}>{t('retry')}</Button></p>}
         {current.data && <div className="saved-content"><h3>{t('savedVersion', { version: current.data.version_number })}</h3><pre>{current.data.content}</pre></div>}
         {isOwner && content !== null && expectedVersion !== null && <form className="form" onSubmit={(event) => { event.preventDefault(); saveContent.mutate(); }}><div className="field"><Label htmlFor="content">{t('content')}</Label><Textarea id="content" className="input text-area min-h-[220px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]" value={content} onChange={(event) => setContent(event.target.value)} /></div>
-          {saveContent.error && <p className="error" role="alert">{saveContent.error instanceof ApiError && saveContent.error.status === 409 ? t('newerVersion') : t(apiFailureKey(saveContent.error) ?? 'saveContentFailed')}</p>}
+          {saveContent.error && <p className="error" role="alert">{saveContent.error instanceof ApiError && saveContent.error.status === 409 ? t('newerVersion') : t(apiFailureKey(saveContent.error) ?? 'save.contentFailed')}</p>}
           {saveContent.error instanceof ApiError && saveContent.error.status === 409 && <Button type="button" variant="outline" onClick={async () => { const latest = await document.refetch(); if (latest.data) setExpectedVersion(latest.data.current_version); }}>{t('useLatest')}</Button>}
-          <Button type="submit" disabled={saveContent.isPending}>{t('saveContent')}</Button></form>}
+          <Button type="submit" disabled={saveContent.isPending}>{t('save.content')}</Button></form>}
       </section>
 
   );
@@ -100,7 +100,7 @@ function DocumentDetailsPanel({ vm }: { vm: DocumentDetailVm }) {
   const { t, title, setTitle, metadata, setMetadata, metadataError, isOwner, saveMetadata, submitMetadata } = vm;
   return (
 isOwner && <section className="sub-panel"><h2>{t('details')}</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">{t('titleLabel')}</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">{t('metadataLabel')}</Label><Textarea id="metadata" className="input text-area compact min-h-[100px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
-        {metadataError && <p className="error" role="alert">{t(metadataError)}</p>}{saveMetadata.error && <p className="error" role="alert">{t(apiFailureKey(saveMetadata.error) ?? 'saveDetailsFailed')}</p>}<Button type="submit" disabled={saveMetadata.isPending}>{t('saveDetails')}</Button></form></section>
+        {metadataError && <p className="error" role="alert">{t(metadataError)}</p>}{saveMetadata.error && <p className="error" role="alert">{t(apiFailureKey(saveMetadata.error) ?? 'save.detailsFailed')}</p>}<Button type="submit" disabled={saveMetadata.isPending}>{t('save.details')}</Button></form></section>
   );
 }
 
@@ -108,10 +108,10 @@ isOwner && <section className="sub-panel"><h2>{t('details')}</h2><form className
 function DocumentVersionHistory({ vm }: { vm: DocumentDetailVm }) {
   const { t, display, versions, selected, selectedVersion, setSelectedVersion } = vm;
   return (
-<aside className="sub-panel"><h2>{t('versionHistory')}</h2>{versions.isPending && <p className="text-muted-foreground">{t('loadingVersions')}</p>}{versions.isError && <p className="error" role="alert">{t('versionsLoadFailed')} <Button variant="outline" onClick={() => versions.refetch()}>{t('retry')}</Button></p>}
-      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><BareButton type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version', { version: version.version_number })}</BareButton><span className="text-muted-foreground">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
-      {versions.hasNextPage && <Button variant="outline" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>{t('loadMoreVersions')}</Button>}
-      {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>{t('version', { version: selectedVersion })}</h3>{selected.isPending && <p className="text-muted-foreground">{t('loadingVersion')}</p>}{selected.isError && <p className="error" role="alert">{t('versionLoadFailed')}</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
+<aside className="sub-panel"><h2>{t('version.history')}</h2>{versions.isPending && <p className="text-muted-foreground">{t('loading.versions')}</p>}{versions.isError && <p className="error" role="alert">{t('versionsLoadFailed')} <Button variant="outline" onClick={() => versions.refetch()}>{t('retry')}</Button></p>}
+      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><BareButton type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version.label', { version: version.version_number })}</BareButton><span className="text-muted-foreground">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
+      {versions.hasNextPage && <Button variant="outline" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>{t('load.moreVersions')}</Button>}
+      {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>{t('version.label', { version: selectedVersion })}</h3>{selected.isPending && <p className="text-muted-foreground">{t('loading.version')}</p>}{selected.isError && <p className="error" role="alert">{t('version.loadFailed')}</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
     </aside>
   );
 }

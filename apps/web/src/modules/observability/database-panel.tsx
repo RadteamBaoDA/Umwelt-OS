@@ -77,8 +77,8 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
   const int = getNumberFormat(locale, { maximumFractionDigits: 0 });
   const n = (v: number | null | undefined, f = int) => (v == null ? null : f.format(v));
   const tablePager = usePagination(pg?.tables ?? []);
-  const title = t('dbPostgres');
-  if (!pg) return <Column title={title} tone="muted" meta={[]}><p className="m-0 text-sm text-muted-foreground">{t('dbUnavailable')}</p></Column>;
+  const title = t('db.postgres');
+  if (!pg) return <Column title={title} tone="muted" meta={[]}><p className="m-0 text-sm text-muted-foreground">{t('db.unavailable')}</p></Column>;
   const conn = pg.connections;
   const ratio = connectionRatio(conn);
   const tone = connectionTone(ratio);
@@ -86,8 +86,8 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
   const tps = latestDbValue(buckets, 'pg_tps_avg');
   const meta = [pg.version, formatUptime(pg.uptime_seconds, locale)].filter((v): v is string => !!v);
   const sentence = !finding ? null : finding.kind === 'deadRows'
-    ? (finding.ago ? t('dbFindDeadAgo', { table: finding.table, percent: finding.percent, ago: finding.ago }) : t('dbFindDead', { table: finding.table, percent: finding.percent }))
-    : finding.kind === 'connections' ? t('dbFindConnections', { total: finding.total, max: finding.max }) : t('dbFindCache', { percent: finding.percent });
+    ? (finding.ago ? t('db.findDeadAgo', { table: finding.table, percent: finding.percent, ago: finding.ago }) : t('db.findDead', { table: finding.table, percent: finding.percent }))
+    : finding.kind === 'connections' ? t('db.findConnections', { total: finding.total, max: finding.max }) : t('db.findCache', { percent: finding.percent });
   const connData = series(buckets, bucketSeconds, (d) => ({ value: d.pg_connections_avg, max: d.pg_connections_max }));
   const tpsData = series(buckets, bucketSeconds, (d) => ({ value: d.pg_tps_avg }));
   const cacheData = series(buckets, bucketSeconds, (d) => ({ value: d.pg_cache_hit_ratio_avg == null ? null : d.pg_cache_hit_ratio_avg * 100 }));
@@ -95,29 +95,29 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
   return <Column title={title} tone={statusTone(pg.status)} meta={meta}>
     {sentence && <p className="m-0 text-sm" role="status">{sentence}</p>}
     <dl className="m-0 grid grid-cols-2 gap-x-4">
-      <Fact label={t('dbSize')} value={formatBytes(pg.database_size_bytes, locale)} />
-      <Fact label={t('dbConnections')} value={conn && conn.total != null ? `${int.format(conn.total)} / ${conn.max == null ? '—' : int.format(conn.max)}` : null} tone={tone === 'success' ? 'muted' : tone}>
-        {ratio != null && <UsageBar ratio={ratio} tone={tone} label={t('dbConnections')} />}
-        <span className="text-xs text-muted-foreground">{t('dbConnectionsNote')}</span>
+      <Fact label={t('db.size')} value={formatBytes(pg.database_size_bytes, locale)} />
+      <Fact label={t('db.connections')} value={conn && conn.total != null ? `${int.format(conn.total)} / ${conn.max == null ? '—' : int.format(conn.max)}` : null} tone={tone === 'success' ? 'muted' : tone}>
+        {ratio != null && <UsageBar ratio={ratio} tone={tone} label={t('db.connections')} />}
+        <span className="text-xs text-muted-foreground">{t('db.connectionsNote')}</span>
       </Fact>
-      <Fact label={t('dbCacheHit')} value={formatRatio(pg.cache_hit_ratio, locale)} />
-      <Fact label={t('dbIndexHit')} value={formatRatio(pg.index_hit_ratio, locale)} />
-      <Fact label={t('dbTps')} value={n(tps, num)} />
-      <Fact label={t('dbDeadlocks')} value={n(pg.deadlocks)} />
-      <Fact label={t('dbLocksWaiting')} value={n(pg.locks_waiting)} />
-      <Fact label={t('dbLongestTx')} value={pg.longest_transaction_seconds == null ? null : formatUptime(pg.longest_transaction_seconds, locale)} tone={longestTxTone(pg.longest_transaction_seconds)} />
-      <Fact label={t('dbTempBytes')} value={formatBytes(pg.temp_bytes, locale)} />
+      <Fact label={t('db.cacheHit')} value={formatRatio(pg.cache_hit_ratio, locale)} />
+      <Fact label={t('db.indexHit')} value={formatRatio(pg.index_hit_ratio, locale)} />
+      <Fact label={t('db.tps')} value={n(tps, num)} />
+      <Fact label={t('db.deadlocks')} value={n(pg.deadlocks)} />
+      <Fact label={t('db.locksWaiting')} value={n(pg.locks_waiting)} />
+      <Fact label={t('db.longestTx')} value={pg.longest_transaction_seconds == null ? null : formatUptime(pg.longest_transaction_seconds, locale)} tone={longestTxTone(pg.longest_transaction_seconds)} />
+      <Fact label={t('db.tempBytes')} value={formatBytes(pg.temp_bytes, locale)} />
     </dl>
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-      <Trend title={t('dbTrendConnections')} data={connData} empty={t('sysCollecting')} keys={[{ dataKey: 'value', name: t('dbAvg') }, { dataKey: 'max', name: t('dbPeak'), neutral: true }]} />
-      <Trend title={t('dbTps')} data={tpsData} empty={t('sysCollecting')} keys={[{ dataKey: 'value', name: t('dbTps') }]} />
-      <Trend title={t('dbCacheHit')} data={cacheData} unit="%" empty={t('sysCollecting')} keys={[{ dataKey: 'value', name: t('dbCacheHit') }]} />
+      <Trend title={t('db.trendConnections')} data={connData} empty={t('sys.collecting')} keys={[{ dataKey: 'value', name: t('db.avg') }, { dataKey: 'max', name: t('db.peak'), neutral: true }]} />
+      <Trend title={t('db.tps')} data={tpsData} empty={t('sys.collecting')} keys={[{ dataKey: 'value', name: t('db.tps') }]} />
+      <Trend title={t('db.cacheHit')} data={cacheData} unit="%" empty={t('sys.collecting')} keys={[{ dataKey: 'value', name: t('db.cacheHit') }]} />
     </div>
-    <h4 className="m-0 mt-1 text-sm font-semibold">{t('dbTables')}</h4>
-    {tablePager.total === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('dbTablesEmpty')}</p> : <><Table>
+    <h4 className="m-0 mt-1 text-sm font-semibold">{t('db.tables')}</h4>
+    {tablePager.total === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('db.tablesEmpty')}</p> : <><Table>
       <TableHeader><TableRow>
-        <TableHead>{t('dbColTable')}</TableHead><TableHead className="text-right">{t('dbColSize')}</TableHead><TableHead className="text-right">{t('dbColLive')}</TableHead>
-        <TableHead className="text-right">{t('dbColDead')}</TableHead><TableHead className="text-right">{t('dbColScans')}</TableHead><TableHead className="text-right">{t('dbColVacuum')}</TableHead>
+        <TableHead>{t('db.colTable')}</TableHead><TableHead className="text-right">{t('db.colSize')}</TableHead><TableHead className="text-right">{t('db.colLive')}</TableHead>
+        <TableHead className="text-right">{t('db.colDead')}</TableHead><TableHead className="text-right">{t('db.colScans')}</TableHead><TableHead className="text-right">{t('db.colVacuum')}</TableHead>
       </TableRow></TableHeader>
       <TableBody>{tables.map((tb) => {
         const dead = deadRatioTone(tb.dead_ratio);
@@ -141,8 +141,8 @@ function RedisColumn({ redis, buckets, bucketSeconds, locale }: { redis: RedisSt
   const t = useTranslations('observability');
   const num = getNumberFormat(locale, { maximumFractionDigits: 1 });
   const int = getNumberFormat(locale, { maximumFractionDigits: 0 });
-  const title = t('dbRedis');
-  if (!redis) return <Column title={title} tone="muted" meta={[]}><p className="m-0 text-sm text-muted-foreground">{t('dbUnavailable')}</p></Column>;
+  const title = t('db.redis');
+  if (!redis) return <Column title={title} tone="muted" meta={[]}><p className="m-0 text-sm text-muted-foreground">{t('db.unavailable')}</p></Column>;
   const meta = [redis.version, formatUptime(redis.uptime_seconds, locale)].filter((v): v is string => !!v);
   const limited = redis.max_memory_bytes != null && redis.max_memory_bytes > 0;
   const memRatio = limited && redis.used_memory_bytes != null ? redis.used_memory_bytes / (redis.max_memory_bytes as number) : null;
@@ -153,20 +153,20 @@ function RedisColumn({ redis, buckets, bucketSeconds, locale }: { redis: RedisSt
   const opsData = series(buckets, bucketSeconds, (d) => ({ value: d.redis_ops_per_sec_avg }));
   return <Column title={title} tone={statusTone(redis.status)} meta={meta}>
     <dl className="m-0 grid grid-cols-2 gap-x-4">
-      <Fact label={t('dbMemory')} value={memory} tone={memTone === 'success' ? 'muted' : memTone}>
-        {memRatio != null ? <UsageBar ratio={memRatio} tone={memTone} label={t('dbMemory')} /> : used != null && !limited && <span className="text-xs text-muted-foreground">{t('dbUnlimited')}</span>}
+      <Fact label={t('db.memory')} value={memory} tone={memTone === 'success' ? 'muted' : memTone}>
+        {memRatio != null ? <UsageBar ratio={memRatio} tone={memTone} label={t('db.memory')} /> : used != null && !limited && <span className="text-xs text-muted-foreground">{t('db.unlimited')}</span>}
       </Fact>
-      <Fact label={t('dbFragmentation')} value={redis.fragmentation_ratio == null ? null : num.format(redis.fragmentation_ratio)} tone={fragmentationTone(redis.fragmentation_ratio)} />
-      <Fact label={t('dbClients')} value={redis.connected_clients == null ? null : int.format(redis.connected_clients)} />
-      <Fact label={t('dbOps')} value={redis.ops_per_sec == null ? null : num.format(redis.ops_per_sec)} />
-      <Fact label={t('dbHitRatio')} value={formatRatio(redis.keyspace_hit_ratio, locale)} />
-      <Fact label={t('dbEvicted')} value={redis.evicted_keys == null ? null : int.format(redis.evicted_keys)} tone={evictedTone(redis.evicted_keys)} />
-      <Fact label={t('dbKeys')} value={redis.keys_total == null ? null : int.format(redis.keys_total)} />
-      <Fact label={t('dbLastSave')} value={redis.last_save_status} tone={saveTone(redis.last_save_status)} />
+      <Fact label={t('db.fragmentation')} value={redis.fragmentation_ratio == null ? null : num.format(redis.fragmentation_ratio)} tone={fragmentationTone(redis.fragmentation_ratio)} />
+      <Fact label={t('db.clients')} value={redis.connected_clients == null ? null : int.format(redis.connected_clients)} />
+      <Fact label={t('db.ops')} value={redis.ops_per_sec == null ? null : num.format(redis.ops_per_sec)} />
+      <Fact label={t('db.hitRatio')} value={formatRatio(redis.keyspace_hit_ratio, locale)} />
+      <Fact label={t('db.evicted')} value={redis.evicted_keys == null ? null : int.format(redis.evicted_keys)} tone={evictedTone(redis.evicted_keys)} />
+      <Fact label={t('db.keys')} value={redis.keys_total == null ? null : int.format(redis.keys_total)} />
+      <Fact label={t('db.lastSave')} value={redis.last_save_status} tone={saveTone(redis.last_save_status)} />
     </dl>
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      <Trend title={t('dbMemory')} data={memData} unit="MiB" empty={t('sysCollecting')} keys={[{ dataKey: 'value', name: t('dbMemory') }]} />
-      <Trend title={t('dbOps')} data={opsData} empty={t('sysCollecting')} keys={[{ dataKey: 'value', name: t('dbOps') }]} />
+      <Trend title={t('db.memory')} data={memData} unit="MiB" empty={t('sys.collecting')} keys={[{ dataKey: 'value', name: t('db.memory') }]} />
+      <Trend title={t('db.ops')} data={opsData} empty={t('sys.collecting')} keys={[{ dataKey: 'value', name: t('db.ops') }]} />
     </div>
   </Column>;
 }
@@ -182,13 +182,13 @@ export function DatabasePanel({ buckets, bucketSeconds }: { buckets: HistoryBuck
   const stats = useQuery({ queryKey: ['system-database'], queryFn: getDatabaseStats, refetchInterval: 15_000 });
   const updated = useMemo(() => stats.dataUpdatedAt
     ? getDateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: display.timezone }).format(new Date(stats.dataUpdatedAt)) : null, [stats.dataUpdatedAt, locale, display.timezone]);
-  return <section className="flex min-w-0 flex-col gap-3" aria-label={t('dbTitle')}>
+  return <section className="flex min-w-0 flex-col gap-3" aria-label={t('db.title')}>
     <div className="flex flex-wrap items-baseline justify-between gap-2">
-      <h2 className="m-0 text-base font-semibold">{t('dbTitle')}</h2>
-      {updated && <span className="text-sm tabular-nums text-muted-foreground">{t('dbUpdated', { time: updated })}</span>}
+      <h2 className="m-0 text-base font-semibold">{t('db.title')}</h2>
+      {updated && <span className="text-sm tabular-nums text-muted-foreground">{t('db.updated', { time: updated })}</span>}
     </div>
     {stats.isPending ? <div className="h-80 w-full animate-pulse rounded-md bg-rule" role="status" aria-label={t('loadingStatus')} />
-      : stats.isError ? <div role="alert" className="flex flex-col items-start gap-2 text-sm"><p className="m-0 text-destructive">{t('sysBlockFailed')}</p><Button type="button" variant="outline" onClick={() => void stats.refetch()}>{t('retry')}</Button></div>
+      : stats.isError ? <div role="alert" className="flex flex-col items-start gap-2 text-sm"><p className="m-0 text-destructive">{t('sys.blockFailed')}</p><Button type="button" variant="outline" onClick={() => void stats.refetch()}>{t('retry')}</Button></div>
         : <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <PostgresColumn pg={stats.data.postgres} buckets={buckets} bucketSeconds={bucketSeconds} locale={locale} />
           <RedisColumn redis={stats.data.redis} buckets={buckets} bucketSeconds={bucketSeconds} locale={locale} />

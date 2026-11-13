@@ -7,6 +7,14 @@ import { StoryDetail } from '@/modules/news';
 import { DocumentDialogBody } from './document-dialog-body';
 import { EntityDialogBody } from './entity-dialog-body';
 
+/** Literal `detail` catalog keys of the dialog chrome per target kind (no runtime key building). */
+const DIALOG_TITLE_KEYS = { story: 'title.story', entity: 'title.entity', document: 'title.document' } as const;
+const DIALOG_DESCRIPTION_KEYS = {
+  story: 'description.story',
+  entity: 'description.entity',
+  document: 'description.document',
+} as const;
+
 export type DetailTarget = {
   kind: 'story' | 'entity' | 'document';
   id: string;
@@ -57,8 +65,8 @@ export function DetailDialog({ target, onClose, onCloseAutoFocus }: DetailDialog
         className="grid-rows-[auto_minmax(0,1fr)] gap-0 h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] overflow-hidden rounded-xl p-0 sm:h-[85dvh] sm:max-h-[85dvh] sm:w-[calc(100vw-2rem)] sm:max-w-[880px]"
       >
         <DialogHeader className="border-b border-border py-4 pl-6 pr-16 text-left">
-          <DialogTitle>{t(`title_${kind}`)}</DialogTitle>
-          <DialogDescription>{t(`description_${kind}`)}</DialogDescription>
+          <DialogTitle>{t(DIALOG_TITLE_KEYS[kind])}</DialogTitle>
+          <DialogDescription>{t(DIALOG_DESCRIPTION_KEYS[kind])}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-hidden">
           {current?.kind === 'story' && supported && <div className="h-full p-3 sm:p-4"><StoryDetail storyId={current.id} sourceIds={current.sourceIds ?? []} onBack={stack.length ? goBack : onClose} onClose={onClose} /></div>}

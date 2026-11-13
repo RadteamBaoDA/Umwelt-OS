@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { observabilityMessages } from './messages';
+import { getCatalog } from '@locales';
 import { SystemStatusDashboard } from './system-status-dashboard';
 
 const api = vi.hoisted(() => ({ history: vi.fn(), settings: vi.fn() }));
@@ -24,7 +24,7 @@ vi.mock('@/components/ui/select', () => ({
 
 /** Renders the dashboard with fresh query state. */
 function view() {
-  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NextIntlClientProvider locale="en-US" messages={{ observability: observabilityMessages['en-us'], uiSweep: {} }} onError={() => undefined}><SystemStatusDashboard /></NextIntlClientProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NextIntlClientProvider locale="en-US" messages={{ observability: getCatalog('en-us', 'observability'), uiSweep: {} }} onError={() => undefined}><SystemStatusDashboard /></NextIntlClientProvider></QueryClientProvider>);
 }
 
 describe('SystemStatusDashboard history controls', () => {

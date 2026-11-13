@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { decideAction, getRuleConversationId, listRuns, type Automation, type Run, type RunAction } from './api';
+import { actionLabel, actionStatusLabel, runStatusLabel, triggerLabel } from './message-keys';
 
 const activeStatuses = new Set(['queued', 'running', 'awaiting_approval']);
 
@@ -33,17 +34,17 @@ function ActionRow({ rule, run, action, csrfToken, onOpenChat }: {
   const agentRun = action.result_reference?.startsWith('agent_run:');
   return <li className="space-y-2 rounded-md border border-border p-3 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <strong>{action.ordinal}. {t(`action_${action.type}`)}</strong>
-      <span className="rounded-full bg-muted px-2 py-1 text-xs">{t(`actionStatus_${action.status}`)}</span>
+      <strong>{action.ordinal}. {actionLabel(t, action.type)}</strong>
+      <span className="rounded-full bg-muted px-2 py-1 text-xs">{actionStatusLabel(t, action.status)}</span>
     </div>
     {action.error_code && <p className="text-xs text-muted-foreground">{t('errorCode', { code: action.error_code })}</p>}
     {action.result_reference && <p className="break-all text-xs text-muted-foreground">{t('resultReference', { reference: action.result_reference })}</p>}
-    {pending && <div role="group" aria-label={t('approvalTitle')} className="space-y-2 rounded-md border border-border bg-surface p-3">
-      <p className="font-medium">{t('approvalTitle')}</p>
-      {spec?.type === 'call_webhook' && <p>{t('approvalWebhook', { alias: spec.alias ?? '', event: spec.event ?? '' })}</p>}
-      {spec?.type === 'run_agent' && <p>{t('approvalAgent', { profile: spec.profile_id ?? '', instruction: spec.instruction ?? '' })}</p>}
-      {!spec && <p className="text-destructive">{t('approvalRevisionChanged')}</p>}
-      {action.approval_expires_at && <p className="text-xs text-muted-foreground">{t('approvalExpires', { time: formatDateTime(action.approval_expires_at, display.locale, display.timezone) })}</p>}
+    {pending && <div role="group" aria-label={t('approval.title')} className="space-y-2 rounded-md border border-border bg-surface p-3">
+      <p className="font-medium">{t('approval.title')}</p>
+      {spec?.type === 'call_webhook' && <p>{t('approval.webhook', { alias: spec.alias ?? '', event: spec.event ?? '' })}</p>}
+      {spec?.type === 'run_agent' && <p>{t('approval.agent', { profile: spec.profile_id ?? '', instruction: spec.instruction ?? '' })}</p>}
+      {!spec && <p className="text-destructive">{t('approval.revisionChanged')}</p>}
+      {action.approval_expires_at && <p className="text-xs text-muted-foreground">{t('approval.expires', { time: formatDateTime(action.approval_expires_at, display.locale, display.timezone) })}</p>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" disabled={decide.isPending || expired || !spec} onClick={() => decide.mutate('approve')}>{t('approve')}</Button>
         <Button type="button" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate('deny')}>{t('deny')}</Button>
@@ -73,9 +74,9 @@ export function RunDetail({ rule, csrfToken, onBack }: { rule: Automation; csrfT
       if (id) chat.openDrawer({ conversationId: id });
     } catch { setChatMissing(true); }
   };
-  return <section className="space-y-4" aria-label={t('runHistory')}>
+  return <section className="space-y-4" aria-label={t('run.history')}>
     <header className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="text-lg font-semibold">{t('runHistoryFor', { name: rule.name })}</h3>
+      <h3 className="text-lg font-semibold">{t('run.historyFor', { name: rule.name })}</h3>
       <div className="flex gap-2">
         <Button type="button" variant="outline" onClick={() => void runs.refetch()}>{t('refresh')}</Button>
         <Button type="button" variant="outline" onClick={onBack}>{t('back')}</Button>
@@ -87,10 +88,10 @@ export function RunDetail({ rule, csrfToken, onBack }: { rule: Automation; csrfT
     {runs.data && runs.data.items.length === 0 && <p className="text-sm text-muted-foreground">{t('noRuns')}</p>}
     <ul className="space-y-3">{runs.data?.items.map((run) => <li key={run.id} className="space-y-2 rounded-lg border border-border bg-surface p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong className="text-sm">{t(`trigger_${run.trigger_type}`)} · {formatDateTime(run.created_at, display.locale, display.timezone)}</strong>
-        <span className="rounded-full bg-muted px-2 py-1 text-xs">{t(`runStatus_${run.status}`)}</span>
+        <strong className="text-sm">{triggerLabel(t, run.trigger_type)} · {formatDateTime(run.created_at, display.locale, display.timezone)}</strong>
+        <span className="rounded-full bg-muted px-2 py-1 text-xs">{runStatusLabel(t, run.status)}</span>
       </div>
-      <p className="text-xs text-muted-foreground">{t('runMeta', { revision: run.revision, depth: run.depth, attempts: run.attempts })}{run.reason ? ` · ${t('reason', { code: run.reason })}` : ''}</p>
+      <p className="text-xs text-muted-foreground">{t('run.meta', { revision: run.revision, depth: run.depth, attempts: run.attempts })}{run.reason ? ` · ${t('reason', { code: run.reason })}` : ''}</p>
       {run.actions.length > 0 && <ul className="space-y-2">{run.actions.map((action) => <ActionRow key={action.ordinal} rule={rule} run={run} action={action} csrfToken={csrfToken} onOpenChat={() => void openChat()} />)}</ul>}
     </li>)}</ul>
   </section>;

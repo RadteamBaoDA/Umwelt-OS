@@ -258,7 +258,7 @@ describe('useEntityDetailController', () => {
 
     await act(async () => {
       await expect(result.current.mergePreview.mutateAsync({ targetId: 'e-2', splitName: '', reason: 'owner_review' })).rejects.toThrow(
-        'mergeTargetTypeChanged',
+        'merge.targetTypeChanged',
       );
     });
   });

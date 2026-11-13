@@ -1,5 +1,6 @@
 import type { ApiResponse } from '@/core/api-contract';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import type { AutomationRequestErrorKey } from './message-keys';
 
 export type TriggerType = 'schedule' | 'new_event' | 'new_document' | 'entity_changed' | 'task_due' | 'goal_deadline' | 'webhook' | 'connector_sync_result';
 export type ActionType = 'run_agent' | 'create_task' | 'create_notification' | 'generate_brief' | 'call_webhook';
@@ -93,12 +94,12 @@ export function decideAction(runId: string, ordinal: number, decision: 'approve'
 export async function getRuleConversationId(id: string): Promise<string | null> {
   return (await apiRequest<{ conversation_id: string | null }>(`${base}/${encodeURIComponent(id)}/conversation`)).conversation_id;
 }
-
 /** Maps a failed automation request to a localized message key; server text is never rendered. */
-export function errorMessageKey(error: unknown, fallback: 'actionFailed' | 'saveFailed'): string {
+export function errorMessageKey(error: unknown, fallback: 'action.failed' | 'saveFailed'): AutomationRequestErrorKey {
   if (!(error instanceof ApiError)) return fallback;
   if (error.status === 409) {
-    return ({ brief_slot_owned: 'conflictBriefSlot', quota_exceeded: 'conflictQuota', stale_revision: 'conflict' } as Record<string, string>)[error.code ?? ''] ?? 'conflictGeneric';
+    const byCode = { brief_slot_owned: 'conflict.briefSlot', quota_exceeded: 'conflict.quota', stale_revision: 'conflict.label' } as const;
+    return Object.hasOwn(byCode, error.code ?? '') ? byCode[error.code as keyof typeof byCode] : 'conflict.generic';
   }
   if (error.status === 422) return error.code === 'pause_before_brief_edit' ? 'pauseBeforeBriefEdit' : 'invalidServer';
   return fallback;

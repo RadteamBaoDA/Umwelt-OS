@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
-import { observabilityMessages } from './messages';
+import { getCatalog } from '@locales';
 import { HistoryRetention } from './history-retention';
 
 const api = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn() }));
@@ -19,7 +19,7 @@ vi.mock('@/components/ui/select', () => ({
 
 /** Renders the retention row with fresh query state. */
 function view() {
-  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NextIntlClientProvider locale="en-US" messages={{ observability: observabilityMessages['en-us'] }} onError={() => undefined}><HistoryRetention oldestSampleAt={null} /></NextIntlClientProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NextIntlClientProvider locale="en-US" messages={{ observability: getCatalog('en-us', 'observability') }} onError={() => undefined}><HistoryRetention oldestSampleAt={null} /></NextIntlClientProvider></QueryClientProvider>);
 }
 
 describe('HistoryRetention', () => {

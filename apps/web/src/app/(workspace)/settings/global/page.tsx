@@ -67,7 +67,7 @@ function GlobalSettingsContent() {
         <ul className="m-0 list-none p-0">
           {([['multiWorkspace', 'multi_workspace_enabled'], ['secureCookies', 'secure_cookies'], ['googleLogin', 'google_login_configured'], ['githubApp', 'github_app_configured'], ['n8n', 'n8n_configured'], ['mcpWidgets', 'mcp_widgets_enabled']] as const).map(([label, key]) => {
             const on = configuration.data[key];
-            return <StatusRow key={key} tone={on ? 'success' : 'muted'} name={t(label)} status={key.endsWith('_configured') ? (on ? t('st_configured') : t('st_not_configured')) : (on ? t('enabled') : t('disabled'))} />;
+            return <StatusRow key={key} tone={on ? 'success' : 'muted'} name={t(label)} status={key.endsWith('_configured') ? (on ? t('st.configured') : t('st.notConfigured')) : (on ? t('enabled') : t('disabled'))} />;
           })}
         </ul>
       </div>

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { NextIntlClientProvider } from "next-intl";
 import { commandDestinations, destinationForRole, detailDestinations, mainNavigation, settingsGroups } from "@/core/module-registry";
 import { WorkspaceSwitcher } from "@/core/app-shell/workspace-switcher";
-import { workspacesMessages } from "@/core/messages/workspaces";
+import { getCatalog } from '@locales';
 
 const select = vi.fn();
 vi.mock("@/core/workspace-context", () => ({
@@ -46,7 +46,7 @@ describe("member navigation", () => {
 describe("WorkspaceSwitcher", () => {
   it("calls selectWorkspace with the chosen id", async () => {
     render(
-      <NextIntlClientProvider locale="en-US" messages={{ workspaces: workspacesMessages["en-us"] }}>
+      <NextIntlClientProvider locale="en-US" messages={{ workspaces: getCatalog('en-us', 'workspaces') }}>
         <WorkspaceSwitcher />
       </NextIntlClientProvider>,
     );

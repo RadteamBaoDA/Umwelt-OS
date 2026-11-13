@@ -1,9 +1,23 @@
 import type { useTranslations } from 'next-intl';
 import { humanizeCode } from '@/modules/shared';
 
-/** Localizes a backend health status via `globalSettings.st_*`; unknown codes fall back to sentence-case words. */
+/** Literal `globalSettings` key per backend health status (no runtime key building). */
+const STATUS_KEYS = {
+  ok: 'st.ok',
+  healthy: 'st.healthy',
+  degraded: 'st.degraded',
+  down: 'st.down',
+  error: 'st.error',
+  unavailable: 'st.unavailable',
+  unconfigured: 'st.unconfigured',
+  configured: 'st.configured',
+  not_configured: 'st.notConfigured',
+  not_installed: 'st.notInstalled',
+} as const;
+
+/** Localizes a backend health status via the `globalSettings` `st.*` keys; unknown codes fall back to sentence-case words. */
 export function statusLabel(t: ReturnType<typeof useTranslations<'globalSettings'>>, status: string): string {
-  return t.has(`st_${status}` as never) ? t(`st_${status}` as never) : humanizeCode(status);
+  return Object.hasOwn(STATUS_KEYS, status) ? t(STATUS_KEYS[status as keyof typeof STATUS_KEYS]) : humanizeCode(status);
 }
 
 /** Maps backend component ids to `uiSweep` message keys; shared by System status and Global settings so both show the same service names. */

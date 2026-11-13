@@ -1,0 +1,22 @@
+{
+  "title": "Công việc",
+  "count": "Đã xong {done}/{total}",
+  "empty": "Chưa có công việc. Trợ lý có thể thêm, hoặc bạn tự thêm.",
+  "loading": "Đang tải công việc",
+  "loadFailed": "Không thể tải công việc.",
+  "retry": "Thử lại",
+  "mutateFailed": "Không thể lưu thay đổi. Đã hoàn tác.",
+  "expand": "Hiện công việc",
+  "collapse": "Ẩn công việc",
+  "addLabel": "Công việc mới",
+  "addPlaceholder": "Thêm công việc",
+  "add": "Thêm",
+  "complete": "Đánh dấu \"{title}\" là đã xong",
+  "reopen": "Đánh dấu \"{title}\" là chưa xong",
+  "edit": "Sửa \"{title}\"",
+  "save": "Lưu",
+  "cancel": "Hủy",
+  "remove": "Xóa \"{title}\"",
+  "editLabel": "Tiêu đề công việc",
+  "limit": "Một cuộc trò chuyện có tối đa {max} công việc."
+}

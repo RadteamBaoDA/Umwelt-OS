@@ -12,12 +12,12 @@ import { useWorkspace } from '@/core/workspace-context';
 import { grantShare, listShares, listWorkspaceMembers, revokeShare, shareKeys, type ShareResourceType, type ShareRow, type WorkspaceMember } from './api';
 
 /** Maps a share failure to a message key: 403 role, 404 invisible, 409 refresh. */
-export function shareErrorKey(error: unknown): 'errorRole' | 'errorInvisible' | 'errorRefresh' | 'errorFailed' {
-  if (!(error instanceof ApiError)) return 'errorFailed';
-  if (error.status === 403) return 'errorRole';
-  if (error.status === 404) return 'errorInvisible';
-  if (error.status === 409) return 'errorRefresh';
-  return 'errorFailed';
+export function shareErrorKey(error: unknown): 'error.role' | 'error.invisible' | 'error.refresh' | 'error.failed' {
+  if (!(error instanceof ApiError)) return 'error.failed';
+  if (error.status === 403) return 'error.role';
+  if (error.status === 404) return 'error.invisible';
+  if (error.status === 409) return 'error.refresh';
+  return 'error.failed';
 }
 
 type ShareDialogProps = {

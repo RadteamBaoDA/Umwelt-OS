@@ -96,7 +96,7 @@ function useAccountDeletionController(props: { csrfToken: string }) {
     onSettled: () => setPassword(''),
   });
   const ready = Boolean(preview.data?.can_delete && !preview.isFetching && !preview.isError && password && confirmation === 'DELETE');
-  const failure = deletion.error instanceof ApiError && deletion.error.code === 'password_incorrect' ? 'passwordIncorrect'
+  const failure: 'passwordIncorrect' | 'tooMany' | 'failed' = deletion.error instanceof ApiError && deletion.error.code === 'password_incorrect' ? 'passwordIncorrect'
     : deletion.error instanceof ApiError && deletion.error.status === 429 ? 'tooMany' : 'failed';
 
   /** Closing drops the transient password; an accepted/ambiguous in-flight request must settle first. */

@@ -126,7 +126,7 @@ export function UserMenu({ onOpenPreferences, onOpenAccount, onOpenChangePasswor
           <Link href="/knowledge/memory">{a('assistantMemory')}</Link>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={openDialog(onOpenAccount)}>{t('accountSettings')}</DropdownMenuItem>
-        <DropdownMenuItem onSelect={openDialog(onOpenChangePassword)}>{a('changePassword')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={openDialog(onOpenChangePassword)}>{a('change.password')}</DropdownMenuItem>
         <DropdownMenuItem disabled={signOutPending} onSelect={onSignOut}>
           {t('sign.out')}
         </DropdownMenuItem>

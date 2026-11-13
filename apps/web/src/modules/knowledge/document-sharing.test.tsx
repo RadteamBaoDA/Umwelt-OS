@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
-import { sharingMessages } from '@/core/messages/sharing';
+import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({
   listWorkspaceMembers: vi.fn(), listShares: vi.fn(), grantShare: vi.fn(), revokeShare: vi.fn(),
@@ -19,7 +19,7 @@ import { DocumentShareButton } from './document-sharing';
 const member = { user_id: 7, email: 'm@example.com', role: 'member' as const, membership_revision: 3 };
 function renderButton() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sharing: sharingMessages['en-us'] }}><DocumentShareButton documentId="d1" currentVersion={4} /></NextIntlClientProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sharing: getCatalog('en-us', 'sharing') }}><DocumentShareButton documentId="d1" currentVersion={4} /></NextIntlClientProvider></QueryClientProvider>);
 }
 
 describe('DocumentShareButton', () => {
@@ -60,6 +60,6 @@ describe('DocumentShareButton', () => {
     renderButton();
     await userEvent.click(screen.getByRole('button', { name: 'Share' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Share with m@example.com' }));
-    expect(await screen.findByText(sharingMessages['en-us'].errorRefresh)).toBeTruthy();
+    expect(await screen.findByText(getCatalog('en-us', 'sharing').error.refresh)).toBeTruthy();
   });
 });

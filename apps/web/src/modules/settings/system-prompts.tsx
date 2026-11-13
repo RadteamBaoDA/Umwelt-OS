@@ -10,6 +10,15 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { SettingsActions, SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
 
+/** Literal catalog keys of each known system prompt (no runtime key building); unknown server keys render raw. */
+const PROMPT_COPY_KEYS = {
+  chat: { label: 'label.chat', hint: 'hint.chat' },
+  brief: { label: 'label.brief', hint: 'hint.brief' },
+  entity_extraction: { label: 'label.entityExtraction', hint: 'hint.entityExtraction' },
+  timeline_extraction: { label: 'label.timelineExtraction', hint: 'hint.timelineExtraction' },
+  translation: { label: 'label.translation', hint: 'hint.translation' },
+} as const;
+
 type Entry = { key: string; value: string; default: string; customized: boolean };
 type Prompts = { configuration_revision: number; prompts: Entry[] };
 const MAX_CHARS = 4000;
@@ -44,9 +53,9 @@ export function SystemPromptsWorkspace() {
           delete rest[entry.key];
           return next === entry.value ? rest : { ...rest, [entry.key]: next };
         });
-        return <SettingsSection key={entry.key} title={<span className="flex flex-wrap items-center gap-2">{t(`label_${entry.key}` as 'label_chat')}{customized ? <span className="rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground">{t('customized')}</span> : null}</span>}>
+        return <SettingsSection key={entry.key} title={<span className="flex flex-wrap items-center gap-2">{(Object.hasOwn(PROMPT_COPY_KEYS, entry.key) ? t(PROMPT_COPY_KEYS[entry.key as keyof typeof PROMPT_COPY_KEYS].label) : entry.key)}{customized ? <span className="rounded-full border border-border px-2 py-0.5 text-xs font-normal text-muted-foreground">{t('customized')}</span> : null}</span>}>
           <label className="field">
-            <span className="text-sm text-muted-foreground">{t(`hint_${entry.key}` as 'hint_chat')}</span>
+            <span className="text-sm text-muted-foreground">{(Object.hasOwn(PROMPT_COPY_KEYS, entry.key) ? t(PROMPT_COPY_KEYS[entry.key as keyof typeof PROMPT_COPY_KEYS].hint) : '')}</span>
             <Textarea rows={5} maxLength={MAX_CHARS} disabled={save.isPending} value={value} onChange={(event) => setValue(event.target.value)} />
           </label>
           <div className="flex flex-wrap items-center justify-between gap-2">

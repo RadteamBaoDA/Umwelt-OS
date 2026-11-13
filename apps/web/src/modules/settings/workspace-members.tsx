@@ -78,7 +78,7 @@ function WorkspaceMembersHeader({ vm }: { vm: WorkspaceMembersVm }) {
 function InviteForm({ vm }: { vm: WorkspaceMembersVm }) {
   const { t, create, email, setEmail, emailError, submit } = vm;
   return (
-    <SettingsSection title={t('inviteHeading')}><form className="grid gap-3" onSubmit={submit} noValidate>
+    <SettingsSection title={t('invite.heading')}><form className="grid gap-3" onSubmit={submit} noValidate>
       <div className="field">
         <Label htmlFor="invite-email">{t('emailLabel')}</Label>
         <div className="flex flex-wrap gap-2">
@@ -262,7 +262,7 @@ function buildWorkspaceMembersActions(p: ReturnType<typeof useWorkspaceMembersDa
 
   const invitationRows = invitations.data?.pages.flatMap((p) => p.items) ?? [];
   const memberRows = members.data?.pages.flatMap((p) => p.items) ?? [];
-  const statusLabel = { pending: t('statusPending'), accepted: t('statusAccepted'), revoked: t('statusRevoked'), expired: t('statusExpired') };
+  const statusLabel = { pending: t('status.pending'), accepted: t('status.accepted'), revoked: t('status.revoked'), expired: t('status.expired') };
 
   return { ...p, error, errorKey, invitationRows, memberRows, statusLabel, failureText, submit, copy, confirmPending };
 }

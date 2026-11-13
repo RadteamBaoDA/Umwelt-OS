@@ -15,23 +15,23 @@ import { PickQrButton } from '@/modules/pick';
 
 export const profileTitleKeys: Record<
   string,
-  | 'agentProfileSupervisor'
-  | 'agentProfileKnowledge'
-  | 'agentProfileResearch'
-  | 'agentProfilePersonal'
-  | 'agentProfileProject'
-  | 'agentProfileNews'
-  | 'agentProfilePlanning'
-  | 'agentProfileAutomation'
+  | 'agent.profileSupervisor'
+  | 'agent.profileKnowledge'
+  | 'agent.profileResearch'
+  | 'agent.profilePersonal'
+  | 'agent.profileProject'
+  | 'agent.profileNews'
+  | 'agent.profilePlanning'
+  | 'agent.profileAutomation'
 > = {
-  supervisor: 'agentProfileSupervisor',
-  knowledge: 'agentProfileKnowledge',
-  research: 'agentProfileResearch',
-  personal: 'agentProfilePersonal',
-  project: 'agentProfileProject',
-  news: 'agentProfileNews',
-  planning: 'agentProfilePlanning',
-  automation: 'agentProfileAutomation',
+  supervisor: 'agent.profileSupervisor',
+  knowledge: 'agent.profileKnowledge',
+  research: 'agent.profileResearch',
+  personal: 'agent.profilePersonal',
+  project: 'agent.profileProject',
+  news: 'agent.profileNews',
+  planning: 'agent.profilePlanning',
+  automation: 'agent.profileAutomation',
 };
 
 /** Props of {@link ChatSessionHeader}. */

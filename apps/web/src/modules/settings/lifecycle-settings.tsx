@@ -32,16 +32,16 @@ function LifecycleRetention({ vm }: { vm: LifecycleSettingsVm }) {
   const { t, retention, saveRetention, days, setDays } = vm;
   return (
 <>
-    <h2 id="lifecycle-title" className="text-lg font-semibold">{t('lifecycleTitle')}</h2>
+    <h2 id="lifecycle-title" className="text-lg font-semibold">{t('lifecycle.title')}</h2>
     <article className="space-y-3">
-      <h3 className="font-medium">{t('retentionTitle')}</h3>
-      <p className="text-muted-foreground text-sm">{t('retentionDescription')}</p>
+      <h3 className="font-medium">{t('retention.title')}</h3>
+      <p className="text-muted-foreground text-sm">{t('retention.description')}</p>
       {retention.data && <div className="flex flex-wrap items-end gap-3">
         <label className="label">{t('agentTraceDays')}<Input className="mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
         <Button variant="outline" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
       </div>}
-      {retention.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
-      {saveRetention.isError && <p role="alert" className="text-destructive">{t('lifecycleSaveFailed')}</p>}
+      {retention.isError && <p role="alert" className="text-destructive">{t('lifecycle.loadFailed')}</p>}
+      {saveRetention.isError && <p role="alert" className="text-destructive">{t('lifecycle.saveFailed')}</p>}
     </article>
 </>
   );
@@ -59,13 +59,13 @@ function LifecycleModulesAndMaintenance({ vm }: { vm: LifecycleSettingsVm }) {
         <span>{module.name}{module.blocked_by.length > 0 && <span className="text-muted-foreground block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
         <Checkbox aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onCheckedChange={() => toggleModule.mutate({ state: modules.data!, module })} />
       </label>)}
-      {modules.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
+      {modules.isError && <p role="alert" className="text-destructive">{t('lifecycle.loadFailed')}</p>}
       {toggleModule.isError && <p role="alert" className="text-destructive">{t('moduleSaveFailed')}</p>}
     </article>
     <article className="space-y-2">
       <h3 className="font-medium">{t('maintenanceTitle')}</h3>
       {summary.data && <p className="text-muted-foreground text-sm">{t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}{summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}{summary.data.next_eligible_at ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}` : ''}</p>}
-      {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycleLoadFailed')}</p>}
+      {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycle.loadFailed')}</p>}
     </article>
 </>
   );

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
-import { apiFailureKey } from '@/core/api-failure-key';
+import { apiFailureKey, type ApiFailureKey } from '@/core/api-failure-key';
 import { SESSION_KEY } from '@/core/session';
 
 type ChangePasswordDialogProps = {
@@ -46,11 +46,11 @@ function useChangePassword(csrfToken: string) {
       clear();
     },
   });
-  const failure =
+  const failure: 'password.tooMany' | 'password.incorrect' | ApiFailureKey | null =
     change.error instanceof ApiError && change.error.status === 429
-      ? 'passwordTooMany'
+      ? 'password.tooMany'
       : change.error instanceof ApiError && change.error.code === 'password_incorrect'
-        ? 'passwordIncorrect'
+        ? 'password.incorrect'
         : change.error
           ? (apiFailureKey(change.error) ?? 'requestFailed')
           : null;
@@ -92,8 +92,8 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent closeLabel={closeLabel} onCloseAutoFocus={onCloseAutoFocus}>
         <DialogHeader>
-          <DialogTitle>{t('changePassword')}</DialogTitle>
-          <DialogDescription>{t('changePasswordHelp')}</DialogDescription>
+          <DialogTitle>{t('change.password')}</DialogTitle>
+          <DialogDescription>{t('change.passwordHelp')}</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="grid gap-3">
           <div className="field">
@@ -131,7 +131,7 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
             />
             {mismatch && (
               <span id="cp-confirm-error" className="error" role="alert">
-                {t('passwordMismatch')}
+                {t('password.mismatch')}
               </span>
             )}
           </div>
@@ -141,11 +141,11 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
             </p>
           )}
           <p className="text-muted-foreground" role="status">
-            {change.isSuccess ? t('passwordChanged') : ''}
+            {change.isSuccess ? t('password.changed') : ''}
           </p>
           <DialogFooter>
             <Button type="submit" disabled={!ready || change.isPending}>
-              {change.isPending ? t('changingPassword') : t('changePassword')}
+              {change.isPending ? t('changingPassword') : t('change.password')}
             </Button>
           </DialogFooter>
         </form>

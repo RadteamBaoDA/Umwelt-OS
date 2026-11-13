@@ -27,21 +27,21 @@ function displayDate(hit: SearchHit, locale: string, timezone: string, unknownLa
   return formatSearchDate(hit.published_at ?? hit.observed_at, locale, timezone) ?? unknownLabel;
 }
 
-const taskStatusKeys: Record<TaskStatus, string> = {
-  inbox: 'taskStatusInbox', todo: 'taskStatusTodo', in_progress: 'taskStatusInProgress',
-  blocked: 'taskStatusBlocked', done: 'taskStatusDone', cancelled: 'taskStatusCancelled',
-};
+const taskStatusKeys = {
+  inbox: 'task.statusInbox', todo: 'task.statusTodo', in_progress: 'task.statusInProgress',
+  blocked: 'task.statusBlocked', done: 'task.statusDone', cancelled: 'task.statusCancelled',
+} as const satisfies Record<TaskStatus, string>;
 
-const goalStatusKeys: Record<GoalStatus, string> = {
-  active: 'goalStatusActive', completed: 'goalStatusCompleted', paused: 'goalStatusPaused', cancelled: 'goalStatusCancelled',
-};
+const goalStatusKeys = {
+  active: 'goal.statusActive', completed: 'goal.statusCompleted', paused: 'goal.statusPaused', cancelled: 'goal.statusCancelled',
+} as const satisfies Record<GoalStatus, string>;
 
 /** Renders source-backed document hits while preserving their cited revision links. */
 export function SearchResults({ items }: { items: SearchHit[] }) {
   const t = useTranslations('entities');
   const { locale, timezone } = useDisplayPreferences();
   const formattingLocale = normalizeFormattingLocale(locale);
-  return <ul className="record-list" aria-label={t('searchResults')}>
+  return <ul className="record-list" aria-label={t('search.results')}>
     {items.map((hit) => {
       const date = displayDate(hit, formattingLocale, timezone, t('dateUnknown'));
       const revisionHref = `/knowledge/documents/${hit.citation.documentId}?version=${hit.version_number}#cited-revision`;
@@ -50,7 +50,7 @@ export function SearchResults({ items }: { items: SearchHit[] }) {
           <Link href={revisionHref}><strong>{hit.title}</strong></Link>
           <p className="text-muted-foreground">{hit.source.name} · {hit.source.type} · {date}{hit.content_type ? ` · ${hit.content_type}` : ''}</p>
           <p className="search-excerpt">{hit.excerpt}</p>
-          <Link href={revisionHref}>{t('openCitedRevision')} {hit.version_number}</Link>
+          <Link href={revisionHref}>{t('open.citedRevision')} {hit.version_number}</Link>
         </div>
       </li>;
     })}
@@ -62,13 +62,13 @@ export function TaskSearchResults({ items }: { items: TaskSearchHit[] }) {
   const t = useTranslations('entities');
   const { locale, timezone } = useDisplayPreferences();
   const formattingLocale = normalizeFormattingLocale(locale);
-  return <ul className="record-list" aria-label={t('searchTasks')}>
+  return <ul className="record-list" aria-label={t('search.tasks')}>
     {items.map((item) => <li className="record-row border border-border bg-card text-card-foreground rounded-md p-4" key={item.id}>
       <strong>{item.title}</strong>
       {item.description && <p className="search-excerpt">{item.description}</p>}
       <p className="text-muted-foreground">{t(taskStatusKeys[item.status])} · {t('revision')} {item.revision}
-        {item.due_date ? ` · ${t('taskDueDate')}: ${formatSearchDate(item.due_date, formattingLocale, timezone, true)}` : ''}
-        {item.due_at ? ` · ${t('taskDueAt')}: ${formatSearchDate(item.due_at, formattingLocale, timezone)}` : ''}
+        {item.due_date ? ` · ${t('task.dueDate')}: ${formatSearchDate(item.due_date, formattingLocale, timezone, true)}` : ''}
+        {item.due_at ? ` · ${t('task.dueAt')}: ${formatSearchDate(item.due_at, formattingLocale, timezone)}` : ''}
       </p>
     </li>)}
   </ul>;
@@ -79,13 +79,13 @@ export function GoalSearchResults({ items }: { items: GoalSearchHit[] }) {
   const t = useTranslations('entities');
   const { locale, timezone } = useDisplayPreferences();
   const formattingLocale = normalizeFormattingLocale(locale);
-  return <ul className="record-list" aria-label={t('searchGoals')}>
+  return <ul className="record-list" aria-label={t('search.goals')}>
     {items.map((item) => <li className="record-row border border-border bg-card text-card-foreground rounded-md p-4" key={item.id}>
       <strong>{item.title}</strong>
       {item.description && <p className="search-excerpt">{item.description}</p>}
       {item.desired_outcome && <p className="text-muted-foreground">{item.desired_outcome}</p>}
-      <p className="text-muted-foreground">{t(goalStatusKeys[item.status])} · {t('revision')} {item.revision} · {t('goalProgress', { progress: formatNumber(item.progress, locale, { maximumFractionDigits: 0 }) })}
-        {item.deadline ? ` · ${t('goalDeadline')}: ${formatSearchDate(item.deadline, formattingLocale, timezone, true)}` : ''}
+      <p className="text-muted-foreground">{t(goalStatusKeys[item.status])} · {t('revision')} {item.revision} · {t('goal.progress', { progress: formatNumber(item.progress, locale, { maximumFractionDigits: 0 }) })}
+        {item.deadline ? ` · ${t('goal.deadline')}: ${formatSearchDate(item.deadline, formattingLocale, timezone, true)}` : ''}
       </p>
     </li>)}
   </ul>;

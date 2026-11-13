@@ -29,6 +29,15 @@ export type StoryDetailProps = {
 const badgeClass = 'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
 const signalKeys = ['topic', 'entity', 'goal', 'recency', 'importance', 'novelty'] as const;
 type SignalKey = (typeof signalKeys)[number];
+/** Literal `detail` catalog key per relevance signal (no runtime key building). */
+const SIGNAL_LABEL_KEYS = {
+  topic: 'signal.topic',
+  entity: 'signal.entity',
+  goal: 'signal.goal',
+  recency: 'signal.recency',
+  importance: 'signal.importance',
+  novelty: 'signal.novelty',
+} as const satisfies Record<SignalKey, string>;
 
 /** Signals that explain why a story is relevant; none while relevance is unavailable, unknown signal names dropped. */
 function relevanceReasons(story: Story | undefined): SignalKey[] {
@@ -107,7 +116,7 @@ function StoryArticle({ vm }: { vm: StoryDetailVm }) {
           </div>
           <div className="flex items-start gap-2">
             <h2 id="story-detail-title" className="flex-1 text-xl font-semibold leading-snug">{translated?.title ?? story.title}</h2>
-            {firstUrl ? <a href={firstUrl} target="_blank" rel="noopener noreferrer" aria-label={d('openOriginal')} title={d('openOriginal')} className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"><ExternalLink aria-hidden="true" className="size-4" /></a> : null}
+            {firstUrl ? <a href={firstUrl} target="_blank" rel="noopener noreferrer" aria-label={d('open.original')} title={d('open.original')} className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"><ExternalLink aria-hidden="true" className="size-4" /></a> : null}
             <Button variant="ghost" size="icon" aria-label={d('copyCitation')} title={d('copyCitation')} onClick={() => { void copyCitation(); }}><CopyIcon aria-hidden="true" className="size-4" /></Button>
           </div>
           <p className="text-xs text-muted-foreground">
@@ -188,7 +197,7 @@ function StoryAside({ vm }: { vm: StoryDetailVm }) {
           {reasons.length ? (
             <div className="space-y-2">
               <h3 className="text-sm font-semibold">{d('whySeeThis')}</h3>
-              <ul className="flex flex-wrap gap-2">{reasons.map((name) => <li key={name} className={badgeClass}>{d(`signal_${name}`)}</li>)}</ul>
+              <ul className="flex flex-wrap gap-2">{reasons.map((name) => <li key={name} className={badgeClass}>{d(SIGNAL_LABEL_KEYS[name])}</li>)}</ul>
             </div>
           ) : null}
           {timeline.length ? (

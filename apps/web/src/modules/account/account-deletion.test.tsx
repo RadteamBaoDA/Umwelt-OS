@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accountDeletionMessages } from '@/core/messages/account-deletion';
+import { getCatalog } from '@locales';
 import { announceAccountErasure } from '@/core/account-erasure';
 import { AccountDeletionSection } from './account-deletion';
 
@@ -12,7 +12,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ accountDeletion: accountDeletionMessages['en-us'] }}><AccountDeletionSection csrfToken="csrf" /></NextIntlClientProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ accountDeletion: getCatalog('en-us', 'accountDeletion') }}><AccountDeletionSection csrfToken="csrf" /></NextIntlClientProvider></QueryClientProvider>);
 }
 
 describe('AccountDeletionSection', () => {

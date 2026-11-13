@@ -65,7 +65,7 @@ export function MemoryPrivacySettings() {
 
   const handlePurge = () => {
     if (!purgeForgotten && !purgeRejected && !purgeHistory) return;
-    if (window.confirm(t('purgeConfirm'))) {
+    if (window.confirm(t('purge.confirm'))) {
       purgeMutation.mutate({
         purge_forgotten_memories: purgeForgotten,
         purge_rejected_candidates: purgeRejected,
@@ -203,45 +203,45 @@ function PurgePanel({ vm }: { vm: MemoryPrivacySettingsVm }) {
   return (
     <div className="space-y-4 pt-6 border-t border-border">
       <div>
-        <h2 className="text-lg font-semibold">{t('purgeTitle')}</h2>
-        <p className="text-xs text-muted-foreground">{t('purgeHelp')}</p>
+        <h2 className="text-lg font-semibold">{t('purge.title')}</h2>
+        <p className="text-xs text-muted-foreground">{t('purge.help')}</p>
       </div>
 
       <div className="space-y-3 border rounded-lg p-5 bg-card">
         <ToggleRow
           id="purge-forgotten"
           checked={purgeForgotten}
-          title={t('purgeForgotten')}
-          description={t('purgeForgottenDesc')}
+          title={t('purge.forgotten')}
+          description={t('purge.forgottenDesc')}
           onChange={setPurgeForgotten}
         />
         <ToggleRow
           id="purge-rejected"
           bordered
           checked={purgeRejected}
-          title={t('purgeRejected')}
-          description={t('purgeRejectedDesc')}
+          title={t('purge.rejected')}
+          description={t('purge.rejectedDesc')}
           onChange={setPurgeRejected}
         />
         <ToggleRow
           id="purge-history"
           bordered
           checked={purgeHistory}
-          title={t('purgeHistory')}
-          description={t('purgeHistoryDesc')}
+          title={t('purge.history')}
+          description={t('purge.historyDesc')}
           onChange={setPurgeHistory}
         />
       </div>
 
       {purgeMutation.error && (
         <p className="text-destructive text-sm" role="alert">
-          {purgeMutation.error instanceof ApiError ? purgeMutation.error.message : t('purgeFailed')}
+          {purgeMutation.error instanceof ApiError ? purgeMutation.error.message : t('purge.failed')}
         </p>
       )}
 
       {purgeResult && (
         <p className="text-sm text-foreground bg-secondary/50 p-3 rounded-md" role="status">
-          {t('purgeSuccess', {
+          {t('purge.success', {
             memories: purgeResult.purged_memories_count,
             candidates: purgeResult.purged_candidates_count,
             conversations: purgeResult.purged_conversations_count,
@@ -256,7 +256,7 @@ function PurgePanel({ vm }: { vm: MemoryPrivacySettingsVm }) {
         disabled={purgeMutation.isPending || (!purgeForgotten && !purgeRejected && !purgeHistory)}
         onClick={handlePurge}
       >
-        {purgeMutation.isPending ? t('saving') : t('purgeButton')}
+        {purgeMutation.isPending ? t('saving') : t('purge.button')}
       </Button>
     </div>
   );

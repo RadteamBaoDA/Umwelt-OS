@@ -2,14 +2,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accountDeletionMessages } from '@/core/messages/account-deletion';
+import { getCatalog } from '@locales';
 import { AccountDeletionStatus } from './deletion-status';
 
 afterEach(() => vi.unstubAllGlobals());
 
 function mount(locale: 'en-us' | 'vi-vi' = 'en-us') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ accountDeletion: accountDeletionMessages[locale] }}><AccountDeletionStatus /></NextIntlClientProvider></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ accountDeletion: getCatalog(locale, 'accountDeletion') }}><AccountDeletionStatus /></NextIntlClientProvider></QueryClientProvider>);
 }
 
 describe('AccountDeletionStatus', () => {

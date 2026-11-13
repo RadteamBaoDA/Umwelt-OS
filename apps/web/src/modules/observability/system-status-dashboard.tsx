@@ -46,6 +46,12 @@ import {
 import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
 const RANGES: HistoryRange[] = ['1h', '24h', '7d', '30d', '90d'];
+/** Literal catalog keys per history range and run kind (no runtime key building). */
+const RANGE_LABEL_KEYS = { '1h': 'r1h', '24h': 'r24h', '7d': 'r7d', '30d': 'r30d', '90d': 'r90d' } as const satisfies Record<
+  HistoryRange,
+  string
+>;
+const RUN_KIND_KEYS = { ingestion: 'ingestion', agent: 'agent', automation: 'automation', chat: 'chat' } as const;
 const BAR: Record<Tone, string> = {
   success: 'bg-[var(--status-success)]',
   warning: 'bg-[var(--status-warning)]',
@@ -220,14 +226,14 @@ function QueueStages({
 }) {
   const t = useTranslations('observability');
   if (pending) return <Skeleton height={60} />;
-  if (failed) return <BlockError message={t('sysBlockFailed')} retry={retry} />;
+  if (failed) return <BlockError message={t('sys.blockFailed')} retry={retry} />;
   const entries = Object.entries(data ?? {}).filter(([, count]) => count > 0);
   const max = Math.max(1, ...entries.map(([, count]) => count));
   return (
     <div className="flex flex-col gap-2 border-t border-border pt-3">
-      <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t('queueNow')}</h3>
+      <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t('queue.now')}</h3>
       {entries.length === 0 ? (
-        <p className="m-0 text-sm text-muted-foreground">{t('queueEmpty')}</p>
+        <p className="m-0 text-sm text-muted-foreground">{t('queue.empty')}</p>
       ) : (
         entries.map(([stage, count]) => (
           <div key={stage} className="flex items-center gap-3 text-sm">
@@ -255,18 +261,18 @@ function SystemStatusHeader({ vm }: { vm: SystemStatusDashboardVm }) {
         {summary && (
           <p className="mt-2 mb-0 text-muted-foreground" role="status">
             {summary.coreOk
-              ? t('sysSummaryOk', { healthy: summary.healthy, total: summary.total })
-              : t('sysSummaryBad', { healthy: summary.healthy, total: summary.total })}
-            {summary.unconfigured > 0 && <> · {t('sysUnconfigured', { count: summary.unconfigured })}</>}
+              ? t('sys.summaryOk', { healthy: summary.healthy, total: summary.total })
+              : t('sys.summaryBad', { healthy: summary.healthy, total: summary.total })}
+            {summary.unconfigured > 0 && <> · {t('sys.unconfigured', { count: summary.unconfigured })}</>}
           </p>
         )}
       </div>
       <div className="flex items-center gap-3 text-sm text-muted-foreground">
-        {checkedAt && <span className="tabular-nums">{t('sysCheckedAt', { time: checkedAt })}</span>}
+        {checkedAt && <span className="tabular-nums">{t('sys.checkedAt', { time: checkedAt })}</span>}
         <Button
           type="button"
           variant="outline"
-          aria-label={t('sysRefresh')}
+          aria-label={t('sys.refresh')}
           onClick={() => {
             void health.refetch();
             void history.refetch();
@@ -288,13 +294,13 @@ function SystemStatusRange({ vm }: { vm: SystemStatusDashboardVm }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <Select value={range} onValueChange={(value) => setRange(value as HistoryRange)}>
-        <SelectTrigger className="w-40" aria-label={t('sysRange')}>
+        <SelectTrigger className="w-40" aria-label={t('sys.range')}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {RANGES.map((r) => (
             <SelectItem key={r} value={r}>
-              {t(`r${r}`)}
+              {t(RANGE_LABEL_KEYS[r])}
             </SelectItem>
           ))}
         </SelectContent>
@@ -313,17 +319,17 @@ function SystemStatusKpis({ vm }: { vm: SystemStatusDashboardVm }) {
   const { t, runs, queue, quality, num, runItems, failedRuns, uptime } = vm;
   return (
     <dl className="m-0 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
-      <Kpi label={t('kpiUptime')} value={uptime === null ? null : `${num.format(uptime)}%`} />
+      <Kpi label={t('kpi.uptime')} value={uptime === null ? null : `${num.format(uptime)}%`} />
       <Kpi
-        label={t('kpiFailedRuns')}
-        note={t('kpiFailedRunsNote')}
+        label={t('kpi.failedRuns')}
+        note={t('kpi.failedRunsNote')}
         value={runs.isSuccess ? `${failedRuns.length}/${runItems.length}` : null}
         danger={failedRuns.length > 0}
       />
-      <Kpi label={t('kpiQueue')} value={queue.data ? num.format(queueTotal(queue.data)) : null} />
-      <Kpi label={t('kpiStale')} value={quality.data ? num.format(quality.data.stale_sources) : null} />
+      <Kpi label={t('kpi.queue')} value={queue.data ? num.format(queueTotal(queue.data)) : null} />
+      <Kpi label={t('kpi.stale')} value={quality.data ? num.format(quality.data.stale_sources) : null} />
       {quality.data?.graph_sync_lag_seconds != null && (
-        <Kpi label={t('kpiGraphLag')} value={t('seconds', { value: num.format(quality.data.graph_sync_lag_seconds) })} />
+        <Kpi label={t('kpi.graphLag')} value={t('seconds', { value: num.format(quality.data.graph_sync_lag_seconds) })} />
       )}
     </dl>
   );
@@ -333,7 +339,7 @@ function SystemStatusKpis({ vm }: { vm: SystemStatusDashboardVm }) {
 function LatencyBlock({ vm }: { vm: SystemStatusDashboardVm }) {
   const { t, history, noSamples, latencyData, collecting, historyError } = vm;
   return (
-    <Block title={t('latencyTitle')}>
+    <Block title={t('latency.title')}>
       {history.isPending ? (
         <Skeleton height={220} />
       ) : history.isError ? (
@@ -344,11 +350,11 @@ function LatencyBlock({ vm }: { vm: SystemStatusDashboardVm }) {
         <BaseLineChart
           height={220}
           connectNulls
-          unit={t('latencyUnit')}
+          unit={t('latency.unit')}
           data={latencyData}
           series={[
-            { dataKey: 'value', name: t('latencyDb') },
-            { dataKey: 'redis', name: t('latencyRedis'), color: 'var(--chart-3)' },
+            { dataKey: 'value', name: t('latency.db') },
+            { dataKey: 'redis', name: t('latency.redis'), color: 'var(--chart-3)' },
           ]}
         />
       )}
@@ -364,7 +370,7 @@ function ServicesBlock({ vm }: { vm: SystemStatusDashboardVm }) {
       {health.isPending ? (
         <Skeleton height={320} />
       ) : health.isError ? (
-        <BlockError message={t('sysHealthFailed')} retry={() => void health.refetch()} />
+        <BlockError message={t('sys.healthFailed')} retry={() => void health.refetch()} />
       ) : (
         <>
           <ServiceGroup title={t('coreGroup')} keys={CORE_SERVICES} health={health.data} buckets={buckets} />
@@ -379,19 +385,19 @@ function ServicesBlock({ vm }: { vm: SystemStatusDashboardVm }) {
 function ActivityBlock({ vm }: { vm: SystemStatusDashboardVm }) {
   const { t, runs, time, clock, activity, finding, axis } = vm;
   return (
-    <Block title={t('activityTitle')}>
+    <Block title={t('activity.title')}>
       {runs.isPending ? (
         <Skeleton height={200} />
       ) : runs.isError ? (
-        <BlockError message={t('sysBlockFailed')} retry={() => void runs.refetch()} />
+        <BlockError message={t('sys.blockFailed')} retry={() => void runs.refetch()} />
       ) : (
         <>
           <p className="m-0 text-sm">
             {finding.kind === 'none'
-              ? t('activityNone')
+              ? t('activity.none')
               : finding.kind === 'clean'
-                ? t('activityClean', { total: finding.total })
-                : t('activityFailures', { failed: finding.failed, total: finding.total, kind: finding.topKind, count: finding.topCount })}
+                ? t('activity.clean', { total: finding.total })
+                : t('activity.failures', { failed: finding.failed, total: finding.total, kind: finding.topKind, count: finding.topCount })}
           </p>
           <RechartsContainer height={200}>
             <BarChart data={activity} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -399,8 +405,8 @@ function ActivityBlock({ vm }: { vm: SystemStatusDashboardVm }) {
               <XAxis dataKey="timestamp" {...axis} tickFormatter={(v: string) => clock(v)} />
               <YAxis {...axis} width={32} allowDecimals={false} axisLine={false} />
               <Tooltip labelFormatter={(v) => time(String(v))} contentStyle={TOOLTIP_STYLE} />
-              <Bar dataKey="ok" name={t('runsOk')} stackId="runs" fill="var(--chart-3)" isAnimationActive={false} />
-              <Bar dataKey="failed" name={t('runsFailed')} stackId="runs" fill="var(--danger)" isAnimationActive={false} />
+              <Bar dataKey="ok" name={t('runs.ok')} stackId="runs" fill="var(--chart-3)" isAnimationActive={false} />
+              <Bar dataKey="failed" name={t('runs.failed')} stackId="runs" fill="var(--danger)" isAnimationActive={false} />
             </BarChart>
           </RechartsContainer>
         </>
@@ -413,7 +419,7 @@ function ActivityBlock({ vm }: { vm: SystemStatusDashboardVm }) {
 function QueueBlock({ vm }: { vm: SystemStatusDashboardVm }) {
   const { t, history, queue, noSamples, time, backlog, collecting, historyError, axis } = vm;
   return (
-    <Block title={t('queueTitle')}>
+    <Block title={t('queue.title')}>
       {history.isPending ? (
         <Skeleton height={100} />
       ) : history.isError ? (
@@ -422,13 +428,13 @@ function QueueBlock({ vm }: { vm: SystemStatusDashboardVm }) {
         collecting
       ) : (
         <>
-          <p className="m-0 text-sm text-muted-foreground">{t('queueBacklog')}</p>
+          <p className="m-0 text-sm text-muted-foreground">{t('queue.backlog')}</p>
           <RechartsContainer height={100} minHeight={100}>
             <BarChart data={backlog} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
               <XAxis dataKey="timestamp" hide />
               <YAxis {...axis} width={32} allowDecimals={false} axisLine={false} />
               <Tooltip labelFormatter={(v) => time(String(v))} contentStyle={TOOLTIP_STYLE} />
-              <Bar dataKey="backlog" name={t('kpiQueue')} fill="var(--chart-1)" isAnimationActive={false} />
+              <Bar dataKey="backlog" name={t('kpi.queue')} fill="var(--chart-1)" isAnimationActive={false} />
             </BarChart>
           </RechartsContainer>
         </>
@@ -447,29 +453,29 @@ function QueueBlock({ vm }: { vm: SystemStatusDashboardVm }) {
 function FailuresBlock({ vm }: { vm: SystemStatusDashboardVm }) {
   const { t, errorLabel, runs, time, failedRuns, failedPager } = vm;
   return (
-    <Block title={t('failuresTitle')}>
+    <Block title={t('failures.title')}>
       {runs.isPending ? (
         <Skeleton height={120} />
       ) : runs.isError ? (
-        <BlockError message={t('sysBlockFailed')} retry={() => void runs.refetch()} />
+        <BlockError message={t('sys.blockFailed')} retry={() => void runs.refetch()} />
       ) : failedRuns.length === 0 ? (
-        <p className="m-0 text-sm text-muted-foreground">{t('failuresEmpty')}</p>
+        <p className="m-0 text-sm text-muted-foreground">{t('failures.empty')}</p>
       ) : (
         <>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t('colTime')}</TableHead>
-                <TableHead>{t('colKind')}</TableHead>
-                <TableHead>{t('colError')}</TableHead>
-                <TableHead className="text-right">{t('colDuration')}</TableHead>
+                <TableHead>{t('col.time')}</TableHead>
+                <TableHead>{t('col.kind')}</TableHead>
+                <TableHead>{t('col.error')}</TableHead>
+                <TableHead className="text-right">{t('col.duration')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {failedPager.pageItems.map((run) => (
                 <TableRow key={`${run.kind}:${run.id}`}>
                   <TableCell className="tabular-nums">{time(run.created_at)}</TableCell>
-                  <TableCell>{t.has(run.kind) ? t(run.kind) : humanizeCode(run.kind)}</TableCell>
+                  <TableCell>{Object.hasOwn(RUN_KIND_KEYS, run.kind) ? t(RUN_KIND_KEYS[run.kind]) : humanizeCode(run.kind)}</TableCell>
                   <TableCell className="text-destructive">{run.error_code ? errorLabel(run.error_code) : DASH}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {run.duration_ms == null ? DASH : `${Math.round(run.duration_ms)} ms`}
@@ -538,10 +544,10 @@ function useSystemStatusData() {
   const finding = activityFinding(runItems);
   const collecting = (
     <p className="m-0 text-sm text-muted-foreground" role="status">
-      {collectionOff ? t('collectionOff') : t('sysCollecting')}
+      {collectionOff ? t('collectionOff') : t('sys.collecting')}
     </p>
   );
-  const historyError = <BlockError message={t('sysBlockFailed')} retry={() => void history.refetch()} />;
+  const historyError = <BlockError message={t('sys.blockFailed')} retry={() => void history.refetch()} />;
   const axis = { fontSize: 11, stroke: 'var(--muted)', tickLine: false } as const;
 
   return {

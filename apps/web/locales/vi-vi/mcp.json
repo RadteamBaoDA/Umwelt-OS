@@ -146,5 +146,6 @@
   "draftRetained": "Bản nháp chưa lưu được giữ lại để xem xét.",
   "reloadDiscard": "Tải lại phiên bản máy chủ và hủy bản nháp",
   "copyAcknowledgement": "Tôi đã lưu token này an toàn và hiểu rằng không thể khôi phục nó.",
-  "token.ackRequired": "Token dùng một lần vẫn đang hiển thị. Hãy xác nhận đã lưu an toàn và ẩn token trước khi rời trang."
+  "token.ackRequired": "Token dùng một lần vẫn đang hiển thị. Hãy xác nhận đã lưu an toàn và ẩn token trước khi rời trang.",
+  "notApplicable": "Không áp dụng"
 }

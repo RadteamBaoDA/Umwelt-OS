@@ -55,7 +55,25 @@ type Workflow = {
 type Secret = { value: string; removed: boolean };
 const empty: Secret = { value: '', removed: false };
 /** Provisioning states the backend can report (ck_connector_provisioning_state). */
-const STATES = new Set(['queued', 'provisioning', 'active', 'saved_not_active', 'reconciliation_required', 'disabled']);
+/** Literal catalog key per workflow state (no runtime key building); unknown states render raw. */
+const STATE_KEYS = {
+  queued: 'state.queued',
+  provisioning: 'state.provisioning',
+  active: 'state.active',
+  saved_not_active: 'state.savedNotActive',
+  reconciliation_required: 'state.reconciliationRequired',
+  disabled: 'state.disabled',
+} as const;
+/** Literal catalog key per setting source. */
+const SOURCE_KEYS = { database: 'source.database', environment: 'source.environment', none: 'source.none' } as const;
+/** Literal catalog key per connection-test error (`null` reads as unknown). */
+const TEST_ERROR_KEYS = {
+  credential_required: 'test.errorCredentialRequired',
+  unreachable: 'test.errorUnreachable',
+  unauthorized: 'test.errorUnauthorized',
+  http_error: 'test.errorHttpError',
+  unknown: 'test.errorUnknown',
+} as const;
 const action = (secret: Secret) => (secret.value ? 'replaced' : secret.removed ? 'removed' : 'unchanged');
 
 /** True when the latest run failed: an error is recorded and no success came after it (ISO timestamps compare lexically). */
@@ -143,7 +161,7 @@ function WorkflowRow({
 /** Badge naming where a setting's value comes from (database, environment or unset). */
 function SourceBadge({ value }: { value: Source }) {
   const t = useTranslations('n8n');
-  return <Badge variant="outline">{t(`source_${value}` as 'source_none')}</Badge>;
+  return <Badge variant="outline">{t(SOURCE_KEYS[value])}</Badge>;
 }
 
 /** Write-only hint: the source badge beside each label already says whether a value is set, so only explain when one is saved. */
@@ -179,24 +197,24 @@ function IntegrationSection({
   const t = useTranslations('n8n');
   const result = test.data;
   return (
-    <SettingsSection title={t('integration')} description={t('integrationHelp')}>
+    <SettingsSection title={t('integration.label')} description={t('integration.help')}>
       <label className="flex items-center gap-3">
         <Switch checked={enabled} disabled={saving} onCheckedChange={onEnabled} aria-label={t('enabledLabel')} />
         <span className="text-sm font-medium">{t('enabledLabel')}</span>
       </label>
       <label className="field" htmlFor="n8n-service-url">
         <span className="label inline-flex items-center gap-2">
-          {t('serviceUrl')}
+          {t('service.url')}
           <SourceBadge value={saved.service_url_source} />
         </span>
         <Input
           id="n8n-service-url"
-          aria-label={t('serviceUrl')}
+          aria-label={t('service.url')}
           type="url"
           disabled={saving}
           value={url}
           onChange={(event) => onUrl(event.target.value)}
-          placeholder={t('serviceUrlHelp')}
+          placeholder={t('service.urlHelp')}
         />
       </label>
       <div className="flex flex-col gap-2">
@@ -222,13 +240,13 @@ function IntegrationSection({
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
-          {test.isPending ? t('testing') : t('test')}
+          {test.isPending ? t('testing') : t('test.label')}
         </Button>
         {result ? (
           <p className="m-0 inline-flex items-center gap-2 text-sm" role="status">
             <StatusDot tone={result.ok ? 'success' : 'danger'} />
             <span className={result.ok ? undefined : 'error'}>
-              {result.ok ? t('testOk') : t(`testError_${result.error ?? 'unknown'}` as 'testError_unknown', { code: result.detail ?? '' })}
+              {result.ok ? t('test.ok') : t(TEST_ERROR_KEYS[result.error ?? 'unknown'], { code: result.detail ?? '' })}
             </span>
           </p>
         ) : null}
@@ -334,33 +352,33 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
   const rows = query.data;
   const pager = usePagination(rows ?? []);
   /** Translates a backend provisioning state, falling back to the raw value for unknown states. */
-  const stateLabel = (state: string) => (STATES.has(state) ? t(`state_${state}` as 'state_active') : state);
+  const stateLabel = (state: string) => (Object.hasOwn(STATE_KEYS, state) ? t(STATE_KEYS[state as keyof typeof STATE_KEYS]) : state);
   const failed = rows?.filter(failing).length ?? 0;
   return (
     <section aria-labelledby="workflows-list" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 id="workflows-list" className="m-0 text-base font-semibold">
-          {t('workflows')}
+          {t('workflows.label')}
         </h2>
         {rows && rows.length > 0 ? (
           <p className="m-0 text-sm text-muted-foreground tabular-nums">
-            {t('summaryTotal', { count: rows.length })} ·{' '}
-            {t('summaryActive', { count: rows.filter((row) => row.state === 'active').length })}
+            {t('summary.total', { count: rows.length })} ·{' '}
+            {t('summary.active', { count: rows.filter((row) => row.state === 'active').length })}
             {failed ? (
               <>
                 {' '}
-                · <span className="text-[var(--danger)]">{t('summaryFailing', { count: failed })}</span>
+                · <span className="text-[var(--danger)]">{t('summary.failing', { count: failed })}</span>
               </>
             ) : null}
           </p>
         ) : null}
       </div>
       {query.isPending ? (
-        <div className="skeleton h-16" role="status" aria-label={t('workflowsLoading')} />
+        <div className="skeleton h-16" role="status" aria-label={t('workflows.loading')} />
       ) : query.isError || !rows ? (
         <div className="flex flex-wrap items-center gap-3">
           <p className="error m-0" role="alert">
-            {t(apiFailureKey(query.error) ?? 'workflowsLoadFailed')}
+            {t(apiFailureKey(query.error) ?? 'workflows.loadFailed')}
           </p>
           <Button type="button" variant="outline" onClick={() => query.refetch()}>
             {t('retry')}
@@ -369,8 +387,8 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
       ) : rows.length === 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-muted px-4 py-5">
           <div>
-            <p className="m-0 font-medium">{t('workflowsEmpty')}</p>
-            <p className="m-0 text-sm text-muted-foreground">{t('workflowsEmptyHint')}</p>
+            <p className="m-0 font-medium">{t('workflows.empty')}</p>
+            <p className="m-0 text-sm text-muted-foreground">{t('workflows.emptyHint')}</p>
           </div>
           <Button asChild variant="outline">
             <Link href="/settings/sources">{t('addSource')}</Link>
@@ -381,11 +399,11 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t('colName')}</TableHead>
-                <TableHead>{t('colState')}</TableHead>
-                <TableHead>{t('colLastRun')}</TableHead>
+                <TableHead>{t('col.name')}</TableHead>
+                <TableHead>{t('col.state')}</TableHead>
+                <TableHead>{t('col.lastRun')}</TableHead>
                 <TableHead>
-                  <span className="sr-only">{t('colActions')}</span>
+                  <span className="sr-only">{t('col.actions')}</span>
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -579,7 +597,7 @@ export function N8nSettingsWorkspace() {
         status={
           <p className="m-0 inline-flex items-center gap-2 text-sm" role="status">
             <StatusDot tone={saved.enabled ? 'success' : 'muted'} />
-            <span>{saved.enabled ? t('integrationOn') : t('integrationOff')}</span>
+            <span>{saved.enabled ? t('integration.on') : t('integration.off')}</span>
             {saved.service_url ? <span className="text-muted-foreground">· {hostOf(saved.service_url)}</span> : null}
           </p>
         }

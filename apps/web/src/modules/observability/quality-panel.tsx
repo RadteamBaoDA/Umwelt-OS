@@ -26,8 +26,8 @@ export function QualityPanel() {
     </dl>}
     <div className="grid gap-3 sm:grid-cols-2">
       <article className="rounded-md border border-border p-4"><h4 className="font-medium">{t('workerHealth')}</h4>{health.isError ? <div role="alert"><p>{t('healthUnavailable')}</p><Button type="button" variant="outline" className="mt-2" onClick={() => void health.refetch()}>{t('retry')}</Button></div> : <p className="text-muted-foreground">{worker}</p>}</article>
-      <article className="rounded-md border border-border p-4"><h4 className="font-medium">{t('queue')}</h4>
-        {queue.isPending ? <p className="text-muted-foreground">{t('loading')}</p> : queue.isError ? <div role="alert"><p>{t('queueUnavailable')}</p><Button type="button" variant="outline" className="mt-2" onClick={() => void queue.refetch()}>{t('retry')}</Button></div> : <>
+      <article className="rounded-md border border-border p-4"><h4 className="font-medium">{t('queue.label')}</h4>
+        {queue.isPending ? <p className="text-muted-foreground">{t('loading')}</p> : queue.isError ? <div role="alert"><p>{t('queue.unavailable')}</p><Button type="button" variant="outline" className="mt-2" onClick={() => void queue.refetch()}>{t('retry')}</Button></div> : <>
           <p className="text-muted-foreground">{t('ingestionStages')}: {summary(queue.data.ingestion_stages)}</p>
           <p className="text-muted-foreground">{t('retryEligible')}: {queue.data.retryable_ingestion_stages}</p>
           <p className="text-muted-foreground">{t('eventDelivery')}: {summary(queue.data.event_delivery)}</p>

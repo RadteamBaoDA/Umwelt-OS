@@ -1,0 +1,9 @@
+{
+  "title": "Xuất dữ liệu",
+  "description": "Bản xuất gồm tài liệu của bạn (kèm các phiên bản đã lưu) và lịch sử trò chuyện đủ điều kiện. Mật khẩu, khóa API, tệp gốc và bí mật quy trình không được đưa vào. Đây là bản sao nội dung, không phải bản sao lưu đầy đủ để khôi phục.",
+  "json": "Tải JSON",
+  "markdown": "Tải Markdown",
+  "csv": "Tải CSV",
+  "downloading": "Đang chuẩn bị tải xuống…",
+  "downloadFailed": "Không thể chuẩn bị bản xuất. Dữ liệu có thể đã thay đổi; hãy thử lại."
+}

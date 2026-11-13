@@ -77,7 +77,7 @@ describe('visualization router card', () => {
       : json(String(url).includes('viz-router') ? typesafe : ai));
     const onError = vi.fn();
     mount(locale, onError);
-    await userEvent.click(await screen.findByRole('button', { name: messages[locale].vizRouter.test }));
+    await userEvent.click(await screen.findByRole('button', { name: messages[locale].vizRouter.test.label }));
     expect(await screen.findByRole('alert')).toHaveTextContent(expected);
     expect(onError).not.toHaveBeenCalled();
   });

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { todosMessages } from '@/core/messages/todos';
+import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({ listTodos: vi.fn(), replaceTodos: vi.fn(), patchTodo: vi.fn() }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
@@ -17,7 +17,7 @@ function renderPanel(isStreaming = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (streaming: boolean) => (
     <QueryClientProvider client={client}>
-      <NextIntlClientProvider locale="en-US" messages={{ todos: todosMessages['en-us'] }}>
+      <NextIntlClientProvider locale="en-US" messages={{ todos: getCatalog('en-us', 'todos') }}>
         <TodosPanel conversationId="c1" isStreaming={streaming} />
       </NextIntlClientProvider>
     </QueryClientProvider>

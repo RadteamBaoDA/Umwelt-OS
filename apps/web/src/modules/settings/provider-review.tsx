@@ -18,6 +18,13 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
 import { connectorKeys, getConnectorCatalog } from '@/modules/sources';
 
+/** Literal `globalSettings` key per declared workspace use (no runtime key building). */
+const USE_KEYS = {
+  personal: 'use.personal',
+  noncommercial: 'use.noncommercial',
+  commercial: 'use.commercial',
+} as const;
+
 export type PendingReview = {
   workspace_id: string;
   workspace_name: string;
@@ -58,7 +65,7 @@ export function ProviderReviewTableRow({ row, locale, providerName }: { row: Pen
   const version = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
     ? formatDate(row.terms_version, locale as AppLocaleId, 'UTC')
     : row.terms_version;
-  const use = row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? t(`use.${row.declared_use}`) : row.declared_use;
+  const use = row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? t(USE_KEYS[row.declared_use]) : row.declared_use;
   return <TableRow>
     <TableCell className="font-medium">{providerName}{termsUrl && <> <a href={termsUrl} target="_blank" rel="noopener noreferrer" className="font-normal text-primary underline underline-offset-4">{t('termsLink')}</a></>}</TableCell>
     <TableCell>{row.workspace_name}</TableCell>
@@ -156,7 +163,7 @@ function useProviderReviewController(props: { row: PendingReview; onDone?: () =>
   const termsVersion = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
     ? formatDate(row.terms_version, display.locale, 'UTC')
     : row.terms_version;
-  const useLabel = (value: string) => (value === 'personal' || value === 'noncommercial' || value === 'commercial' ? t(`use.${value}`) : value);
+  const useLabel = (value: string) => (value === 'personal' || value === 'noncommercial' || value === 'commercial' ? t(USE_KEYS[value]) : value);
   const [allowedUse, setAllowedUse] = useState<ReviewDecision['allowed_use'] | ''>(
     row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? row.declared_use : '',
   );

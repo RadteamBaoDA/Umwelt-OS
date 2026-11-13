@@ -23,13 +23,13 @@ type ReadinessAI = {
   privacy: { allow_remote_reasoning: boolean; allow_remote_embeddings: boolean };
 };
 
-const steps: { id: OnboardingStep; label: 'stepAi' | 'stepCapability' | 'stepSources' | 'stepSamples' | 'stepIndexing' | 'stepComplete' }[] = [
-  { id: 'ai_privacy', label: 'stepAi' },
-  { id: 'capability', label: 'stepCapability' },
-  { id: 'sources', label: 'stepSources' },
-  { id: 'sample_or_import', label: 'stepSamples' },
-  { id: 'indexing', label: 'stepIndexing' },
-  { id: 'complete', label: 'stepComplete' },
+const steps: { id: OnboardingStep; label: 'step.ai' | 'step.capability' | 'step.sources' | 'step.samples' | 'step.indexing' | 'step.complete' }[] = [
+  { id: 'ai_privacy', label: 'step.ai' },
+  { id: 'capability', label: 'step.capability' },
+  { id: 'sources', label: 'step.sources' },
+  { id: 'sample_or_import', label: 'step.samples' },
+  { id: 'indexing', label: 'step.indexing' },
+  { id: 'complete', label: 'step.complete' },
 ];
 
 /**
@@ -84,12 +84,12 @@ export function OnboardingPage() {
   /** Maps the owner SearchIndexStatus state to the matching localized progress message. */
   const indexState = (state: string) => {
     switch (state) {
-      case 'queued': return t('indexQueued');
-      case 'running': return t('indexRunning');
-      case 'active': return t('indexActive');
-      case 'failed': return t('indexFailed');
-      case 'unavailable': return t('indexUnavailable');
-      case 'retired': return t('indexRetired');
+      case 'queued': return t('index.queued');
+      case 'running': return t('index.running');
+      case 'active': return t('index.active');
+      case 'failed': return t('index.failed');
+      case 'unavailable': return t('index.unavailable');
+      case 'retired': return t('index.retired');
       default: return t('unknown');
     }
   };
@@ -101,16 +101,16 @@ export function OnboardingPage() {
   /** Saves the selected next step before allowing the owner to continue. */
   const move = (step: OnboardingStep, dataChoice = progress.data.data_choice) => save.mutate({ step, dataChoice });
   const stepContent = currentStep.id === 'ai_privacy'
-    ? <><h2>{t('aiTitle')}</h2><p>{t('aiText')}</p><p role="status">{aiReady && !ai.isPending && !ai.isError ? `${status(aiReady, false)} · ` : ai.isPending || ai.isError ? `${status(aiReady, true)} · ` : ''}{ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'aiReady' : 'aiNeedsSetup')}</p><div className="form-actions"><Button type="button" variant="outline" aria-expanded={providerOpen} onClick={() => setProviderOpen((open) => !open)}>{t(providerOpen ? 'hideProviderForm' : 'addProviderHere')}</Button><Button type="button" variant="ghost" disabled={save.isPending} onClick={() => move('capability')}>{t('skipLocalOnly')}</Button></div>{providerOpen && <div className="w-full"><AISettingsWorkspace /></div>}</>
+    ? <><h2>{t('ai.title')}</h2><p>{t('ai.text')}</p><p role="status">{aiReady && !ai.isPending && !ai.isError ? `${status(aiReady, false)} · ` : ai.isPending || ai.isError ? `${status(aiReady, true)} · ` : ''}{ai.isError && networkUnavailable(ai.error) ? t('offline') : ai.isPending || ai.isError ? t('unknown') : t(aiReady ? 'ai.ready' : 'ai.needsSetup')}</p><div className="form-actions"><Button type="button" variant="outline" aria-expanded={providerOpen} onClick={() => setProviderOpen((open) => !open)}>{t(providerOpen ? 'hideProviderForm' : 'addProviderHere')}</Button><Button type="button" variant="ghost" disabled={save.isPending} onClick={() => move('capability')}>{t('skipLocalOnly')}</Button></div>{providerOpen && <div className="w-full"><AISettingsWorkspace /></div>}</>
     : currentStep.id === 'capability'
-      ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatDefault?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
+      ? <><h2>{t('capability.title')}</h2><p>{t('capability.text')}</p><p role="status">{status(chatCapability && chatDefault?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capability.ready') : t('capability.needsProbe')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('open.aiSettings')}</Link></Button></>
       : currentStep.id === 'sources'
-        ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('sourceUnknown') : activeSources ? t('sourceCount', { count: activeSources }) : t('sourceNone')}</p><div className="form-actions"><Button type="button" onClick={() => setStarterOpen(true)}>{t('starterPacks')}</Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div><OnboardingTopics /></>
+        ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('source.unknown') : activeSources ? t('source.count', { count: activeSources }) : t('source.none')}</p><div className="form-actions"><Button type="button" onClick={() => setStarterOpen(true)}>{t('starterPacks')}</Button><Button asChild variant="outline"><Link href="/sources">{t('open.sources')}</Link></Button></div><OnboardingTopics /></>
         : currentStep.id === 'sample_or_import'
-          ? <><h2>{t('samplesTitle')}</h2><p>{t('samplesText')}</p><div className="form-actions"><Button type="button" aria-pressed={progress.data.data_choice === 'sample'} className={progress.data.data_choice === 'sample' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'sample')}>{t(progress.data.data_choice === 'sample' ? 'sampleSelected' : 'chooseSample')}</Button><Button type="button" aria-pressed={progress.data.data_choice === 'personal_import'} className={progress.data.data_choice === 'personal_import' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'personal_import')}>{t(progress.data.data_choice === 'personal_import' ? 'importSelected' : 'choosePersonalImport')}</Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div></>
+          ? <><h2>{t('samplesTitle')}</h2><p>{t('samplesText')}</p><div className="form-actions"><Button type="button" aria-pressed={progress.data.data_choice === 'sample'} className={progress.data.data_choice === 'sample' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'sample')}>{t(progress.data.data_choice === 'sample' ? 'sampleSelected' : 'chooseSample')}</Button><Button type="button" aria-pressed={progress.data.data_choice === 'personal_import'} className={progress.data.data_choice === 'personal_import' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'personal_import')}>{t(progress.data.data_choice === 'personal_import' ? 'importSelected' : 'choosePersonalImport')}</Button><Button asChild variant="outline"><Link href="/sources">{t('open.sources')}</Link></Button></div></>
           : currentStep.id === 'indexing'
-            ? <><h2>{t('indexingTitle')}</h2><p>{t('indexingText')}</p><p role="status">{indexUnresolved ? index.isError && networkUnavailable(index.error) ? t('offline') : t('unknown') : `${indexState(index.data?.status ?? 'unavailable')} · ${t('indexCount', { count: index.data?.indexed_items ?? 0 })} · ${t('indexFailures', { count: index.data?.failed_items ?? 0 })}`}</p><p role="status">{aiUnresolved || indexUnresolved ? t('unknown') : semanticUnavailable ? t('semanticUnavailable') : t('semanticCompatibilityUnknown')}</p>{!aiUnresolved && !indexUnresolved && !semanticUnavailable ? <p>{t('semanticCompatibilityHelp')}</p> : null}<p role="status">{t('lexicalIndependent')}</p><div className="form-actions"><Button asChild variant="outline"><Link href="/search">{t('openSearch')}</Link></Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div></>
-            : <><h2>{t('completeTitle')}</h2><p>{t('completeText')}</p><p role="status">{t('finished')}</p><Button asChild><Link href="/dashboard">{t('openDashboard')}</Link></Button></>;
+            ? <><h2>{t('indexingTitle')}</h2><p>{t('indexingText')}</p><p role="status">{indexUnresolved ? index.isError && networkUnavailable(index.error) ? t('offline') : t('unknown') : `${indexState(index.data?.status ?? 'unavailable')} · ${t('index.count', { count: index.data?.indexed_items ?? 0 })} · ${t('index.failures', { count: index.data?.failed_items ?? 0 })}`}</p><p role="status">{aiUnresolved || indexUnresolved ? t('unknown') : semanticUnavailable ? t('semantic.unavailable') : t('semantic.compatibilityUnknown')}</p>{!aiUnresolved && !indexUnresolved && !semanticUnavailable ? <p>{t('semantic.compatibilityHelp')}</p> : null}<p role="status">{t('lexicalIndependent')}</p><div className="form-actions"><Button asChild variant="outline"><Link href="/search">{t('open.search')}</Link></Button><Button asChild variant="outline"><Link href="/sources">{t('open.sources')}</Link></Button></div></>
+            : <><h2>{t('completeTitle')}</h2><p>{t('completeText')}</p><p role="status">{t('finished')}</p><Button asChild><Link href="/dashboard">{t('open.dashboard')}</Link></Button></>;
 
   const done = Boolean(progress.data.completed_at);
   return <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-start gap-6">
@@ -125,7 +125,7 @@ export function OnboardingPage() {
               <BareButton type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
                 className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-start gap-3 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
                 <span aria-hidden="true" className={`w-5 shrink-0 text-sm tabular-nums ${complete ? 'text-primary' : current ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
-                <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong>{(complete || current) && <span className="text-muted-foreground text-xs">{t(complete ? 'stepDone' : 'stepCurrent')}</span>}</span>
+                <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong>{(complete || current) && <span className="text-muted-foreground text-xs">{t(complete ? 'step.done' : 'step.current')}</span>}</span>
               </BareButton>
             </li>;
           })}

@@ -23,15 +23,26 @@ type TestResult = { ok: boolean; error: 'credential_required' | 'network_denied'
 
 /**
  * Map a backend failure `reason` token (never secret) to localized detail text, or null when none/unknown.
- * `http_<status>` and `content_type:<mime>` carry a parameter; fixed tokens use `testReason_<token>` keys.
+ * `http_<status>` and `content_type:<mime>` carry a parameter; fixed tokens map to the literal `test.reason*` keys.
  */
 function reasonText(t: ReturnType<typeof useTranslations<'webSearch'>>, reason: string | null | undefined): string | null {
   if (!reason) return null;
-  if (reason.startsWith('http_')) return t('testReason_http', { status: reason.slice(5) });
-  if (reason.startsWith('content_type:')) return t('testReason_content_type', { type: reason.slice(13) });
-  if (reason === 'too_large' || reason === 'invalid_json' || reason === 'unexpected_shape') return t(`testReason_${reason}` as 'testReason_too_large');
+  if (reason.startsWith('http_')) return t('test.reasonHttp', { status: reason.slice(5) });
+  if (reason.startsWith('content_type:')) return t('test.reasonContentType', { type: reason.slice(13) });
+  if (reason === 'too_large') return t('test.reasonTooLarge');
+  if (reason === 'invalid_json') return t('test.reasonInvalidJson');
+  if (reason === 'unexpected_shape') return t('test.reasonUnexpectedShape');
   return null;
 }
+
+/** Literal catalog key per search-provider test error (no runtime key building); unknown codes read as unknown. */
+const TEST_ERROR_KEYS = {
+  credential_required: 'test.errorCredentialRequired',
+  network_denied: 'test.errorNetworkDenied',
+  provider_error: 'test.errorProviderError',
+  timeout: 'test.errorTimeout',
+  unknown: 'test.errorUnknown',
+} as const;
 
 /** Edit ordered web-search providers and their write-only credentials under one remote-search consent. */
 // eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
@@ -93,13 +104,13 @@ export function WebSearchSettingsWorkspace() {
             <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={entry.provider} onValueChange={(provider) => changeEntry(index, { provider: provider as Provider })}><SelectTrigger aria-label={t('providerAt', { number: index + 1 })}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem><SelectItem value="searxng">SearXNG</SelectItem><SelectItem value="omniroute">OmniRoute</SelectItem></SelectContent></Select></label>
             <label className="field"><span className="label">{t('endpoint')}</span><Input type="url" disabled={save.isPending} value={entry.endpoint ?? ''} placeholder={entry.provider === 'omniroute' ? 'https://<host>/v1' : undefined} onChange={(event) => changeEntry(index, { endpoint: event.target.value || null })} /></label>
           </FieldGrid>
-          {entry.provider !== 'searxng' ? <SecretField id={`web-search-key-${index}`} label={t('apiKey')} value={entry.key} onValue={(key) => changeEntry(index, { key, ...(key ? { removed: false } : {}) })} removed={entry.removed} onRemoved={(removed) => changeEntry(index, { removed, ...(removed ? { key: '' } : {}) })} configured={configured(entry)} disabled={save.isPending} placeholder={t('keepSaved')} removeLabel={t('removeKey')} status={<>{t('keyStatus')} {configured(entry) ? t('configured') : t('notConfigured')}. {t('keyNeverShown')} {t('keyRequired')}</>} /> : null}
+          {entry.provider !== 'searxng' ? <SecretField id={`web-search-key-${index}`} label={t('apiKey')} value={entry.key} onValue={(key) => changeEntry(index, { key, ...(key ? { removed: false } : {}) })} removed={entry.removed} onRemoved={(removed) => changeEntry(index, { removed, ...(removed ? { key: '' } : {}) })} configured={configured(entry)} disabled={save.isPending} placeholder={t('keepSaved')} removeLabel={t('remove.key')} status={<>{t('key.status')} {configured(entry) ? t('configured') : t('notConfigured')}. {t('key.neverShown')} {t('key.required')}</>} /> : null}
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant="outline" disabled={test.isPending || save.isPending || !entry.endpoint || !keyReady(entry)} onClick={() => { setTestedIndex(index); test.mutate(entry); }}>{test.isPending && testedIndex === index ? t('testing') : t('test')}</Button>
-            <Button type="button" variant="outline" disabled={save.isPending || index === 0} onClick={() => move(index, -1)} aria-label={t('moveUpAt', { number: index + 1 })}>{t('moveUp')}</Button>
-            <Button type="button" variant="outline" disabled={save.isPending || index === view.providers.length - 1} onClick={() => move(index, 1)} aria-label={t('moveDownAt', { number: index + 1 })}>{t('moveDown')}</Button>
-            <Button type="button" variant="outline" disabled={save.isPending} onClick={() => change({ ...view, providers: view.providers.filter((_, i) => i !== index) })} aria-label={t('removeAt', { number: index + 1 })}>{t('removeProvider')}</Button>
-            {testedIndex === index && test.data ? <p className={test.data.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{test.data.ok ? (test.data.detail == null ? t('testOkNoCount') : t('testOk', { count: test.data.detail })) : t(`testError_${test.data.error ?? 'unknown'}` as 'testError_unknown')}</p> : null}
+            <Button type="button" variant="outline" disabled={test.isPending || save.isPending || !entry.endpoint || !keyReady(entry)} onClick={() => { setTestedIndex(index); test.mutate(entry); }}>{test.isPending && testedIndex === index ? t('testing') : t('test.label')}</Button>
+            <Button type="button" variant="outline" disabled={save.isPending || index === 0} onClick={() => move(index, -1)} aria-label={t('move.upAt', { number: index + 1 })}>{t('move.up')}</Button>
+            <Button type="button" variant="outline" disabled={save.isPending || index === view.providers.length - 1} onClick={() => move(index, 1)} aria-label={t('move.downAt', { number: index + 1 })}>{t('move.down')}</Button>
+            <Button type="button" variant="outline" disabled={save.isPending} onClick={() => change({ ...view, providers: view.providers.filter((_, i) => i !== index) })} aria-label={t('remove.at', { number: index + 1 })}>{t('remove.provider')}</Button>
+            {testedIndex === index && test.data ? <p className={test.data.ok ? 'm-0 text-sm text-muted-foreground' : 'error m-0'} role="status">{test.data.ok ? (test.data.detail == null ? t('test.okNoCount') : t('test.ok', { count: test.data.detail })) : t(test.data.error && Object.hasOwn(TEST_ERROR_KEYS, test.data.error) ? TEST_ERROR_KEYS[test.data.error as keyof typeof TEST_ERROR_KEYS] : 'test.errorUnknown')}</p> : null}
             {testedIndex === index && test.data && !test.data.ok && reasonText(t, test.data.reason) ? <p className="m-0 text-sm text-muted-foreground">{reasonText(t, test.data.reason)}</p> : null}
             {testedIndex === index && test.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(test.error) ?? 'requestFailed')}</p> : null}
           </div>

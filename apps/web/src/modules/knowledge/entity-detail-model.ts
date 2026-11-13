@@ -1,3 +1,4 @@
+import { entityTypeLabel } from '@/core/entity-type-label';
 import { ApiError } from '@/core/api';
 import { type Entity } from './api';
 import { mergeConfirmationSchema, splitConfirmationSchema } from './entity-detail-schemas';
@@ -126,7 +127,7 @@ function buildEntityActions(c: EntityDetailController, d: DerivedEntityState, va
   const unconfirmedAliases = value.aliases.filter((item) => !item.confirmed);
   /** Copies a plain-text citation (name, type and page address) for this entity to the clipboard. */
   const copyCitation = () => {
-    const citation = `${value.name ?? t('unnamedEntity')} (${t(`type_${value.type}` as 'type_person')}, ${t('revision')} ${value.revision}) ${window.location.href}`;
+    const citation = `${value.name ?? t('unnamedEntity')} (${entityTypeLabel(t, value.type)}, ${t('revision')} ${value.revision}) ${window.location.href}`;
     void navigator.clipboard?.writeText(citation).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 2000); }).catch(() => undefined);
   };
   /** Opens the Chat drawer scoped to this entity. */

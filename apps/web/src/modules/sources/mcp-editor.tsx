@@ -155,7 +155,7 @@ function ConnectionTechnicalDetails({ m }: { m: McpModel }) {
       {selected && <details><summary className="cursor-pointer text-sm">{t('technicalDetails')}</summary><div className="space-y-1 text-muted-foreground">
         <p>{t('revision', { revision: selected.revision })}</p>
         {selected.transport === 'stdio' && <p>{t('profile.hash')}: <code>{selected.deployment_profile_hash ?? t('unknown')}</code></p>}
-        {discovery && <p>{t('discovery.identity', { revision: discovery.connection_revision, schema: discovery.schema_set_hash, profile: discovery.deployment_profile_hash ?? t('notApplicable' as never) })}</p>}
+        {discovery && <p>{t('discovery.identity', { revision: discovery.connection_revision, schema: discovery.schema_set_hash, profile: discovery.deployment_profile_hash ?? t('notApplicable') })}</p>}
         {grants.map((grant) => <p key={grant.id}>{t('reviewIdentity')}: r{grant.reviewed_connection_revision} · <code>{grant.descriptor_hash}</code></p>)}
       </div></details>}
       <p className="text-muted-foreground">{t('collection.unavailable')} <Link className="underline" href="/settings/sources">{t('manageCollectionSources')}</Link></p>

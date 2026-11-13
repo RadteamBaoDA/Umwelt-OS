@@ -35,12 +35,12 @@ function HistoryRetentionChoice({ vm }: { vm: HistoryRetentionVm }) {
   const { t, settings, save, current, options } = vm;
   return (
 <>
-    <h2 id="history-retention-title" className="m-0 text-base font-semibold">{t('retentionRowTitle')}</h2>
+    <h2 id="history-retention-title" className="m-0 text-base font-semibold">{t('retention.rowTitle')}</h2>
     <Select value={current === undefined ? '' : String(current)} disabled={!settings.data || save.isPending} onValueChange={(value) => save.mutate({ retention_days: Number(value) })}>
-      <SelectTrigger className="w-32" aria-label={t('retentionRowTitle')}><SelectValue /></SelectTrigger>
-      <SelectContent>{options.map((days) => <SelectItem key={days} value={String(days)}>{t('retentionDays', { days })}</SelectItem>)}</SelectContent>
+      <SelectTrigger className="w-32" aria-label={t('retention.rowTitle')}><SelectValue /></SelectTrigger>
+      <SelectContent>{options.map((days) => <SelectItem key={days} value={String(days)}>{t('retention.days', { days })}</SelectItem>)}</SelectContent>
     </Select>
-    <h2 id="history-interval-title" className="m-0 text-base font-semibold">{t('intervalTitle')}</h2>
+    <h2 id="history-interval-title" className="m-0 text-base font-semibold">{t('interval.title')}</h2>
 </>
   );
 }
@@ -51,13 +51,13 @@ function HistoryIntervalAndStatus({ vm }: { vm: HistoryRetentionVm }) {
   return (
 <>
     <Select value={interval === undefined ? '' : String(interval)} disabled={!settings.data || save.isPending} onValueChange={(value) => save.mutate({ sample_interval_minutes: Number(value) as NonNullable<HistorySettingsPatch['sample_interval_minutes']> })}>
-      <SelectTrigger className="w-36" aria-label={t('intervalTitle')}><SelectValue /></SelectTrigger>
-      <SelectContent>{INTERVALS.map((m) => <SelectItem key={m} value={String(m)}>{m === 0 ? t('intervalOff') : t('intervalEvery', { minutes: m })}</SelectItem>)}</SelectContent>
+      <SelectTrigger className="w-36" aria-label={t('interval.title')}><SelectValue /></SelectTrigger>
+      <SelectContent>{INTERVALS.map((m) => <SelectItem key={m} value={String(m)}>{m === 0 ? t('interval.off') : t('interval.every', { minutes: m })}</SelectItem>)}</SelectContent>
     </Select>
     <span className="text-sm text-muted-foreground" role="status">
-      {save.isPending ? t('retentionSaving') : save.isSuccess && saved ? t('retentionSaved') : ''}
+      {save.isPending ? t('retention.saving') : save.isSuccess && saved ? t('retention.saved') : ''}
     </span>
-    {save.isError && <p role="alert" className="m-0 text-sm text-destructive">{isStaleRevision(save.error) ? t('retentionStale') : t('retentionFailed')}</p>}
+    {save.isError && <p role="alert" className="m-0 text-sm text-destructive">{isStaleRevision(save.error) ? t('retention.stale') : t('retention.failed')}</p>}
     <p className="m-0 text-sm text-muted-foreground sm:ml-auto">{t('oldestSample', { time: oldestSampleAt ? getDateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone: display.timezone }).format(new Date(oldestSampleAt)) : '—' })}</p>
 </>
   );

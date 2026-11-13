@@ -9,14 +9,14 @@ import type { Topic } from '@/modules/news';
 
 /** Stable English topic names: the stored name is the identity so re-running onboarding in any locale never duplicates. */
 const PRESETS = [
-  { id: 'Economy', vi: 'kinh tế', label: 'topicEconomy' },
-  { id: 'Technology', vi: 'công nghệ', label: 'topicTechnology' },
-  { id: 'Health', vi: 'sức khỏe', label: 'topicHealth' },
-  { id: 'Climate', vi: 'khí hậu', label: 'topicClimate' },
-  { id: 'Science', vi: 'khoa học', label: 'topicScience' },
-  { id: 'Politics', vi: 'chính trị', label: 'topicPolitics' },
-  { id: 'Sports', vi: 'thể thao', label: 'topicSports' },
-  { id: 'Culture', vi: 'văn hóa', label: 'topicCulture' },
+  { id: 'Economy', vi: 'kinh tế', label: 'topic.economy' },
+  { id: 'Technology', vi: 'công nghệ', label: 'topic.technology' },
+  { id: 'Health', vi: 'sức khỏe', label: 'topic.health' },
+  { id: 'Climate', vi: 'khí hậu', label: 'topic.climate' },
+  { id: 'Science', vi: 'khoa học', label: 'topic.science' },
+  { id: 'Politics', vi: 'chính trị', label: 'topic.politics' },
+  { id: 'Sports', vi: 'thể thao', label: 'topic.sports' },
+  { id: 'Culture', vi: 'văn hóa', label: 'topic.culture' },
 ] as const;
 const key = ['topics', 'onboarding'] as const;
 
@@ -42,17 +42,17 @@ export function OnboardingTopics() {
     onSettled: () => Promise.all([client.invalidateQueries({ queryKey: ['topics'] }), client.invalidateQueries({ queryKey: ['news-stories'] })]),
   });
   return <div className="space-y-2">
-    <h3 className="text-sm font-semibold">{t('topicsTitle')}</h3>
-    <p className="text-muted-foreground text-sm">{t('topicsText')}</p>
-    {topics.isPending ? <p role="status" className="text-muted-foreground text-sm">{t('topicsLoading')}</p> : null}
-    {topics.isError ? <p role="alert" className="error">{t('topicsLoadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p> : null}
-    {topics.data ? <div className="flex flex-wrap gap-2" role="group" aria-label={t('topicsTitle')}>
+    <h3 className="text-sm font-semibold">{t('topics.title')}</h3>
+    <p className="text-muted-foreground text-sm">{t('topics.text')}</p>
+    {topics.isPending ? <p role="status" className="text-muted-foreground text-sm">{t('topics.loading')}</p> : null}
+    {topics.isError ? <p role="alert" className="error">{t('topics.loadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p> : null}
+    {topics.data ? <div className="flex flex-wrap gap-2" role="group" aria-label={t('topics.title')}>
       {PRESETS.map((preset) => {
         const pressed = topics.data.some((topic) => ownsPreset(topic, preset.id) && topic.is_active);
         return <Button key={preset.id} type="button" size="sm" variant={pressed ? 'default' : 'outline'} aria-pressed={pressed}
           disabled={toggle.isPending} onClick={() => toggle.mutate(preset)}>{t(preset.label)}</Button>;
       })}
     </div> : null}
-    {toggle.isError ? <p role="alert" className="error">{t('topicsSaveFailed')}</p> : null}
+    {toggle.isError ? <p role="alert" className="error">{t('topics.saveFailed')}</p> : null}
   </div>;
 }

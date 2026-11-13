@@ -224,7 +224,7 @@ function GoogleSignIn({ vm }: { vm: LoginPageVm }) {
         <div className="grid gap-2">
           {googleError && (
             <p className="error" role="alert">
-              {t('googleFailed')}
+              {t('google.failed')}
             </p>
           )}
           <Button
@@ -238,11 +238,11 @@ function GoogleSignIn({ vm }: { vm: LoginPageVm }) {
             {googleLogin.isPending ? t('openingGoogle') : t('continueGoogle')}
           </Button>
           <p id="google-help" className="text-muted-foreground text-xs leading-snug">
-            {t('googleHelp')}
+            {t('google.help')}
           </p>
           {googleLogin.error && (
             <p className="error" role="alert">
-              {t(apiFailureKey(googleLogin.error) ?? 'googleStartFailed')}
+              {t(apiFailureKey(googleLogin.error) ?? 'google.startFailed')}
             </p>
           )}
         </div>

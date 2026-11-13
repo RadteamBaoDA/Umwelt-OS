@@ -17,14 +17,14 @@ const AgentRunDetail = dynamic(() => import('@/modules/agents/run-detail').then(
 
 const runStatusKeys: Record<
   string,
-  'agentRunQueued' | 'agentRunRunning' | 'agentRunWaitingApproval' | 'agentRunSucceeded' | 'agentRunFailed' | 'agentRunCancelled'
+  'agent.runQueued' | 'agent.runRunning' | 'agent.runWaitingApproval' | 'agent.runSucceeded' | 'agent.runFailed' | 'agent.runCancelled'
 > = {
-  queued: 'agentRunQueued',
-  running: 'agentRunRunning',
-  waiting_approval: 'agentRunWaitingApproval',
-  succeeded: 'agentRunSucceeded',
-  failed: 'agentRunFailed',
-  cancelled: 'agentRunCancelled',
+  queued: 'agent.runQueued',
+  running: 'agent.runRunning',
+  waiting_approval: 'agent.runWaitingApproval',
+  succeeded: 'agent.runSucceeded',
+  failed: 'agent.runFailed',
+  cancelled: 'agent.runCancelled',
 };
 
 const ACTIVE_RUN_STATUSES = ['queued', 'running', 'waiting_approval'];
@@ -56,8 +56,8 @@ export function AgentPanels(props: AgentPanelsProps) {
     <>
       {pendingProfileRun ? (
         <div role="status" className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agentProfileKnowledge')} ·{' '}
-          {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
+          {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agent.profileKnowledge')} ·{' '}
+          {tAgents('agent.pendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
         </div>
       ) : null}
       {/* R7: approvals UI (and its chunk and polling) exists only while a specialist is selected or one of the
@@ -71,7 +71,7 @@ export function AgentPanels(props: AgentPanelsProps) {
       {agentMode && runs?.items.length ? (
         <details className="shrink-0 border-b border-border px-4 py-2">
           <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-            {tAgents('agentHistory')} ({runs.items.length})
+            {tAgents('agent.history')} ({runs.items.length})
           </summary>
           <div className="mt-2 flex flex-wrap gap-2">
             {runs.items.map((run) => (
@@ -83,9 +83,9 @@ export function AgentPanels(props: AgentPanelsProps) {
                 onClick={() => onOpenRun(run.id)}
               >
                 {run.agent_id === 'assistant'
-                  ? tAgents('agentAssistant')
-                  : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}
-                : {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}
+                  ? tAgents('agent.assistant')
+                  : tAgents(profileTitleKeys[run.agent_id] ?? 'agent.profileKnowledge')}
+                : {tAgents(runStatusKeys[run.status] ?? 'agent.runFailed')}
               </Button>
             ))}
           </div>
