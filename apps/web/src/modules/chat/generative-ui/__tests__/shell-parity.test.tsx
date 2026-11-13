@@ -2,7 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 import { useChatScroll } from '../../use-chat-scroll';
 import { useRevealBlocks } from '../../reveal-blocks';
 import { ToolReasoning } from '../components/tool-reasoning';

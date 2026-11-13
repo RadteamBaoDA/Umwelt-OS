@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 import type { Citation } from './api';
 import { CitationPanel } from './citation-panel';
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 import { commandDestinations, settingsExtraLinks, sourcesSubNavigation } from './module-registry';
 
 /** Walks a dotted message key (`group.key`) through a nested catalog; undefined when any segment is missing. */

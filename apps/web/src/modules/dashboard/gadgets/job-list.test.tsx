@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 import { dashboardMessages } from '@/core/messages/dashboard';
 import { JobListGadget } from './job-list';
 

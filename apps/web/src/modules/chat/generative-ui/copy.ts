@@ -1,5 +1,5 @@
 import type { AppLocaleId } from '@/core/i18n';
-import { getCatalog, jsonCatalogs } from '@messages';
+import { getCatalog, jsonCatalogs } from '@locales';
 
 /** Nested `chat` catalog tree for one locale (the shape of messages/<locale>/chat.json). */
 export type ChatCatalog = (typeof jsonCatalogs)['en-us']['chat'];

@@ -15,11 +15,9 @@
   "pageNumber": "Trang {page}",
   "previousPage": "Trang trước",
   "nextPage": "Trang sau",
-  "api": {
-    "unauthorized": "Phiên đã kết thúc. Hãy đăng nhập lại.",
-    "forbidden": "Bạn không có quyền thực hiện thao tác này.",
-    "conflict": "Dữ liệu đã thay đổi ở nơi khác. Hãy tải lại và thử lại.",
-    "serviceUnavailable": "Dịch vụ không khả dụng. Hãy thử lại sau.",
-    "requestFailed": "Yêu cầu không thành công."
-  }
+  "api.unauthorized": "Phiên đã kết thúc. Hãy đăng nhập lại.",
+  "api.forbidden": "Bạn không có quyền thực hiện thao tác này.",
+  "api.conflict": "Dữ liệu đã thay đổi ở nơi khác. Hãy tải lại và thử lại.",
+  "api.serviceUnavailable": "Dịch vụ không khả dụng. Hãy thử lại sau.",
+  "api.requestFailed": "Yêu cầu không thành công."
 }

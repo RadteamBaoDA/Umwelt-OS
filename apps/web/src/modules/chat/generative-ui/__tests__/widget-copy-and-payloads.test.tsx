@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 import { PromptBridgeProvider, usePromptBridge } from '../bridge';
 import { ToolRendering } from '../components/tool-rendering';
 import type { GenerativeUIPayload } from '../sandbox/schema';

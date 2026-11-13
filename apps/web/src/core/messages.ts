@@ -15,7 +15,7 @@ import { preferencesMessages } from './messages/preferences';
 import { loginMessages } from './messages/login';
 import { accountMessages } from './messages/account';
 import { accountDeletionMessages } from './messages/account-deletion';
-import { jsonCatalogs } from '@messages';
+import { jsonCatalogs } from '@locales';
 import { sourcesMessages } from './messages/sources';
 import { memoryMessages } from './messages/memory';
 import { memoryPrivacyMessages } from './messages/memory-privacy';
@@ -42,7 +42,7 @@ import { landingMessages } from './messages/landing';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
- * Namespaces already migrated to JSON (messages/<locale>/<ns>.json) come from `jsonCatalogs`. Each UI wave edits only its own fragment; add a new area by creating a fragment file and one line per locale below.
+ * Namespaces already migrated to JSON (locales/<locale>/<ns>.json) come from `jsonCatalogs`. Each UI wave edits only its own fragment; add a new area by creating a fragment file and one line per locale below.
  */
 export const messages = {
   'en-us': {

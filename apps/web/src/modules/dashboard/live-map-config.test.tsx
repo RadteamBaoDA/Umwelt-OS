@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { dashboardMessages } from '@/core/messages/dashboard';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: 'workspace' }, isOwner: true }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'token' }) }));

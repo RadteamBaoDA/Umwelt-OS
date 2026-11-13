@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getCatalog } from '@messages';
+import { getCatalog } from '@locales';
 
 const en = getCatalog('en-us', 'chat');
 const vi = getCatalog('vi-vi', 'chat');
