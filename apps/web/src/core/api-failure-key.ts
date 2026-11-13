@@ -13,11 +13,11 @@ export function apiFailureKey(error: unknown): ApiFailureKey | null {
 }
 
 const COMMON_FAILURE_KEYS: Record<ApiFailureKey, string> = {
-  unauthorized: 'apiUnauthorized',
-  forbidden: 'apiForbidden',
-  conflict: 'apiConflict',
-  serviceUnavailable: 'apiServiceUnavailable',
-  requestFailed: 'apiRequestFailed',
+  unauthorized: 'api.unauthorized',
+  forbidden: 'api.forbidden',
+  conflict: 'api.conflict',
+  serviceUnavailable: 'api.serviceUnavailable',
+  requestFailed: 'api.requestFailed',
 };
 
 /**

@@ -5,7 +5,16 @@ import { useRef, useState, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { UserIcon } from 'lucide-react';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useWorkspace } from '@/core/workspace-context';
 import { useNotificationFeed } from '@/modules/notifications';
@@ -50,37 +59,78 @@ export function UserMenu({ onOpenPreferences, onOpenAccount, onOpenChangePasswor
   const [open, setOpen] = useState(false);
   const suppressFocusRef = useRef(false);
   /** Runs a dialog-opening action without the menu stealing focus back on close. */
-  const openDialog = (action: () => void) => () => { suppressFocusRef.current = true; action(); };
-  return <DropdownMenu open={open} onOpenChange={setOpen}>
-    <DropdownMenuTrigger asChild>
-      <BareButton ref={triggerRef} type="button" className="avatar-button relative" aria-label={t('userMenu')}>{initials ? <span data-testid="avatar-initials" aria-hidden="true" className="text-xs font-semibold leading-none">{initials}</span> : <UserIcon className="size-4" aria-hidden="true" />}{unread > 0 && <span data-testid="avatar-unread-dot" aria-hidden="true" className="absolute right-0 top-0 size-2.5 rounded-full border-2 border-background bg-primary sm:hidden" />}</BareButton>
-    </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" onCloseAutoFocus={(event) => {
-      if (suppressFocusRef.current) {
-        event.preventDefault();
-        suppressFocusRef.current = false;
-      }
-    }}>
-      <DropdownMenuLabel className="grid gap-0.5"><span>{t('localAccount')}</span><span className="text-xs font-normal text-muted-foreground">{a('ownerAccount')}</span></DropdownMenuLabel>
-      <DropdownMenuSeparator />
-      <div className="sm:hidden" data-testid="user-menu-mobile">
-        {selection && workspaces.length > 0 && <>
-          <DropdownMenuLabel>{w('switcherLabel')}</DropdownMenuLabel>
-          <DropdownMenuRadioGroup value={selection.id} onValueChange={selectWorkspace}>
-            {workspaces.map((ws) => <DropdownMenuRadioItem key={ws.id} value={ws.id}>{ws.name}{ws.role === 'member' ? ` · ${w('memberBadge')}` : ''}</DropdownMenuRadioItem>)}
-          </DropdownMenuRadioGroup>
-          <DropdownMenuSeparator />
-        </>}
-        <DropdownMenuLabel>{t('notificationsLabel')}</DropdownMenuLabel>
-        <div className="max-h-56 overflow-y-auto"><NotificationItems /></div>
+  const openDialog = (action: () => void) => () => {
+    suppressFocusRef.current = true;
+    action();
+  };
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <BareButton ref={triggerRef} type="button" className="avatar-button relative" aria-label={t('userMenu')}>
+          {initials ? (
+            <span data-testid="avatar-initials" aria-hidden="true" className="text-xs font-semibold leading-none">
+              {initials}
+            </span>
+          ) : (
+            <UserIcon className="size-4" aria-hidden="true" />
+          )}
+          {unread > 0 && (
+            <span
+              data-testid="avatar-unread-dot"
+              aria-hidden="true"
+              className="absolute right-0 top-0 size-2.5 rounded-full border-2 border-background bg-primary sm:hidden"
+            />
+          )}
+        </BareButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          if (suppressFocusRef.current) {
+            event.preventDefault();
+            suppressFocusRef.current = false;
+          }
+        }}
+      >
+        <DropdownMenuLabel className="grid gap-0.5">
+          <span>{t('localAccount')}</span>
+          <span className="text-xs font-normal text-muted-foreground">{a('ownerAccount')}</span>
+        </DropdownMenuLabel>
         <DropdownMenuSeparator />
-      </div>
-      <DropdownMenuItem onSelect={openDialog(onOpenPreferences)}>{t('userSettings')}</DropdownMenuItem>
-      <DropdownMenuItem asChild><Link href="/onboarding">{t('workspaceOnboarding')}</Link></DropdownMenuItem>
-      <DropdownMenuItem asChild><Link href="/knowledge/memory">{a('assistantMemory')}</Link></DropdownMenuItem>
-      <DropdownMenuItem onSelect={openDialog(onOpenAccount)}>{t('accountSettings')}</DropdownMenuItem>
-      <DropdownMenuItem onSelect={openDialog(onOpenChangePassword)}>{a('changePassword')}</DropdownMenuItem>
-      <DropdownMenuItem disabled={signOutPending} onSelect={onSignOut}>{t('signOut')}</DropdownMenuItem>
-    </DropdownMenuContent>
-  </DropdownMenu>;
+        <div className="sm:hidden" data-testid="user-menu-mobile">
+          {selection && workspaces.length > 0 && (
+            <>
+              <DropdownMenuLabel>{w('switcherLabel')}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={selection.id} onValueChange={selectWorkspace}>
+                {workspaces.map((ws) => (
+                  <DropdownMenuRadioItem key={ws.id} value={ws.id}>
+                    {ws.name}
+                    {ws.role === 'member' ? ` · ${w('memberBadge')}` : ''}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuLabel>{t('notificationsLabel')}</DropdownMenuLabel>
+          <div className="max-h-56 overflow-y-auto">
+            <NotificationItems />
+          </div>
+          <DropdownMenuSeparator />
+        </div>
+        <DropdownMenuItem onSelect={openDialog(onOpenPreferences)}>{t('userSettings')}</DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/onboarding">{t('workspace.onboarding')}</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/knowledge/memory">{a('assistantMemory')}</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={openDialog(onOpenAccount)}>{t('accountSettings')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={openDialog(onOpenChangePassword)}>{a('changePassword')}</DropdownMenuItem>
+        <DropdownMenuItem disabled={signOutPending} onSelect={onSignOut}>
+          {t('sign.out')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }

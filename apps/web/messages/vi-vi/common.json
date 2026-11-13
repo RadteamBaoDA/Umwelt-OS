@@ -1,0 +1,25 @@
+{
+  "retry": "Thử lại",
+  "loading": "Đang tải…",
+  "cancel": "Hủy",
+  "save": "Lưu",
+  "saved": "Đã lưu",
+  "unsaved": "Thay đổi chưa lưu",
+  "unavailable": "Không khả dụng",
+  "failed": "Yêu cầu không thành công.",
+  "close": "Đóng",
+  "showPassword": "Hiện mật khẩu",
+  "hidePassword": "Ẩn mật khẩu",
+  "rowsPerPage": "Số dòng mỗi trang",
+  "pageRange": "{start}–{end} / {total}",
+  "pageNumber": "Trang {page}",
+  "previousPage": "Trang trước",
+  "nextPage": "Trang sau",
+  "api": {
+    "unauthorized": "Phiên đã kết thúc. Hãy đăng nhập lại.",
+    "forbidden": "Bạn không có quyền thực hiện thao tác này.",
+    "conflict": "Dữ liệu đã thay đổi ở nơi khác. Hãy tải lại và thử lại.",
+    "serviceUnavailable": "Dịch vụ không khả dụng. Hãy thử lại sau.",
+    "requestFailed": "Yêu cầu không thành công."
+  }
+}

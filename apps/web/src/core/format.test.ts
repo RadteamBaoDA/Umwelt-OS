@@ -29,7 +29,7 @@ describe('core/format', () => {
 describe('apiErrorMessageKey', () => {
   it('prefers the machine code, then status class, then generic', () => {
     expect(apiErrorMessageKey(new ApiError(400, 'x', { code: 'bad_thing' }))).toEqual({ namespace: 'errorCodes', key: 'bad_thing' });
-    expect(apiErrorMessageKey(new ApiError(403, 'x'))).toEqual({ namespace: 'common', key: 'apiForbidden' });
-    expect(apiErrorMessageKey(new Error('boom'))).toEqual({ namespace: 'common', key: 'apiRequestFailed' });
+    expect(apiErrorMessageKey(new ApiError(403, 'x'))).toEqual({ namespace: 'common', key: 'api.forbidden' });
+    expect(apiErrorMessageKey(new Error('boom'))).toEqual({ namespace: 'common', key: 'api.requestFailed' });
   });
 });

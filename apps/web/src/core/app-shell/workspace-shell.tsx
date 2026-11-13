@@ -218,8 +218,8 @@ function SessionUnavailable({
     <ShellFrame apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} health={health}>
       <main id="main-content" tabIndex={-1} className="page">
         <section className="status-panel">
-          <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
-          <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
+          <h1>{expired ? t('expiredTitle') : t('workspace.unavailable')}</h1>
+          <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspace.unavailableHelp')}</p>
           <Button variant="outline" onClick={onRetry}>
             {t('retry')}
           </Button>
@@ -450,7 +450,7 @@ function ShellDialogs({
     <>
       {signOutFailed && (
         <p className="error" role="alert">
-          {t('signOutFailed')}
+          {t('sign.outFailed')}
         </p>
       )}
       <ShellPreferences

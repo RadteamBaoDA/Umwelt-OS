@@ -29,25 +29,51 @@ export function SettingsPanel({ links, pathname, children }: { links: Navigation
   const dataAi = dataAiIds.flatMap((id) => links.filter((item) => item.id === id));
   const workspace = links.filter((item) => !dataAiIds.includes(item.id));
   /** Nav link for one destination; marks it `aria-current="page"` when it is the active route. */
-  const renderLink = (item: NavigationDestination) => <Link key={item.id} href={item.href} aria-current={current?.id === item.id ? 'page' : undefined}>{t(item.messageKey)}</Link>;
-  return <div className="settings-panel">
-    <nav className="settings-nav" aria-label={t('settings')}>
-      {[{ id: 'data-ai', label: t('settingsGroupDataAi'), items: dataAi }, { id: 'workspace', label: t('settingsGroupWorkspace'), items: workspace }]
-        .filter((group) => group.items.length > 0)
-        .map((group, gi) => <div key={group.id} role="group" aria-labelledby={`settings-group-${group.id}`} className="contents">
-          <span id={`settings-group-${group.id}`} className={`px-2.5 pb-1 text-xs font-medium text-muted-foreground ${gi === 0 ? 'pt-0' : 'pt-3'}`}>{group.label}</span>
-          {group.items.map(renderLink)}
-        </div>)}
-    </nav>
-    <div className="settings-section-select">
-      <span className="label" id="settings-section-label">{t('settingsSection')}</span>
-      <Select value={current?.href ?? ''} onValueChange={(href) => navigate(href)}>
-        <SelectTrigger aria-labelledby="settings-section-label"><SelectValue placeholder={t('settings')} /></SelectTrigger>
-        <SelectContent>{[...dataAi, ...workspace].map((item) => <SelectItem key={item.id} value={item.href}>{t(item.messageKey)}</SelectItem>)}</SelectContent>
-      </Select>
+  const renderLink = (item: NavigationDestination) => (
+    <Link key={item.id} href={item.href} aria-current={current?.id === item.id ? 'page' : undefined}>
+      {t(item.messageKey)}
+    </Link>
+  );
+  return (
+    <div className="settings-panel">
+      <nav className="settings-nav" aria-label={t('settings')}>
+        {[
+          { id: 'data-ai', label: t('settingsGroupDataAi'), items: dataAi },
+          { id: 'workspace', label: t('settingsGroupWorkspace'), items: workspace },
+        ]
+          .filter((group) => group.items.length > 0)
+          .map((group, gi) => (
+            <div key={group.id} role="group" aria-labelledby={`settings-group-${group.id}`} className="contents">
+              <span
+                id={`settings-group-${group.id}`}
+                className={`px-2.5 pb-1 text-xs font-medium text-muted-foreground ${gi === 0 ? 'pt-0' : 'pt-3'}`}
+              >
+                {group.label}
+              </span>
+              {group.items.map(renderLink)}
+            </div>
+          ))}
+      </nav>
+      <div className="settings-section-select">
+        <span className="label" id="settings-section-label">
+          {t('settingsSection')}
+        </span>
+        <Select value={current?.href ?? ''} onValueChange={(href) => navigate(href)}>
+          <SelectTrigger aria-labelledby="settings-section-label">
+            <SelectValue placeholder={t('settings')} />
+          </SelectTrigger>
+          <SelectContent>
+            {[...dataAi, ...workspace].map((item) => (
+              <SelectItem key={item.id} value={item.href}>
+                {t(item.messageKey)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="settings-body">{children}</div>
     </div>
-    <div className="settings-body">{children}</div>
-  </div>;
+  );
 }
 
 /**
@@ -57,13 +83,26 @@ export function SettingsPanel({ links, pathname, children }: { links: Navigation
  */
 export function SourcesSubNav({ pathname }: { pathname: string }) {
   const t = useTranslations('shell');
-  return <nav className="sub-tabs" aria-label={t('sourcesNavigation')}>
-    {sourcesSubNavigation.map((item) => {
-      const on = item.exact ? pathname === item.href : groupActive(pathname, item.href);
-      if (item.messageKey === 'permissionsTab') {
-        return <Link key={item.id} href={item.href} aria-current={on ? 'page' : undefined} aria-label={t('permissionsTab')}><span className="tab-full">{t('permissionsTab')}</span><span className="tab-short" aria-hidden="true">{t('permissionsTabShort')}</span></Link>;
-      }
-      return <Link key={item.id} href={item.href} aria-current={on ? 'page' : undefined}>{t(item.messageKey)}</Link>;
-    })}
-  </nav>;
+  return (
+    <nav className="sub-tabs" aria-label={t('sourcesNavigation')}>
+      {sourcesSubNavigation.map((item) => {
+        const on = item.exact ? pathname === item.href : groupActive(pathname, item.href);
+        if (item.messageKey === 'permissions.tab') {
+          return (
+            <Link key={item.id} href={item.href} aria-current={on ? 'page' : undefined} aria-label={t('permissions.tab')}>
+              <span className="tab-full">{t('permissions.tab')}</span>
+              <span className="tab-short" aria-hidden="true">
+                {t('permissions.tabShort')}
+              </span>
+            </Link>
+          );
+        }
+        return (
+          <Link key={item.id} href={item.href} aria-current={on ? 'page' : undefined}>
+            {t(item.messageKey)}
+          </Link>
+        );
+      })}
+    </nav>
+  );
 }

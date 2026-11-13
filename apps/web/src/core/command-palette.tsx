@@ -270,7 +270,7 @@ export function CommandPalette() {
           }}
         >
           <DialogTitle className="sr-only">{tc('paletteTitle')}</DialogTitle>
-          <DialogDescription className="sr-only">{t('workspaceCommands')}</DialogDescription>
+          <DialogDescription className="sr-only">{t('workspace.commands')}</DialogDescription>
           <PaletteInputRow vm={vm} />
           <PaletteScopeTabs vm={vm} />
           <div className="max-h-[520px] overflow-y-auto px-2 pb-2 pt-1">

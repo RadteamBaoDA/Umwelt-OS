@@ -5,7 +5,7 @@ export type ShellMessageKey =
   | 'dataSources'
   | 'aiRouter'
   | 'systemPrompts'
-  | 'workspaceMembers'
+  | 'workspace.members'
   | 'documents'
   | 'timeline'
   | 'entities'
@@ -18,7 +18,7 @@ export type ShellMessageKey =
   | 'systemStatus'
   | 'sourcesTab'
   | 'mcpTab'
-  | 'permissionsTab'
+  | 'permissions.tab'
   | 'globalSettings'
   | 'collapseSidebar'
   | 'expandSidebar';
@@ -40,7 +40,10 @@ export type ModuleAvailability = { modules: { id: string; enabled: boolean }[] }
 /** Allows member-shared surfaces, a narrower administrator read set, or all owner destinations. */
 export function destinationForRole(destination: NavigationDestination, role?: 'owner' | 'member' | 'admin_viewer'): boolean {
   if (destination.adminOnly) return false;
-  if (role === 'admin_viewer') return Boolean(destination.adminViewer || destination.members) && !['chat', 'settings', 'translation-settings'].includes(destination.id);
+  if (role === 'admin_viewer')
+    return (
+      Boolean(destination.adminViewer || destination.members) && !['chat', 'settings', 'translation-settings'].includes(destination.id)
+    );
   return role !== 'member' || Boolean(destination.members);
 }
 
@@ -48,9 +51,12 @@ export function destinationForRole(destination: NavigationDestination, role?: 'o
 export function destinationEnabled(destination: NavigationDestination, state?: ModuleAvailability): boolean {
   if (!state) return true;
   const owner: Record<string, string> = {
-    dashboard: 'dashboard', chat: 'chat', 'data-sources': 'sources',
+    dashboard: 'dashboard',
+    chat: 'chat',
+    'data-sources': 'sources',
     documents: 'knowledge.documents',
-    entities: 'knowledge.entities', search: 'search',
+    entities: 'knowledge.entities',
+    search: 'search',
   };
   const moduleId = owner[destination.id];
   return !moduleId || state.modules.some((module) => module.id === moduleId && module.enabled);
@@ -66,7 +72,7 @@ export const settingsGroups: NavigationDestination[] = [
   { id: 'data-sources', href: '/settings/sources', messageKey: 'dataSources' },
   { id: 'ai-router', href: '/settings/models', messageKey: 'aiRouter' },
   { id: 'system-prompts', href: '/settings/prompts', messageKey: 'systemPrompts' },
-  { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspaceMembers' },
+  { id: 'workspace-members', href: '/settings/workspace', messageKey: 'workspace.members' },
   { id: 'translation-settings', href: '/settings/translation', messageKey: 'translationSettings', members: true },
 ];
 
@@ -83,7 +89,7 @@ export const settingsExtraLinks: NavigationDestination[] = [
 export const sourcesSubNavigation: (NavigationDestination & { exact?: boolean })[] = [
   { id: 'sources-list', href: '/settings/sources', messageKey: 'sourcesTab', exact: true },
   { id: 'sources-mcp', href: '/settings/sources/mcp', messageKey: 'mcpTab' },
-  { id: 'sources-permissions', href: '/settings/sources/permissions', messageKey: 'permissionsTab' },
+  { id: 'sources-permissions', href: '/settings/sources/permissions', messageKey: 'permissions.tab' },
 ];
 
 /** Routes kept reachable from the command palette only (not shown in the Settings rail). */

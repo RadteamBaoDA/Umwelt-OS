@@ -20,14 +20,18 @@ type DocumentDeletionStageStatus =
   | DocumentDeletionReceipt['brief_status'];
 
 /** Shows the operation-only deletion receipt after its Document and content queries are gone. */
-// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
+// eslint-disable-next-line complexity, max-lines-per-function -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function DocumentDeletionReceiptPanel({ operationId }: { operationId: string }) {
-  const t = useTranslations('shell');
+  const t = useTranslations('chat');
   const pollUntil = useRef(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { headingRef.current?.focus(); }, []);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
   const [automaticRefreshPaused, setAutomaticRefreshPaused] = useState(false);
-  useResetOnChange([operationId], () => { setAutomaticRefreshPaused(false); });
+  useResetOnChange([operationId], () => {
+    setAutomaticRefreshPaused(false);
+  });
   useEffect(() => {
     pollUntil.current = Date.now() + 30_000;
     const timer = window.setTimeout(() => setAutomaticRefreshPaused(true), 30_000);
@@ -51,15 +55,24 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
   /** Maps exact API stage states to localized labels without treating shared or aggregate-pending data as erased. */
   function stageLabel(status: DocumentDeletionStageStatus): string {
     switch (status) {
-      case 'queued': return t('documentDeletionQueued');
-      case 'running': return t('documentDeletionRunning');
-      case 'succeeded': return t('documentDeletionSucceeded');
-      case 'failed': return t('documentDeletionFailed');
-      case 'not_present': return t('documentDeletionNotPresent');
-      case 'retained_shared': return t('documentDeletionShared');
-      case 'capturing': return t('documentDeletionCapturing');
-      case 'captured': return t('documentDeletionCaptured');
-      case 'unavailable': return t('documentDeletionUnavailable');
+      case 'queued':
+        return t('documentDeletionQueued');
+      case 'running':
+        return t('documentDeletionRunning');
+      case 'succeeded':
+        return t('documentDeletionSucceeded');
+      case 'failed':
+        return t('documentDeletionFailed');
+      case 'not_present':
+        return t('documentDeletionNotPresent');
+      case 'retained_shared':
+        return t('documentDeletionShared');
+      case 'capturing':
+        return t('documentDeletionCapturing');
+      case 'captured':
+        return t('documentDeletionCaptured');
+      case 'unavailable':
+        return t('documentDeletionUnavailable');
     }
   }
 
@@ -72,54 +85,158 @@ export function DocumentDeletionReceiptPanel({ operationId }: { operationId: str
   const summary = agentUnresolved
     ? t('documentDeletionAgentUnresolved')
     : materializationUnresolved
-    ? t('documentDeletionMaterializationUnresolved')
-    : briefUnresolved
-    ? t('documentDeletionBriefUnresolved')
-    : memoryUnresolved
-    ? t('documentDeletionMemoryUnresolved')
-    : scopeUnavailable
-    ? t('documentDeletionScopeFailure')
-    : receipt?.status === 'queued'
-    ? t('documentDeletionAggregateQueued')
-    : receipt?.status === 'running'
-      ? t('documentDeletionAggregateRunning')
-      : receipt?.status === 'failed'
-        ? t('documentDeletionAggregateFailed')
-        : receipt?.status === 'succeeded'
-          ? t('documentDeletionAggregateSucceeded')
-          : t('documentDeletionLoading');
+      ? t('documentDeletionMaterializationUnresolved')
+      : briefUnresolved
+        ? t('documentDeletionBriefUnresolved')
+        : memoryUnresolved
+          ? t('documentDeletionMemoryUnresolved')
+          : scopeUnavailable
+            ? t('documentDeletionScopeFailure')
+            : receipt?.status === 'queued'
+              ? t('documentDeletionAggregateQueued')
+              : receipt?.status === 'running'
+                ? t('documentDeletionAggregateRunning')
+                : receipt?.status === 'failed'
+                  ? t('documentDeletionAggregateFailed')
+                  : receipt?.status === 'succeeded'
+                    ? t('documentDeletionAggregateSucceeded')
+                    : t('documentDeletionLoading');
 
-  return <section aria-labelledby="document-deletion-title" className="rounded-lg border border-border bg-card p-4 text-card-foreground">
-    <h1 id="document-deletion-title" ref={headingRef} tabIndex={-1} className="text-lg font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t('documentDeletionTitle')}</h1>
-    {receipt?.immediate_access_revoked === true && <p className="mt-2 text-sm text-muted-foreground">{t('documentDeletionAccessRevoked')}</p>}
-    <p className="mt-3" role={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved || materializationUnresolved || briefUnresolved ? 'alert' : 'status'} aria-live={receipt?.status === 'failed' || scopeUnavailable || memoryUnresolved || agentUnresolved || materializationUnresolved || briefUnresolved ? 'assertive' : 'polite'}>{summary}</p>
-    {receipt?.memory_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionMemoryUnresolvedCount', { count: receipt.memory_unresolved_count })}</p> : null}
-    {receipt?.memory_cache_pending && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionMemoryCachePending')}</p>}
-    {receipt?.agent_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionAgentUnresolvedCount', { count: receipt.agent_unresolved_count })}</p> : null}
-    {receipt?.materialization_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionMaterializationUnresolvedCount', { count: receipt.materialization_unresolved_count })}</p> : null}
-    {receipt?.brief_unresolved_count ? <p className="mt-2 text-sm text-destructive" role="alert">{t('documentDeletionBriefUnresolvedCount', { count: receipt.brief_unresolved_count })}</p> : null}
-    {receipt?.agent_waiting_for_lease && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionAgentLeasePending')}</p>}
-    {operation.isPending && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionLoading')}</p>}
-    {operation.isError && <p className="mt-2 text-sm text-destructive" role="alert">{receipt ? t('documentDeletionRefreshFailed') : t('documentDeletionStatusUnavailable')}</p>}
-    {automaticRefreshPaused && receipt && (receipt.status === 'queued' || receipt.status === 'running') && <p className="mt-2 text-sm text-muted-foreground" role="status">{t('documentDeletionAutomaticRefreshPaused')}</p>}
-    {receipt && <>
-      <p className="mt-3 text-sm text-muted-foreground">{t('documentDeletionOperation')}: <code className="break-all">{receipt.operation_id}</code></p>
-      <dl aria-live="polite" className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionRaw')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.raw_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionEvidenceScope')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.evidence_scope_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionCopied')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.copied_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionChat')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.chat_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionMemory')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.memory_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionAgent')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.agent_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionMaterialization')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.materialization_status)}</dd></div>
-        <div className="rounded-md border border-border p-3"><dt className="text-sm font-medium">{t('documentDeletionBrief')}</dt><dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.brief_status)}</dd></div>
-      </dl>
-    </>}
-    <div className="mt-4 flex flex-wrap gap-3">
-      <Button type="button" variant="outline" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
-        {operation.isFetching ? t('documentDeletionRefreshing') : t('documentDeletionRefresh')}
-      </Button>
-      <Link className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center rounded-md px-3 text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href="/knowledge/documents">{t('documentDeletionBackToList')}</Link>
-    </div>
-  </section>;
+  return (
+    <section aria-labelledby="document-deletion-title" className="rounded-lg border border-border bg-card p-4 text-card-foreground">
+      <h1
+        id="document-deletion-title"
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-lg font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {t('documentDeletionTitle')}
+      </h1>
+      {receipt?.immediate_access_revoked === true && (
+        <p className="mt-2 text-sm text-muted-foreground">{t('documentDeletionAccessRevoked')}</p>
+      )}
+      <p
+        className="mt-3"
+        role={
+          receipt?.status === 'failed' ||
+          scopeUnavailable ||
+          memoryUnresolved ||
+          agentUnresolved ||
+          materializationUnresolved ||
+          briefUnresolved
+            ? 'alert'
+            : 'status'
+        }
+        aria-live={
+          receipt?.status === 'failed' ||
+          scopeUnavailable ||
+          memoryUnresolved ||
+          agentUnresolved ||
+          materializationUnresolved ||
+          briefUnresolved
+            ? 'assertive'
+            : 'polite'
+        }
+      >
+        {summary}
+      </p>
+      {receipt?.memory_unresolved_count ? (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {t('documentDeletionMemoryUnresolvedCount', { count: receipt.memory_unresolved_count })}
+        </p>
+      ) : null}
+      {receipt?.memory_cache_pending && (
+        <p className="mt-2 text-sm text-muted-foreground" role="status">
+          {t('documentDeletionMemoryCachePending')}
+        </p>
+      )}
+      {receipt?.agent_unresolved_count ? (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {t('documentDeletionAgentUnresolvedCount', { count: receipt.agent_unresolved_count })}
+        </p>
+      ) : null}
+      {receipt?.materialization_unresolved_count ? (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {t('documentDeletionMaterializationUnresolvedCount', { count: receipt.materialization_unresolved_count })}
+        </p>
+      ) : null}
+      {receipt?.brief_unresolved_count ? (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {t('documentDeletionBriefUnresolvedCount', { count: receipt.brief_unresolved_count })}
+        </p>
+      ) : null}
+      {receipt?.agent_waiting_for_lease && (
+        <p className="mt-2 text-sm text-muted-foreground" role="status">
+          {t('documentDeletionAgentLeasePending')}
+        </p>
+      )}
+      {operation.isPending && (
+        <p className="mt-2 text-sm text-muted-foreground" role="status">
+          {t('documentDeletionLoading')}
+        </p>
+      )}
+      {operation.isError && (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {receipt ? t('documentDeletionRefreshFailed') : t('documentDeletionStatusUnavailable')}
+        </p>
+      )}
+      {automaticRefreshPaused && receipt && (receipt.status === 'queued' || receipt.status === 'running') && (
+        <p className="mt-2 text-sm text-muted-foreground" role="status">
+          {t('documentDeletionAutomaticRefreshPaused')}
+        </p>
+      )}
+      {receipt && (
+        <>
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t('documentDeletionOperation')}: <code className="break-all">{receipt.operation_id}</code>
+          </p>
+          <dl aria-live="polite" className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionRaw')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.raw_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionEvidenceScope')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.evidence_scope_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionCopied')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.copied_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionChat')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.chat_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionMemory')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.memory_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionAgent')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.agent_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionMaterialization')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.materialization_status)}</dd>
+            </div>
+            <div className="rounded-md border border-border p-3">
+              <dt className="text-sm font-medium">{t('documentDeletionBrief')}</dt>
+              <dd className="mt-1 text-sm text-muted-foreground">{stageLabel(receipt.brief_status)}</dd>
+            </div>
+          </dl>
+        </>
+      )}
+      <div className="mt-4 flex flex-wrap gap-3">
+        <Button type="button" variant="outline" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
+          {operation.isFetching ? t('documentDeletionRefreshing') : t('documentDeletionRefresh')}
+        </Button>
+        <Link
+          className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center rounded-md px-3 text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          href="/knowledge/documents"
+        >
+          {t('documentDeletionBackToList')}
+        </Link>
+      </div>
+    </section>
+  );
 }

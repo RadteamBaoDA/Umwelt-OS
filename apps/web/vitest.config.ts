@@ -8,6 +8,8 @@ export default defineConfig({
     // Mirrors tsconfig.json compilerOptions.paths: "@/*" -> "./src/*".
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // Mirrors tsconfig paths: "@messages" -> JSON message catalogs.
+      '@messages': fileURLToPath(new URL('./messages/index.ts', import.meta.url)),
       // Vitest resolves this test stub; Next retains its server-only import boundary in production.
       'server-only': fileURLToPath(new URL('./src/test/server-only.ts', import.meta.url)),
     },
@@ -15,7 +17,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'messages/**/*.test.ts'],
     exclude: ['node_modules', '.next', '../../tests/**', '**/*.spec.{ts,tsx}'],
     // Coverage runs only via `npm run test:coverage` (CI). Floors in docs/development.md "Coverage floors".
     coverage: {

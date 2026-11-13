@@ -13,16 +13,33 @@ import { SettingsPageHeader } from '@/components/settings-layout';
 export function PersonalDataPermissionsPage() {
   const t = useTranslations('shell');
   const areas = [
-    { id: 'memory', title: t('permissionsMemoryTitle'), body: t('permissionsMemoryBody'), href: '/settings/memory', action: t('openMemoryPrivacy') },
-    { id: 'mcp', title: t('permissionsMcpTitle'), body: t('permissionsMcpBody'), href: '/settings/sources/mcp', action: t('openMcp') },
+    {
+      id: 'memory',
+      title: t('permissions.memoryTitle'),
+      body: t('permissions.memoryBody'),
+      href: '/settings/memory',
+      action: t('open.memoryPrivacy'),
+    },
+    { id: 'mcp', title: t('permissions.mcpTitle'), body: t('permissions.mcpBody'), href: '/settings/sources/mcp', action: t('open.mcp') },
   ];
-  return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('settings')} title={t('permissionsUnavailableTitle')} description={t('permissionsUnavailable')} />
-    <div className="grid gap-4 md:grid-cols-2">
-      {areas.map((area) => <Card key={area.id}>
-        <CardHeader><CardTitle>{area.title}</CardTitle><CardDescription>{area.body}</CardDescription></CardHeader>
-        <CardFooter><Button asChild variant="outline"><Link href={area.href}>{area.action}</Link></Button></CardFooter>
-      </Card>)}
+  return (
+    <div className="flex flex-col gap-5">
+      <SettingsPageHeader eyebrow={t('settings')} title={t('permissions.unavailableTitle')} description={t('permissions.unavailable')} />
+      <div className="grid gap-4 md:grid-cols-2">
+        {areas.map((area) => (
+          <Card key={area.id}>
+            <CardHeader>
+              <CardTitle>{area.title}</CardTitle>
+              <CardDescription>{area.body}</CardDescription>
+            </CardHeader>
+            <CardFooter>
+              <Button asChild variant="outline">
+                <Link href={area.href}>{area.action}</Link>
+              </Button>
+            </CardFooter>
+          </Card>
+        ))}
+      </div>
     </div>
-  </div>;
+  );
 }

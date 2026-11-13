@@ -7,7 +7,6 @@ import { githubMessages } from '@/modules/dashboard/github-messages';
 import { automationMessages } from '@/modules/automations/messages';
 import { observabilityMessages } from '@/modules/observability/messages';
 import { exportMessages } from '@/modules/settings/export-messages';
-import { shellMessages } from './messages/shell';
 import { onboardingMessages } from './messages/onboarding';
 import { setupMessages } from './messages/setup';
 import { topicsMessages } from './messages/topics';
@@ -16,7 +15,7 @@ import { preferencesMessages } from './messages/preferences';
 import { loginMessages } from './messages/login';
 import { accountMessages } from './messages/account';
 import { accountDeletionMessages } from './messages/account-deletion';
-import { commonMessages } from './messages/common';
+import { jsonCatalogs } from '@messages';
 import { sourcesMessages } from './messages/sources';
 import { chatMessages } from './messages/chat';
 import { memoryMessages } from './messages/memory';
@@ -45,11 +44,11 @@ import { landingMessages } from './messages/landing';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
- * Each UI wave edits only its own fragment; add a new area by creating a fragment file and one line per locale below.
+ * Namespaces already migrated to JSON (messages/<locale>/<ns>.json) come from `jsonCatalogs`. Each UI wave edits only its own fragment; add a new area by creating a fragment file and one line per locale below.
  */
 export const messages = {
   'en-us': {
-    shell: shellMessages['en-us'],
+    shell: jsonCatalogs['en-us'].shell,
     landing: landingMessages['en-us'],
     onboarding: onboardingMessages['en-us'],
     setup: setupMessages['en-us'],
@@ -59,7 +58,7 @@ export const messages = {
     login: loginMessages['en-us'],
     account: accountMessages['en-us'],
     accountDeletion: accountDeletionMessages['en-us'],
-    common: commonMessages['en-us'],
+    common: jsonCatalogs['en-us'].common,
     sources: sourcesMessages['en-us'],
     chat: chatMessages['en-us'],
     memory: memoryMessages['en-us'],
@@ -95,7 +94,7 @@ export const messages = {
     routeErrors: routeErrorsMessages['en-us'],
   },
   'vi-vi': {
-    shell: shellMessages['vi-vi'],
+    shell: jsonCatalogs['vi-vi'].shell,
     landing: landingMessages['vi-vi'],
     onboarding: onboardingMessages['vi-vi'],
     setup: setupMessages['vi-vi'],
@@ -105,7 +104,7 @@ export const messages = {
     login: loginMessages['vi-vi'],
     account: accountMessages['vi-vi'],
     accountDeletion: accountDeletionMessages['vi-vi'],
-    common: commonMessages['vi-vi'],
+    common: jsonCatalogs['vi-vi'].common,
     sources: sourcesMessages['vi-vi'],
     chat: chatMessages['vi-vi'],
     memory: memoryMessages['vi-vi'],
