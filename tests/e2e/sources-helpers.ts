@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { uiRe, uiText } from './ui-text';
 
 type Outcome = { ok: boolean; text: string };
 
@@ -231,8 +232,8 @@ export const BUILTINS: [id: string, label: string][] = [
 /** Opens the "Add datasource" > "Connect an API" wizard dialog from the sources settings page. */
 export async function openWizard(page: Page) {
   await page.goto('/settings/sources');
-  await page.getByRole('button', { name: 'Add datasource' }).click();
-  await page.getByRole('menuitem', { name: /Connect an API/ }).click();
+  await page.getByRole('button', { name: uiText('sources', 'add.datasource') }).click();
+  await page.getByRole('menuitem', { name: uiRe('sources', 'menu.connector') }).click();
   return page.getByRole('dialog');
 }
 
