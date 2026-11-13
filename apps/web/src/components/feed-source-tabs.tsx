@@ -9,7 +9,12 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
  *
  * @param props Bound source ids, resolved names, current filter value and change handler.
  */
-export function FeedSourceTabs({ sourceIds, sourceNames, value, onChange }: {
+export function FeedSourceTabs({
+  sourceIds,
+  sourceNames,
+  value,
+  onChange,
+}: {
   sourceIds: string[];
   sourceNames: { id: string; name: string }[] | undefined;
   value: string;
@@ -18,14 +23,21 @@ export function FeedSourceTabs({ sourceIds, sourceNames, value, onChange }: {
   const t = useTranslations('dashboard');
   // More than 6 sources keep the filter dropdown only; a single source needs no tabs.
   if (sourceIds.length < 2 || sourceIds.length > 6) return null;
-  const trigger = 'min-h-8 pointer-coarse:min-h-11 max-w-40 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none';
+  const trigger =
+    'min-h-8 pointer-coarse:min-h-11 max-w-40 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none';
   return (
     <Tabs value={value} onValueChange={onChange}>
-      <TabsList aria-label={t('feedSourceTabs')} className="h-auto max-w-full flex-wrap gap-1 p-0">
-        <TabsTrigger value="all" className={trigger}>{t('feedSourceAll')}</TabsTrigger>
+      <TabsList aria-label={t('feed.sourceTabs')} className="h-auto max-w-full flex-wrap gap-1 p-0">
+        <TabsTrigger value="all" className={trigger}>
+          {t('feed.sourceAll')}
+        </TabsTrigger>
         {sourceIds.map((id) => {
-          const name = sourceNames?.find((source) => source.id === id)?.name ?? t('feedSourceUnknown');
-          return <TabsTrigger key={id} value={id} title={name} className={trigger}><span className="truncate">{name}</span></TabsTrigger>;
+          const name = sourceNames?.find((source) => source.id === id)?.name ?? t('feed.sourceUnknown');
+          return (
+            <TabsTrigger key={id} value={id} title={name} className={trigger}>
+              <span className="truncate">{name}</span>
+            </TabsTrigger>
+          );
         })}
       </TabsList>
     </Tabs>

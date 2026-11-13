@@ -63,18 +63,18 @@ export function FeedGadget(props: FeedGadgetProps) {
   if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} />;
   return (
     <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
-      <TabsList aria-label={t('feedTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
+      <TabsList aria-label={t('feed.tabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
         <TabsTrigger
           value="items"
           className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
         >
-          {t('feedTabItems')}
+          {t('feed.tabItems')}
         </TabsTrigger>
         <TabsTrigger
           value="stories"
           className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
         >
-          {t('feedTabStories')}
+          {t('feed.tabStories')}
         </TabsTrigger>
       </TabsList>
       <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
@@ -102,17 +102,17 @@ function FeedEmptyNotice({
   const t = useTranslations('dashboard');
   const searching = Boolean(needle) || sourceFilter !== 'all';
   const emptyDetail = searching
-    ? t('feedNoMatch')
+    ? t('feed.noMatch')
     : serverFiltered
-      ? t('feedNoServerMatch')
+      ? t('feed.noServerMatch')
       : onlyUnread
-        ? t('feedCaughtUp')
-        : t('feedEmptyDetail');
+        ? t('feed.caughtUp')
+        : t('feed.emptyDetail');
   return (
     <GadgetNotice
       kind="empty"
-      message={`${t('feedEmptyTitle')}. ${emptyDetail}`}
-      action={searching || serverFiltered || onlyUnread ? undefined : { href: '/settings/sources', label: t('gadgetConfigureAction') }}
+      message={`${t('feed.emptyTitle')}. ${emptyDetail}`}
+      action={searching || serverFiltered || onlyUnread ? undefined : { href: '/settings/sources', label: t('gadget.configureAction') }}
       className="px-0"
     />
   );
@@ -135,10 +135,10 @@ function FeedStatus(props: {
     <>
       {/* Loading Skeleton */}
       {docsQuery.isLoading && props.feedItemCount === 0 && (
-        <GadgetSkeleton variant="list" label={t('gadgetDataLoading')} className="flex-1 px-0" />
+        <GadgetSkeleton variant="list" label={t('gadget.dataLoading')} className="flex-1 px-0" />
       )}
 
-      {docsQuery.isError && !docsQuery.isFetchNextPageError && <GadgetNotice kind="error" message={t('feedLoadError')} className="px-0" />}
+      {docsQuery.isError && !docsQuery.isFetchNextPageError && <GadgetNotice kind="error" message={t('feed.loadError')} className="px-0" />}
 
       {/* Empty State */}
       {!docsQuery.isLoading && !docsQuery.isError && (!docsQuery.hasNextPage || filtering) && props.displayedCount === 0 && (
@@ -167,7 +167,7 @@ function FeedFooter({
     <>
       {docsQuery.isFetchNextPageError && (
         <p role="alert" className="text-xs text-destructive">
-          {t('feedLoadMoreError')}
+          {t('feed.loadMoreError')}
         </p>
       )}
       {docsQuery.hasNextPage && listExpanded && (
@@ -179,11 +179,11 @@ function FeedFooter({
           disabled={docsQuery.isFetchingNextPage}
           onClick={() => docsQuery.fetchNextPage()}
         >
-          {docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}
+          {docsQuery.isFetchingNextPage ? t('feed.loadingMore') : t('feed.loadMore')}
         </Button>
       )}
       {!docsQuery.hasNextPage && !docsQuery.isError && feedItemCount > 0 && listExpanded && (
-        <p className="text-center text-xs text-muted-foreground">{t('feedEndOfList')}</p>
+        <p className="text-center text-xs text-muted-foreground">{t('feed.endOfList')}</p>
       )}
     </>
   );
@@ -253,7 +253,7 @@ function FeedStreamToolbar(props: {
       unreadCount={props.unreadCount}
       volume={
         volume.length >= 2 && (
-          <span className="w-20 shrink-0" title={t('feedVolume')}>
+          <span className="w-20 shrink-0" title={t('feed.volume')}>
             <Sparkline data={volume} height={24} width={80} line />
           </span>
         )
@@ -345,7 +345,7 @@ function FeedModerationBars({
 function useFeedSignals(feedItems: FeedStreamItem[], onUnreadCountChange: FeedGadgetProps['onUnreadCountChange']) {
   const t = useTranslations('dashboard');
   const unreadCount = feedItems.filter((i) => !i.read).length;
-  useReportGadgetFreshness(newestCollectedAt(feedItems), feedItems.length > 0 ? t('gadgetItemCount', { count: feedItems.length }) : null);
+  useReportGadgetFreshness(newestCollectedAt(feedItems), feedItems.length > 0 ? t('gadget.itemCount', { count: feedItems.length }) : null);
   const volume = useMemo(() => bucketByDay(feedItems.map((i) => i.timestamp)), [feedItems]);
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
   return { unreadCount, volume };

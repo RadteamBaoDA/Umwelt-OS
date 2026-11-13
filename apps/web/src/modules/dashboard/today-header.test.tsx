@@ -24,11 +24,20 @@ function renderHeader(name?: string, weatherSource?: { id: string; name: string 
 }
 
 describe('TodayHeader', () => {
-  beforeEach(() => { window.localStorage.clear(); window.sessionStorage.clear(); vi.useFakeTimers({ toFake: ['Date'] }); });
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
   afterEach(() => vi.useRealTimers());
 
   it('maps hours to greetings', () => {
-    expect([greetingKey(8), greetingKey(14), greetingKey(20), greetingKey(2)]).toEqual(['greetingMorning', 'greetingAfternoon', 'greetingEvening', 'greetingEvening']);
+    expect([greetingKey(8), greetingKey(14), greetingKey(20), greetingKey(2)]).toEqual([
+      'greeting.morning',
+      'greeting.afternoon',
+      'greeting.evening',
+      'greeting.evening',
+    ]);
   });
   it('greets by time of day with the name, or without it', () => {
     vi.setSystemTime(new Date('2026-11-03T14:00:00Z'));
@@ -40,10 +49,25 @@ describe('TodayHeader', () => {
   });
   it('shows place and temperature from the latest Open-Meteo reading, or the bare unit without a place', async () => {
     vi.setSystemTime(new Date('2026-11-03T14:00:00Z'));
-    mocks.window.mockResolvedValue({ items: [
-      { provider: 'open_meteo', metric: 'temperature_2m', value: 20.2, quality: 'provider_reported', observed_at: '2026-11-03T11:00:00Z' },
-      { provider: 'open_meteo', metric: 'temperature_2m', value: 24.4, quality: 'provider_reported', observed_at: '2026-11-03T13:50:00Z' },
-    ], truncated: false });
+    mocks.window.mockResolvedValue({
+      items: [
+        {
+          provider: 'open_meteo',
+          metric: 'temperature_2m',
+          value: 20.2,
+          quality: 'provider_reported',
+          observed_at: '2026-11-03T11:00:00Z',
+        },
+        {
+          provider: 'open_meteo',
+          metric: 'temperature_2m',
+          value: 24.4,
+          quality: 'provider_reported',
+          observed_at: '2026-11-03T13:50:00Z',
+        },
+      ],
+      truncated: false,
+    });
     const { unmount } = renderHeader('Bao', { id: 'w1', name: 'Hanoi' });
     expect(await screen.findByText(/Hanoi 24°/)).toBeTruthy();
     unmount();

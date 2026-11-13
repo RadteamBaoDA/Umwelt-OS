@@ -91,7 +91,12 @@ export function buildMultiChart(seriesData: readonly ChartSeriesData[], range: C
   }
   return {
     data: [...rows.values()].sort((left, right) => parsePointTimestampMs(left.timestamp) - parsePointTimestampMs(right.timestamp)),
-    series: visible.map(({ item }): ChartSeries => ({ dataKey: item.key, name: item.name, unit: rebased ? '%' : item.unit, currency: rebased ? undefined : item.currency })),
+    series: visible.map(({ item }): ChartSeries => ({
+      dataKey: item.key,
+      name: item.name,
+      unit: rebased ? '%' : item.unit,
+      currency: rebased ? undefined : item.currency,
+    })),
     last: visible.map(({ item, points }) => ({ item, value: points[points.length - 1].value })),
     rebased,
   };
@@ -153,7 +158,7 @@ function summarizeChange(visiblePoints: ChartDataPoint[]): { currentValue: numbe
 function RangeTabs({ timeRange, onChange }: { timeRange: ChartTimeRange; onChange: (range: ChartTimeRange) => void }) {
   const ts = useTranslations('uiSweep');
   return (
-    <div className="flex items-center gap-1" role="group" aria-label={ts('chartRangeAria')}>
+    <div className="flex items-center gap-1" role="group" aria-label={ts('chart.rangeAria')}>
       {(['24h', '7d', '30d', '90d', '1y', 'all'] as ChartTimeRange[]).map((range) => (
         <BareButton
           key={range}
@@ -174,11 +179,13 @@ function ChartKindToggle({ chartKind, onChange }: { chartKind: ChartKind; onChan
   const ts = useTranslations('uiSweep');
   return (
     <div className="hidden shrink-0 items-center gap-0.5 rounded-md border border-border bg-muted/20 p-0.5 @[40rem]/gadget:flex">
-      {([
-        ['area', Activity, ts('chartArea'), ts('chartAreaAria')],
-        ['line', LineChartIcon, ts('chartLine'), ts('chartLineAria')],
-        ['bar', BarChart2, ts('chartBar'), ts('chartBarAria')],
-      ] as const).map(([kind, Icon, title, aria]) => (
+      {(
+        [
+          ['area', Activity, ts('chart.area'), ts('chart.areaAria')],
+          ['line', LineChartIcon, ts('chart.line'), ts('chart.lineAria')],
+          ['bar', BarChart2, ts('chart.bar'), ts('chart.barAria')],
+        ] as const
+      ).map(([kind, Icon, title, aria]) => (
         <BareButton
           key={kind}
           type="button"
@@ -195,7 +202,14 @@ function ChartKindToggle({ chartKind, onChange }: { chartKind: ChartKind; onChan
 }
 
 /** The plot for the selected chart kind. */
-function KindChart({ kind, data, series, currency, unit, providerDelay }: {
+function KindChart({
+  kind,
+  data,
+  series,
+  currency,
+  unit,
+  providerDelay,
+}: {
   kind: ChartKind;
   data: ChartDataPoint[];
   series: ChartSeries[];
@@ -209,7 +223,13 @@ function KindChart({ kind, data, series, currency, unit, providerDelay }: {
 }
 
 /** Several sources: compact legend (latest raw value per series), notes and one line per series. */
-function MultiSeriesBody({ multi, capped, timeRange, onRangeChange, providerDelay }: {
+function MultiSeriesBody({
+  multi,
+  capped,
+  timeRange,
+  onRangeChange,
+  providerDelay,
+}: {
   multi: NonNullable<ReturnType<typeof buildMultiChart>>;
   capped: boolean;
   timeRange: ChartTimeRange;
@@ -236,14 +256,24 @@ function MultiSeriesBody({ multi, capped, timeRange, onRangeChange, providerDela
           </li>
         ))}
       </ul>
-      {multi.rebased && <p role="status" className="shrink-0 text-xs text-muted-foreground">{t('chartRebasedNote')}</p>}
-      {capped && <p role="status" className="shrink-0 text-xs text-muted-foreground">{t('chartTooManySeries', { max: MAX_CHART_SERIES })}</p>}
-      {multi.data.length >= 2 && <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
-        <BaseLineChart data={multi.data} series={multi.series} providerDelay={providerDelay} height="100%" connectNulls />
-      </div>}
+      {multi.rebased && (
+        <p role="status" className="shrink-0 text-xs text-muted-foreground">
+          {t('chart.rebasedNote')}
+        </p>
+      )}
+      {capped && (
+        <p role="status" className="shrink-0 text-xs text-muted-foreground">
+          {t('chart.tooManySeries', { max: MAX_CHART_SERIES })}
+        </p>
+      )}
+      {multi.data.length >= 2 && (
+        <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
+          <BaseLineChart data={multi.data} series={multi.series} providerDelay={providerDelay} height="100%" connectNulls />
+        </div>
+      )}
       <div className="flex shrink-0 items-center justify-between text-xs">
         <RangeTabs timeRange={timeRange} onChange={onRangeChange} />
-        <span className="text-xs tabular-nums text-muted-foreground">{t('chartObservationCount', { count: multi.data.length })}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{t('chart.observationCount', { count: multi.data.length })}</span>
       </div>
     </div>
   );
@@ -261,14 +291,7 @@ function MultiSeriesBody({ multi, capped, timeRange, onRangeChange, providerDela
  * @param props Gadget instance configuration and time series options.
  * @returns Accessible metrics chart gadget component.
  */
-export function MetricsChart({
-  instance,
-  initialData,
-  currency,
-  unit,
-  providerDelay,
-  seriesData,
-}: MetricsChartProps) {
+export function MetricsChart({ instance, initialData, currency, unit, providerDelay, seriesData }: MetricsChartProps) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const daily = useTranslations('daily');
@@ -290,8 +313,16 @@ export function MetricsChart({
   const { currentValue, changePercent, isFlat } = useMemo(() => summarizeChange(visiblePoints), [visiblePoints]);
   const series: ChartSeries[] = [{ dataKey: 'value', name: targetSymbol, currency, unit }];
 
-  if (multi) return <MultiSeriesBody multi={multi} capped={capped} timeRange={timeRange} onRangeChange={setTimeRange} providerDelay={providerDelay} />;
-  if (points.length === 0) return <p role="status" className="p-3 text-sm text-muted-foreground">{daily('noGadgetData')}</p>;
+  if (multi)
+    return (
+      <MultiSeriesBody multi={multi} capped={capped} timeRange={timeRange} onRangeChange={setTimeRange} providerDelay={providerDelay} />
+    );
+  if (points.length === 0)
+    return (
+      <p role="status" className="p-3 text-sm text-muted-foreground">
+        {daily('noGadgetData')}
+      </p>
+    );
 
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-2 overflow-y-auto overflow-x-hidden">
@@ -315,15 +346,19 @@ export function MetricsChart({
 
       {/* Main Responsive Recharts View */}
       {/* With fewer than 2 points a plot is only a lone dot on a misleading axis; the history note below explains it. */}
-      {visiblePoints.length >= 2 && <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
-        <KindChart kind={chartKind} data={visiblePoints} series={series} currency={currency} unit={unit} providerDelay={providerDelay} />
-      </div>}
+      {visiblePoints.length >= 2 && (
+        <div className="flex-1 w-full min-h-[140px] shrink-0 relative">
+          <KindChart kind={chartKind} data={visiblePoints} series={series} currency={currency} unit={unit} providerDelay={providerDelay} />
+        </div>
+      )}
       {/* Range selector as quiet text tabs under the plot */}
       <div className="flex shrink-0 items-center justify-between text-xs">
         <RangeTabs timeRange={timeRange} onChange={setTimeRange} />
-        <span className="text-xs tabular-nums text-muted-foreground">{t('chartObservationCount', { count: visiblePoints.length })}</span>
+        <span className="text-xs tabular-nums text-muted-foreground">{t('chart.observationCount', { count: visiblePoints.length })}</span>
       </div>
-      <div className="shrink-0"><ChartHistoryNote data={visiblePoints} /></div>
+      <div className="shrink-0">
+        <ChartHistoryNote data={visiblePoints} />
+      </div>
     </div>
   );
 }

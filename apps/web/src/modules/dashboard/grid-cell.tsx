@@ -42,7 +42,7 @@ function ResizeHandles({ onResizeStart }: { onResizeStart: GridCellProps['onResi
       {/* East / Right edge handle */}
       <div
         role="separator"
-        aria-label={t('resizeWidth')}
+        aria-label={t('resize.width')}
         onPointerDown={(e) => onResizeStart('e', e)}
         className="absolute right-0 top-3 bottom-3 w-2.5 cursor-ew-resize hover:bg-primary/40 active:bg-primary rounded-r-md transition-colors z-20"
       />
@@ -50,7 +50,7 @@ function ResizeHandles({ onResizeStart }: { onResizeStart: GridCellProps['onResi
       {/* South / Bottom edge handle */}
       <div
         role="separator"
-        aria-label={t('resizeHeight')}
+        aria-label={t('resize.height')}
         onPointerDown={(e) => onResizeStart('s', e)}
         className="absolute bottom-0 left-3 right-3 h-2.5 cursor-ns-resize hover:bg-primary/40 active:bg-primary rounded-b-md transition-colors z-20"
       />
@@ -58,7 +58,7 @@ function ResizeHandles({ onResizeStart }: { onResizeStart: GridCellProps['onResi
       {/* South-East / Corner handle */}
       <div
         role="separator"
-        aria-label={t('resizeCorner')}
+        aria-label={t('resize.corner')}
         onPointerDown={(e) => onResizeStart('se', e)}
         className="absolute right-0 bottom-0 w-4 h-4 cursor-nwse-resize flex items-end justify-end p-0.5 z-20 group"
       >
@@ -69,19 +69,28 @@ function ResizeHandles({ onResizeStart }: { onResizeStart: GridCellProps['onResi
 }
 
 /** Live tooltip showing integer coordinates (and the size while resizing) during a gesture. */
-function GestureTooltip({ gesture, placement, overlapCount, gestureNotice }: Pick<GridCellProps, 'placement' | 'overlapCount' | 'gestureNotice'> & { gesture: ActiveGesture }) {
+function GestureTooltip({
+  gesture,
+  placement,
+  overlapCount,
+  gestureNotice,
+}: Pick<GridCellProps, 'placement' | 'overlapCount' | 'gestureNotice'> & { gesture: ActiveGesture }) {
   const t = useTranslations('dashboard');
   return (
-    <div className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[11px] shadow-[var(--shadow-popover)] z-40 max-w-xs pointer-events-none ${overlapCount > 0 ? 'bg-destructive text-destructive-foreground' : 'bg-foreground text-background'}`}>
+    <div
+      className={`absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[11px] shadow-[var(--shadow-popover)] z-40 max-w-xs pointer-events-none ${overlapCount > 0 ? 'bg-destructive text-destructive-foreground' : 'bg-foreground text-background'}`}
+    >
       {gesture.type === 'resize' ? (
         <span className="tabular-nums font-semibold">{t('resizingLabel', { w: placement.w, h: placement.h })}</span>
       ) : null}
-      <span className={gesture.type === 'resize' ? 'ml-2 tabular-nums' : 'tabular-nums'}>{t('positionLabel', {
-        x: placement.x + 1,
-        y: placement.y + 1,
-        w: placement.w,
-        h: placement.h,
-      })}</span>
+      <span className={gesture.type === 'resize' ? 'ml-2 tabular-nums' : 'tabular-nums'}>
+        {t('positionLabel', {
+          x: placement.x + 1,
+          y: placement.y + 1,
+          w: placement.w,
+          h: placement.h,
+        })}
+      </span>
       <span className="ml-2">{gestureNotice}</span>
     </div>
   );
@@ -151,16 +160,23 @@ export function GridCell(props: GridCellProps) {
         onRemove={props.onRemove}
       >
         {/* null (not an element returning null) for planned renderers, so GadgetFrame shows its planned body. */}
-        {isGadgetRendererRegistered(instance.definition.renderer)
-          ? <RegisteredGadget rendererId={instance.definition.renderer} instance={instance} isEditMode={isEditMode} onUnreadCountChange={setUnreadCount} />
-          : null}
+        {isGadgetRendererRegistered(instance.definition.renderer) ? (
+          <RegisteredGadget
+            rendererId={instance.definition.renderer}
+            instance={instance}
+            isEditMode={isEditMode}
+            onUnreadCountChange={setUnreadCount}
+          />
+        ) : null}
       </GadgetFrame>
 
       {/* Resize handles rendered only in edit mode */}
       {isEditMode && <ResizeHandles onResizeStart={props.onResizeStart} />}
 
       {/* Live tooltip showing integer coordinates during gesture */}
-      {isGestureTarget && <GestureTooltip gesture={gesture} placement={placement} overlapCount={overlapCount} gestureNotice={props.gestureNotice} />}
+      {isGestureTarget && (
+        <GestureTooltip gesture={gesture} placement={placement} overlapCount={overlapCount} gestureNotice={props.gestureNotice} />
+      )}
     </div>
   );
 }

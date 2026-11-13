@@ -18,12 +18,31 @@ import { deltaVsPrevious, formatObservationValue, historyPerSeries, seriesKey } 
 import { SeriesRow } from './series-row';
 import { formatRelativeTime } from './relative-time';
 
+/** Literal catalog keys for the screen-reader severity and status labels (no runtime key concatenation). */
+const SEVERITY_KEY = {
+  info: 'watchlist.severityInfo',
+  warning: 'watchlist.severityWarning',
+  critical: 'watchlist.severityCritical',
+} as const;
+const STATUS_KEY = {
+  alert: 'watchlist.statusAlert',
+  matched: 'watchlist.statusMatched',
+  monitoring: 'watchlist.statusMonitoring',
+} as const;
+
 /** Sort rank per status/severity (lower sorts first). */
 const STATUS_RANK: Record<WatchlistItem['status'], number> = { alert: 0, matched: 1, monitoring: 2 };
 const SEVERITY_RANK: Record<WatchlistItem['severity'], number> = { critical: 0, warning: 1, info: 2 };
 
 /** Ticker to CoinGecko series key (observations of by-id assets carry the uppercased coin id, e.g. BITCOIN). */
-const SYMBOL_ALIASES: Record<string, string> = { BTC: 'BITCOIN', ETH: 'ETHEREUM', SOL: 'SOLANA', XRP: 'RIPPLE', DOGE: 'DOGECOIN', ADA: 'CARDANO' };
+const SYMBOL_ALIASES: Record<string, string> = {
+  BTC: 'BITCOIN',
+  ETH: 'ETHEREUM',
+  SOL: 'SOLANA',
+  XRP: 'RIPPLE',
+  DOGE: 'DOGECOIN',
+  ADA: 'CARDANO',
+};
 /** History window for watchlist sparklines. */
 const SPARK_LOOKBACK_DAYS = 30;
 
@@ -66,21 +85,30 @@ export interface WatchlistGadgetProps {
 function filterWatchItems(items: WatchlistItem[], filterQuery: string): WatchlistItem[] {
   if (!filterQuery) return items;
   const q = filterQuery.toLowerCase();
-  return items.filter((item) => item.target.toLowerCase().includes(q)
-    || item.condition.toLowerCase().includes(q)
-    || item.matchReason?.toLowerCase().includes(q));
+  return items.filter(
+    (item) =>
+      item.target.toLowerCase().includes(q) || item.condition.toLowerCase().includes(q) || item.matchReason?.toLowerCase().includes(q),
+  );
 }
 
 /** Alerting first, then by severity, then most recently matched, so the rows that need attention lead. */
 function sortWatchItems(items: WatchlistItem[]): WatchlistItem[] {
-  return [...items].sort((a, b) =>
-    STATUS_RANK[a.status] - STATUS_RANK[b.status]
-    || SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
-    || (b.lastMatchedAt ?? '').localeCompare(a.lastMatchedAt ?? ''));
+  return [...items].sort(
+    (a, b) =>
+      STATUS_RANK[a.status] - STATUS_RANK[b.status] ||
+      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+      (b.lastMatchedAt ?? '').localeCompare(a.lastMatchedAt ?? ''),
+  );
 }
 
 /** Loading skeleton, load error and the empty notice of the watchlist (mutually exclusive with the rule rows). */
-function WatchlistStatus({ definition, matchesQuery, highlightRuleCount, emptyResult, onAddRule }: {
+function WatchlistStatus({
+  definition,
+  matchesQuery,
+  highlightRuleCount,
+  emptyResult,
+  onAddRule,
+}: {
   definition: GadgetInstance['definition'];
   matchesQuery: { isPending: boolean; isError: boolean };
   highlightRuleCount: number;
@@ -92,10 +120,21 @@ function WatchlistStatus({ definition, matchesQuery, highlightRuleCount, emptyRe
   const loading = matchesQuery.isPending && highlightRuleCount > 0 && definition.source_ids.length > 0;
   return (
     <>
-      {loading && <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />}
-      {matchesQuery.isError && <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />}
+      {loading && <GadgetSkeleton variant="table" className="p-0" label={t('gadget.dataLoading')} />}
+      {matchesQuery.isError && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
       {!loading && !matchesQuery.isError && emptyResult && (
-        <GadgetNotice kind="empty" className="p-0" message={definition.renderer === 'highlights' ? daily('highlightsEmpty') : `${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} action={onAddRule ? { label: daily('addRule'), onClick: onAddRule } : { href: '/settings/sources', label: t('gadgetConfigureAction') }} />
+        <GadgetNotice
+          kind="empty"
+          className="p-0"
+          message={
+            definition.renderer === 'highlights'
+              ? daily('highlights.empty')
+              : `${daily('watchlist.empty')}. ${daily('watchlist.emptyDetail')}`
+          }
+          action={
+            onAddRule ? { label: daily('addRule'), onClick: onAddRule } : { href: '/settings/sources', label: t('gadget.configureAction') }
+          }
+        />
       )}
     </>
   );
@@ -110,21 +149,25 @@ function useWatchlistItems(instance: GadgetInstance, initialItems: WatchlistItem
   const highlightRules: HighlightRule[] = definition.highlight_rules ?? [];
   const matchesQuery = useQuery({
     queryKey: ['dashboard-highlights', definition.id, definition.revision],
-    enabled: (definition.renderer === 'highlights' || definition.renderer === 'watch_rules')
-      && definition.source_ids.length > 0 && highlightRules.length > 0,
+    enabled:
+      (definition.renderer === 'highlights' || definition.renderer === 'watch_rules') &&
+      definition.source_ids.length > 0 &&
+      highlightRules.length > 0,
     queryFn: () => evaluateGadgetHighlights(definition.id),
   });
-  const items: WatchlistItem[] = initialItems.length ? initialItems : (matchesQuery.data ?? []).map((match) => ({
-    id: `${match.document_version_id}:${match.rule_id}`,
-    target: match.title,
-    targetType: 'keyword',
-    condition: match.matched_keywords.join(', '),
-    status: match.severity === 'critical' ? 'alert' : 'matched',
-    severity: match.severity,
-    lastMatchedAt: match.observed_at,
-    matchReason: match.reason,
-    matchCount: 1,
-  }));
+  const items: WatchlistItem[] = initialItems.length
+    ? initialItems
+    : (matchesQuery.data ?? []).map((match) => ({
+        id: `${match.document_version_id}:${match.rule_id}`,
+        target: match.title,
+        targetType: 'keyword',
+        condition: match.matched_keywords.join(', '),
+        status: match.severity === 'critical' ? 'alert' : 'matched',
+        severity: match.severity,
+        lastMatchedAt: match.observed_at,
+        matchReason: match.reason,
+        matchCount: 1,
+      }));
 
   return { matchesQuery, items };
 }
@@ -160,9 +203,12 @@ function useWatchlistSpark(instance: GadgetInstance, items: WatchlistItem[]) {
     if (key && o.value !== null && (!cur || o.observed_at > cur.observed_at)) latestBySymbol.set(key, o);
   }
   /** Latest observation matching a symbol item, or undefined (row then keeps its plain display). */
-  const matchFor = (item: WatchlistItem) => item.targetType === 'symbol'
-    ? symbolCandidates(item.target).map((c) => latestBySymbol.get(c)).find(Boolean)
-    : undefined;
+  const matchFor = (item: WatchlistItem) =>
+    item.targetType === 'symbol'
+      ? symbolCandidates(item.target)
+          .map((c) => latestBySymbol.get(c))
+          .find(Boolean)
+      : undefined;
 
   return { history, matchFor };
 }
@@ -173,7 +219,11 @@ function severityEdge(severity: WatchlistItem['severity']): string {
 }
 
 /** One rule row: a symbol row with sparkline when live observations exist, otherwise the target/condition/time row. */
-function WatchlistRow({ item, obs, history }: {
+function WatchlistRow({
+  item,
+  obs,
+  history,
+}: {
   item: WatchlistItem;
   obs: WorldObservation | undefined;
   history: ReturnType<typeof historyPerSeries>;
@@ -181,14 +231,25 @@ function WatchlistRow({ item, obs, history }: {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const edge = severityEdge(item.severity);
-  const srSeverity = <span className="sr-only">{t(`watchlistSeverity_${item.severity}`)} · {t(`watchlistStatus_${item.status}`)}</span>;
+  const srSeverity = (
+    <span className="sr-only">
+      {t(SEVERITY_KEY[item.severity])} · {t(STATUS_KEY[item.status])}
+    </span>
+  );
   // Symbol with live observations: label | sparkline | value | % change, direction-aware delta colour.
   if (obs) {
     const points = history.get(seriesKey(obs));
     return (
       <li className={`border-l-2 pl-3 ${edge}`} data-testid="watchlist-symbol-row">
-        <SeriesRow label={item.target} value={obs.value} currency={obs.currency ?? undefined} series={points}
-          format={(v) => formatObservationValue(obs, v, display.locale)} deltaPercent={deltaVsPrevious(points)} better={metricBetterDirection(obs.metric)} />
+        <SeriesRow
+          label={item.target}
+          value={obs.value}
+          currency={obs.currency ?? undefined}
+          series={points}
+          format={(v) => formatObservationValue(obs, v, display.locale)}
+          deltaPercent={deltaVsPrevious(points)}
+          better={metricBetterDirection(obs.metric)}
+        />
         {srSeverity}
       </li>
     );
@@ -206,11 +267,15 @@ function WatchlistRow({ item, obs, history }: {
           {item.lastMatchedAt ? (
             <time
               dateTime={item.lastMatchedAt}
-              title={t('watchlistMatchedTitle', { time: formatDateTime(item.lastMatchedAt, display.locale, display.timezone) })}
-            >{formatRelativeTime(item.lastMatchedAt, display.locale)}</time>
-          ) : t('watchlistNever')}
+              title={t('watchlist.matchedTitle', { time: formatDateTime(item.lastMatchedAt, display.locale, display.timezone) })}
+            >
+              {formatRelativeTime(item.lastMatchedAt, display.locale)}
+            </time>
+          ) : (
+            t('watchlist.never')
+          )}
         </p>
-        <p>{t('watchlistMatchCount', { count: item.matchCount })}</p>
+        <p>{t('watchlist.matchCount', { count: item.matchCount })}</p>
       </div>
     </li>
   );
@@ -226,11 +291,7 @@ function WatchlistRow({ item, obs, history }: {
  * @param props Gadget instance configuration and watchlist items.
  * @returns Accessible watchlist table gadget component.
  */
-export function WatchlistGadget({
-  instance,
-  initialItems = [],
-  onAddRule,
-}: WatchlistGadgetProps) {
+export function WatchlistGadget({ instance, initialItems = [], onAddRule }: WatchlistGadgetProps) {
   const t = useTranslations('dashboard');
   const daily = useTranslations('daily');
 
@@ -245,7 +306,9 @@ export function WatchlistGadget({
   const sortedItems = sortWatchItems(filteredItems);
   const alertingCount = items.filter((item) => item.status === 'alert').length;
   // The latest match time is the newest real data timestamp this gadget knows about.
-  useReportGadgetFreshness(items.reduce<string | null>((max, i) => (i.lastMatchedAt && (!max || i.lastMatchedAt > max) ? i.lastMatchedAt : max), null));
+  useReportGadgetFreshness(
+    items.reduce<string | null>((max, i) => (i.lastMatchedAt && (!max || i.lastMatchedAt > max) ? i.lastMatchedAt : max), null),
+  );
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
@@ -253,9 +316,9 @@ export function WatchlistGadget({
       <div className="flex items-center justify-between gap-2">
         <p
           className="text-figure-sm"
-          title={highlightRules.length > 0 ? daily('highlightRulesApplied', { count: highlightRules.length }) : undefined}
+          title={highlightRules.length > 0 ? daily('highlightRules.applied', { count: highlightRules.length }) : undefined}
         >
-          {t('watchlistSummary', { alerting: alertingCount, total: items.length })}
+          {t('watchlist.summary', { alerting: alertingCount, total: items.length })}
         </p>
         {onAddRule && (
           <Button type="button" variant="ghost" size="sm" onClick={onAddRule} className="h-7 shrink-0 gap-1 px-2 text-xs">
@@ -273,22 +336,27 @@ export function WatchlistGadget({
             type="search"
             value={filterQuery}
             onChange={(e) => setFilterQuery(e.target.value)}
-            placeholder={t('feedSearch')}
-            aria-label={t('feedSearch')}
+            placeholder={t('feed.search')}
+            aria-label={t('feed.search')}
             className="h-7 w-full text-xs pl-7 bg-muted/20"
           />
         </div>
       )}
 
       <WatchlistStatus
-        definition={definition} matchesQuery={matchesQuery} highlightRuleCount={highlightRules.length}
-        emptyResult={filteredItems.length === 0} onAddRule={onAddRule}
+        definition={definition}
+        matchesQuery={matchesQuery}
+        highlightRuleCount={highlightRules.length}
+        emptyResult={filteredItems.length === 0}
+        onAddRule={onAddRule}
       />
 
       {/* Rule rows: severity is a 2px left edge (plus screen-reader text), time and count sit right, tabular. */}
       {sortedItems.length > 0 && (
         <ul className="min-h-0 flex-1 divide-y divide-border/50">
-          {sortedItems.map((item) => <WatchlistRow key={item.id} item={item} obs={matchFor(item)} history={history} />)}
+          {sortedItems.map((item) => (
+            <WatchlistRow key={item.id} item={item} obs={matchFor(item)} history={history} />
+          ))}
         </ul>
       )}
     </div>

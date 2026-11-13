@@ -141,7 +141,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
   const count = (status: FreshnessStatus) => counts[status];
   // The overdue marker takes the worst status among its members so a failing source is never hidden.
   /** Formats the time since a source last succeeded, or the never-synced label. */
-  const ago = (tick: FreshnessTick) => (tick.lastSuccessMs !== null ? formatAgo(tick.lastSuccessMs, locale) : t('staleSourceNever'));
+  const ago = (tick: FreshnessTick) => (tick.lastSuccessMs !== null ? formatAgo(tick.lastSuccessMs, locale) : t('staleSource.never'));
   const overdueActive = activeId === OVERDUE_ID;
   const active = overdueActive ? null : ticks.find((tick) => tick.id === activeId) ?? null;
   const activePosition = overdueActive ? 0 : active?.position ?? 0;
@@ -149,22 +149,22 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
     ? overdue.map((tick) => `${tick.name} · ${ago(tick)}`).join(' - ')
     : active
     ? [
-      t('freshnessTooltip', { name: active.name, time: ago(active) }),
-      active.status === 'failing' ? t('staleSourceLine', { name: active.name, code: active.errorCode ?? '-' }) : null,
+      t('freshness.tooltip', { name: active.name, time: ago(active) }),
+      active.status === 'failing' ? t('staleSource.line', { name: active.name, code: active.errorCode ?? '-' }) : null,
     ].filter(Boolean).join(' - ')
     : null;
   const legend = (['fresh', 'stale', 'failing'] as const)
     .filter((status) => count(status) > 0)
     .map((status) => ({
       status,
-      label: t(status === 'fresh' ? 'freshnessLegendFresh' : status === 'stale' ? 'freshnessLegendStale' : 'freshnessLegendFailing', { count: count(status) }),
+      label: t(status === 'fresh' ? 'freshness.legendFresh' : status === 'stale' ? 'freshness.legendStale' : 'freshness.legendFailing', { count: count(status) }),
     }));
 
   return (
     <div className="flex w-full flex-col items-stretch gap-1 text-xs text-muted-foreground min-[721px]:flex-row min-[721px]:items-start min-[721px]:gap-3">
     <div
       role="group"
-      aria-label={t('freshnessSummary', { total: ticks.length, fresh: count('fresh'), stale: count('stale'), failing: count('failing') })}
+      aria-label={t('freshness.summary', { total: ticks.length, fresh: count('fresh'), stale: count('stale'), failing: count('failing') })}
       data-testid="freshness-strip"
       className="relative h-9 min-w-0 min-[721px]:flex-1"
     >
@@ -185,9 +185,9 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
           <span aria-hidden="true" className="block" style={{ width: 3, height: 12, borderRadius: 1, background: STATUS_COLOR[tick.status] }} />
         </BareButton>
       ))}
-      <span aria-hidden="true" className="absolute bottom-0 left-0">{t('freshnessAxisHours', { hours: 24 })}</span>
-      <span aria-hidden="true" className="absolute bottom-0 left-1/2 hidden -translate-x-1/2 sm:block">{t('freshnessAxisHours', { hours: 12 })}</span>
-      <span aria-hidden="true" className="absolute bottom-0 right-0">{t('freshnessAxisNow')}</span>
+      <span aria-hidden="true" className="absolute bottom-0 left-0">{t('freshness.axisHours', { hours: 24 })}</span>
+      <span aria-hidden="true" className="absolute bottom-0 left-1/2 hidden -translate-x-1/2 sm:block">{t('freshness.axisHours', { hours: 12 })}</span>
+      <span aria-hidden="true" className="absolute bottom-0 right-0">{t('freshness.axisNow')}</span>
       {(active || overdueActive) && tooltip && (
         <span
           role="tooltip"
@@ -202,7 +202,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
       {overdue.length > 0 && (
         <BareButton
           type="button"
-          aria-label={`${t('freshnessOverdue', { count: overdue.length })}: ${overdue.map((tick) => tick.name).join(', ')}`}
+          aria-label={`${t('freshness.overdue', { count: overdue.length })}: ${overdue.map((tick) => tick.name).join(', ')}`}
           onMouseEnter={() => setActiveId(OVERDUE_ID)}
           onMouseLeave={() => setActiveId(null)}
           onFocus={() => setActiveId(OVERDUE_ID)}
@@ -210,7 +210,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
           className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <span aria-hidden="true" className="block" style={{ width: 8, height: 8, borderRadius: '50%', border: `1.5px solid ${STATUS_COLOR.stale}`, background: 'transparent' }} />
-          <span aria-hidden="true" className="text-xs tabular-nums leading-none text-muted-foreground">{t('freshnessOverdue', { count: overdue.length })}</span>
+          <span aria-hidden="true" className="text-xs tabular-nums leading-none text-muted-foreground">{t('freshness.overdue', { count: overdue.length })}</span>
         </BareButton>
       )}
       {legend.map((entry) => (

@@ -31,7 +31,7 @@ type ForecastRow = { hour: string; temperature: number | null; rain: number | nu
 function UnitSwitch({ unit, onChoose }: { unit: 'c' | 'f'; onChoose: (unit: 'c' | 'f') => void }) {
   const t = useTranslations('dashboard');
   return (
-    <div className="flex items-start self-start text-sm" role="group" aria-label={t('weatherUnit')}>
+    <div className="flex items-start self-start text-sm" role="group" aria-label={t('weather.unit')}>
       {(['c', 'f'] as const).map((option, index) => (
         <span key={option} className="flex items-center">
           {index > 0 && (
@@ -77,23 +77,24 @@ function ForecastPanel({
     <XAxis dataKey="hour" tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} interval={0} />
   );
   const labels = <LabelList dataKey={metric} position="top" formatter={label} style={{ fontSize: 11, fill: 'var(--foreground)' }} />;
-  const chartLabel = metric === 'temperature' ? t('weatherTabTemperature') : metric === 'rain' ? t('weatherTabRain') : t('weatherTabWind');
+  const chartLabel =
+    metric === 'temperature' ? t('weather.tabTemperature') : metric === 'rain' ? t('weather.tabRain') : t('weather.tabWind');
   return (
     <div className="flex flex-col gap-1">
       <Tabs value={metric} onValueChange={(value) => onMetric(value as Metric)}>
-        <TabsList aria-label={t('weatherForecastTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0">
+        <TabsList aria-label={t('weather.forecastTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0">
           {(['temperature', 'rain', 'wind'] as const).map((tab) => (
             <TabsTrigger
               key={tab}
               value={tab}
               className="min-h-8 rounded-none border-b-2 border-transparent px-2 text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
             >
-              {tab === 'temperature' ? t('weatherTabTemperature') : tab === 'rain' ? t('weatherTabRain') : t('weatherTabWind')}
+              {tab === 'temperature' ? t('weather.tabTemperature') : tab === 'rain' ? t('weather.tabRain') : t('weather.tabWind')}
             </TabsTrigger>
           ))}
         </TabsList>
       </Tabs>
-      <div className="h-28" role="img" aria-label={t('weatherNext24hChart', { metric: chartLabel })}>
+      <div className="h-28" role="img" aria-label={t('weather.next24hChart', { metric: chartLabel })}>
         <ResponsiveContainer width="100%" height="100%">
           {metric === 'rain' ? (
             <BarChart data={rows} margin={{ top: 18, right: 8, bottom: 0, left: 8 }}>
@@ -141,9 +142,11 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
 
   // Each detail line renders only when the provider returned that reading.
   const details = [
-    data.precipitation_probability_pct != null ? t('weatherRainChance', { value: whole.format(data.precipitation_probability_pct) }) : null,
-    data.humidity_pct != null ? t('weatherHumidity', { value: whole.format(data.humidity_pct) }) : null,
-    data.wind_kmh != null ? t('weatherWind', { value: whole.format(data.wind_kmh) }) : null,
+    data.precipitation_probability_pct != null
+      ? t('weather.rainChance', { value: whole.format(data.precipitation_probability_pct) })
+      : null,
+    data.humidity_pct != null ? t('weather.humidity', { value: whole.format(data.humidity_pct) }) : null,
+    data.wind_kmh != null ? t('weather.wind', { value: whole.format(data.wind_kmh) }) : null,
   ].filter((line): line is string => line !== null);
 
   const rows = (data.hourly ?? [])
@@ -155,7 +158,7 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
       wind: point.wind_kmh == null ? null : Math.round(point.wind_kmh),
     }));
   return (
-    <section aria-label={t('localWeatherTitle')} className="flex w-[28rem] max-w-full min-w-0 flex-col gap-3 px-4 py-3">
+    <section aria-label={t('localWeather.title')} className="flex w-[28rem] max-w-full min-w-0 flex-col gap-3 px-4 py-3">
       {data.place && (
         <p className="m-0 flex min-w-0 items-center gap-1.5 text-sm font-semibold text-foreground">
           <MapPin className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

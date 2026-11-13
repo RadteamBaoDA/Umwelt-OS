@@ -41,7 +41,16 @@ export function isAccepted(shapes: readonly DataShape[] | undefined, accepted: r
 }
 
 /** Backend preview/apply 409 codes that have dedicated `dashboard.presetError.<code>` copy. */
-const PRESET_ERROR_CODES = ['dashboard_limit', 'definition_limit', 'group_limit', 'instance_limit', 'preview_changed', 'revision_conflict', 'revision_exhausted'];
+/** Literal `dashboard` catalog keys per 409 preset error code (no runtime key concatenation); also the allow-list. */
+const PRESET_ERROR_KEY = {
+  dashboard_limit: 'preset.error.dashboardLimit',
+  definition_limit: 'preset.error.definitionLimit',
+  group_limit: 'preset.error.groupLimit',
+  instance_limit: 'preset.error.instanceLimit',
+  preview_changed: 'preset.error.previewChanged',
+  revision_conflict: 'preset.error.revisionConflict',
+  revision_exhausted: 'preset.error.revisionExhausted',
+} as const;
 
 /** Target context of the picker (which dashboard a non-create apply would change). */
 export interface PresetTarget {
@@ -78,7 +87,12 @@ function usePresetCatalog(open: boolean) {
     if (open && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage({ cancelRefetch: false });
   }, [open, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
   return {
-    presetsQuery, renderersById, rendererCatalogLoaded: renderersQuery.isSuccess, sourceRows, hasNextPage, sourcesLoaded,
+    presetsQuery,
+    renderersById,
+    rendererCatalogLoaded: renderersQuery.isSuccess,
+    sourceRows,
+    hasNextPage,
+    sourcesLoaded,
   };
 }
 
@@ -103,7 +117,8 @@ function usePresetMutations(
   const { setPreviewError, setApplyError, setSelectedPresetId, setReplaceConfirmed, setSlotSources, latePreselectRef } = draft;
   /** Localized copy for a failed preview/apply: the 409 code first (limits, stale preview), else the failure class. */
   const presetFailureText = (error: unknown): string => {
-    if (error instanceof ApiError && error.code && PRESET_ERROR_CODES.includes(error.code)) return t(`presetError.${error.code}`);
+    if (error instanceof ApiError && error.code && error.code in PRESET_ERROR_KEY)
+      return t(PRESET_ERROR_KEY[error.code as keyof typeof PRESET_ERROR_KEY]);
     return tg(apiFailureKey(error) ?? 'requestFailed');
   };
 
@@ -121,7 +136,9 @@ function usePresetMutations(
       );
     },
     // Server messages are English-only: show localized copy keyed by the failure class instead.
-    onError: (error) => { setPreviewError(presetFailureText(error)); },
+    onError: (error) => {
+      setPreviewError(presetFailureText(error));
+    },
   });
   // `mutate` keeps a stable identity across renders (the mutation object does not), so effects can depend on it.
   const previewMutate = previewMutation.mutate;
@@ -153,7 +170,9 @@ function usePresetMutations(
       onPresetApplied(updatedDashboard);
       handleClose();
     },
-    onError: (error) => { setApplyError(presetFailureText(error)); },
+    onError: (error) => {
+      setApplyError(presetFailureText(error));
+    },
   });
   const applyReset = applyMutation.reset;
 
@@ -168,7 +187,17 @@ function usePresetMutations(
     previewReset();
     applyReset();
     onOpenChange(false);
-  }, [applyReset, latePreselectRef, onOpenChange, previewReset, setApplyError, setPreviewError, setReplaceConfirmed, setSelectedPresetId, setSlotSources]);
+  }, [
+    applyReset,
+    latePreselectRef,
+    onOpenChange,
+    previewReset,
+    setApplyError,
+    setPreviewError,
+    setReplaceConfirmed,
+    setSelectedPresetId,
+    setSlotSources,
+  ]);
 
   return { previewMutation, previewMutate, applyMutation, handleClose };
 }
@@ -186,9 +215,21 @@ function usePresetDraft() {
   /** Preset whose preselection waited for unloaded source pages; cleared once it has been re-run. */
   const latePreselectRef = useRef<string | null>(null);
   return {
-    selectedPresetId, setSelectedPresetId, applyMode, setApplyMode, newDashboardName, setNewDashboardName,
-    replaceConfirmed, setReplaceConfirmed, previewError, setPreviewError, applyError, setApplyError,
-    slotSources, setSlotSources, latePreselectRef,
+    selectedPresetId,
+    setSelectedPresetId,
+    applyMode,
+    setApplyMode,
+    newDashboardName,
+    setNewDashboardName,
+    replaceConfirmed,
+    setReplaceConfirmed,
+    previewError,
+    setPreviewError,
+    applyError,
+    setApplyError,
+    slotSources,
+    setSlotSources,
+    latePreselectRef,
   };
 }
 
@@ -230,7 +271,8 @@ function usePresetActions(draft: Draft, catalog: Catalog, mutations: Mutations, 
   // Re-runs the preselection for still-unset slots once the pages that were missing at click time have loaded.
   // A slot the owner already touched has a key in `slotSources` and is never overwritten.
   useEffect(() => {
-    if (!selectedPreset || latePreselectRef.current !== selectedPreset.id || hasNextPage || !sourcesLoaded || !rendererCatalogLoaded) return;
+    if (!selectedPreset || latePreselectRef.current !== selectedPreset.id || hasNextPage || !sourcesLoaded || !rendererCatalogLoaded)
+      return;
     latePreselectRef.current = null;
     const extra = preselect(selectedPreset, slotSources);
     if (Object.keys(extra).length === 0) return;
@@ -238,36 +280,68 @@ function usePresetActions(draft: Draft, catalog: Catalog, mutations: Mutations, 
     // One-shot (guarded by the ref): the late preselection is a reaction to the source query finishing, not derivable during render.
     setSlotSources(next);
     previewMutate({ preset: selectedPreset, sources: next });
-  }, [hasNextPage, latePreselectRef, preselect, previewMutate, rendererCatalogLoaded, selectedPreset, setSlotSources, slotSources, sourcesLoaded]);
+  }, [
+    hasNextPage,
+    latePreselectRef,
+    preselect,
+    previewMutate,
+    rendererCatalogLoaded,
+    selectedPreset,
+    setSlotSources,
+    slotSources,
+    sourcesLoaded,
+  ]);
 
   /** Selects a preset, preselects the only compatible datasource per slot and previews it. */
-  const handleSelectPreset = useCallback((preset: DashboardPreset, mode: ApplyMode = applyMode) => {
-    const initial = preselect(preset, {});
-    latePreselectRef.current = hasNextPage || !sourcesLoaded || !rendererCatalogLoaded ? preset.id : null;
-    setSelectedPresetId(preset.id);
-    setNewDashboardName(preset.label);
-    setPreviewError(null);
-    setApplyError(null);
-    setSlotSources(initial);
-    void previewMutation.mutateAsync({ preset, sources: initial, mode });
-  }, [applyMode, hasNextPage, latePreselectRef, preselect, previewMutation, rendererCatalogLoaded, setApplyError, setNewDashboardName, setPreviewError, setSelectedPresetId, setSlotSources, sourcesLoaded]);
+  const handleSelectPreset = useCallback(
+    (preset: DashboardPreset, mode: ApplyMode = applyMode) => {
+      const initial = preselect(preset, {});
+      latePreselectRef.current = hasNextPage || !sourcesLoaded || !rendererCatalogLoaded ? preset.id : null;
+      setSelectedPresetId(preset.id);
+      setNewDashboardName(preset.label);
+      setPreviewError(null);
+      setApplyError(null);
+      setSlotSources(initial);
+      void previewMutation.mutateAsync({ preset, sources: initial, mode });
+    },
+    [
+      applyMode,
+      hasNextPage,
+      latePreselectRef,
+      preselect,
+      previewMutation,
+      rendererCatalogLoaded,
+      setApplyError,
+      setNewDashboardName,
+      setPreviewError,
+      setSelectedPresetId,
+      setSlotSources,
+      sourcesLoaded,
+    ],
+  );
 
   /** Records a slot's datasource choice and re-previews so readiness and the fingerprint reflect it. */
-  const handleSlotSources = useCallback((slotId: string, ids: string[]) => {
-    if (!selectedPreset) return;
-    const next = { ...slotSources, [slotId]: ids };
-    setSlotSources(next);
-    previewMutation.mutate({ preset: selectedPreset, sources: next });
-  }, [previewMutation, selectedPreset, setSlotSources, slotSources]);
+  const handleSlotSources = useCallback(
+    (slotId: string, ids: string[]) => {
+      if (!selectedPreset) return;
+      const next = { ...slotSources, [slotId]: ids };
+      setSlotSources(next);
+      previewMutation.mutate({ preset: selectedPreset, sources: next });
+    },
+    [previewMutation, selectedPreset, setSlotSources, slotSources],
+  );
 
   /**
    * Switches create/append/replace and re-previews, because the preview fingerprint includes the target and
    * applying with a create-mode fingerprint would always conflict (`preview_changed`).
    */
-  const handleApplyMode = useCallback((mode: ApplyMode) => {
-    setApplyMode(mode);
-    if (selectedPreset && mode !== applyMode) previewMutation.mutate({ preset: selectedPreset, sources: slotSources, mode });
-  }, [applyMode, previewMutation, selectedPreset, setApplyMode, slotSources]);
+  const handleApplyMode = useCallback(
+    (mode: ApplyMode) => {
+      setApplyMode(mode);
+      if (selectedPreset && mode !== applyMode) previewMutation.mutate({ preset: selectedPreset, sources: slotSources, mode });
+    },
+    [applyMode, previewMutation, selectedPreset, setApplyMode, slotSources],
+  );
 
   /** Confirms and applies the active preview. */
   const handleApply = useCallback(() => {
@@ -310,7 +384,10 @@ export function usePresetPicker(
   const { setApplyMode } = draft;
   // One-shot per open: re-arms on close so a later "build dashboard" preselects again; never overrides an owner's choice.
   useEffect(() => {
-    if (!open) { autoSelected.current = false; return; }
+    if (!open) {
+      autoSelected.current = false;
+      return;
+    }
     if (!initialPresetId || autoSelected.current) return;
     const preset = presets.find((candidate) => candidate.id === initialPresetId);
     if (!preset) return;

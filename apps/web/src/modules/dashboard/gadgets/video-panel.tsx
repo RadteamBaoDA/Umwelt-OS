@@ -50,17 +50,22 @@ export function VideoPanel({ instance }: VideoPanelProps) {
         let safeUrl: string | undefined;
         try {
           const parsed = new URL(url ?? '');
-          if (parsed.protocol === 'https:' && ['youtube.com', 'www.youtube.com', 'youtu.be'].includes(parsed.hostname)) safeUrl = parsed.toString();
-        } catch { /* Invalid provider URLs are omitted. */ }
+          if (parsed.protocol === 'https:' && ['youtube.com', 'www.youtube.com', 'youtu.be'].includes(parsed.hostname))
+            safeUrl = parsed.toString();
+        } catch {
+          /* Invalid provider URLs are omitted. */
+        }
         if (item.provider_metadata?.provider !== 'youtube' || !safeUrl) return [];
         const fields = item.provider_metadata.source_fields;
-        return [{
-          id: item.document_version_id,
-          title: typeof fields.title === 'string' ? fields.title : item.title,
-          channel: typeof fields.author === 'string' ? fields.author : '',
-          videoUrl: safeUrl,
-          imageUrl: item.image_url ?? null,
-        }];
+        return [
+          {
+            id: item.document_version_id,
+            title: typeof fields.title === 'string' ? fields.title : item.title,
+            channel: typeof fields.author === 'string' ? fields.author : '',
+            videoUrl: safeUrl,
+            imageUrl: item.image_url ?? null,
+          },
+        ];
       });
     },
   });
@@ -71,20 +76,33 @@ export function VideoPanel({ instance }: VideoPanelProps) {
 
   return (
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto">
-      {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={dashboard('videoSourcesRequired')} />}
-      {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={dashboard('gadgetDataLoading')} />}
-      {query.isError && <GadgetNotice kind="error" className="p-0" message={dashboard('gadgetDataLoadFailed')} />}
-      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <GadgetNotice kind="empty" className="p-0" message={dashboard('videoRecordsEmpty')} action={{ href: '/settings/sources', label: dashboard('gadgetConfigureAction') }} />}
+      {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={dashboard('video.sourcesRequired')} />}
+      {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={dashboard('gadget.dataLoading')} />}
+      {query.isError && <GadgetNotice kind="error" className="p-0" message={dashboard('gadget.dataLoadFailed')} />}
+      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && (
+        <GadgetNotice
+          kind="empty"
+          className="p-0"
+          message={dashboard('video.recordsEmpty')}
+          action={{ href: '/settings/sources', label: dashboard('gadget.configureAction') }}
+        />
+      )}
       <ul className="divide-y divide-border">
         {more.visible.map((video) => (
           <li key={video.id} className="flex items-start gap-3 py-2">
             <VideoThumb src={video.imageUrl} />
             <div className="min-w-0 flex-1">
-            {/* Ink title, underline only on hover; the link still opens YouTube in a new tab. */}
-            <a href={video.videoUrl} target="_blank" rel="noopener noreferrer" title={dashboard('videoOpen')} className="line-clamp-2 text-sm font-semibold text-foreground hover:underline underline-offset-4">
-              {video.title}
-            </a>
-            {video.channel && <p className="mt-0.5 text-xs text-muted-foreground">{video.channel}</p>}
+              {/* Ink title, underline only on hover; the link still opens YouTube in a new tab. */}
+              <a
+                href={video.videoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={dashboard('video.open')}
+                className="line-clamp-2 text-sm font-semibold text-foreground hover:underline underline-offset-4"
+              >
+                {video.title}
+              </a>
+              {video.channel && <p className="mt-0.5 text-xs text-muted-foreground">{video.channel}</p>}
             </div>
           </li>
         ))}

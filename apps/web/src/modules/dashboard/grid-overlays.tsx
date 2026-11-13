@@ -19,7 +19,11 @@ export function GridNotices({ isEditMode, liveText, interactionNotice, projectio
   const t = useTranslations('dashboard');
   return (
     <>
-      {isEditMode && <p role="status" aria-live="polite" className="sr-only">{liveText}</p>}
+      {isEditMode && (
+        <p role="status" aria-live="polite" className="sr-only">
+          {liveText}
+        </p>
+      )}
       {interactionNotice && (
         <p role="status" className="absolute inset-x-0 top-0 z-20 rounded-md bg-card/95 px-3 py-2 text-sm text-destructive">
           {interactionNotice}
@@ -27,12 +31,12 @@ export function GridNotices({ isEditMode, liveText, interactionNotice, projectio
       )}
       {projectionPending && (
         <p role="status" className="absolute inset-x-0 top-0 z-20 rounded-md bg-card/95 px-3 py-2 text-sm text-muted-foreground">
-          {t('mobileProjectionPending')}
+          {t('mobile.projectionPending')}
         </p>
       )}
       {projectionUnavailable && (
         <p role="status" className="absolute inset-x-0 top-0 z-20 rounded-md bg-card/95 px-3 py-2 text-sm text-destructive">
-          {t('mobileLayoutUnavailable')}
+          {t('mobile.layoutUnavailable')}
         </p>
       )}
     </>
@@ -55,7 +59,9 @@ export function GridBackdrop({ columnCount, cellSize, maxRow }: { columnCount: n
         style={{ gridTemplateColumns: `repeat(${columnCount}, ${cellSize}px)`, gap: `${GRID_GAP_PX}px` }}
       >
         {Array.from({ length: columnCount }).map((_, i) => (
-          <span key={i} className="text-center tabular-nums">{i + 1}</span>
+          <span key={i} className="text-center tabular-nums">
+            {i + 1}
+          </span>
         ))}
       </div>
       {/* Background grid guides in edit mode */}
@@ -69,10 +75,7 @@ export function GridBackdrop({ columnCount, cellSize, maxRow }: { columnCount: n
         }}
       >
         {Array.from({ length: columnCount * renderRows }).map((_, i) => (
-          <div
-            key={i}
-            className="border border-border/20 rounded-md bg-primary/[0.015]"
-          />
+          <div key={i} className="border border-border/20 rounded-md bg-primary/[0.015]" />
         ))}
       </div>
     </>

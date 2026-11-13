@@ -359,7 +359,7 @@ export function WorldMap({
       <div ref={hostRef} className={failed ? 'hidden' : 'absolute inset-0'} />
       {failed && (
         <p role="status" className="absolute left-2 top-2 rounded bg-card px-2 py-1 text-xs text-muted-foreground">
-          {t('mapWebglUnavailable')}
+          {t('map.webglUnavailable')}
         </p>
       )}
     </div>

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import { FeedGadget, type FeedStreamItem } from './feed-gadget';
 
 vi.mock('@/modules/knowledge/api', () => ({
@@ -17,7 +17,15 @@ vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => 
 
 const hour = 3_600_000;
 const items: FeedStreamItem[] = [
-  { id: 'a', title: 'Lead headline', sourceType: 'news', author: 'Wire', excerpt: 'Lead excerpt text', timestamp: new Date(Date.now() - 2 * hour).toISOString(), read: false },
+  {
+    id: 'a',
+    title: 'Lead headline',
+    sourceType: 'news',
+    author: 'Wire',
+    excerpt: 'Lead excerpt text',
+    timestamp: new Date(Date.now() - 2 * hour).toISOString(),
+    read: false,
+  },
   { id: 'b', title: 'Second headline', sourceType: 'news', timestamp: new Date(Date.now() - 30 * hour).toISOString(), read: true },
   { id: 'c', title: 'Third headline', sourceType: 'news', timestamp: new Date(Date.now() - 55 * hour).toISOString(), read: true },
 ];
@@ -27,7 +35,7 @@ function view(feed: FeedStreamItem[] = items, sourceIds: string[] = ['s1']) {
   const instance = { id: 'g1', title: '', definition: { renderer: 'feed', source_ids: sourceIds, scope: {} } } as never;
   return render(
     <QueryClientProvider client={client}>
-      <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
         <FeedGadget instance={instance} initialItems={feed} />
       </NextIntlClientProvider>
     </QueryClientProvider>,
@@ -56,7 +64,11 @@ describe('FeedGadget lead + list', () => {
 
 describe('FeedGadget view toggle and images', () => {
   beforeEach(() => localStorage.clear());
-  const withImage = [{ ...items[0]!, imageUrl: '/api/v1/media/proxy?x=1' }, items[1]!, { ...items[2]!, imageUrl: '/api/v1/media/proxy?x=2' }];
+  const withImage = [
+    { ...items[0]!, imageUrl: '/api/v1/media/proxy?x=1' },
+    items[1]!,
+    { ...items[2]!, imageUrl: '/api/v1/media/proxy?x=2' },
+  ];
 
   it('shows the lead image in List mode (rows stay text-only) and hides it on load error', () => {
     view(withImage);
@@ -90,7 +102,12 @@ describe('FeedGadget view toggle and images', () => {
 describe('FeedGadget show more and source tabs', () => {
   beforeEach(() => localStorage.clear());
   const many: FeedStreamItem[] = Array.from({ length: 8 }, (_, i) => ({
-    id: `m${i}`, title: `Story ${i}`, sourceType: 'news', sourceId: i % 2 ? 's2' : 's1', timestamp: new Date(Date.now() - i * hour).toISOString(), read: true,
+    id: `m${i}`,
+    title: `Story ${i}`,
+    sourceType: 'news',
+    sourceId: i % 2 ? 's2' : 's1',
+    timestamp: new Date(Date.now() - i * hour).toISOString(),
+    read: true,
   }));
 
   it('collapses to a lead plus 4 rows and expands in place', async () => {

@@ -2,7 +2,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import type { GadgetInstance } from '../api';
 
 const workspace = vi.hoisted(() => ({ isOwner: true }));
@@ -67,7 +67,7 @@ describe('live map visibility', () => {
     const instance = { id: 'one', definition: { scope: { live_map_providers: ['lobsters'] }, filters: {} } } as GadgetInstance;
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <LiveMapGadget instance={instance} isEditMode={false} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -112,7 +112,7 @@ describe('live map visibility', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <LiveMapGadget instance={instance} isEditMode={false} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -163,7 +163,7 @@ describe('live map visibility', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const renderMaps = (count: number) => (
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           {Array.from({ length: count }, (_, i) => (
             <LiveMapGadget key={i} instance={instance} isEditMode={false} />
           ))}
@@ -210,7 +210,7 @@ describe('live map visibility', () => {
       const instance = { id: 'one', definition: { scope: { live_map_providers: ['lobsters'] }, filters: {} } } as GadgetInstance;
       render(
         <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+          <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
             <LiveMapGadget instance={instance} isEditMode={false} />
           </NextIntlClientProvider>
         </QueryClientProvider>,
@@ -287,7 +287,7 @@ describe('live map owner gate, event cap and selection', () => {
     const instance = { id: 'one', definition: { scope: { live_map_providers: ['lobsters'] }, filters: {} } } as GadgetInstance;
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <LiveMapGadget instance={instance} isEditMode={false} />
         </NextIntlClientProvider>
       </QueryClientProvider>,

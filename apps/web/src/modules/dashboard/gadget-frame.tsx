@@ -189,7 +189,7 @@ function useGadgetFooter() {
   /** Receives renderer-reported freshness and optional attribution for the footer line. */
   const reportFreshness = useCallback((at: string | null, attr?: string | null) => { setCollectedAt(at); setAttribution(attr ?? null); }, []);
   const collectedMs = collectedAt ? Date.parse(collectedAt) : NaN;
-  const freshnessLabel = Number.isFinite(collectedMs) ? t('freshnessUpdated', { time: formatAgo(collectedMs, display.locale) }) : null;
+  const freshnessLabel = Number.isFinite(collectedMs) ? t('freshness.updated', { time: formatAgo(collectedMs, display.locale) }) : null;
   const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
   const footerText = [attribution, freshnessLabel].filter(Boolean).join(' · ');
   return { reportFreshness, footerText, freshnessTitle };
@@ -199,8 +199,11 @@ function useGadgetFooter() {
 function SeverityBadge({ severity }: { severity: 'info' | 'warning' | 'critical' }) {
   const t = useTranslations('dashboard');
   return (
-    <Badge variant={severity === 'critical' ? 'destructive' : 'outline'} className={`shrink-0 text-xs font-semibold ${severity === 'info' ? 'text-muted-foreground' : ''}`}>
-      {severity === 'critical' ? t('severityCritical') : severity === 'warning' ? t('severityWarning') : t('severityInfo')}
+    <Badge
+      variant={severity === 'critical' ? 'destructive' : 'outline'}
+      className={`shrink-0 text-xs font-semibold ${severity === 'info' ? 'text-muted-foreground' : ''}`}
+    >
+      {severity === 'critical' ? t('severity.critical') : severity === 'warning' ? t('severity.warning') : t('severity.info')}
     </Badge>
   );
 }
@@ -223,7 +226,7 @@ function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessT
   if (!worst) return null;
   const failing = worst.status === 'failing';
   const key = failing ? collectErrorKey(worst.errorCode) : null;
-  const reason = failing ? (key ? ts(key) : worst.errorCode ?? '') : t('sourceStaleTitle');
+  const reason = failing ? (key ? ts(key) : (worst.errorCode ?? '')) : t('source.staleTitle');
   /** Runs one collection for the worst source and refreshes the freshness data once it settles. */
   const collect = async () => {
     setState('running');
@@ -236,12 +239,17 @@ function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessT
   return (
     <>
       <Badge variant={failing ? 'destructive' : 'secondary'} className="shrink-0 gap-1 text-[11px]" title={reason}>
-        <AlertTriangle className="w-3 h-3" aria-hidden /><span>{t(failing ? 'sourceFailingBadge' : 'sourceStaleBadge')}</span>
+        <AlertTriangle className="w-3 h-3" aria-hidden />
+        <span>{t(failing ? 'source.failingBadge' : 'source.staleBadge')}</span>
       </Badge>
       <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-1.5 text-[11px]" disabled={state === 'running'} onClick={() => void collect()}>
         {state === 'running' ? ts('collecting') : ts('collectNow')}
       </Button>
-      {state === 'failed' && <span role="alert" className="shrink-0 text-[11px] text-destructive">{t('sourceCollectFailed')}</span>}
+      {state === 'failed' && (
+        <span role="alert" className="shrink-0 text-[11px] text-destructive">
+          {t('source.collectFailed')}
+        </span>
+      )}
     </>
   );
 }
@@ -256,11 +264,29 @@ function StatusBadges({ instance, unreadCount, ruleMatch, sourceHealth }: Pick<G
   const unread = unreadCount ?? 0;
   return (
     <div className="hidden min-w-0 shrink items-center gap-1.5 overflow-hidden whitespace-nowrap @[22rem]:flex">
-      {unread > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={ts('frameUnread', { count: unread })}>{t('unreadBadge', { count: unread })}</Badge>}
-      {ruleMatch?.matched && <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></Badge>}
+      {unread > 0 && (
+        <Badge className="shrink-0 px-1.5 text-[11px]" title={ts('frame.unread', { count: unread })}>
+          {t('unread.badge', { count: unread })}
+        </Badge>
+      )}
+      {ruleMatch?.matched && (
+        <Badge
+          variant="outline"
+          className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground"
+          title={ruleMatch.reason || t('ruleMatch.fallback')}
+        >
+          <AlertTriangle className="w-3 h-3" />
+          <span>{t('ruleMatch.badge')}</span>
+        </Badge>
+      )}
       {sourceHealth && sourceHealth.length > 0 && <SourceHealthBadge sourceHealth={sourceHealth} />}
       {effectiveSeverity && <SeverityBadge severity={effectiveSeverity} />}
-      {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-xs" title={ts('frameSetupTitle')}><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
+      {definition.warnings && definition.warnings.length > 0 && (
+        <Badge variant="secondary" className="shrink-0 gap-0.5 text-xs" title={ts('frame.setupTitle')}>
+          <Info className="w-3 h-3" />
+          <span>{t('setup.required')}</span>
+        </Badge>
+      )}
     </div>
   );
 }
@@ -273,7 +299,7 @@ function EditMenu({ onConfigure, onRemove }: Pick<GadgetFrameProps, 'onConfigure
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          aria-label={t('configureGadget')}
+          aria-label={t('configureGadget.label')}
           variant="ghost"
           size="icon"
           className="size-9 min-h-9 min-w-9 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -285,7 +311,7 @@ function EditMenu({ onConfigure, onRemove }: Pick<GadgetFrameProps, 'onConfigure
         {onConfigure && (
           <DropdownMenuItem onClick={onConfigure} className="gap-2 text-xs">
             <Settings className="w-3.5 h-3.5" />
-            <span>{t('configureGadget')}</span>
+            <span>{t('configureGadget.label')}</span>
           </DropdownMenuItem>
         )}
         {onRemove && (
@@ -296,7 +322,7 @@ function EditMenu({ onConfigure, onRemove }: Pick<GadgetFrameProps, 'onConfigure
               className="gap-2 text-xs text-destructive focus:text-destructive"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>{t('removeGadget')}</span>
+              <span>{t('removeGadget.label')}</span>
             </DropdownMenuItem>
           </>
         )}
@@ -362,10 +388,8 @@ function PlannedGadgetBody({ instance }: { instance: GadgetInstance }) {
 
         {definition.filters?.keywords && definition.filters.keywords.length > 0 && (
           <div className="text-xs">
-            <span className="text-muted-foreground">{ts('frameFilters')}</span>
-            <span className="font-medium text-foreground">
-              {definition.filters.keywords.join(', ')}
-            </span>
+            <span className="text-muted-foreground">{ts('frame.filters')}</span>
+            <span className="font-medium text-foreground">{definition.filters.keywords.join(', ')}</span>
           </div>
         )}
 
@@ -387,7 +411,7 @@ function PlannedGadgetBody({ instance }: { instance: GadgetInstance }) {
       </div>
 
       <div className="pt-3 border-t border-border mt-3 text-xs text-muted-foreground flex items-center justify-between">
-        <span className="italic">{ts('frameLive')}</span>
+        <span className="italic">{ts('frame.live')}</span>
         <span className="tabular-nums text-xs">rev.{definition.revision}</span>
       </div>
     </div>
@@ -423,9 +447,7 @@ function ExpandedDialog({ open, onOpenChange, title, triggerRef, attachHost }: {
       <DialogContent closeLabel={t('close')} onCloseAutoFocus={(event) => { event.preventDefault(); triggerRef.current?.focus(); }} className="flex h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-lg p-0 sm:max-w-[1240px]">
         <DialogHeader className="shrink-0 gap-0 border-b border-border py-4 pl-6 pr-16 text-left">
           <DialogTitle className="text-lg font-semibold leading-snug">{title}</DialogTitle>
-          <DialogDescription className="text-xs text-muted-foreground">
-            {t('gadgetExpandedDescription', { title })}
-          </DialogDescription>
+          <DialogDescription className="text-xs text-muted-foreground">{t('gadget.expandedDescription', { title })}</DialogDescription>
         </DialogHeader>
         <div ref={attachHost} className="min-h-0 flex-1 overflow-auto overscroll-contain p-6" />
       </DialogContent>
@@ -525,7 +547,7 @@ export function GadgetFrame({
         role="region"
         aria-labelledby={titleId}
         tabIndex={0}
-        aria-label={t('gadgetScrollRegionLabel', { title: displayTitle })}
+        aria-label={t('gadget.scrollRegionLabel', { title: displayTitle })}
         onClick={isEditMode ? onSelect : undefined}
         className={cardClassName(isSelected, isDragging, isResizing)}
       >

@@ -17,6 +17,22 @@ export const LIVE_TAGS = [
   'world',
 ] as const;
 
+/** Literal `dashboard` catalog keys per tag chip (no runtime key concatenation). */
+export const LIVE_TAG_KEY = {
+  geo: 'liveMap.tagGeo',
+  disaster: 'liveMap.tagDisaster',
+  weather: 'liveMap.tagWeather',
+  technology: 'liveMap.tagTechnology',
+  security: 'liveMap.tagSecurity',
+  finance: 'liveMap.tagFinance',
+  crypto: 'liveMap.tagCrypto',
+  economy: 'liveMap.tagEconomy',
+  space: 'liveMap.tagSpace',
+  gaming: 'liveMap.tagGaming',
+  politics: 'liveMap.tagPolitics',
+  world: 'liveMap.tagWorld',
+} as const satisfies Record<(typeof LIVE_TAGS)[number], string>;
+
 /** Provider-scoped values a browser source may use to build its URL. */
 export type LiveFeedScope = { live_map_github_owner?: string | null; live_map_github_repo?: string | null };
 

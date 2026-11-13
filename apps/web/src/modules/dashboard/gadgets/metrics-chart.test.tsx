@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import { MetricsChart, buildMultiChart } from './metrics-chart';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
@@ -17,7 +17,15 @@ const instance = { id: 'c1', title: '', definition: { scope: { symbols: ['BTC'] 
 /** Renders the chart with the given points inside the message providers it needs. */
 function view(values: number[]) {
   const points = values.map((value, i) => ({ timestamp: `2026-10-0${i + 1}T00:00:00Z`, value }));
-  return render(<NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], daily: {}, uiSweep: {} }} onError={() => undefined}><MetricsChart instance={instance} initialData={points} /></NextIntlClientProvider>);
+  return render(
+    <NextIntlClientProvider
+      locale="en-US"
+      messages={{ dashboard: getCatalog('en-us', 'dashboard'), daily: {}, uiSweep: {} }}
+      onError={() => undefined}
+    >
+      <MetricsChart instance={instance} initialData={points} />
+    </NextIntlClientProvider>,
+  );
 }
 
 describe('MetricsChart', () => {
@@ -47,14 +55,26 @@ describe('MetricsChart', () => {
 describe('buildMultiChart', () => {
   const pts = (...v: number[]) => v.map((value, i) => ({ timestamp: `2026-10-0${i + 1}T00:00:00Z`, value }));
   it('keeps raw values when units match and merges rows by timestamp', () => {
-    const out = buildMultiChart([{ key: 'a', name: 'A', points: pts(10, 20), unit: 'VND' }, { key: 'b', name: 'B', points: pts(1, 2, 3), unit: 'VND' }], 'all');
+    const out = buildMultiChart(
+      [
+        { key: 'a', name: 'A', points: pts(10, 20), unit: 'VND' },
+        { key: 'b', name: 'B', points: pts(1, 2, 3), unit: 'VND' },
+      ],
+      'all',
+    );
     expect(out.rebased).toBe(false);
     expect(out.data).toHaveLength(3);
     expect(out.data[2].a).toBeUndefined();
     expect(out.data[1].a).toBe(20);
   });
   it('rebases to percent change when units differ', () => {
-    const out = buildMultiChart([{ key: 'a', name: 'A', points: pts(10, 20), currency: 'VND' }, { key: 'b', name: 'B', points: pts(100, 150), currency: 'USD' }], 'all');
+    const out = buildMultiChart(
+      [
+        { key: 'a', name: 'A', points: pts(10, 20), currency: 'VND' },
+        { key: 'b', name: 'B', points: pts(100, 150), currency: 'USD' },
+      ],
+      'all',
+    );
     expect(out.rebased).toBe(true);
     expect(out.data[1].a).toBe(100);
     expect(out.data[1].b).toBe(50);

@@ -3,22 +3,37 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
-import { gadgetSettingsMessages } from '@/core/messages/gadget-settings';
+import { getCatalog } from '@locales';
+
 import { sourcesMessages } from '@/core/messages/sources';
-import { uiSweepMessages } from '@/core/messages/ui-sweep';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('./live-map-config', () => ({ LiveMapConfig: () => null }));
-vi.mock('next/link', () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock('next/link', () => ({
+  default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
+}));
 const api = vi.hoisted(() => ({
-  listGadgetSources: vi.fn(), listCompatibleSourceCounts: vi.fn(), listGadgetRenderers: vi.fn(), listGadgetTemplates: vi.fn(), createGadgetDefinition: vi.fn(), patchGadgetDefinition: vi.fn(), getMetricCatalog: vi.fn(),
+  listGadgetSources: vi.fn(),
+  listCompatibleSourceCounts: vi.fn(),
+  listGadgetRenderers: vi.fn(),
+  listGadgetTemplates: vi.fn(),
+  createGadgetDefinition: vi.fn(),
+  patchGadgetDefinition: vi.fn(),
+  getMetricCatalog: vi.fn(),
 }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
 vi.mock('@/modules/sources/source-wizard', () => ({
   SourceWizard: ({ onCreated, onClose }: { onCreated?: (id: string) => void; onClose: () => void }) => (
-    <button type="button" onClick={() => { onCreated?.('b2'); onClose(); }}>finish-wizard</button>
+    <button
+      type="button"
+      onClick={() => {
+        onCreated?.('b2');
+        onClose();
+      }}
+    >
+      finish-wizard
+    </button>
   ),
 }));
 const sourceApi = vi.hoisted(() => ({ getConnectorConfiguration: vi.fn() }));
@@ -46,8 +61,23 @@ const renderers = [backendRenderer('provider_observation'), backendRenderer('new
 const financeRenderer = backendRenderer('finance_chart');
 const templates = [backendTemplate('metric')];
 /** Builds a source fixture with the shapes and provider the picker filters on; measurement sources also expose `series` (what the single-source Chart accepts). */
-const source = (id: string, name: string, provider: string, shapes: string[], last: string | null = null) => ({ id, name, provider, status: 'active', type: 'api', generation: 1, local_only: false, last_success_at: last, data_shapes: shapes.includes('measurement') && !shapes.includes('series') ? [...shapes, 'series'] : shapes });
-const messages = { gadgetSettings: gadgetSettingsMessages['en-us'], dashboard: dashboardMessages['en-us'], sources: sourcesMessages['en-us'], uiSweep: uiSweepMessages['en-us'] };
+const source = (id: string, name: string, provider: string, shapes: string[], last: string | null = null) => ({
+  id,
+  name,
+  provider,
+  status: 'active',
+  type: 'api',
+  generation: 1,
+  local_only: false,
+  last_success_at: last,
+  data_shapes: shapes.includes('measurement') && !shapes.includes('series') ? [...shapes, 'series'] : shapes,
+});
+const messages = {
+  gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
+  dashboard: getCatalog('en-us', 'dashboard'),
+  sources: sourcesMessages['en-us'],
+  uiSweep: getCatalog('en-us', 'uiSweep'),
+};
 /** Backend metric catalog snapshot (verified against `metric_catalog_read()` by pytest). */
 const catalog = metricCatalog;
 /** Returns the backend renderer descriptor for a renderer id. */
@@ -60,23 +90,32 @@ const tpl = (id: string, rendererId: string, filters: Record<string, unknown> = 
 };
 const onSaved = vi.fn();
 /** Renders the editor with query and intl providers. */
-const wrap = (props: Partial<React.ComponentProps<typeof GadgetEditor>> = {}) => render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={messages}><GadgetEditor onSaved={onSaved} {...props} /></NextIntlClientProvider>
-  </QueryClientProvider>);
+const wrap = (props: Partial<React.ComponentProps<typeof GadgetEditor>> = {}) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={messages}>
+        <GadgetEditor onSaved={onSaved} {...props} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 
 beforeEach(() => {
   [...Object.values(api), onSaved].forEach((mock) => mock.mockReset());
   sourceApi.getConnectorConfiguration.mockReset();
-  sourceApi.getConnectorConfiguration.mockResolvedValue({ configuration: { coingecko_assets: [{ id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', series_symbol: 'BITCOIN' }] } });
+  sourceApi.getConnectorConfiguration.mockResolvedValue({
+    configuration: { coingecko_assets: [{ id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', series_symbol: 'BITCOIN' }] },
+  });
   api.listGadgetRenderers.mockResolvedValue(renderers);
   api.listGadgetTemplates.mockResolvedValue(templates);
   api.getMetricCatalog.mockResolvedValue(catalog);
   api.listCompatibleSourceCounts.mockResolvedValue({ provider_observation: 2, news_feed: 1, finance_chart: 0 });
-  api.listGadgetSources.mockResolvedValue({ items: [
-    source('b1', 'Binance spot', 'binance', ['measurement'], '2026-10-28T08:30:00Z'),
-    source('g1', 'My GitHub', 'github', ['project_activity']),
-  ], next_cursor: null });
+  api.listGadgetSources.mockResolvedValue({
+    items: [
+      source('b1', 'Binance spot', 'binance', ['measurement'], '2026-10-28T08:30:00Z'),
+      source('g1', 'My GitHub', 'github', ['project_activity']),
+    ],
+    next_cursor: null,
+  });
 });
 afterEach(() => cleanup());
 
@@ -89,11 +128,11 @@ describe('GadgetEditor', () => {
   it('shows a retry notice when the compatible-counts query fails while tiles stay usable', async () => {
     api.listCompatibleSourceCounts.mockRejectedValueOnce(new Error('down')).mockResolvedValue({ provider_observation: 2, news_feed: 1 });
     wrap();
-    expect(await screen.findByText(gadgetSettingsMessages['en-us'].compatibleCountsFailed)).toBeTruthy();
+    expect(await screen.findByText(getCatalog('en-us', 'gadgetSettings').compatible.countsFailed)).toBeTruthy();
     expect(screen.getByRole('button', { name: /Metric/ })).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: gadgetSettingsMessages['en-us'].retry }));
+    await userEvent.click(screen.getByRole('button', { name: getCatalog('en-us', 'gadgetSettings').retry }));
     expect(await screen.findByText('2 compatible datasources')).toBeTruthy();
-    expect(screen.queryByText(gadgetSettingsMessages['en-us'].compatibleCountsFailed)).toBeNull();
+    expect(screen.queryByText(getCatalog('en-us', 'gadgetSettings').compatible.countsFailed)).toBeNull();
   });
 
   it('renders tiles while compatible counts are still pending', async () => {
@@ -124,10 +163,13 @@ describe('GadgetEditor', () => {
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
     await screen.findByText('Binance spot');
-    api.listGadgetSources.mockResolvedValue({ items: [
-      source('b1', 'Binance spot', 'binance', ['measurement'], '2026-10-28T08:30:00Z'),
-      source('b2', 'Fresh Binance', 'binance', ['measurement']),
-    ], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [
+        source('b1', 'Binance spot', 'binance', ['measurement'], '2026-10-28T08:30:00Z'),
+        source('b2', 'Fresh Binance', 'binance', ['measurement']),
+      ],
+      next_cursor: null,
+    });
     await userEvent.click(screen.getByRole('button', { name: 'Add source' }));
     await userEvent.click(await screen.findByText('finish-wizard'));
     const created = await screen.findByLabelText(/Fresh Binance/);
@@ -142,7 +184,8 @@ describe('GadgetEditor', () => {
   });
 
   it('loads next source page', async () => {
-    api.listGadgetSources.mockResolvedValueOnce({ items: [source('b1', 'Binance spot', 'binance', ['measurement'])], next_cursor: 'c2' })
+    api.listGadgetSources
+      .mockResolvedValueOnce({ items: [source('b1', 'Binance spot', 'binance', ['measurement'])], next_cursor: 'c2' })
       .mockResolvedValueOnce({ items: [source('n1', 'NOAA Kp', 'noaa_kp', ['measurement'])], next_cursor: null });
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
@@ -169,12 +212,27 @@ describe('GadgetEditor', () => {
     expect(save.hasAttribute('disabled')).toBe(false);
     await userEvent.click(save);
     await waitFor(() => expect(api.createGadgetDefinition).toHaveBeenCalled());
-    expect(api.createGadgetDefinition.mock.calls[0][0]).toMatchObject({ renderer: 'provider_observation', source_ids: ['b1'], filters: { limit: 25 } });
+    expect(api.createGadgetDefinition.mock.calls[0][0]).toMatchObject({
+      renderer: 'provider_observation',
+      source_ids: ['b1'],
+      filters: { limit: 25 },
+    });
     expect(onSaved).toHaveBeenCalled();
   });
 
   it('does not lock out an existing definition whose saved source is now incompatible', async () => {
-    const definition = { id: 'd1', name: 'FX', revision: 3, renderer: 'provider_observation', source_ids: ['g1'], scope: {}, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+    const definition = {
+      id: 'd1',
+      name: 'FX',
+      revision: 3,
+      renderer: 'provider_observation',
+      source_ids: ['g1'],
+      scope: {},
+      filters: { limit: 25 },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...definition, revision: 4 });
     wrap({ definition });
     expect(await screen.findByText('Not compatible with this gadget')).toBeTruthy();
@@ -199,7 +257,18 @@ describe('GadgetEditor', () => {
   });
 
   it('shows why Save is disabled and opens Advanced when the limit is invalid', async () => {
-    const definition = { id: 'd1', name: 'News', revision: 1, renderer: 'news_feed', source_ids: [], scope: {}, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+    const definition = {
+      id: 'd1',
+      name: 'News',
+      revision: 1,
+      renderer: 'news_feed',
+      source_ids: [],
+      scope: {},
+      filters: { limit: 25 },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
     const { container } = wrap({ definition });
     const details = container.querySelector('details') as HTMLDetailsElement;
     expect(details.open).toBe(false);
@@ -277,12 +346,25 @@ describe('GadgetEditor', () => {
     await pickChart('Binance spot');
     await screen.findByRole('combobox', { name: 'Symbols' });
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
-    await waitFor(() => expect(document.querySelector('[data-field="symbols"]')?.textContent).toContain('This datasource needs at least one symbol.'));
+    await waitFor(() =>
+      expect(document.querySelector('[data-field="symbols"]')?.textContent).toContain('This datasource needs at least one symbol.'),
+    );
     expect(screen.queryByText('Could not save the gadget.')).toBeNull();
   });
 
   /** A saved NVDA chart whose bound source is not in the loaded first page of source rows. */
-  const orphanChart = { id: 'd2', name: 'NVDA', revision: 2, renderer: 'finance_chart', source_ids: ['not-loaded'], scope: { symbols: ['NVDA'], metrics: ['close'], lookback_days: 90 }, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+  const orphanChart = {
+    id: 'd2',
+    name: 'NVDA',
+    revision: 2,
+    renderer: 'finance_chart',
+    source_ids: ['not-loaded'],
+    scope: { symbols: ['NVDA'], metrics: ['close'], lookback_days: 90 },
+    filters: { limit: 25 },
+    highlight_rules: [],
+    config_version: 1,
+    runtime_state: 'available' as const,
+  };
 
   it('keeps saved symbols when the bound source is not among the loaded rows', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
@@ -299,7 +381,9 @@ describe('GadgetEditor', () => {
     wrap({ definition: orphanChart });
     const field = await screen.findByRole('textbox', { name: 'Symbols' });
     expect((field as HTMLInputElement).value).toBe('NVDA');
-    expect(screen.getByText('The provider of this datasource is unknown, so symbols cannot be suggested. Type them separated by commas.')).toBeTruthy();
+    expect(
+      screen.getByText('The provider of this datasource is unknown, so symbols cannot be suggested. Type them separated by commas.'),
+    ).toBeTruthy();
     await userEvent.clear(field);
     await userEvent.type(field, 'NVDA, AMD');
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
@@ -363,7 +447,12 @@ describe('GadgetEditor', () => {
   it('rename of a legacy [close, volume] chart sends its stored metrics exactly and no invented lookback', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetSources.mockResolvedValue({ items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement'])], next_cursor: null });
-        const legacy = { ...orphanChart, id: 'd3', source_ids: ['a1'], scope: { symbols: ['NVDA'], metrics: ['close', 'volume'], lookback_days: null } };
+    const legacy = {
+      ...orphanChart,
+      id: 'd3',
+      source_ids: ['a1'],
+      scope: { symbols: ['NVDA'], metrics: ['close', 'volume'], lookback_days: null },
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...legacy, revision: 3 });
     wrap({ definition: legacy });
     const nameInput = await screen.findByLabelText('Name');
@@ -403,9 +492,20 @@ describe('GadgetEditor', () => {
 
   it('a saved non-world map layer stays checked and removable', async () => {
     api.listGadgetRenderers.mockResolvedValue([renderer('map')]);
-    const saved = { id: 'm1', name: 'Map', revision: 1, renderer: 'map', source_ids: [], scope: { map_layer_ids: ['military'], lookback_days: 30 }, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+    const saved = {
+      id: 'm1',
+      name: 'Map',
+      revision: 1,
+      renderer: 'map',
+      source_ids: [],
+      scope: { map_layer_ids: ['military'], lookback_days: 30 },
+      filters: { limit: 25 },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
     const { container } = wrap({ definition: saved });
-    (await screen.findByLabelText('Name'));
+    await screen.findByLabelText('Name');
     (container.querySelector('details') as HTMLDetailsElement).open = true;
     const military = await screen.findByRole('checkbox', { name: /Military/ });
     expect(military.getAttribute('aria-checked')).toBe('true');
@@ -414,15 +514,29 @@ describe('GadgetEditor', () => {
 
   it('shows format help under the Telegram channels input', async () => {
     api.listGadgetRenderers.mockResolvedValue([renderer('telegram_feed')]);
-    const saved = { id: 't1', name: 'TG', revision: 1, renderer: 'telegram_feed', source_ids: [], scope: { channel_ids: [] }, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+    const saved = {
+      id: 't1',
+      name: 'TG',
+      revision: 1,
+      renderer: 'telegram_feed',
+      source_ids: [],
+      scope: { channel_ids: [] },
+      filters: { limit: 25 },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
     const { container } = wrap({ definition: saved });
     await screen.findByLabelText('Name');
     (container.querySelector('details') as HTMLDetailsElement).open = true;
-    expect(await screen.findByText(dashboardMessages['en-us'].telegramChannelsHelp)).toBeTruthy();
+    expect(await screen.findByText(getCatalog('en-us', 'dashboard').telegram.channelsHelp)).toBeTruthy();
   });
 
   it('shows a readable provider label for keyed and catalog providers', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('f1', 'Rates', 'fred', ['measurement']), source('o1', 'CLI', 'oecd_cli', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('f1', 'Rates', 'fred', ['measurement']), source('o1', 'CLI', 'oecd_cli', ['measurement'])],
+      next_cursor: null,
+    });
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
     expect(await screen.findByText(/FRED · never updated/)).toBeTruthy();
@@ -440,7 +554,18 @@ describe('GadgetEditor', () => {
   });
 
   it('persists removing a legacy symbol from a Metric gadget', async () => {
-    const saved = { id: 'm2', name: 'BTC', revision: 1, renderer: 'provider_observation', source_ids: ['b1'], scope: { metrics: ['close'], symbols: ['BTCUSDT'] }, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+    const saved = {
+      id: 'm2',
+      name: 'BTC',
+      revision: 1,
+      renderer: 'provider_observation',
+      source_ids: ['b1'],
+      scope: { metrics: ['close'], symbols: ['BTCUSDT'] },
+      filters: { limit: 25 },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...saved, revision: 2 });
     wrap({ definition: saved });
     await userEvent.click(await screen.findByRole('button', { name: /Remove BTCUSDT/i }));
@@ -456,7 +581,10 @@ describe('GadgetEditor', () => {
   }
 
   it('replaces symbols the new provider does not suggest when the datasource changes', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('f1', 'Frank', 'frankfurter', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('f1', 'Frank', 'frankfurter', ['measurement'])],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Paprika');
     await userEvent.click(screen.getByRole('checkbox', { name: /Paprika/ })); // unbind the old source: a chart now accepts several
@@ -468,7 +596,10 @@ describe('GadgetEditor', () => {
   });
 
   it('clears the old ticker when switching to owner-configured CoinGecko IDs', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('c1', 'Gecko', 'coingecko', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('p1', 'Paprika', 'coinpaprika', ['measurement']), source('c1', 'Gecko', 'coingecko', ['measurement'])],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Paprika');
     await userEvent.click(screen.getByRole('checkbox', { name: /Paprika/ })); // unbind the old source: a chart now accepts several
@@ -480,10 +611,14 @@ describe('GadgetEditor', () => {
 
   it('selects separate CoinGecko IDs even when two coins share a ticker', async () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('c1', 'Gecko', 'coingecko', ['measurement'])], next_cursor: null });
-    sourceApi.getConnectorConfiguration.mockResolvedValue({ configuration: { coingecko_assets: [
-      { id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', series_symbol: 'BITCOIN' },
-      { id: 'wrapped-bitcoin', name: 'Wrapped Bitcoin', symbol: 'BTC', series_symbol: 'WRAPPED-BITCOIN' },
-    ] } });
+    sourceApi.getConnectorConfiguration.mockResolvedValue({
+      configuration: {
+        coingecko_assets: [
+          { id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC', series_symbol: 'BITCOIN' },
+          { id: 'wrapped-bitcoin', name: 'Wrapped Bitcoin', symbol: 'BTC', series_symbol: 'WRAPPED-BITCOIN' },
+        ],
+      },
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Gecko');
     await userEvent.click(await screen.findByRole('button', { name: /Wrapped Bitcoin \(BTC\)/ }));
@@ -513,8 +648,22 @@ describe('GadgetEditor', () => {
   });
 
   it('drops metrics the new provider does not list when a Metric gadget changes datasource (Binance to NOAA Kp)', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('b1', 'Binance spot', 'binance', ['measurement']), source('n1', 'NOAA Kp', 'noaa_kp', ['measurement'])], next_cursor: null });
-    const saved = { id: 'm9', name: 'Spot', revision: 1, renderer: 'provider_observation', source_ids: ['b1'], scope: { metrics: ['spot_price'], symbols: ['BTCUSDT'] }, filters: { limit: 25 }, highlight_rules: [], config_version: 1, runtime_state: 'available' as const };
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('b1', 'Binance spot', 'binance', ['measurement']), source('n1', 'NOAA Kp', 'noaa_kp', ['measurement'])],
+      next_cursor: null,
+    });
+    const saved = {
+      id: 'm9',
+      name: 'Spot',
+      revision: 1,
+      renderer: 'provider_observation',
+      source_ids: ['b1'],
+      scope: { metrics: ['spot_price'], symbols: ['BTCUSDT'] },
+      filters: { limit: 25 },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...saved, revision: 2 });
     wrap({ definition: saved });
     await userEvent.click(await screen.findByRole('checkbox', { name: /Binance spot/ })); // unbind the old source, then bind the new one
@@ -525,7 +674,10 @@ describe('GadgetEditor', () => {
   });
 
   it('keeps symbols when the chosen datasource keeps the same provider', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('f1', 'FRED one', 'fred', ['measurement']), source('f2', 'FRED two', 'fred', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('f1', 'FRED one', 'fred', ['measurement']), source('f2', 'FRED two', 'fred', ['measurement'])],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('FRED one');
     await addSymbol('CPIAUCSL');
@@ -538,7 +690,12 @@ describe('GadgetEditor', () => {
   it('a symbol edit on a legacy two-metric chart sends exactly one metric', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetSources.mockResolvedValue({ items: [source('f1', 'FRED', 'fred', ['measurement'])], next_cursor: null });
-    const legacy = { ...orphanChart, id: 'd4', source_ids: ['f1'], scope: { symbols: ['DFF'], metrics: ['fred_series', 'other'], lookback_days: null } };
+    const legacy = {
+      ...orphanChart,
+      id: 'd4',
+      source_ids: ['f1'],
+      scope: { symbols: ['DFF'], metrics: ['fred_series', 'other'], lookback_days: null },
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...legacy, revision: 3 });
     wrap({ definition: legacy });
     await userEvent.click(await screen.findByRole('button', { name: /Remove DFF/i }));
@@ -553,7 +710,12 @@ describe('GadgetEditor', () => {
   it('re-binding a legacy multi-metric chart to a provider without a catalog entry sends only the first metric', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetSources.mockResolvedValue({ items: [source('x1', 'Custom series', 'custom_ts', ['measurement'])], next_cursor: null });
-    const legacy = { ...orphanChart, id: 'd8', source_ids: ['gone'], scope: { symbols: ['NVDA'], metrics: ['close', 'volume'], lookback_days: null } };
+    const legacy = {
+      ...orphanChart,
+      id: 'd8',
+      source_ids: ['gone'],
+      scope: { symbols: ['NVDA'], metrics: ['close', 'volume'], lookback_days: null },
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...legacy, revision: 3 });
     wrap({ definition: legacy });
     await userEvent.click(await screen.findByRole('checkbox', { name: /Custom series/ }));
@@ -563,10 +725,13 @@ describe('GadgetEditor', () => {
   });
 
   it('a new chart bound to World Bank starts at the provider default lookback', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [
-      source('w1', 'World Bank GDP', 'world_bank', ['measurement', 'series']),
-      source('n1', 'NOAA Kp', 'noaa_kp', ['measurement', 'series']),
-    ], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [
+        source('w1', 'World Bank GDP', 'world_bank', ['measurement', 'series']),
+        source('n1', 'NOAA Kp', 'noaa_kp', ['measurement', 'series']),
+      ],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('World Bank GDP');
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
@@ -575,7 +740,10 @@ describe('GadgetEditor', () => {
   });
 
   it('keeps a lookback the owner edited when the datasource provider changes on a new chart', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement']), source('w1', 'World Bank GDP', 'world_bank', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement']), source('w1', 'World Bank GDP', 'world_bank', ['measurement'])],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Alpha');
     const lookback = screen.getByLabelText('Date range (days)');
@@ -604,16 +772,27 @@ describe('GadgetEditor', () => {
     await userEvent.type(lookback, '5000');
     const save = screen.getByRole('button', { name: 'Save to library' });
     expect(save.hasAttribute('disabled')).toBe(true);
-    expect(document.getElementById(save.getAttribute('aria-describedby') as string)?.textContent).toBe(gadgetSettingsMessages['en-us'].lookbackHelp);
-    expect(screen.getAllByText(gadgetSettingsMessages['en-us'].lookbackHelp).length).toBeGreaterThan(0);
+    expect(document.getElementById(save.getAttribute('aria-describedby') as string)?.textContent).toBe(
+      getCatalog('en-us', 'gadgetSettings').lookbackHelp,
+    );
+    expect(screen.getAllByText(getCatalog('en-us', 'gadgetSettings').lookbackHelp).length).toBeGreaterThan(0);
   });
 
   it('maps a code-less backend 422 that names lookback_days to the lookback field message', async () => {
     api.listGadgetSources.mockResolvedValue({ items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement'])], next_cursor: null });
-    api.createGadgetDefinition.mockRejectedValue(new ApiError(422, 'bad', { code: 'VALIDATION_ERROR', details: [{ type: 'less_than_equal', loc: ['body', 'scope', 'lookback_days'], msg: 'x' }] }));
+    api.createGadgetDefinition.mockRejectedValue(
+      new ApiError(422, 'bad', {
+        code: 'VALIDATION_ERROR',
+        details: [{ type: 'less_than_equal', loc: ['body', 'scope', 'lookback_days'], msg: 'x' }],
+      }),
+    );
     await pickMetric('Alpha');
     await userEvent.click(await screen.findByRole('button', { name: 'Save to library' }));
-    await waitFor(() => expect(document.querySelector('[data-field="lookback_days"]')?.textContent).toContain(gadgetSettingsMessages['en-us'].lookbackHelp));
+    await waitFor(() =>
+      expect(document.querySelector('[data-field="lookback_days"]')?.textContent).toContain(
+        getCatalog('en-us', 'gadgetSettings').lookbackHelp,
+      ),
+    );
     expect(screen.queryByText('Could not save the gadget.')).toBeNull();
   });
 
@@ -627,7 +806,10 @@ describe('GadgetEditor', () => {
   });
 
   it('single-country providers (world_bank) show no Region field', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('w1', 'World Bank GDP', 'world_bank', ['measurement', 'series'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('w1', 'World Bank GDP', 'world_bank', ['measurement', 'series'])],
+      next_cursor: null,
+    });
     await pickChart('World Bank GDP');
     await screen.findByRole('combobox', { name: 'Metric' });
     expect(screen.queryByRole('combobox', { name: 'Region' })).toBeNull();
@@ -646,39 +828,43 @@ describe('GadgetEditor', () => {
   });
 
   it('shows the localized region_required error under the Region field', async () => {
-        api.listGadgetSources.mockResolvedValue({ items: [source('q1', 'OpenAQ', 'openaq', ['measurement', 'series'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({ items: [source('q1', 'OpenAQ', 'openaq', ['measurement', 'series'])], next_cursor: null });
     api.createGadgetDefinition.mockRejectedValue(new ApiError(422, 'bad', { code: 'region_required', details: { field: 'regions' } }));
     await pickChart('OpenAQ');
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
-    expect(await screen.findByText(gadgetSettingsMessages['en-us'].fieldErrors.region_required)).toBeTruthy();
+    expect(await screen.findByText(getCatalog('en-us', 'gadgetSettings').fieldErrors.region_required)).toBeTruthy();
   });
 
   it('keeps paging while no compatible source is loaded and never shows the empty message', async () => {
-    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
-      ? { items: [source('b1', 'Binance spot', 'binance', ['measurement'])], next_cursor: null }
-      : { items: [source('g1', 'My GitHub', 'github', ['project_activity'])], next_cursor: 'p2' });
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) =>
+      cursor
+        ? { items: [source('b1', 'Binance spot', 'binance', ['measurement'])], next_cursor: null }
+        : { items: [source('g1', 'My GitHub', 'github', ['project_activity'])], next_cursor: 'p2' },
+    );
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
     expect(await screen.findByText('Binance spot')).toBeTruthy();
-    expect(screen.queryByText(gadgetSettingsMessages['en-us'].datasourceNoneAddInSources)).toBeNull();
+    expect(screen.queryByText(getCatalog('en-us', 'gadgetSettings').datasource.noneAddInSources)).toBeNull();
     expect(api.listGadgetSources).toHaveBeenCalledTimes(2);
   });
   it('a saved source on page 2 keeps paging, shows no Inactive badge, shows symbols and keeps stored scope on rename', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     let release: (value: unknown) => void = () => undefined;
-    const pageTwo = new Promise((resolve) => { release = resolve; });
-    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
-      ? pageTwo
-      : { items: [source('g1', 'My GitHub', 'github', ['project_activity'])], next_cursor: 'p2' });
+    const pageTwo = new Promise((resolve) => {
+      release = resolve;
+    });
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) =>
+      cursor ? pageTwo : { items: [source('g1', 'My GitHub', 'github', ['project_activity'])], next_cursor: 'p2' },
+    );
     const legacy = { ...orphanChart, id: 'd5', source_ids: ['b1'], scope: { symbols: ['BTCUSDT'], metrics: [], lookback_days: null } };
     api.patchGadgetDefinition.mockResolvedValue({ ...legacy, revision: 3 });
     wrap({ definition: legacy });
     await waitFor(() => expect(api.listGadgetSources).toHaveBeenCalledTimes(2));
     // While page 2 is pending the placeholder must not claim the source is inactive.
-    expect(screen.queryByText(gadgetSettingsMessages['en-us'].datasourceInactive)).toBeNull();
+    expect(screen.queryByText(getCatalog('en-us', 'gadgetSettings').datasource.inactive)).toBeNull();
     release({ items: [source('b1', 'Binance spot', 'binance', ['measurement'])], next_cursor: null });
     expect(await screen.findByRole('button', { name: /Remove BTCUSDT/i })).toBeTruthy();
-    expect(screen.queryByText(gadgetSettingsMessages['en-us'].datasourceInactive)).toBeNull();
+    expect(screen.queryByText(getCatalog('en-us', 'gadgetSettings').datasource.inactive)).toBeNull();
     const nameInput = await screen.findByLabelText('Name');
     await userEvent.clear(nameInput);
     await userEvent.type(nameInput, 'Renamed');
@@ -696,7 +882,7 @@ describe('GadgetEditor', () => {
     const legacy = { ...orphanChart, id: 'd6', source_ids: ['gone'], scope: { symbols: ['NVDA'], metrics: [], lookback_days: null } };
     api.patchGadgetDefinition.mockResolvedValue({ ...legacy, revision: 3 });
     wrap({ definition: legacy });
-    expect(await screen.findByText(gadgetSettingsMessages['en-us'].datasourceInactive)).toBeTruthy();
+    expect(await screen.findByText(getCatalog('en-us', 'gadgetSettings').datasource.inactive)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
     await waitFor(() => expect(api.patchGadgetDefinition).toHaveBeenCalled());
     const scope = api.patchGadgetDefinition.mock.calls[0][1].scope;
@@ -704,10 +890,10 @@ describe('GadgetEditor', () => {
     expect(scope.symbols).toEqual(['NVDA']);
   });
   it('explains the "location <id>" region format under the Region field', async () => {
-        api.listGadgetSources.mockResolvedValue({ items: [source('q1', 'OpenAQ', 'openaq', ['measurement', 'series'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({ items: [source('q1', 'OpenAQ', 'openaq', ['measurement', 'series'])], next_cursor: null });
     await pickChart('OpenAQ');
-    expect(await screen.findByText(gadgetSettingsMessages['en-us'].regionHelp)).toBeTruthy();
-    expect(gadgetSettingsMessages['en-us'].regionHelp).toContain('location');
+    expect(await screen.findByText(getCatalog('en-us', 'gadgetSettings').region.help)).toBeTruthy();
+    expect(getCatalog('en-us', 'gadgetSettings').region.help).toContain('location');
   });
 
   it('rename of a preset-created Alpha Vantage chart sends its stored empty scope unchanged', async () => {
@@ -731,7 +917,12 @@ describe('GadgetEditor', () => {
   it('rename of a legacy chart with several stored regions sends the stored regions unchanged', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetSources.mockResolvedValue({ items: [source('w1', 'Air', 'openaq', ['measurement'])], next_cursor: null });
-    const stored = { ...orphanChart, id: 'd11', source_ids: ['w1'], scope: { symbols: [], metrics: ['pm25', 'pm10'], regions: ['Hanoi', 'Saigon'], lookback_days: null } };
+    const stored = {
+      ...orphanChart,
+      id: 'd11',
+      source_ids: ['w1'],
+      scope: { symbols: [], metrics: ['pm25', 'pm10'], regions: ['Hanoi', 'Saigon'], lookback_days: null },
+    };
     api.patchGadgetDefinition.mockResolvedValue({ ...stored, revision: 3 });
     wrap({ definition: stored });
     await screen.findByText('Air');
@@ -780,20 +971,23 @@ describe('GadgetEditor', () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetSources.mockReturnValue(new Promise(() => undefined));
     wrap({ definition: { ...orphanChart, id: 'd8', source_ids: ['b1'] } });
-    expect((await screen.findAllByText(gadgetSettingsMessages['en-us'].datasourceLoading)).length).toBeGreaterThan(0);
-    expect(screen.queryByText(gadgetSettingsMessages['en-us'].datasourceInactive)).toBeNull();
+    expect((await screen.findAllByText(getCatalog('en-us', 'gadgetSettings').datasource.loading)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(getCatalog('en-us', 'gadgetSettings').datasource.inactive)).toBeNull();
   });
 
   it('shows no Inactive badge for a saved source when the source read failed', async () => {
     api.listGadgetRenderers.mockResolvedValue([...renderers, financeRenderer]);
     api.listGadgetSources.mockRejectedValue(new ApiError(500, 'boom', { code: 'x' }));
     wrap({ definition: { ...orphanChart, id: 'd9', source_ids: ['b1'] } });
-    expect(await screen.findByText(gadgetSettingsMessages['en-us'].datasourceLoadFailed)).toBeTruthy();
-    expect(screen.queryByText(gadgetSettingsMessages['en-us'].datasourceInactive)).toBeNull();
+    expect(await screen.findByText(getCatalog('en-us', 'gadgetSettings').datasource.loadFailed)).toBeTruthy();
+    expect(screen.queryByText(getCatalog('en-us', 'gadgetSettings').datasource.inactive)).toBeNull();
   });
 
   it('resets a metric the new provider does not offer when the datasource changes (Alpha Vantage to World Bank)', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement']), source('w1', 'World Bank GDP', 'world_bank', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('a1', 'Alpha', 'alpha_vantage', ['measurement']), source('w1', 'World Bank GDP', 'world_bank', ['measurement'])],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Alpha');
     await userEvent.click(screen.getByRole('checkbox', { name: /World Bank GDP/ }));
@@ -804,7 +998,10 @@ describe('GadgetEditor', () => {
   });
 
   it('clears symbols the new provider cannot suggest when the datasource changes (Binance to Alpha Vantage)', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('b1', 'Binance spot', 'binance', ['measurement']), source('a1', 'Alpha', 'alpha_vantage', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('b1', 'Binance spot', 'binance', ['measurement']), source('a1', 'Alpha', 'alpha_vantage', ['measurement'])],
+      next_cursor: null,
+    });
     api.createGadgetDefinition.mockResolvedValue({ id: 'n1' });
     await pickChart('Binance spot');
     await userEvent.click(screen.getByRole('checkbox', { name: /Alpha/ }));
@@ -818,19 +1015,22 @@ describe('GadgetEditor', () => {
     api.listGadgetSources.mockReturnValue(new Promise(() => undefined));
     api.getMetricCatalog.mockReturnValue(new Promise(() => undefined));
     wrap({ definition: orphanChart });
-    expect((await screen.findAllByText(gadgetSettingsMessages['en-us'].datasourceLoading)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(gadgetSettingsMessages['en-us'].metricCatalogLoading)).toBeTruthy();
+    expect((await screen.findAllByText(getCatalog('en-us', 'gadgetSettings').datasource.loading)).length).toBeGreaterThan(0);
+    expect(await screen.findByText(getCatalog('en-us', 'gadgetSettings').metric.catalogLoading)).toBeTruthy();
   });
 
   it('labels the Region and Symbols fields with real labels and links the region help', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('q1', 'OpenAQ', 'openaq', ['measurement', 'series']), source('b1', 'Binance spot', 'binance', ['measurement'])], next_cursor: null });
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('q1', 'OpenAQ', 'openaq', ['measurement', 'series']), source('b1', 'Binance spot', 'binance', ['measurement'])],
+      next_cursor: null,
+    });
     await pickChart('OpenAQ');
     const region = await screen.findByRole('combobox', { name: 'Region' });
     const label = screen.getByText('Region');
     expect(label.tagName).toBe('LABEL');
     expect(region.getAttribute('aria-labelledby')).toBe(label.id);
     const help = document.getElementById(region.getAttribute('aria-describedby') ?? '');
-    expect(help?.textContent).toBe(gadgetSettingsMessages['en-us'].regionHelp);
+    expect(help?.textContent).toBe(getCatalog('en-us', 'gadgetSettings').region.help);
     await userEvent.click(screen.getByRole('checkbox', { name: /Binance spot/ }));
     const symbols = await screen.findByRole('combobox', { name: 'Symbols' });
     expect(screen.getByText('Symbols').tagName).toBe('LABEL');
@@ -839,7 +1039,20 @@ describe('GadgetEditor', () => {
 });
 
 describe('mergeCatalogEntries', () => {
-  const entry = (over: Record<string, unknown>) => ({ metrics: [], symbol_keyed: false, suggested_symbols: [], metrics_open: false, charts_as_series: true, region_keyed: false, suggested_regions: [], seed_symbol: true, cadence_days: 1, default_lookback_days: null, ...over }) as never;
+  const entry = (over: Record<string, unknown>) =>
+    ({
+      metrics: [],
+      symbol_keyed: false,
+      suggested_symbols: [],
+      metrics_open: false,
+      charts_as_series: true,
+      region_keyed: false,
+      suggested_regions: [],
+      seed_symbol: true,
+      cadence_days: 1,
+      default_lookback_days: null,
+      ...over,
+    }) as never;
   it('returns the entry itself for one provider and undefined when any is unknown', () => {
     const one = entry({});
     expect(mergeCatalogEntries([one])).toBe(one);
@@ -849,9 +1062,19 @@ describe('mergeCatalogEntries', () => {
   it('unions metrics and suggestions, any-of keyed flags and the widest lookback', () => {
     const merged = mergeCatalogEntries([
       entry({ metrics: [{ id: 'close', unit: 'VND' }], symbol_keyed: true, suggested_symbols: ['FPT'], default_lookback_days: 30 }),
-      entry({ metrics: [{ id: 'close', unit: 'USD' }, { id: 'spot', unit: 'USD' }], seed_symbol: false, default_lookback_days: 365 }),
+      entry({
+        metrics: [
+          { id: 'close', unit: 'USD' },
+          { id: 'spot', unit: 'USD' },
+        ],
+        seed_symbol: false,
+        default_lookback_days: 365,
+      }),
     ])!;
-    expect(merged.metrics).toEqual([{ id: 'close', unit: null }, { id: 'spot', unit: 'USD' }]);
+    expect(merged.metrics).toEqual([
+      { id: 'close', unit: null },
+      { id: 'spot', unit: 'USD' },
+    ]);
     expect([merged.symbol_keyed, merged.seed_symbol, merged.default_lookback_days]).toEqual([true, false, 365]);
   });
 });

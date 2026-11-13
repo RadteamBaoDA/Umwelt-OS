@@ -28,12 +28,7 @@ export function MemoryPrivacySettings() {
   const { t, tShell, ts, query, purgeMutation, draft, setDraft, purgeForgotten, purgeRejected, purgeHistory } = s0;
 
   if (query.isPending) {
-    return (
-      <section
-        className="rounded-lg border bg-card p-6 skeleton h-48 rounded-lg"
-        aria-label={ts('loadingMemoryPrivacy')}
-      />
-    );
+    return <section className="rounded-lg border bg-card p-6 skeleton h-48 rounded-lg" aria-label={ts('loading.memoryPrivacy')} />;
   }
 
   if (query.isError) {
@@ -50,11 +45,12 @@ export function MemoryPrivacySettings() {
     );
   }
 
-  const current: MemoryPrivacyConfig = draft ?? query.data ?? {
-    store_conversation_history: true,
-    store_agent_memory: false,
-    auto_accept_memory: false,
-  };
+  const current: MemoryPrivacyConfig = draft ??
+    query.data ?? {
+      store_conversation_history: true,
+      store_agent_memory: false,
+      auto_accept_memory: false,
+    };
 
   const isDirty =
     draft !== null &&
@@ -84,77 +80,77 @@ export function MemoryPrivacySettings() {
       <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('subtitle')} />
 
       {/* Privacy Toggles */}
-<PrivacyToggleForm vm={vm} />
+      <PrivacyToggleForm vm={vm} />
 
       {/* Durable Purge Options */}
-<PurgePanel vm={vm} />
+      <PurgePanel vm={vm} />
     </div>
   );
 }
 
-type MemoryPrivacySettingsVm = ReturnType<typeof useMemoryPrivacyState> & { current: MemoryPrivacyConfig; isDirty: boolean; handleToggle: (key: keyof MemoryPrivacyConfig, checked: boolean) => void; handlePurge: () => void };
+type MemoryPrivacySettingsVm = ReturnType<typeof useMemoryPrivacyState> & {
+  current: MemoryPrivacyConfig;
+  isDirty: boolean;
+  handleToggle: (key: keyof MemoryPrivacyConfig, checked: boolean) => void;
+  handlePurge: () => void;
+};
 
 /** Storage toggles form with its save button and status. */
 function PrivacyToggleForm({ vm }: { vm: MemoryPrivacySettingsVm }) {
   const { t, saveMutation, current, isDirty, handleToggle } = vm;
   return (
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          saveMutation.mutate(current);
-        }}
-        className="space-y-6"
-      >
-        <div className="space-y-4 border rounded-lg p-5 bg-card">
-          <ToggleRow
-            id="store-conversation-history"
-            checked={current.store_conversation_history}
-            title={t('conversationHistoryTitle')}
-            description={t('conversationHistoryDesc')}
-            onChange={(checked) => handleToggle('store_conversation_history', checked)}
-          />
-          <ToggleRow
-            id="store-agent-memory"
-            bordered
-            checked={current.store_agent_memory}
-            title={t('agentMemoryTitle')}
-            description={t('agentMemoryDesc')}
-            onChange={(checked) => handleToggle('store_agent_memory', checked)}
-          />
-          <ToggleRow
-            id="auto-accept-memory"
-            bordered
-            checked={current.auto_accept_memory}
-            disabled={!current.store_agent_memory}
-            dimTitle={!current.store_agent_memory}
-            title={t('autoAcceptTitle')}
-            description={t('autoAcceptDesc')}
-            onChange={(checked) => handleToggle('auto_accept_memory', checked)}
-          />
-        </div>
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        saveMutation.mutate(current);
+      }}
+      className="space-y-6"
+    >
+      <div className="space-y-4 border rounded-lg p-5 bg-card">
+        <ToggleRow
+          id="store-conversation-history"
+          checked={current.store_conversation_history}
+          title={t('conversationHistoryTitle')}
+          description={t('conversationHistoryDesc')}
+          onChange={(checked) => handleToggle('store_conversation_history', checked)}
+        />
+        <ToggleRow
+          id="store-agent-memory"
+          bordered
+          checked={current.store_agent_memory}
+          title={t('agentMemoryTitle')}
+          description={t('agentMemoryDesc')}
+          onChange={(checked) => handleToggle('store_agent_memory', checked)}
+        />
+        <ToggleRow
+          id="auto-accept-memory"
+          bordered
+          checked={current.auto_accept_memory}
+          disabled={!current.store_agent_memory}
+          dimTitle={!current.store_agent_memory}
+          title={t('autoAcceptTitle')}
+          description={t('autoAcceptDesc')}
+          onChange={(checked) => handleToggle('auto_accept_memory', checked)}
+        />
+      </div>
 
-        {saveMutation.error && (
-          <p className="text-destructive text-sm" role="alert">
-            {saveMutation.error instanceof ApiError
-              ? saveMutation.error.message
-              : t('saveFailed')}
-          </p>
+      {saveMutation.error && (
+        <p className="text-destructive text-sm" role="alert">
+          {saveMutation.error instanceof ApiError ? saveMutation.error.message : t('saveFailed')}
+        </p>
+      )}
+
+      <SettingsActions>
+        {saveMutation.isSuccess && !isDirty && (
+          <span className="text-xs text-muted-foreground" role="status">
+            {t('saved')}
+          </span>
         )}
-
-        <SettingsActions>
-          {saveMutation.isSuccess && !isDirty && (
-            <span className="text-xs text-muted-foreground" role="status">
-              {t('saved')}
-            </span>
-          )}
-          <Button
-            type="submit"
-            disabled={saveMutation.isPending || !isDirty}
-          >
-            {saveMutation.isPending ? t('saving') : t('saveButton')}
-          </Button>
-        </SettingsActions>
-      </form>
+        <Button type="submit" disabled={saveMutation.isPending || !isDirty}>
+          {saveMutation.isPending ? t('saving') : t('saveButton')}
+        </Button>
+      </SettingsActions>
+    </form>
   );
 }
 
@@ -176,13 +172,7 @@ interface ToggleRowProps {
 function ToggleRow({ id, checked, title, description, onChange, disabled, bordered, dimTitle }: ToggleRowProps) {
   return (
     <div className={bordered ? 'flex items-start space-x-3 pt-3 border-t border-border' : 'flex items-start space-x-3'}>
-      <Checkbox
-        id={id}
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={(value) => onChange(Boolean(value))}
-        className="mt-1"
-      />
+      <Checkbox id={id} checked={checked} disabled={disabled} onCheckedChange={(value) => onChange(Boolean(value))} className="mt-1" />
       <div className="space-y-1">
         <Label
           htmlFor={id}
@@ -198,52 +188,77 @@ function ToggleRow({ id, checked, title, description, onChange, disabled, border
 
 /** Durable purge options with the confirmation-guarded purge button. */
 function PurgePanel({ vm }: { vm: MemoryPrivacySettingsVm }) {
-  const { t, purgeMutation, purgeForgotten, setPurgeForgotten, purgeRejected, setPurgeRejected, purgeHistory, setPurgeHistory, purgeResult, handlePurge } = vm;
+  const {
+    t,
+    purgeMutation,
+    purgeForgotten,
+    setPurgeForgotten,
+    purgeRejected,
+    setPurgeRejected,
+    purgeHistory,
+    setPurgeHistory,
+    purgeResult,
+    handlePurge,
+  } = vm;
   return (
-      <div className="space-y-4 pt-6 border-t border-border">
-        <div>
-          <h2 className="text-lg font-semibold">{t('purgeTitle')}</h2>
-          <p className="text-xs text-muted-foreground">
-            {t('purgeHelp')}
-          </p>
-        </div>
-
-        <div className="space-y-3 border rounded-lg p-5 bg-card">
-          <ToggleRow id="purge-forgotten" checked={purgeForgotten} title={t('purgeForgotten')} description={t('purgeForgottenDesc')} onChange={setPurgeForgotten} />
-          <ToggleRow id="purge-rejected" bordered checked={purgeRejected} title={t('purgeRejected')} description={t('purgeRejectedDesc')} onChange={setPurgeRejected} />
-          <ToggleRow id="purge-history" bordered checked={purgeHistory} title={t('purgeHistory')} description={t('purgeHistoryDesc')} onChange={setPurgeHistory} />
-        </div>
-
-        {purgeMutation.error && (
-          <p className="text-destructive text-sm" role="alert">
-            {purgeMutation.error instanceof ApiError
-              ? purgeMutation.error.message
-              : t('purgeFailed')}
-          </p>
-        )}
-
-        {purgeResult && (
-          <p className="text-sm text-foreground bg-secondary/50 p-3 rounded-md" role="status">
-            {t('purgeSuccess', {
-              memories: purgeResult.purged_memories_count,
-              candidates: purgeResult.purged_candidates_count,
-              conversations: purgeResult.purged_conversations_count,
-            })}
-          </p>
-        )}
-
-        <Button
-          type="button"
-          variant="outline" className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
-          disabled={
-            purgeMutation.isPending ||
-            (!purgeForgotten && !purgeRejected && !purgeHistory)
-          }
-          onClick={handlePurge}
-        >
-          {purgeMutation.isPending ? t('saving') : t('purgeButton')}
-        </Button>
+    <div className="space-y-4 pt-6 border-t border-border">
+      <div>
+        <h2 className="text-lg font-semibold">{t('purgeTitle')}</h2>
+        <p className="text-xs text-muted-foreground">{t('purgeHelp')}</p>
       </div>
+
+      <div className="space-y-3 border rounded-lg p-5 bg-card">
+        <ToggleRow
+          id="purge-forgotten"
+          checked={purgeForgotten}
+          title={t('purgeForgotten')}
+          description={t('purgeForgottenDesc')}
+          onChange={setPurgeForgotten}
+        />
+        <ToggleRow
+          id="purge-rejected"
+          bordered
+          checked={purgeRejected}
+          title={t('purgeRejected')}
+          description={t('purgeRejectedDesc')}
+          onChange={setPurgeRejected}
+        />
+        <ToggleRow
+          id="purge-history"
+          bordered
+          checked={purgeHistory}
+          title={t('purgeHistory')}
+          description={t('purgeHistoryDesc')}
+          onChange={setPurgeHistory}
+        />
+      </div>
+
+      {purgeMutation.error && (
+        <p className="text-destructive text-sm" role="alert">
+          {purgeMutation.error instanceof ApiError ? purgeMutation.error.message : t('purgeFailed')}
+        </p>
+      )}
+
+      {purgeResult && (
+        <p className="text-sm text-foreground bg-secondary/50 p-3 rounded-md" role="status">
+          {t('purgeSuccess', {
+            memories: purgeResult.purged_memories_count,
+            candidates: purgeResult.purged_candidates_count,
+            conversations: purgeResult.purged_conversations_count,
+          })}
+        </p>
+      )}
+
+      <Button
+        type="button"
+        variant="outline"
+        className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+        disabled={purgeMutation.isPending || (!purgeForgotten && !purgeRejected && !purgeHistory)}
+        onClick={handlePurge}
+      >
+        {purgeMutation.isPending ? t('saving') : t('purgeButton')}
+      </Button>
+    </div>
   );
 }
 
@@ -267,8 +282,7 @@ function useMemoryPrivacyState() {
   const [purgeResult, setPurgeResult] = useState<MemoryPurgeResponse | null>(null);
 
   const saveMutation = useMutation({
-    mutationFn: (config: MemoryPrivacyConfig) =>
-      updateMemoryPrivacyConfig(config, csrfToken),
+    mutationFn: (config: MemoryPrivacyConfig) => updateMemoryPrivacyConfig(config, csrfToken),
     onSuccess: (updated) => {
       setDraft(updated);
       queryClient.setQueryData(memoryKeys.privacy, updated);
@@ -276,8 +290,7 @@ function useMemoryPrivacyState() {
   });
 
   const purgeMutation = useMutation({
-    mutationFn: (payload: MemoryPurgeRequest) =>
-      purgeMemoryData(payload, csrfToken),
+    mutationFn: (payload: MemoryPurgeRequest) => purgeMemoryData(payload, csrfToken),
     onSuccess: (result) => {
       setPurgeResult(result);
       setPurgeForgotten(false);
@@ -287,5 +300,24 @@ function useMemoryPrivacyState() {
     },
   });
 
-  return { t, tShell, ts, queryClient, query, saveMutation, purgeMutation, draft, setDraft, purgeForgotten, setPurgeForgotten, purgeRejected, setPurgeRejected, purgeHistory, setPurgeHistory, purgeResult, setPurgeResult, csrfToken };
+  return {
+    t,
+    tShell,
+    ts,
+    queryClient,
+    query,
+    saveMutation,
+    purgeMutation,
+    draft,
+    setDraft,
+    purgeForgotten,
+    setPurgeForgotten,
+    purgeRejected,
+    setPurgeRejected,
+    purgeHistory,
+    setPurgeHistory,
+    purgeResult,
+    setPurgeResult,
+    csrfToken,
+  };
 }

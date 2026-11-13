@@ -1,9 +1,7 @@
 /* eslint-disable no-restricted-imports -- message catalogs are imported by path on purpose: the module index files pull in components that import this barrel (import cycle). */
 import mcpCatalog from '@/modules/sources/mcp-messages.json';
 import { storyMessages } from '@/modules/news/story-messages';
-import { dailyMessages, notificationMessages } from '@/modules/dashboard/daily-messages';
 import { pickMessages } from '@/modules/pick/messages';
-import { githubMessages } from '@/modules/dashboard/github-messages';
 import { automationMessages } from '@/modules/automations/messages';
 import { observabilityMessages } from '@/modules/observability/messages';
 import { exportMessages } from '@/modules/settings/export-messages';
@@ -25,8 +23,6 @@ import { webSearchMessages } from './messages/web-search';
 import { vizRouterMessages } from './messages/viz-router';
 import { todosMessages } from './messages/todos';
 import { n8nMessages } from './messages/n8n';
-import { dashboardMessages } from './messages/dashboard';
-import { gadgetSettingsMessages } from './messages/gadget-settings';
 import { searchEntitiesMessages } from './messages/search';
 import { detailMessages } from './messages/detail';
 import { documentsMessages } from './messages/documents';
@@ -34,7 +30,6 @@ import { workspacesMessages } from './messages/workspaces';
 import { workspaceMembersMessages } from './messages/workspace-members';
 import { sharingMessages } from './messages/sharing';
 import { translationsMessages } from './messages/translations';
-import { uiSweepMessages } from './messages/ui-sweep';
 import { routeErrorsMessages } from './messages/route-errors';
 import { errorCodesMessages } from './messages/error-codes';
 import { globalSettingsMessages } from './messages/global-settings';
@@ -67,8 +62,8 @@ export const messages = {
     vizRouter: vizRouterMessages['en-us'],
     todos: todosMessages['en-us'],
     n8n: n8nMessages['en-us'],
-    dashboard: dashboardMessages['en-us'],
-    gadgetSettings: gadgetSettingsMessages['en-us'],
+    dashboard: jsonCatalogs['en-us'].dashboard,
+    gadgetSettings: jsonCatalogs['en-us'].gadgetSettings,
     taskGoal: jsonCatalogs['en-us'].taskGoal,
     entities: searchEntitiesMessages['en-us'],
     observability: observabilityMessages['en-us'],
@@ -77,10 +72,10 @@ export const messages = {
     detail: detailMessages['en-us'],
     documents: documentsMessages['en-us'],
     news: storyMessages['en-us'],
-    daily: dailyMessages['en-us'],
-    github: githubMessages['en-us'],
+    daily: jsonCatalogs['en-us'].daily,
+    github: jsonCatalogs['en-us'].github,
     automations: automationMessages['en-us'],
-    notifications: notificationMessages['en-us'],
+    notifications: jsonCatalogs['en-us'].notifications,
     pick: pickMessages['en-us'],
     workspaces: workspacesMessages['en-us'],
     globalSettings: globalSettingsMessages['en-us'],
@@ -88,7 +83,7 @@ export const messages = {
     workspaceMembers: workspaceMembersMessages['en-us'],
     sharing: sharingMessages['en-us'],
     translations: translationsMessages['en-us'],
-    uiSweep: uiSweepMessages['en-us'],
+    uiSweep: jsonCatalogs['en-us'].uiSweep,
     routeErrors: routeErrorsMessages['en-us'],
   },
   'vi-vi': {
@@ -113,8 +108,8 @@ export const messages = {
     vizRouter: vizRouterMessages['vi-vi'],
     todos: todosMessages['vi-vi'],
     n8n: n8nMessages['vi-vi'],
-    dashboard: dashboardMessages['vi-vi'],
-    gadgetSettings: gadgetSettingsMessages['vi-vi'],
+    dashboard: jsonCatalogs['vi-vi'].dashboard,
+    gadgetSettings: jsonCatalogs['vi-vi'].gadgetSettings,
     taskGoal: jsonCatalogs['vi-vi'].taskGoal,
     entities: searchEntitiesMessages['vi-vi'],
     observability: observabilityMessages['vi-vi'],
@@ -123,10 +118,10 @@ export const messages = {
     detail: detailMessages['vi-vi'],
     documents: documentsMessages['vi-vi'],
     news: storyMessages['vi-vi'],
-    daily: dailyMessages['vi-vi'],
-    github: githubMessages['vi-vi'],
+    daily: jsonCatalogs['vi-vi'].daily,
+    github: jsonCatalogs['vi-vi'].github,
     automations: automationMessages['vi-vi'],
-    notifications: notificationMessages['vi-vi'],
+    notifications: jsonCatalogs['vi-vi'].notifications,
     pick: pickMessages['vi-vi'],
     workspaces: workspacesMessages['vi-vi'],
     globalSettings: globalSettingsMessages['vi-vi'],
@@ -134,7 +129,7 @@ export const messages = {
     workspaceMembers: workspaceMembersMessages['vi-vi'],
     sharing: sharingMessages['vi-vi'],
     translations: translationsMessages['vi-vi'],
-    uiSweep: uiSweepMessages['vi-vi'],
+    uiSweep: jsonCatalogs['vi-vi'].uiSweep,
     routeErrors: routeErrorsMessages['vi-vi'],
   },
 } as const;

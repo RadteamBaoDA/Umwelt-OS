@@ -2,16 +2,18 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import { DashboardOverview } from './dashboard-overview';
 
-vi.mock('./gadgets/live-map-gadget', () => ({ LiveMapOverview: ({ toolbarStart }: { toolbarStart?: React.ReactNode }) => <div data-testid="map">{toolbarStart}</div> }));
+vi.mock('./gadgets/live-map-gadget', () => ({
+  LiveMapOverview: ({ toolbarStart }: { toolbarStart?: React.ReactNode }) => <div data-testid="map">{toolbarStart}</div>,
+}));
 vi.mock('./dashboard-panel', () => ({ DashboardPanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 
 /** Renders the overview in desktop (non-compact) mode. */
 function show() {
   return render(
-    <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+    <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
       <DashboardOverview panelId="p" editMode={false} compact={false} empty={false} canAdd onAdd={() => {}} scrollPositions={new Map()}>
         <span>gadgets</span>
       </DashboardOverview>

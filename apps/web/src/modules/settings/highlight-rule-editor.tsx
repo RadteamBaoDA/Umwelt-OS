@@ -4,7 +4,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Bell, Eye, Plus, RotateCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useId, useRef, useState } from 'react';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -13,8 +22,16 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import {
-  dashboardKeys, evaluateGadgetHighlights, getGadgetDefinitionUsage, highlightRuleErrorKey, listGadgetDefinitions, listGadgetSources, patchGadgetDefinition, previewHighlightRules,
-  type GadgetDefinition, type HighlightRule,
+  dashboardKeys,
+  evaluateGadgetHighlights,
+  getGadgetDefinitionUsage,
+  highlightRuleErrorKey,
+  listGadgetDefinitions,
+  listGadgetSources,
+  patchGadgetDefinition,
+  previewHighlightRules,
+  type GadgetDefinition,
+  type HighlightRule,
 } from '@/modules/dashboard';
 import { fetchAllTopics } from '@/modules/news';
 import { CheckboxField, FieldGrid } from '@/components/settings-layout';
@@ -22,18 +39,43 @@ import { uuid7 } from '@/core/uuid7';
 
 type Severity = HighlightRule['severity'];
 type SourceMode = 'any' | 'only' | 'exclude';
-type RuleDraft = { id: string; keywords: string; severity: Severity; notify: boolean; topicIds: string[]; sourceModes: Record<string, SourceMode>; cooldown: string; expires: string; quietStart: string; quietEnd: string };
+type RuleDraft = {
+  id: string;
+  keywords: string;
+  severity: Severity;
+  notify: boolean;
+  topicIds: string[];
+  sourceModes: Record<string, SourceMode>;
+  cooldown: string;
+  expires: string;
+  quietStart: string;
+  quietEnd: string;
+};
 const MAX_COOLDOWN = 7 * 24 * 60;
 const MAX_TOPICS = 8;
 
-const previewCodeKeys: Record<string, string> = { preview_rate_limited: 'rulePreviewRateLimited', preview_unavailable: 'rulePreviewUnavailable', preview_timeout: 'rulePreviewTimeout' };
-const previewErrorKey = (error: unknown) => (error instanceof ApiError && Object.hasOwn(previewCodeKeys, error.code ?? '') ? previewCodeKeys[error.code as string] : null);
+const previewCodeKeys = {
+  preview_rate_limited: 'rulePreview.rateLimited',
+  preview_unavailable: 'rulePreview.unavailable',
+  preview_timeout: 'rulePreview.timeout',
+} as const;
+const previewErrorKey = (error: unknown) =>
+  error instanceof ApiError && Object.hasOwn(previewCodeKeys, error.code ?? '')
+    ? previewCodeKeys[error.code as keyof typeof previewCodeKeys]
+    : null;
 
-const sourceModeKeys = { any: 'sourceAny', only: 'sourceOnly', exclude: 'sourceExclude' } as const;
+const sourceModeKeys = { any: 'source.any', only: 'source.only', exclude: 'source.exclude' } as const;
 
 /** Normalizes comma-separated rule keywords and removes duplicates. */
 function parseKeywordList(value: string): string[] {
-  return [...new Set(value.split(',').map((item) => item.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 /** ISO instant to the `datetime-local` value in the browser time zone. */
@@ -45,17 +87,26 @@ const toLocalInput = (iso?: string | null) => {
 
 /** Builds the API rule from a draft, keeping only conditions that are set. */
 function toRule(draft: RuleDraft, keywords: string[]): HighlightRule {
-  const ids = (mode: SourceMode) => Object.entries(draft.sourceModes).filter(([, value]) => value === mode).map(([id]) => id);
+  const ids = (mode: SourceMode) =>
+    Object.entries(draft.sourceModes)
+      .filter(([, value]) => value === mode)
+      .map(([id]) => id);
   return {
-    id: draft.id, keywords, severity: draft.severity, notify: draft.notify,
-    topic_ids: draft.topicIds, source_ids: ids('only'), exclude_source_ids: ids('exclude'),
+    id: draft.id,
+    keywords,
+    severity: draft.severity,
+    notify: draft.notify,
+    topic_ids: draft.topicIds,
+    source_ids: ids('only'),
+    exclude_source_ids: ids('exclude'),
     cooldown_minutes: Number(draft.cooldown) || 0,
     expires_at: draft.expires ? new Date(draft.expires).toISOString() : null,
-    quiet_start: draft.quietStart || null, quiet_end: draft.quietEnd || null,
+    quiet_start: draft.quietStart || null,
+    quiet_end: draft.quietEnd || null,
   };
 }
 
-const severityKeys = { info: 'severityInfo', warning: 'severityWarning', critical: 'severityCritical' } as const;
+const severityKeys = { info: 'severity.info', warning: 'severity.warning', critical: 'severity.critical' } as const;
 
 /**
  * Highlight rules tab: choose a gadget, then add, edit or delete its keyword rules.
@@ -69,17 +120,60 @@ export function HighlightRuleEditor({ initialDefinitionId }: { initialDefinition
   const headingRef = useRef<HTMLHeadingElement>(null);
   const definitions = defs.data ?? [];
   const def = definitions.find((item) => item.id === picked) ?? definitions[0] ?? null;
-  return <div className="space-y-4">
-    <div><h2 ref={headingRef} tabIndex={-1} className="text-base font-semibold">{t('rulesTitle')}</h2><p role="status" className="sr-only">{notice}</p><p className="text-muted-foreground">{t('rulesIntro')}</p><p className="text-muted-foreground">{t('unsupportedRules')}</p></div>
-    {defs.isPending && <div className="skeleton h-16" role="status" aria-label={t('loading')} />}
-    {defs.isError && <div role="alert" className="space-y-2"><p className="error">{t(apiFailureKey(defs.error) ?? 'loadFailed')}</p><Button type="button" variant="outline" onClick={() => defs.refetch()}><RotateCw className="size-4" aria-hidden="true" /> {t('retry')}</Button></div>}
-    {defs.isSuccess && !def && <p className="text-muted-foreground rounded-lg border border-dashed border-border p-6">{t('noGadgets')}</p>}
-    {def && <>
-      <label className="field max-w-md"><span className="label">{t('pickGadget')}</span>
-        <Select value={def.id} onValueChange={setPicked}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{definitions.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></label>
-      <RuleList key={`${def.id}:${def.revision}`} def={def} onRuleDeleted={() => { setNotice(''); requestAnimationFrame(() => setNotice(t('ruleDeleted'))); headingRef.current?.focus(); }} />
-    </>}
-  </div>;
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 ref={headingRef} tabIndex={-1} className="text-base font-semibold">
+          {t('rules.title')}
+        </h2>
+        <p role="status" className="sr-only">
+          {notice}
+        </p>
+        <p className="text-muted-foreground">{t('rules.intro')}</p>
+        <p className="text-muted-foreground">{t('unsupportedRules')}</p>
+      </div>
+      {defs.isPending && <div className="skeleton h-16" role="status" aria-label={t('loading')} />}
+      {defs.isError && (
+        <div role="alert" className="space-y-2">
+          <p className="error">{t(apiFailureKey(defs.error) ?? 'loadFailed')}</p>
+          <Button type="button" variant="outline" onClick={() => defs.refetch()}>
+            <RotateCw className="size-4" aria-hidden="true" /> {t('retry')}
+          </Button>
+        </div>
+      )}
+      {defs.isSuccess && !def && (
+        <p className="text-muted-foreground rounded-lg border border-dashed border-border p-6">{t('noGadgets')}</p>
+      )}
+      {def && (
+        <>
+          <label className="field max-w-md">
+            <span className="label">{t('pickGadget')}</span>
+            <Select value={def.id} onValueChange={setPicked}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {definitions.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <RuleList
+            key={`${def.id}:${def.revision}`}
+            def={def}
+            onRuleDeleted={() => {
+              setNotice('');
+              requestAnimationFrame(() => setNotice(t('rule.deleted')));
+              headingRef.current?.focus();
+            }}
+          />
+        </>
+      )}
+    </div>
+  );
 }
 
 /** Rule list, inline rule editor and current-match preview for one saved gadget. */
@@ -89,13 +183,15 @@ function RuleList(props: { def: GadgetDefinition; onRuleDeleted: () => void }) {
   const s1 = useRuleListEditor(s0);
 
   const vm: RuleListVm = s1;
-  return <div className="space-y-4">
-<RuleListHeader vm={vm} />
-<RuleListItems vm={vm} />
-<RuleEditForm vm={vm} />
-<RuleMatchesPanel vm={vm} />
-<RuleDeleteDialog vm={vm} />
-  </div>;
+  return (
+    <div className="space-y-4">
+      <RuleListHeader vm={vm} />
+      <RuleListItems vm={vm} />
+      <RuleEditForm vm={vm} />
+      <RuleMatchesPanel vm={vm} />
+      <RuleDeleteDialog vm={vm} />
+    </div>
+  );
 }
 
 type RuleListVm = ReturnType<typeof useRuleListEditor>;
@@ -105,8 +201,10 @@ function RuleListHeader({ vm }: { vm: RuleListVm }) {
   const { t, write, open } = vm;
   return (
     <div className="flex items-center justify-between gap-2">
-      <h3 className="font-semibold">{t('rulesListLabel')}</h3>
-      <Button type="button" variant="outline" disabled={write.isPending} onClick={() => open(null)}><Plus className="size-4" aria-hidden="true" /> {t('addRule')}</Button>
+      <h3 className="font-semibold">{t('rules.listLabel')}</h3>
+      <Button type="button" variant="outline" disabled={write.isPending} onClick={() => open(null)}>
+        <Plus className="size-4" aria-hidden="true" /> {t('addRule')}
+      </Button>
     </div>
   );
 }
@@ -115,19 +213,56 @@ function RuleListHeader({ vm }: { vm: RuleListVm }) {
 function RuleListItems({ vm }: { vm: RuleListVm }) {
   const { t, returnFocusRef, rules, usage, usageNames, sources, write, editing, setDeleteId, open } = vm;
   return (
-<>
-    {usage.isError && <p className="text-muted-foreground rounded-lg border border-border p-3" role="status">{t('ruleUsageError')}</p>}
-    {sources.isError && <p className="text-muted-foreground text-xs" role="status">{t('ruleSourcesError')}</p>}
-    {usageNames && <p className="text-muted-foreground rounded-lg border border-border p-3" role="status">{t('usageWarn', { count: usage.data?.length ?? 0, names: usageNames })}</p>}
-    {rules.length === 0 && !editing && <p className="text-muted-foreground">{t('noRules')}</p>}
-    <ul aria-label={t('rulesListLabel')} className="space-y-2">{rules.map((rule) => <li key={rule.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
-      <span className="min-w-0 flex-1 font-medium">{[...rule.keywords, ...((rule.topic_ids?.length ?? 0) > 0 ? [t('ruleTopicCount', { count: rule.topic_ids?.length ?? 0 })] : [])].join(', ')}</span>
-      <span className="text-muted-foreground text-xs">{t(severityKeys[rule.severity])}</span>
-      <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">{rule.notify && <Bell className="size-3" aria-hidden="true" />}{rule.notify ? t('notifyOn') : t('notifyOff')}</span>
-      <Button type="button" variant="outline" disabled={write.isPending} onClick={() => open(rule)}>{t('editRule')}</Button>
-      <Button type="button" variant="destructive" aria-disabled={write.isPending} onClick={(event) => { if (write.isPending) return; returnFocusRef.current = event.currentTarget; setDeleteId(rule.id); }}>{t('deleteRule')}</Button>
-    </li>)}</ul>
-</>
+    <>
+      {usage.isError && (
+        <p className="text-muted-foreground rounded-lg border border-border p-3" role="status">
+          {t('rule.usageError')}
+        </p>
+      )}
+      {sources.isError && (
+        <p className="text-muted-foreground text-xs" role="status">
+          {t('rule.sourcesError')}
+        </p>
+      )}
+      {usageNames && (
+        <p className="text-muted-foreground rounded-lg border border-border p-3" role="status">
+          {t('usageWarn', { count: usage.data?.length ?? 0, names: usageNames })}
+        </p>
+      )}
+      {rules.length === 0 && !editing && <p className="text-muted-foreground">{t('noRules')}</p>}
+      <ul aria-label={t('rules.listLabel')} className="space-y-2">
+        {rules.map((rule) => (
+          <li key={rule.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
+            <span className="min-w-0 flex-1 font-medium">
+              {[
+                ...rule.keywords,
+                ...((rule.topic_ids?.length ?? 0) > 0 ? [t('rule.topicCount', { count: rule.topic_ids?.length ?? 0 })] : []),
+              ].join(', ')}
+            </span>
+            <span className="text-muted-foreground text-xs">{t(severityKeys[rule.severity])}</span>
+            <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+              {rule.notify && <Bell className="size-3" aria-hidden="true" />}
+              {rule.notify ? t('notify.on') : t('notify.off')}
+            </span>
+            <Button type="button" variant="outline" disabled={write.isPending} onClick={() => open(rule)}>
+              {t('editRule')}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              aria-disabled={write.isPending}
+              onClick={(event) => {
+                if (write.isPending) return;
+                returnFocusRef.current = event.currentTarget;
+                setDeleteId(rule.id);
+              }}
+            >
+              {t('rule.deleteRule')}
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -135,19 +270,49 @@ function RuleListItems({ vm }: { vm: RuleListVm }) {
 function RuleEditForm({ vm }: { vm: RuleListVm }) {
   const { t, preview, write, editing, setEditing, isNew, def, keywords, valid, saveRule } = vm;
   return (
-    editing && <form className="space-y-3 rounded-lg border border-border p-4" aria-label={isNew ? t('ruleNew') : t('ruleTitle')} onSubmit={(event) => { event.preventDefault(); saveRule(); }}>
-      <fieldset disabled={write.isPending} className="space-y-3">
-        <h3 className="font-semibold">{isNew ? t('ruleNew') : t('ruleTitle')}</h3>
-      <RuleKeywordsField vm={vm} editing={editing} />
-      <RuleTopicPicker vm={vm} editing={editing} />
-        {(def.source_ids.length > 1 || Object.values(editing.sourceModes).some((mode) => mode !== 'any')) && <RuleSourceModes vm={vm} editing={editing} />}
-      <RuleSeverityFields vm={vm} editing={editing} />
-      <RuleDeliveryFields vm={vm} editing={editing} />
-      </fieldset>
-      {write.error && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
-      <div className="form-actions"><Button type="submit" disabled={write.isPending}>{write.isPending ? t('saving') : t('saveRule')}</Button><Button type="button" variant="outline" disabled={write.isPending || !valid || def.source_ids.length === 0 || preview.isPending} onClick={() => preview.mutate(toRule(editing, keywords))}><Eye className="size-4" aria-hidden="true" /> {preview.isPending ? t('rulePreviewRunning') : t('rulePreview')}</Button><Button type="button" variant="outline" disabled={write.isPending} onClick={() => setEditing(null)}>{t('cancelRule')}</Button></div>
-      <RulePreviewPanel vm={vm} />
-    </form>
+    editing && (
+      <form
+        className="space-y-3 rounded-lg border border-border p-4"
+        aria-label={isNew ? t('rule.new') : t('rule.title')}
+        onSubmit={(event) => {
+          event.preventDefault();
+          saveRule();
+        }}
+      >
+        <fieldset disabled={write.isPending} className="space-y-3">
+          <h3 className="font-semibold">{isNew ? t('rule.new') : t('rule.title')}</h3>
+          <RuleKeywordsField vm={vm} editing={editing} />
+          <RuleTopicPicker vm={vm} editing={editing} />
+          {(def.source_ids.length > 1 || Object.values(editing.sourceModes).some((mode) => mode !== 'any')) && (
+            <RuleSourceModes vm={vm} editing={editing} />
+          )}
+          <RuleSeverityFields vm={vm} editing={editing} />
+          <RuleDeliveryFields vm={vm} editing={editing} />
+        </fieldset>
+        {write.error && (
+          <p className="error" role="alert">
+            {t(highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed')}
+          </p>
+        )}
+        <div className="form-actions">
+          <Button type="submit" disabled={write.isPending}>
+            {write.isPending ? t('saving') : t('saveRule')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={write.isPending || !valid || def.source_ids.length === 0 || preview.isPending}
+            onClick={() => preview.mutate(toRule(editing, keywords))}
+          >
+            <Eye className="size-4" aria-hidden="true" /> {preview.isPending ? t('rulePreview.running') : t('rulePreview.label')}
+          </Button>
+          <Button type="button" variant="outline" disabled={write.isPending} onClick={() => setEditing(null)}>
+            {t('cancelRule')}
+          </Button>
+        </div>
+        <RulePreviewPanel vm={vm} />
+      </form>
+    )
   );
 }
 
@@ -156,12 +321,33 @@ function RuleMatchesPanel({ vm }: { vm: RuleListVm }) {
   const { t, matches } = vm;
   return (
     <section aria-labelledby="hr-matches" className="space-y-2 rounded-lg border border-border p-3">
-      <h3 id="hr-matches" className="font-semibold">{t('matches')}</h3>
-      {matches.isPending && <p className="text-muted-foreground" role="status">{t('previewLoading')}</p>}
-      {matches.isError && <p className="error" role="alert"><AlertCircle className="inline size-4" aria-hidden="true" /> {t('previewError')}</p>}
-      {matches.isSuccess && matches.data.length === 0 && <p className="text-muted-foreground">{t('matchesEmpty')}</p>}
-      {matches.isSuccess && <ul className="space-y-1">{matches.data.map((match) => <li key={`${match.rule_id}:${match.document_version_id}`}><span className="font-medium">{match.title}</span> <span className="text-muted-foreground text-xs">{t('previewMatch', { keywords: match.matched_keywords.join(', ') })} · {t(severityKeys[match.severity])}</span></li>)}</ul>}
-      <p className="text-muted-foreground text-xs">{t('matchesNote')}</p>
+      <h3 id="hr-matches" className="font-semibold">
+        {t('matches.label')}
+      </h3>
+      {matches.isPending && (
+        <p className="text-muted-foreground" role="status">
+          {t('preview.loading')}
+        </p>
+      )}
+      {matches.isError && (
+        <p className="error" role="alert">
+          <AlertCircle className="inline size-4" aria-hidden="true" /> {t('preview.error')}
+        </p>
+      )}
+      {matches.isSuccess && matches.data.length === 0 && <p className="text-muted-foreground">{t('matches.empty')}</p>}
+      {matches.isSuccess && (
+        <ul className="space-y-1">
+          {matches.data.map((match) => (
+            <li key={`${match.rule_id}:${match.document_version_id}`}>
+              <span className="font-medium">{match.title}</span>{' '}
+              <span className="text-muted-foreground text-xs">
+                {t('preview.match', { keywords: match.matched_keywords.join(', ') })} · {t(severityKeys[match.severity])}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-muted-foreground text-xs">{t('matches.note')}</p>
     </section>
   );
 }
@@ -170,14 +356,46 @@ function RuleMatchesPanel({ vm }: { vm: RuleListVm }) {
 function RuleDeleteDialog({ vm }: { vm: RuleListVm }) {
   const { t, returnFocusRef, rules, usageNames, write, editing, deleteId, setDeleteId, onRuleDeleted } = vm;
   return (
-<>
-    {write.error && !editing && <p className="error" role="alert">{t((highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed') as 'saveFailed')}</p>}
-    <AlertDialog open={deleteId !== null} onOpenChange={(value) => { if (!value) setDeleteId(null); }}>
-      <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); returnFocusRef.current?.focus(); }}><AlertDialogHeader><AlertDialogTitle>{t('deleteRuleTitle')}</AlertDialogTitle><AlertDialogDescription>{usageNames ? t('deleteRuleBodyUsed', { names: usageNames }) : t('deleteRuleBody')}</AlertDialogDescription></AlertDialogHeader>
-        <AlertDialogFooter><AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel><AlertDialogAction onClick={() => { write.mutate(rules.filter((item) => item.id !== deleteId), { onSuccess: onRuleDeleted }); }}>{t('deleteRule')}</AlertDialogAction></AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-</>
+    <>
+      {write.error && !editing && (
+        <p className="error" role="alert">
+          {t(highlightRuleErrorKey(write.error) ?? apiFailureKey(write.error) ?? 'saveFailed')}
+        </p>
+      )}
+      <AlertDialog
+        open={deleteId !== null}
+        onOpenChange={(value) => {
+          if (!value) setDeleteId(null);
+        }}
+      >
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            returnFocusRef.current?.focus();
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('rule.deleteRuleTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {usageNames ? t('rule.deleteRuleBodyUsed', { names: usageNames }) : t('rule.deleteRuleBody')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('cancelRule')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                write.mutate(
+                  rules.filter((item) => item.id !== deleteId),
+                  { onSuccess: onRuleDeleted },
+                );
+              }}
+            >
+              {t('rule.deleteRule')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -194,19 +412,62 @@ function useRuleListData(props: { def: GadgetDefinition; onRuleDeleted: () => vo
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const returnFocusRef = useRef<HTMLButtonElement | null>(null);
   const rules = def.highlight_rules ?? [];
-  const usage = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'usage'], queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal) });
+  const usage = useQuery({
+    queryKey: [...dashboardKeys.definition(def.id), 'usage'],
+    queryFn: ({ signal }) => getGadgetDefinitionUsage(def.id, signal),
+  });
   const usageNames = (usage.data ?? []).map((item) => item.name).join(', ');
   const topics = useQuery({ queryKey: ['highlight-rule-topics'], queryFn: ({ signal }) => fetchAllTopics({ isActive: true, signal }) });
   const sources = useQuery({ queryKey: ['highlight-rule-sources'], queryFn: ({ signal }) => listGadgetSources(100, undefined, signal) });
   const sourceName = (id: string) => sources.data?.items.find((item) => item.id === id)?.name ?? id;
-  const preview = useMutation({ mutationFn: (rule: HighlightRule) => previewHighlightRules({ source_ids: def.source_ids, rules: [rule], days: 7, source_item_ids: def.scope.source_item_ids }, session.csrfToken) });
-  const matches = useQuery({ queryKey: [...dashboardKeys.definition(def.id), 'highlights', def.revision], queryFn: () => evaluateGadgetHighlights(def.id) });
+  const preview = useMutation({
+    mutationFn: (rule: HighlightRule) =>
+      previewHighlightRules(
+        { source_ids: def.source_ids, rules: [rule], days: 7, source_item_ids: def.scope.source_item_ids },
+        session.csrfToken,
+      ),
+  });
+  const matches = useQuery({
+    queryKey: [...dashboardKeys.definition(def.id), 'highlights', def.revision],
+    queryFn: () => evaluateGadgetHighlights(def.id),
+  });
   const write = useMutation({
-    mutationFn: (next: HighlightRule[]) => patchGadgetDefinition(def.id, { expected_revision: def.revision, highlight_rules: next }, session.csrfToken),
-    onSuccess: () => { setEditing(null); setDeleteId(null); setTouched(false); void client.invalidateQueries({ queryKey: dashboardKeys.definitions }); },
+    mutationFn: (next: HighlightRule[]) =>
+      patchGadgetDefinition(def.id, { expected_revision: def.revision, highlight_rules: next }, session.csrfToken),
+    onSuccess: () => {
+      setEditing(null);
+      setDeleteId(null);
+      setTouched(false);
+      void client.invalidateQueries({ queryKey: dashboardKeys.definitions });
+    },
   });
 
-  return { fid, t, session, client, returnFocusRef, rules, usage, usageNames, topics, sources, sourceName, preview, matches, write, editing, setEditing, isNew, setIsNew, touched, setTouched, deleteId, setDeleteId, def, onRuleDeleted };
+  return {
+    fid,
+    t,
+    session,
+    client,
+    returnFocusRef,
+    rules,
+    usage,
+    usageNames,
+    topics,
+    sources,
+    sourceName,
+    preview,
+    matches,
+    write,
+    editing,
+    setEditing,
+    isNew,
+    setIsNew,
+    touched,
+    setTouched,
+    deleteId,
+    setDeleteId,
+    def,
+    onRuleDeleted,
+  };
 }
 
 /** Cooldown is a whole number of minutes within 0..MAX_COOLDOWN. */
@@ -241,11 +502,44 @@ function useRuleListEditor(p: ReturnType<typeof useRuleListData>) {
     write.mutate(isNew ? [...rules, rule] : rules.map((item) => (item.id === rule.id ? rule : item)));
   };
   const open = (rule: HighlightRule | null) => {
-    setTouched(false); write.reset(); preview.reset(); setIsNew(rule === null);
+    setTouched(false);
+    write.reset();
+    preview.reset();
+    setIsNew(rule === null);
     const sourceModes: Record<string, SourceMode> = {};
-    rule?.source_ids?.forEach((id) => { sourceModes[id] = 'only'; });
-    rule?.exclude_source_ids?.forEach((id) => { sourceModes[id] = 'exclude'; });
-    setEditing(rule ? { id: rule.id, keywords: rule.keywords.join(', '), severity: rule.severity, notify: rule.notify, topicIds: rule.topic_ids ?? [], sourceModes, cooldown: String(rule.cooldown_minutes ?? 0), expires: toLocalInput(rule.expires_at), quietStart: rule.quiet_start ?? '', quietEnd: rule.quiet_end ?? '' } : { id: uuid7(), keywords: '', severity: 'info', notify: false, topicIds: [], sourceModes, cooldown: '0', expires: '', quietStart: '', quietEnd: '' });
+    rule?.source_ids?.forEach((id) => {
+      sourceModes[id] = 'only';
+    });
+    rule?.exclude_source_ids?.forEach((id) => {
+      sourceModes[id] = 'exclude';
+    });
+    setEditing(
+      rule
+        ? {
+            id: rule.id,
+            keywords: rule.keywords.join(', '),
+            severity: rule.severity,
+            notify: rule.notify,
+            topicIds: rule.topic_ids ?? [],
+            sourceModes,
+            cooldown: String(rule.cooldown_minutes ?? 0),
+            expires: toLocalInput(rule.expires_at),
+            quietStart: rule.quiet_start ?? '',
+            quietEnd: rule.quiet_end ?? '',
+          }
+        : {
+            id: uuid7(),
+            keywords: '',
+            severity: 'info',
+            notify: false,
+            topicIds: [],
+            sourceModes,
+            cooldown: '0',
+            expires: '',
+            quietStart: '',
+            quietEnd: '',
+          },
+    );
   };
 
   return { ...p, keywords, cooldownNumber, deliveryValid, keywordsValid, topicsValid, valid, saveRule, open };
@@ -255,16 +549,33 @@ function useRuleListEditor(p: ReturnType<typeof useRuleListData>) {
 function RulePreviewPanel({ vm }: { vm: RuleListVm }) {
   const { t, preview } = vm;
   return (
-      <div aria-live="polite" className="space-y-1">
-        {preview.isError && <p className="error" role="alert">{t((previewErrorKey(preview.error) ?? highlightRuleErrorKey(preview.error) ?? apiFailureKey(preview.error) ?? 'rulePreviewFailed') as 'rulePreviewFailed')}</p>}
-        {preview.data && <>
-          <p>{t('rulePreviewSummary', { matches: preview.data.rules[0]?.match_count ?? 0, scanned: preview.data.scanned })}</p>
-          {preview.data.truncated && <p className="text-muted-foreground text-xs">{t('rulePreviewTruncated')}</p>}
-          {(preview.data.rules[0]?.unresolved_topic_ids.length ?? 0) > 0 && <p className="text-muted-foreground text-xs">{t('rulePreviewTopicGone')}</p>}
-          <ul className="space-y-1">{preview.data.matches.map((match) => <li key={`${match.rule_id}:${match.document_version_id}`}><span className="font-medium">{match.title}</span> <span className="text-muted-foreground text-xs">{t('previewMatch', { keywords: match.matched_keywords.join(', ') })}</span></li>)}</ul>
-        </>}
-        <p className="text-muted-foreground text-xs">{t('rulePreviewNoSend')}</p>
-      </div>
+    <div aria-live="polite" className="space-y-1">
+      {preview.isError && (
+        <p className="error" role="alert">
+          {t(
+            previewErrorKey(preview.error) ?? highlightRuleErrorKey(preview.error) ?? apiFailureKey(preview.error) ?? 'rulePreview.failed',
+          )}
+        </p>
+      )}
+      {preview.data && (
+        <>
+          <p>{t('rulePreview.summary', { matches: preview.data.rules[0]?.match_count ?? 0, scanned: preview.data.scanned })}</p>
+          {preview.data.truncated && <p className="text-muted-foreground text-xs">{t('rulePreview.truncated')}</p>}
+          {(preview.data.rules[0]?.unresolved_topic_ids.length ?? 0) > 0 && (
+            <p className="text-muted-foreground text-xs">{t('rulePreview.topicGone')}</p>
+          )}
+          <ul className="space-y-1">
+            {preview.data.matches.map((match) => (
+              <li key={`${match.rule_id}:${match.document_version_id}`}>
+                <span className="font-medium">{match.title}</span>{' '}
+                <span className="text-muted-foreground text-xs">{t('preview.match', { keywords: match.matched_keywords.join(', ') })}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="text-muted-foreground text-xs">{t('rulePreview.noSend')}</p>
+    </div>
   );
 }
 
@@ -272,16 +583,66 @@ function RulePreviewPanel({ vm }: { vm: RuleListVm }) {
 function RuleDeliveryFields({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }) {
   const { fid, t, setEditing, touched, deliveryValid } = vm;
   return (
-        <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"><legend className="label mb-1 p-0">{t('ruleDelivery')}</legend><span className="text-muted-foreground text-xs">{t('ruleDeliveryHelp')}</span>
-          <FieldGrid>
-            <label className="field"><span className="label">{t('ruleCooldown')}</span><Input type="number" min={0} max={MAX_COOLDOWN} step={1} inputMode="numeric" value={editing.cooldown} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? `${fid}-cooldown-help ${fid}-delivery-error` : `${fid}-cooldown-help`} onChange={(event) => setEditing({ ...editing, cooldown: event.target.value })} /><span id={`${fid}-cooldown-help`} className="text-muted-foreground text-xs">{t('ruleCooldownHelp')}</span></label>
-            <label className="field"><span className="label">{t('ruleExpires')}</span><Input type="datetime-local" value={editing.expires} onChange={(event) => setEditing({ ...editing, expires: event.target.value })} /><span className="text-muted-foreground text-xs">{t('ruleExpiresHelp')}</span></label>
-            <label className="field"><span className="label">{t('ruleQuietStart')}</span><Input type="time" value={editing.quietStart} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? `${fid}-delivery-error ${fid}-quiet-note` : `${fid}-quiet-note`} onChange={(event) => setEditing({ ...editing, quietStart: event.target.value })} /></label>
-            <label className="field"><span className="label">{t('ruleQuietEnd')}</span><Input type="time" value={editing.quietEnd} aria-invalid={touched && !deliveryValid} aria-describedby={touched && !deliveryValid ? `${fid}-delivery-error ${fid}-quiet-note` : `${fid}-quiet-note`} onChange={(event) => setEditing({ ...editing, quietEnd: event.target.value })} /></label>
-          </FieldGrid>
-          <span id={`${fid}-quiet-note`} className="text-muted-foreground text-xs">{t('ruleQuietNote')}</span>
-          {touched && !deliveryValid && <span id={`${fid}-delivery-error`} className="error" role="alert">{t('ruleDeliveryInvalid')}</span>}
-        </fieldset>
+    <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
+      <legend className="label mb-1 p-0">{t('rule.delivery')}</legend>
+      <span className="text-muted-foreground text-xs">{t('rule.deliveryHelp')}</span>
+      <FieldGrid>
+        <label className="field">
+          <span className="label">{t('rule.cooldown')}</span>
+          <Input
+            type="number"
+            min={0}
+            max={MAX_COOLDOWN}
+            step={1}
+            inputMode="numeric"
+            value={editing.cooldown}
+            aria-invalid={touched && !deliveryValid}
+            aria-describedby={touched && !deliveryValid ? `${fid}-cooldown-help ${fid}-delivery-error` : `${fid}-cooldown-help`}
+            onChange={(event) => setEditing({ ...editing, cooldown: event.target.value })}
+          />
+          <span id={`${fid}-cooldown-help`} className="text-muted-foreground text-xs">
+            {t('rule.cooldownHelp')}
+          </span>
+        </label>
+        <label className="field">
+          <span className="label">{t('rule.expires')}</span>
+          <Input
+            type="datetime-local"
+            value={editing.expires}
+            onChange={(event) => setEditing({ ...editing, expires: event.target.value })}
+          />
+          <span className="text-muted-foreground text-xs">{t('rule.expiresHelp')}</span>
+        </label>
+        <label className="field">
+          <span className="label">{t('rule.quietStart')}</span>
+          <Input
+            type="time"
+            value={editing.quietStart}
+            aria-invalid={touched && !deliveryValid}
+            aria-describedby={touched && !deliveryValid ? `${fid}-delivery-error ${fid}-quiet-note` : `${fid}-quiet-note`}
+            onChange={(event) => setEditing({ ...editing, quietStart: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span className="label">{t('rule.quietEnd')}</span>
+          <Input
+            type="time"
+            value={editing.quietEnd}
+            aria-invalid={touched && !deliveryValid}
+            aria-describedby={touched && !deliveryValid ? `${fid}-delivery-error ${fid}-quiet-note` : `${fid}-quiet-note`}
+            onChange={(event) => setEditing({ ...editing, quietEnd: event.target.value })}
+          />
+        </label>
+      </FieldGrid>
+      <span id={`${fid}-quiet-note`} className="text-muted-foreground text-xs">
+        {t('rule.quietNote')}
+      </span>
+      {touched && !deliveryValid && (
+        <span id={`${fid}-delivery-error`} className="error" role="alert">
+          {t('rule.deliveryInvalid')}
+        </span>
+      )}
+    </fieldset>
   );
 }
 
@@ -289,10 +650,30 @@ function RuleDeliveryFields({ vm, editing }: { vm: RuleListVm; editing: RuleDraf
 function RuleSourceModes({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }) {
   const { t, sourceName, setEditing, def } = vm;
   return (
-    <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"><legend className="label mb-1 p-0">{t('ruleSources')}</legend><span className="text-muted-foreground text-xs">{t('ruleSourcesHelp')}</span>
-          {def.source_ids.map((id) => <div key={id} className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1">{sourceName(id)}</span>
-            <Select value={editing.sourceModes[id] ?? 'any'} onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}><SelectTrigger aria-label={t('ruleSourceModeFor', { name: sourceName(id) })} className="w-40"><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => <SelectItem key={mode} value={mode}>{t(sourceModeKeys[mode])}</SelectItem>)}</SelectContent></Select></div>)}
-        </fieldset>
+    <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
+      <legend className="label mb-1 p-0">{t('rule.sources')}</legend>
+      <span className="text-muted-foreground text-xs">{t('rule.sourcesHelp')}</span>
+      {def.source_ids.map((id) => (
+        <div key={id} className="flex flex-wrap items-center gap-2">
+          <span className="min-w-0 flex-1">{sourceName(id)}</span>
+          <Select
+            value={editing.sourceModes[id] ?? 'any'}
+            onValueChange={(value) => setEditing({ ...editing, sourceModes: { ...editing.sourceModes, [id]: value as SourceMode } })}
+          >
+            <SelectTrigger aria-label={t('rule.sourceModeFor', { name: sourceName(id) })} className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(sourceModeKeys) as SourceMode[]).map((mode) => (
+                <SelectItem key={mode} value={mode}>
+                  {t(sourceModeKeys[mode])}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ))}
+    </fieldset>
   );
 }
 
@@ -300,14 +681,61 @@ function RuleSourceModes({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }
 function RuleTopicPicker({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }) {
   const { t, topics, setEditing } = vm;
   return (
-        <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0"><legend className="label mb-1 p-0">{t('ruleTopics')}</legend><span className="text-muted-foreground text-xs">{t('ruleTopicsHelp')}</span>
-          {topics.isPending && <span className="text-muted-foreground" role="status">{t('ruleTopicsLoading')}</span>}
-          {topics.isError && <span className="error" role="alert">{t('ruleTopicsError')} <Button type="button" variant="outline" onClick={() => topics.refetch()}>{t('retry')}</Button></span>}
-          {topics.isSuccess && topics.data.length === 0 && editing.topicIds.length === 0 && <span className="text-muted-foreground">{t('ruleTopicsNone')}</span>}
-          {topics.isSuccess && topics.data.map((topic) => <label key={topic.id} className="flex items-center gap-2"><Checkbox checked={editing.topicIds.includes(topic.id)} onCheckedChange={(checked) => setEditing({ ...editing, topicIds: checked === true ? [...editing.topicIds, topic.id] : editing.topicIds.filter((id) => id !== topic.id) })} /> {topic.name}</label>)}
-          {topics.isSuccess && editing.topicIds.filter((id) => !topics.data.some((topic) => topic.id === id)).map((id) => <div key={id} className="flex items-center gap-2"><span className="text-muted-foreground min-w-0 flex-1">{t('ruleTopicUnavailable')}</span><Button type="button" variant="outline" onClick={() => setEditing({ ...editing, topicIds: editing.topicIds.filter((value) => value !== id) })}>{t('ruleTopicRemove')}</Button></div>)}
-          {editing.topicIds.length > MAX_TOPICS && <span className="error" role="alert">{t('ruleTopicsLimit')}</span>}
-        </fieldset>
+    <fieldset className="m-0 flex min-w-0 flex-col gap-2 border-0 p-0">
+      <legend className="label mb-1 p-0">{t('rule.topics')}</legend>
+      <span className="text-muted-foreground text-xs">{t('rule.topicsHelp')}</span>
+      {topics.isPending && (
+        <span className="text-muted-foreground" role="status">
+          {t('rule.topicsLoading')}
+        </span>
+      )}
+      {topics.isError && (
+        <span className="error" role="alert">
+          {t('rule.topicsError')}{' '}
+          <Button type="button" variant="outline" onClick={() => topics.refetch()}>
+            {t('retry')}
+          </Button>
+        </span>
+      )}
+      {topics.isSuccess && topics.data.length === 0 && editing.topicIds.length === 0 && (
+        <span className="text-muted-foreground">{t('rule.topicsNone')}</span>
+      )}
+      {topics.isSuccess &&
+        topics.data.map((topic) => (
+          <label key={topic.id} className="flex items-center gap-2">
+            <Checkbox
+              checked={editing.topicIds.includes(topic.id)}
+              onCheckedChange={(checked) =>
+                setEditing({
+                  ...editing,
+                  topicIds: checked === true ? [...editing.topicIds, topic.id] : editing.topicIds.filter((id) => id !== topic.id),
+                })
+              }
+            />{' '}
+            {topic.name}
+          </label>
+        ))}
+      {topics.isSuccess &&
+        editing.topicIds
+          .filter((id) => !topics.data.some((topic) => topic.id === id))
+          .map((id) => (
+            <div key={id} className="flex items-center gap-2">
+              <span className="text-muted-foreground min-w-0 flex-1">{t('rule.topicUnavailable')}</span>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditing({ ...editing, topicIds: editing.topicIds.filter((value) => value !== id) })}
+              >
+                {t('rule.topicRemove')}
+              </Button>
+            </div>
+          ))}
+      {editing.topicIds.length > MAX_TOPICS && (
+        <span className="error" role="alert">
+          {t('rule.topicsLimit')}
+        </span>
+      )}
+    </fieldset>
   );
 }
 
@@ -315,11 +743,31 @@ function RuleTopicPicker({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }
 function RuleSeverityFields({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }) {
   const { fid, t, setEditing } = vm;
   return (
-<>
-        <label className="field max-w-xs"><span className="label">{t('severity')}</span>
-          <Select value={editing.severity} onValueChange={(value) => setEditing({ ...editing, severity: value as Severity })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{(Object.keys(severityKeys) as Severity[]).map((item) => <SelectItem key={item} value={item}>{t(severityKeys[item])}</SelectItem>)}</SelectContent></Select></label>
-        <CheckboxField><Checkbox id={`${fid}-notify`} checked={editing.notify} onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })} /><label htmlFor={`${fid}-notify`}>{t('notify')}</label></CheckboxField>
-</>
+    <>
+      <label className="field max-w-xs">
+        <span className="label">{t('severity.label')}</span>
+        <Select value={editing.severity} onValueChange={(value) => setEditing({ ...editing, severity: value as Severity })}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(severityKeys) as Severity[]).map((item) => (
+              <SelectItem key={item} value={item}>
+                {t(severityKeys[item])}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
+      <CheckboxField>
+        <Checkbox
+          id={`${fid}-notify`}
+          checked={editing.notify}
+          onCheckedChange={(checked) => setEditing({ ...editing, notify: checked === true })}
+        />
+        <label htmlFor={`${fid}-notify`}>{t('notify.label')}</label>
+      </CheckboxField>
+    </>
   );
 }
 
@@ -327,6 +775,25 @@ function RuleSeverityFields({ vm, editing }: { vm: RuleListVm; editing: RuleDraf
 function RuleKeywordsField({ vm, editing }: { vm: RuleListVm; editing: RuleDraft }) {
   const { fid, t, setEditing, touched, keywordsValid } = vm;
   return (
-        <div className="field"><label htmlFor={`${fid}-keywords`} className="label">{t('ruleKeywords')}</label><Input id={`${fid}-keywords`} value={editing.keywords} aria-invalid={touched && !keywordsValid} aria-describedby={touched && !keywordsValid ? `${fid}-keywords-help ${fid}-keywords-error` : `${fid}-keywords-help`} onChange={(event) => setEditing({ ...editing, keywords: event.target.value })} /><span id={`${fid}-keywords-help`} className="text-muted-foreground text-xs">{t('ruleKeywordsHelp')}</span>{touched && !keywordsValid && <span id={`${fid}-keywords-error`} className="error" role="alert">{t('ruleNeedsCondition')}</span>}</div>
+    <div className="field">
+      <label htmlFor={`${fid}-keywords`} className="label">
+        {t('rule.keywords')}
+      </label>
+      <Input
+        id={`${fid}-keywords`}
+        value={editing.keywords}
+        aria-invalid={touched && !keywordsValid}
+        aria-describedby={touched && !keywordsValid ? `${fid}-keywords-help ${fid}-keywords-error` : `${fid}-keywords-help`}
+        onChange={(event) => setEditing({ ...editing, keywords: event.target.value })}
+      />
+      <span id={`${fid}-keywords-help`} className="text-muted-foreground text-xs">
+        {t('rule.keywordsHelp')}
+      </span>
+      {touched && !keywordsValid && (
+        <span id={`${fid}-keywords-error`} className="error" role="alert">
+          {t('rule.needsCondition')}
+        </span>
+      )}
+    </div>
   );
 }

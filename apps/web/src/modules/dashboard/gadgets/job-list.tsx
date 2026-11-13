@@ -67,36 +67,36 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
 
   useReportGadgetFreshness(
     items.reduce<string | null>((max, r) => (r.observed_at && (!max || r.observed_at > max) ? r.observed_at : max), null),
-    postings.length > 0 ? t('gadgetItemCount', { count: postings.length }) : null,
+    postings.length > 0 ? t('gadget.itemCount', { count: postings.length }) : null,
   );
 
   const dash = '–';
   return (
     <section className="flex h-full flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadgetDataEmpty')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />
-        : query.isPending ? <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />
-          : query.isError ? <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />
-            : postings.length === 0 ? <GadgetNotice kind="empty" className="p-0" message={t('gadgetDataEmpty')} />
+      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadget.dataEmpty')} action={{ href: '/settings/sources', label: t('gadget.configureAction') }} />
+        : query.isPending ? <GadgetSkeleton variant="table" className="p-0" label={t('gadget.dataLoading')} />
+          : query.isError ? <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />
+            : postings.length === 0 ? <GadgetNotice kind="empty" className="p-0" message={t('gadget.dataEmpty')} />
               : (
                 <>
                   <Input
                     type="search"
-                    aria-label={t('jobsFilterLabel')}
-                    placeholder={t('jobsFilterPlaceholder')}
+                    aria-label={t('jobs.filterLabel')}
+                    placeholder={t('jobs.filterPlaceholder')}
                     value={filter}
                     onChange={(event) => setFilter(event.target.value)}
                   />
-                  {visible.length === 0 ? <p role="status" className="text-sm text-muted-foreground">{t('jobsNoMatches')}</p> : (
+                  {visible.length === 0 ? <p role="status" className="text-sm text-muted-foreground">{t('jobs.noMatches')}</p> : (
                     <div className="min-h-0 flex-1 overflow-auto">
-                      <Table aria-label={t('jobsTableLabel')} containerClassName="max-h-none">
+                      <Table aria-label={t('jobs.tableLabel')} containerClassName="max-h-none">
                         <TableHeader className="sticky top-0 bg-card">
                           <TableRow>
-                            <TableHead>{t('jobsColPosition')}</TableHead>
-                            <TableHead>{t('jobsColCompany')}</TableHead>
-                            <TableHead>{t('jobsColLocation')}</TableHead>
-                            <TableHead>{t('jobsColSalary')}</TableHead>
-                            <TableHead>{t('jobsColPosted')}</TableHead>
-                            <TableHead>{t('jobsColSource')}</TableHead>
+                            <TableHead>{t('jobs.colPosition')}</TableHead>
+                            <TableHead>{t('jobs.colCompany')}</TableHead>
+                            <TableHead>{t('jobs.colLocation')}</TableHead>
+                            <TableHead>{t('jobs.colSalary')}</TableHead>
+                            <TableHead>{t('jobs.colPosted')}</TableHead>
+                            <TableHead>{t('jobs.colSource')}</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>

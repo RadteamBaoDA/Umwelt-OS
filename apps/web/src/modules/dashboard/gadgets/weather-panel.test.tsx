@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import { WeatherPanel, nearestReading } from './weather-panel';
 
 const api = vi.hoisted(() => ({ listWorldObservationWindow: vi.fn() }));
@@ -48,12 +48,12 @@ describe('WeatherPanel', () => {
     const instance = { id: 'w1', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never;
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <WeatherPanel instance={instance} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
     );
-    await screen.findByText(dashboardMessages['en-us'].observationEmpty);
+    await screen.findByText(getCatalog('en-us', 'dashboard').observation.empty);
     const { from, to } = api.listWorldObservationWindow.mock.calls[0][0] as { from: Date; to: Date };
     expect(Math.round((to.getTime() - from.getTime()) / hour)).toBe(96);
   });
@@ -72,7 +72,7 @@ describe('WeatherPanel', () => {
     const instance = { id: 'w2', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never;
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <WeatherPanel instance={instance} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -81,7 +81,7 @@ describe('WeatherPanel', () => {
     expect(hero.textContent).toContain('27.4');
     expect(hero.textContent).toContain('°C');
     expect(screen.getByText(/3\.5 m\/s/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: dashboardMessages['en-us'].openMeteoAttribution })).toBeTruthy();
+    expect(screen.getByRole('link', { name: getCatalog('en-us', 'dashboard').openMeteoAttribution })).toBeTruthy();
   });
 
   it('shows the compact low/high strip for today', async () => {
@@ -93,7 +93,7 @@ describe('WeatherPanel', () => {
     const instance = { id: 'w3', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never;
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <WeatherPanel instance={instance} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -125,7 +125,7 @@ describe('WeatherPanel with several sources', () => {
     const instance = { id: 'w2', title: '', definition: { source_ids: ['s1', 's2'], scope: { metrics: [] } } } as never;
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
           <WeatherPanel instance={instance} />
         </NextIntlClientProvider>
       </QueryClientProvider>,

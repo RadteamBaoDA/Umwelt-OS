@@ -40,16 +40,16 @@ export type ProviderStatus = { fetchedAt?: string; error?: LiveErrorKey; truncat
 
 /** Translation keys a provider failure can map to; response bodies are never rendered. */
 export type LiveErrorKey =
-  | 'liveMapTermsRequired'
-  | 'liveMapConfigChanged'
-  | 'liveMapFirmsSetup'
-  | 'liveMapGithubSetup'
-  | 'liveMapSecSetup'
-  | 'liveMapSecContact'
-  | 'liveMapRateLimited'
-  | 'liveMapOwnerOnly'
-  | 'liveMapStorageError'
-  | 'liveMapSourceError';
+  | 'liveMap.termsRequired'
+  | 'liveMap.configChanged'
+  | 'liveMap.firmsSetup'
+  | 'liveMap.githubSetup'
+  | 'liveMap.secSetup'
+  | 'liveMap.secContact'
+  | 'liveMap.rateLimited'
+  | 'liveMap.ownerOnly'
+  | 'liveMap.storageError'
+  | 'liveMap.sourceError';
 
 type LiveResponse = components['schemas']['LiveMapEventsResponse'];
 
@@ -139,18 +139,18 @@ async function fetchLiveEvents(provider: string, scope: GadgetScope, signal: Abo
  */
 export function liveErrorKey(error: unknown, provider: string): LiveErrorKey {
   if (typeof error === 'string') {
-    if (error === 'storage') return 'liveMapStorageError';
-    if (error === 'http_429') return 'liveMapRateLimited';
-    return error === 'scope' && provider === 'github_releases' ? 'liveMapGithubSetup' : 'liveMapSourceError';
+    if (error === 'storage') return 'liveMap.storageError';
+    if (error === 'http_429') return 'liveMap.rateLimited';
+    return error === 'scope' && provider === 'github_releases' ? 'liveMap.githubSetup' : 'liveMap.sourceError';
   }
-  if (!(error instanceof ApiError)) return 'liveMapSourceError';
-  if (error.message === 'provider_terms_ineligible') return 'liveMapTermsRequired';
-  if (error.message === 'live_map_configuration_changed') return 'liveMapConfigChanged';
-  if (error.message === 'contact_required') return 'liveMapSecContact';
+  if (!(error instanceof ApiError)) return 'liveMap.sourceError';
+  if (error.message === 'provider_terms_ineligible') return 'liveMap.termsRequired';
+  if (error.message === 'live_map_configuration_changed') return 'liveMap.configChanged';
+  if (error.message === 'contact_required') return 'liveMap.secContact';
   if (error.message === 'provider_scope_invalid')
-    return provider === 'firms' ? 'liveMapFirmsSetup' : provider === 'sec' ? 'liveMapSecSetup' : 'liveMapSourceError';
-  if (error.status === 429) return 'liveMapRateLimited';
-  return 'liveMapSourceError';
+    return provider === 'firms' ? 'liveMap.firmsSetup' : provider === 'sec' ? 'liveMap.secSetup' : 'liveMap.sourceError';
+  if (error.status === 429) return 'liveMap.rateLimited';
+  return 'liveMap.sourceError';
 }
 
 /**
@@ -230,7 +230,7 @@ export function proxiedStatus(
   provider: string,
   isOwner: boolean,
 ): ProviderStatus | undefined {
-  if (!isOwner) return { error: 'liveMapOwnerOnly' };
+  if (!isOwner) return { error: 'liveMap.ownerOnly' };
   if (result.isError) return { error: liveErrorKey(result.error, provider), staleSince: result.data?.fetched_at };
   if (result.data) return { fetchedAt: result.data.fetched_at, truncated: result.data.truncated };
   return undefined;

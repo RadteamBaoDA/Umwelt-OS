@@ -53,7 +53,9 @@ function CatalogPane({ model, headingId }: { model: PresetPickerModel; headingId
     <section aria-labelledby={headingId} className="flex min-h-0 flex-col border-border md:border-r">
       <h3 id={headingId} className="flex items-center justify-between px-4 pt-4 pb-2 text-sm font-semibold text-foreground">
         <span>{t('selectPreset')}</span>
-        {catalog.presetsQuery.isLoading && <span className="text-xs font-normal text-muted-foreground motion-safe:animate-pulse">{ts('ppLoading')}</span>}
+        {catalog.presetsQuery.isLoading && (
+          <span className="text-xs font-normal text-muted-foreground motion-safe:animate-pulse">{ts('pp.loading')}</span>
+        )}
       </h3>
       <div className="space-y-1 px-2 pb-4 md:min-h-0 md:flex-1 md:overflow-y-auto">
         {presets.map((preset) => {
@@ -71,7 +73,8 @@ function CatalogPane({ model, headingId }: { model: PresetPickerModel; headingId
               <span className="min-w-0">
                 <span className="block text-sm font-semibold text-foreground">{preset.label}</span>
                 <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">
-                  {t('presetSlotsCount', { count: preset.slots.length })}: {preset.slots.map((s) => s.label ?? templateName(s.renderer, tg)).join(', ')}
+                  {t('preset.slotsCount', { count: preset.slots.length })}:{' '}
+                  {preset.slots.map((s) => s.label ?? templateName(s.renderer, tg)).join(', ')}
                 </span>
               </span>
               <ChevronRight className={`mt-0.5 size-4 shrink-0 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} aria-hidden />
@@ -83,6 +86,16 @@ function CatalogPane({ model, headingId }: { model: PresetPickerModel; headingId
   );
 }
 
+/** Literal `dashboard` catalog keys per preset warning code; unknown codes render the raw code. */
+const PRESET_WARNING_KEY = {
+  missing_source: 'preset.warning.missingSource',
+  source_unbound: 'preset.warning.sourceUnbound',
+  scope_required: 'preset.warning.scopeRequired',
+  source_incompatible: 'preset.warning.sourceIncompatible',
+  source_unavailable: 'preset.warning.sourceUnavailable',
+  renderer_planned: 'preset.warning.rendererPlanned',
+} as const;
+
 /** Aggregated missing access / capability warnings across all slots (first five). */
 function WarningsBox({ warnings }: { warnings: DashboardWarning[] }) {
   const t = useTranslations('dashboard');
@@ -92,14 +105,18 @@ function WarningsBox({ warnings }: { warnings: DashboardWarning[] }) {
     <div className="space-y-1.5 rounded-md bg-background p-3 text-xs text-foreground">
       <div className="flex items-center gap-1.5 font-semibold">
         <AlertCircle className="size-4 shrink-0" aria-hidden />
-        <span>{t('missingAccessWarnings')} ({warnings.length})</span>
+        <span>
+          {t('missingAccessWarnings')} ({warnings.length})
+        </span>
       </div>
       <ul className="list-inside list-disc space-y-0.5 pl-1">
         {warnings.slice(0, 5).map((warning, idx) => (
           <li key={idx}>
             {warning.capability
-              ? ts('ppCapability', { capability: warning.capability })
-              : t.has(`presetWarning.${warning.code}`) ? t(`presetWarning.${warning.code}` as 'cancel') : warning.code}
+              ? ts('pp.capability', { capability: warning.capability })
+              : warning.code in PRESET_WARNING_KEY
+                ? t(PRESET_WARNING_KEY[warning.code as keyof typeof PRESET_WARNING_KEY])
+                : warning.code}
           </li>
         ))}
       </ul>
@@ -119,9 +136,11 @@ function LayoutPane({ model, headingId }: { model: PresetPickerModel; headingId:
     <section aria-labelledby={headingId} className="flex min-h-0 flex-col gap-3 bg-muted/40 p-4 md:overflow-y-auto">
       <div className="flex items-baseline justify-between gap-3">
         <h3 id={headingId} className="text-sm font-semibold text-foreground">
-          {selectedPreset ? selectedPreset.label : t('layoutPreview')}
+          {selectedPreset ? selectedPreset.label : t('layoutPreview.label')}
           {selectedPreset && (
-            <span className="ml-2 text-xs font-normal text-muted-foreground">{t('presetGadgetsCount', { count: selectedPreset.slots.length })}</span>
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              {t('preset.gadgetsCount', { count: selectedPreset.slots.length })}
+            </span>
           )}
         </h3>
         {preview && (
@@ -143,13 +162,17 @@ function LayoutPane({ model, headingId }: { model: PresetPickerModel; headingId:
       {!selectedPreset ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center text-sm text-muted-foreground">
           <Sparkles className="size-6 opacity-60" aria-hidden />
-          <p>{t('layoutPreviewEmpty')}</p>
+          <p>{t('layoutPreview.empty')}</p>
         </div>
       ) : preview?.layouts ? (
         <PresetLayoutPreview
           append={draft.applyMode === 'append'}
           layout={preview.layouts.desktop}
-          slots={preview.slots.map((slot) => ({ id: slot.slot_id, name: slotName(slot.slot_id, slot.renderer), ready: slot.warnings.length === 0 }))}
+          slots={preview.slots.map((slot) => ({
+            id: slot.slot_id,
+            name: slotName(slot.slot_id, slot.renderer),
+            ready: slot.warnings.length === 0,
+          }))}
         />
       ) : null}
       <WarningsBox warnings={allWarnings} />
@@ -165,13 +188,13 @@ function ApplyModeFieldset({ model, target }: { model: PresetPickerModel; target
   const { draft, actions, selectedPreset } = model;
   const { applyMode } = draft;
   const modes: { mode: ApplyMode; label: string; needsTarget: boolean }[] = [
-    { mode: 'create', label: t('applyModeCreate'), needsTarget: false },
-    { mode: 'append', label: t('applyModeAppend'), needsTarget: true },
-    { mode: 'replace', label: t('applyModeReplace'), needsTarget: true },
+    { mode: 'create', label: t('applyMode.create'), needsTarget: false },
+    { mode: 'append', label: t('applyMode.append'), needsTarget: true },
+    { mode: 'replace', label: t('applyMode.replace'), needsTarget: true },
   ];
   return (
     <fieldset className="space-y-2">
-      <legend className="mb-2 text-sm font-semibold text-foreground">{t('applyMode')}</legend>
+      <legend className="mb-2 text-sm font-semibold text-foreground">{t('applyMode.label')}</legend>
       <div className="grid grid-cols-1 gap-1 rounded-md bg-muted p-1">
         {modes.map(({ mode, label, needsTarget }) => (
           <BareButton
@@ -182,7 +205,9 @@ function ApplyModeFieldset({ model, target }: { model: PresetPickerModel; target
             onClick={() => actions.handleApplyMode(mode)}
             className={`rounded px-3 py-2 text-left text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 ${
               applyMode === mode
-                ? mode === 'replace' ? 'bg-background text-destructive' : 'bg-background text-foreground'
+                ? mode === 'replace'
+                  ? 'bg-background text-destructive'
+                  : 'bg-background text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
@@ -192,8 +217,16 @@ function ApplyModeFieldset({ model, target }: { model: PresetPickerModel; target
       </div>
       {applyMode === 'create' && (
         <div className="space-y-1 pt-1">
-          <Label htmlFor={newNameId} className="text-xs">{t('dashboardName')}</Label>
-          <Input id={newNameId} value={draft.newDashboardName} onChange={(e) => draft.setNewDashboardName(e.target.value)} placeholder={selectedPreset?.label} className="h-8 text-xs" />
+          <Label htmlFor={newNameId} className="text-xs">
+            {t('dashboardName')}
+          </Label>
+          <Input
+            id={newNameId}
+            value={draft.newDashboardName}
+            onChange={(e) => draft.setNewDashboardName(e.target.value)}
+            placeholder={selectedPreset?.label}
+            className="h-8 text-xs"
+          />
         </div>
       )}
       {applyMode === 'append' && <p className="text-xs text-muted-foreground">{t('appendHint')}</p>}
@@ -201,8 +234,14 @@ function ApplyModeFieldset({ model, target }: { model: PresetPickerModel; target
         <div className="space-y-2 rounded-md bg-destructive/10 p-2.5 text-xs">
           <p className="font-medium leading-relaxed text-destructive">{t('confirmReplaceWarning')}</p>
           <div className="flex items-center gap-2">
-            <Checkbox id={confirmId} checked={draft.replaceConfirmed} onCheckedChange={(checked) => draft.setReplaceConfirmed(Boolean(checked))} />
-            <label htmlFor={confirmId} className="cursor-pointer text-xs font-medium leading-none text-foreground">{t('confirmReplaceCheckbox')}</label>
+            <Checkbox
+              id={confirmId}
+              checked={draft.replaceConfirmed}
+              onCheckedChange={(checked) => draft.setReplaceConfirmed(Boolean(checked))}
+            />
+            <label htmlFor={confirmId} className="cursor-pointer text-xs font-medium leading-none text-foreground">
+              {t('confirmReplaceCheckbox')}
+            </label>
           </div>
         </div>
       )}
@@ -226,12 +265,19 @@ function SlotRow({ model, slot }: { model: PresetPickerModel; slot: PresetPrevie
       <div className="flex items-center justify-between gap-2">
         <span className="min-w-0 truncate font-medium">{slotName(slot.slot_id, slot.renderer)}</span>
         {slot.warnings.length === 0 ? (
-          <span className="shrink-0 text-muted-foreground">{t('slotReady')}</span>
+          <span className="shrink-0 text-muted-foreground">{t('slot.ready')}</span>
         ) : (
           <span className="flex shrink-0 items-center gap-2">
-            <span className="font-semibold text-destructive">{t('slotNeedsSetup')}</span>
+            <span className="font-semibold text-destructive">{t('slot.needsSetup')}</span>
             {/* Renderers that bind no sources have nothing to configure in Sources. */}
-            {descriptor?.source_mode !== 'none' && needsSourcesPage && <Link href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'} className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4">{t('slotConfigure')}</Link>}
+            {descriptor?.source_mode !== 'none' && needsSourcesPage && (
+              <Link
+                href={descriptor ? sourcesLinkFor(descriptor) : '/settings/sources'}
+                className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4"
+              >
+                {t('slot.configure')}
+              </Link>
+            )}
           </span>
         )}
       </div>
@@ -262,9 +308,11 @@ function TargetPane({ model, hasTarget }: { model: PresetPickerModel; hasTarget:
           {/* Per-gadget readiness: warnings come from the preview; nothing is connected on the owner's behalf */}
           <div className="space-y-1.5">
             <ul className="divide-y divide-border rounded-md border border-border">
-              {preview.slots.map((slot) => <SlotRow key={slot.slot_id} model={model} slot={slot} />)}
+              {preview.slots.map((slot) => (
+                <SlotRow key={slot.slot_id} model={model} slot={slot} />
+              ))}
             </ul>
-            <p className="text-xs text-muted-foreground">{t('presetsNoConnect')}</p>
+            <p className="text-xs text-muted-foreground">{t('presets.noConnect')}</p>
           </div>
         </>
       )}
@@ -277,8 +325,12 @@ function PickerFooter({ model }: { model: PresetPickerModel }) {
   const t = useTranslations('dashboard');
   const { draft, mutations, actions, selectedPreset } = model;
   const { previewMutation, applyMutation } = mutations;
-  const applyDisabled = !selectedPreset || !previewMutation.data || previewMutation.isPending
-    || applyMutation.isPending || (draft.applyMode === 'replace' && !draft.replaceConfirmed);
+  const applyDisabled =
+    !selectedPreset ||
+    !previewMutation.data ||
+    previewMutation.isPending ||
+    applyMutation.isPending ||
+    (draft.applyMode === 'replace' && !draft.replaceConfirmed);
   return (
     <DialogFooter className="flex items-center justify-between gap-2 border-t border-border px-6 py-3 sm:justify-between">
       <Button type="button" variant="outline" onClick={mutations.handleClose}>
@@ -322,7 +374,14 @@ export function PresetPicker({
   const t = useTranslations('dashboard');
   const catalogHeadingId = useId();
   const layoutHeadingId = useId();
-  const model = usePresetPicker(open, onOpenChange, { currentDashboardId, currentDashboardRevision }, onPresetApplied, initialPresetId, initialApplyMode);
+  const model = usePresetPicker(
+    open,
+    onOpenChange,
+    { currentDashboardId, currentDashboardRevision },
+    onPresetApplied,
+    initialPresetId,
+    initialApplyMode,
+  );
   const { applyError, setApplyError } = model.draft;
 
   return (
@@ -331,9 +390,9 @@ export function PresetPicker({
         <DialogHeader className="border-b border-border px-6 py-4">
           <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
             <LayoutTemplate className="size-4 text-muted-foreground" aria-hidden />
-            {t('presetPickerTitle')}
+            {t('presetPicker.title')}
           </DialogTitle>
-          <DialogDescription className="text-sm text-muted-foreground">{t('presetPickerDesc')}</DialogDescription>
+          <DialogDescription className="text-sm text-muted-foreground">{t('presetPicker.desc')}</DialogDescription>
         </DialogHeader>
 
         {/* Three panes on desktop (catalog, layout, target and sources); one scrolling column on phones. */}
@@ -344,12 +403,20 @@ export function PresetPicker({
         </div>
 
         {applyError && (
-          <div role="alert" className="flex items-center justify-between border-t border-destructive/20 bg-destructive/10 px-6 py-2.5 text-xs text-destructive">
+          <div
+            role="alert"
+            className="flex items-center justify-between border-t border-destructive/20 bg-destructive/10 px-6 py-2.5 text-xs text-destructive"
+          >
             <div className="flex items-center gap-2">
               <AlertCircle className="size-4 shrink-0" aria-hidden />
               <span>{applyError}</span>
             </div>
-            <BareButton type="button" aria-label={t('cancel')} onClick={() => setApplyError(null)} className="rounded p-1 hover:bg-destructive/10">
+            <BareButton
+              type="button"
+              aria-label={t('cancel')}
+              onClick={() => setApplyError(null)}
+              className="rounded p-1 hover:bg-destructive/10"
+            >
               <X className="size-3.5" aria-hidden />
             </BareButton>
           </div>
@@ -373,7 +440,11 @@ type LayoutSlot = { id: string; name: string; ready: boolean };
  * @param slots Display name and readiness per slot id.
  * @param append Whether the preset is added below existing gadgets.
  */
-function PresetLayoutPreview({ layout, slots, append }: {
+function PresetLayoutPreview({
+  layout,
+  slots,
+  append,
+}: {
   layout: PresetPreview['layouts']['desktop'];
   slots: LayoutSlot[];
   append: boolean;

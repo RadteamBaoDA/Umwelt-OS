@@ -12,6 +12,4 @@ export {
   patchGadgetDefinition,
   previewHighlightRules,
 } from './api';
-export { dailyMessages, notificationMessages } from './daily-messages';
 export { formatRelativeTime } from './gadgets/relative-time';
-export { githubMessages } from './github-messages';

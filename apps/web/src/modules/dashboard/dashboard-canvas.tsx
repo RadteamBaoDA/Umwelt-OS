@@ -39,7 +39,7 @@ export function LayoutEditorBar({
   const t = useTranslations('dashboard');
   const { session, save, membership } = ops;
   const { editOrigin, requestedBreakpoint, isDirty, historyIndex, history, currentBreakpoint, readablePlacements } = session;
-  const layoutLabel = (breakpoint: 'desktop' | 'mobile') => t(breakpoint === 'mobile' ? 'mobileLayout' : 'desktopLayout');
+  const layoutLabel = (breakpoint: 'desktop' | 'mobile') => t(breakpoint === 'mobile' ? 'mobile.layout' : 'desktopLayout');
   return (
     <LayoutEditor
       dashboardName={activeDashboard?.name ?? ''}
@@ -72,7 +72,7 @@ export function LayoutEditorBar({
       dirtyModalOpen={session.dirtyModalOpen}
       dirtyDescription={
         editOrigin && requestedBreakpoint !== editOrigin.breakpoint
-          ? t('mobileBreakpointDirtyWarning', { breakpoint: layoutLabel(editOrigin.breakpoint) })
+          ? t('mobile.breakpointDirtyWarning', { breakpoint: layoutLabel(editOrigin.breakpoint) })
           : undefined
       }
       onDirtyModalResolution={save.handleDirtyModalResolution}

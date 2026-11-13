@@ -47,26 +47,36 @@ function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowCont
           size="sm"
           className="h-6 px-2 text-xs"
           onClick={() => ctx.onAskAbout([{ sourceId: item.sourceId!, documentId: item.id, documentVersionId: item.documentVersionId! }])}
-        >{t('askAboutMessage')}</Button>
+        >
+          {t('askAbout.message')}
+        </Button>
       )}
-      {item.versionNumber !== undefined && <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-6 px-2 text-xs"
-        disabled={ctx.interactionPending}
-        onClick={() => ctx.onInteract({ id: item.id, versionNumber: item.versionNumber!, read: !item.read })}
-      >{isRead ? t('markUnread') : t('markRead')}</Button>}
-      {item.versionNumber !== undefined && <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-6"
-        disabled={ctx.interactionPending}
-        onClick={() => ctx.onInteract({ id: item.id, versionNumber: item.versionNumber!, bookmarked: !item.bookmarked })}
-        aria-pressed={!!item.bookmarked}
-        aria-label={item.bookmarked ? t('removeBookmark') : t('bookmark')}
-      ><Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} aria-hidden="true" /></Button>}
+      {item.versionNumber !== undefined && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-xs"
+          disabled={ctx.interactionPending}
+          onClick={() => ctx.onInteract({ id: item.id, versionNumber: item.versionNumber!, read: !item.read })}
+        >
+          {isRead ? t('markUnread') : t('markRead')}
+        </Button>
+      )}
+      {item.versionNumber !== undefined && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-6"
+          disabled={ctx.interactionPending}
+          onClick={() => ctx.onInteract({ id: item.id, versionNumber: item.versionNumber!, bookmarked: !item.bookmarked })}
+          aria-pressed={!!item.bookmarked}
+          aria-label={item.bookmarked ? t('removeBookmark') : t('bookmark')}
+        >
+          <Bookmark className="h-3.5 w-3.5" fill={item.bookmarked ? 'currentColor' : 'none'} aria-hidden="true" />
+        </Button>
+      )}
       {safeHttpUrl(item.url) && (
         <a
           href={safeHttpUrl(item.url)}
@@ -74,11 +84,13 @@ function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowCont
           rel="noopener noreferrer"
           className="inline-flex items-center gap-0.5 font-medium hover:text-foreground"
         >
-          <span>{t('sourceLink')}</span>
+          <span>{t('source.link')}</span>
           <ExternalLink className="w-2.5 h-2.5" />
         </a>
       )}
-      <Link href={`/knowledge/documents/${item.id}`} className="font-medium hover:text-foreground">{t('detailLink')}</Link>
+      <Link href={`/knowledge/documents/${item.id}`} className="font-medium hover:text-foreground">
+        {t('detailLink')}
+      </Link>
     </div>
   );
 }
@@ -91,20 +103,25 @@ function FeedCheckbox({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext
     <Checkbox
       aria-label={t('selectRecord', { title: item.title })}
       checked={Boolean(ctx.selected[item.id])}
-      onCheckedChange={(next) => ctx.setSelected((current) => {
-        if (next !== true) {
-          const remaining = { ...current };
-          delete remaining[item.id];
-          return remaining;
-        }
-        if (Object.keys(current).length >= 32) return current;
-        return { ...current, [item.id]: {
-          sourceId: item.sourceId!,
-          documentId: item.id,
-          documentVersionId: item.documentVersionId!,
-          versionNumber: item.versionNumber!,
-        } };
-      })}
+      onCheckedChange={(next) =>
+        ctx.setSelected((current) => {
+          if (next !== true) {
+            const remaining = { ...current };
+            delete remaining[item.id];
+            return remaining;
+          }
+          if (Object.keys(current).length >= 32) return current;
+          return {
+            ...current,
+            [item.id]: {
+              sourceId: item.sourceId!,
+              documentId: item.id,
+              documentVersionId: item.documentVersionId!,
+              versionNumber: item.versionNumber!,
+            },
+          };
+        })
+      }
     />
   );
 }
@@ -112,41 +129,61 @@ function FeedCheckbox({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext
 /** Single muted meta line: source/channel, then (for Telegram) message id. Time is rendered separately. */
 function useMetaParts(isTelegram: boolean) {
   const t = useTranslations('dashboard');
-  return (item: FeedStreamItem) => [
-    isTelegram ? item.channelLabel : item.author,
-    isTelegram && item.messageId ? t('telegramMessageId', { id: item.messageId }) : null,
-  ].filter(Boolean).join(' · ');
+  return (item: FeedStreamItem) =>
+    [isTelegram ? item.channelLabel : item.author, isTelegram && item.messageId ? t('telegram.messageId', { id: item.messageId }) : null]
+      .filter(Boolean)
+      .join(' · ');
 }
 
 /** Full timestamps for a tooltip; Telegram folds published/collected/edited lines into one title. */
 function useTimeTitle(isTelegram: boolean) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
-  return (item: FeedStreamItem) => isTelegram
-    ? [
-      item.publishedAt && t('telegramPublishedAt', { time: formatDateTime(item.publishedAt, display.locale, display.timezone) }),
-      item.collectedAt && t('telegramCollectedAt', { time: formatDateTime(item.collectedAt, display.locale, display.timezone) }),
-      item.editedAt && t('telegramEditedAt', { time: formatDateTime(item.editedAt, display.locale, display.timezone) }),
-    ].filter(Boolean).join('\n')
-    : formatDateTime(item.timestamp, display.locale, display.timezone);
+  return (item: FeedStreamItem) =>
+    isTelegram
+      ? [
+          item.publishedAt && t('telegram.publishedAt', { time: formatDateTime(item.publishedAt, display.locale, display.timezone) }),
+          item.collectedAt && t('telegram.collectedAt', { time: formatDateTime(item.collectedAt, display.locale, display.timezone) }),
+          item.editedAt && t('telegram.editedAt', { time: formatDateTime(item.editedAt, display.locale, display.timezone) }),
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : formatDateTime(item.timestamp, display.locale, display.timezone);
 }
 
 /** Unread marker: a 6px ink dot with screen-reader text, replacing the old per-item pill. */
 function UnreadDot({ item }: { item: FeedStreamItem }) {
   const t = useTranslations('dashboard');
   return item.read ? null : (
-    <span className="inline-block size-1.5 shrink-0 self-center rounded-full bg-foreground"><span className="sr-only">{t('unreadBadge', { count: 1 })}</span></span>
+    <span className="inline-block size-1.5 shrink-0 self-center rounded-full bg-foreground">
+      <span className="sr-only">{t('unread.badge', { count: 1 })}</span>
+    </span>
   );
 }
 
-/** Telegram media placeholder list shared by lead and rows. */
+/** Literal catalog keys per Telegram media kind (no runtime key concatenation). */
+const MEDIA_KIND_KEY = {
+  photo: 'telegram.mediaKindPhoto',
+  video: 'telegram.mediaKindVideo',
+  audio: 'telegram.mediaKindAudio',
+  voice: 'telegram.mediaKindVoice',
+  document: 'telegram.mediaKindDocument',
+  animation: 'telegram.mediaKindAnimation',
+  sticker: 'telegram.mediaKindSticker',
+  other: 'telegram.mediaKindOther',
+} as const;
+
+/** Telegram media placeholder list shared by lead and rows; kinds outside the table render as "other". */
 function MediaList({ item, isTelegram }: { item: FeedStreamItem; isTelegram: boolean }) {
   const t = useTranslations('dashboard');
   return isTelegram && item.media && item.media.length > 0 ? (
-    <ul aria-label={t('telegramMedia')} className="space-y-0.5 text-xs text-muted-foreground">
+    <ul aria-label={t('telegram.media')} className="space-y-0.5 text-xs text-muted-foreground">
       {item.media.map((media, index) => (
         <li key={`${media.kind}:${index}`}>
-          {t('telegramMediaPlaceholder', { kind: t(`telegramMediaKind_${media.kind}`), count: media.count })}
+          {t('telegram.mediaPlaceholder', {
+            kind: t(MEDIA_KIND_KEY[media.kind as keyof typeof MEDIA_KIND_KEY] ?? MEDIA_KIND_KEY.other),
+            count: media.count,
+          })}
           {media.caption ? ` · ${media.caption}` : ''}
         </li>
       ))}
@@ -167,16 +204,29 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
       <FeedCheckbox item={item} ctx={ctx} />
       <div className="flex min-w-0 flex-1 items-baseline gap-2 @[40rem]/gadget:block">
         <FeedImage src={item.imageUrl} className="mb-2 hidden @[40rem]/gadget:block" />
-        <h3 className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-sm leading-snug @[40rem]/gadget:text-xl ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}>
+        <h3
+          className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-sm leading-snug @[40rem]/gadget:text-xl ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
+        >
           <UnreadDot item={item} />
-          <Link href={`/knowledge/documents/${item.id}`} className="min-w-0 truncate hover:underline @[40rem]/gadget:line-clamp-2 @[40rem]/gadget:whitespace-normal">{item.title}</Link>
+          <Link
+            href={`/knowledge/documents/${item.id}`}
+            className="min-w-0 truncate hover:underline @[40rem]/gadget:line-clamp-2 @[40rem]/gadget:whitespace-normal"
+          >
+            {item.title}
+          </Link>
         </h3>
-        {item.excerpt && <p className="mt-2 hidden line-clamp-3 text-sm leading-relaxed text-muted-foreground @[40rem]/gadget:block">{item.excerpt}</p>}
+        {item.excerpt && (
+          <p className="mt-2 hidden line-clamp-3 text-sm leading-relaxed text-muted-foreground @[40rem]/gadget:block">{item.excerpt}</p>
+        )}
         <p className="shrink-0 text-xs text-muted-foreground @[40rem]/gadget:mt-2">
           {metaParts(item) ? `${metaParts(item)} · ` : ''}
-          <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>{formatRelativeTime(item.timestamp, display.locale)}</time>
+          <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>
+            {formatRelativeTime(item.timestamp, display.locale)}
+          </time>
         </p>
-        <div className="hidden @[40rem]/gadget:block"><MediaList item={item} isTelegram={ctx.isTelegram} /></div>
+        <div className="hidden @[40rem]/gadget:block">
+          <MediaList item={item} isTelegram={ctx.isTelegram} />
+        </div>
       </div>
       <FeedItemActions item={item} ctx={ctx} />
     </article>
@@ -196,11 +246,15 @@ function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
         <Link
           href={`/knowledge/documents/${item.id}`}
           className={`block truncate text-[length:var(--gadget-font)] leading-snug hover:underline ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
-        >{item.title}</Link>
+        >
+          {item.title}
+        </Link>
         {ctx.isTelegram && metaParts(item) && <p className="truncate text-xs text-muted-foreground">{metaParts(item)}</p>}
         <MediaList item={item} isTelegram={ctx.isTelegram} />
       </div>
-      <time className="shrink-0 text-xs tabular-nums text-muted-foreground" dateTime={item.timestamp} title={timeTitle(item)}>{formatRelativeTime(item.timestamp, display.locale)}</time>
+      <time className="shrink-0 text-xs tabular-nums text-muted-foreground" dateTime={item.timestamp} title={timeTitle(item)}>
+        {formatRelativeTime(item.timestamp, display.locale)}
+      </time>
       <FeedItemActions item={item} ctx={ctx} />
     </li>
   );
@@ -215,14 +269,20 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
     <li className="group/item relative flex min-w-0 flex-col gap-2 rounded-lg border border-border p-[var(--gadget-pad)]">
       <FeedCheckbox item={item} ctx={ctx} />
       <FeedImage src={item.imageUrl} />
-      <h3 className={`flex min-w-0 items-baseline gap-1.5 text-[length:var(--gadget-font)] leading-snug ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}>
+      <h3
+        className={`flex min-w-0 items-baseline gap-1.5 text-[length:var(--gadget-font)] leading-snug ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
+      >
         <UnreadDot item={item} />
-        <Link href={`/knowledge/documents/${item.id}`} className="min-w-0 line-clamp-2 hover:underline">{item.title}</Link>
+        <Link href={`/knowledge/documents/${item.id}`} className="min-w-0 line-clamp-2 hover:underline">
+          {item.title}
+        </Link>
       </h3>
       {item.excerpt && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.excerpt}</p>}
       <p className="text-xs text-muted-foreground">
         {metaParts(item) ? `${metaParts(item)} · ` : ''}
-        <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>{formatRelativeTime(item.timestamp, display.locale)}</time>
+        <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>
+          {formatRelativeTime(item.timestamp, display.locale)}
+        </time>
       </p>
       <MediaList item={item} isTelegram={ctx.isTelegram} />
       <FeedItemActions item={item} ctx={ctx} />
@@ -237,7 +297,9 @@ export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRo
   if (ctx.view === 'cards') {
     return (
       <ul data-testid="feed-cards" className="grid min-h-0 grid-cols-1 gap-3 @[28rem]/gadget:grid-cols-2 @[56rem]/gadget:grid-cols-3">
-        {items.map((item) => <FeedCard key={item.id} item={item} ctx={ctx} />)}
+        {items.map((item) => (
+          <FeedCard key={item.id} item={item} ctx={ctx} />
+        ))}
       </ul>
     );
   }
@@ -245,7 +307,9 @@ export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRo
     <div className="grid min-h-0 gap-x-6 gap-y-1 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <FeedLead item={lead} ctx={ctx} />
       <ul className="min-w-0 divide-y divide-border/50">
-        {rest.map((item) => <FeedRow key={item.id} item={item} ctx={ctx} />)}
+        {rest.map((item) => (
+          <FeedRow key={item.id} item={item} ctx={ctx} />
+        ))}
       </ul>
     </div>
   );
@@ -277,7 +341,7 @@ export function FeedFilterPopover(props: FeedFilterProps) {
       <PopoverTrigger asChild>
         <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs">
           <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />
-          {activeFilterCount > 0 ? t('feedFilterActive', { count: activeFilterCount }) : t('feedFilter')}
+          {activeFilterCount > 0 ? t('feed.filterActive', { count: activeFilterCount }) : t('feed.filter')}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-72 space-y-2 p-3">
@@ -285,40 +349,62 @@ export function FeedFilterPopover(props: FeedFilterProps) {
           type="search"
           value={props.searchText}
           onChange={(event) => props.setSearchText(event.target.value)}
-          aria-label={t('feedSearch')}
-          placeholder={t('feedSearch')}
+          aria-label={t('feed.search')}
+          placeholder={t('feed.search')}
           className="h-9 text-xs"
         />
         {sourceIds.length > 1 && (
           <Select value={props.sourceFilter} onValueChange={props.setSourceFilter}>
-            <SelectTrigger aria-label={t('feedSourceLabel')} className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label={t('feed.sourceLabel')} className="h-9 w-full text-xs">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all" className="text-xs">{t('feedSourceAll')}</SelectItem>
+              <SelectItem value="all" className="text-xs">
+                {t('feed.sourceAll')}
+              </SelectItem>
               {sourceIds.map((id) => (
                 <SelectItem key={id} value={id} className="text-xs">
-                  {props.sourceNames?.find((source) => source.id === id)?.name ?? t('feedSourceUnknown')}
+                  {props.sourceNames?.find((source) => source.id === id)?.name ?? t('feed.sourceUnknown')}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         )}
         <Select value={props.language} onValueChange={props.setLanguage}>
-          <SelectTrigger aria-label={t('feedLanguageLabel')} className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label={t('feed.languageLabel')} className="h-9 w-full text-xs">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
-            <SelectItem value="any" className="text-xs">{t('feedLanguageAny')}</SelectItem>
-            {FEED_LANGUAGES.map((code) => <SelectItem key={code} value={code} className="text-xs">{languageLabel(locale, code)}</SelectItem>)}
+            <SelectItem value="any" className="text-xs">
+              {t('feed.languageAny')}
+            </SelectItem>
+            {FEED_LANGUAGES.map((code) => (
+              <SelectItem key={code} value={code} className="text-xs">
+                {languageLabel(locale, code)}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Select value={props.timeWindow} onValueChange={props.setTimeWindow}>
-          <SelectTrigger aria-label={t('feedWindowLabel')} className="h-9 w-full text-xs"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label={t('feed.windowLabel')} className="h-9 w-full text-xs">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
-            <SelectItem value="any" className="text-xs">{t('feedWindowAny')}</SelectItem>
-            <SelectItem value="24h" className="text-xs">{t('feedWindow24h')}</SelectItem>
-            <SelectItem value="7d" className="text-xs">{t('feedWindow7d')}</SelectItem>
-            <SelectItem value="30d" className="text-xs">{t('feedWindow30d')}</SelectItem>
+            <SelectItem value="any" className="text-xs">
+              {t('feed.windowAny')}
+            </SelectItem>
+            <SelectItem value="24h" className="text-xs">
+              {t('feed.window24h')}
+            </SelectItem>
+            <SelectItem value="7d" className="text-xs">
+              {t('feed.window7d')}
+            </SelectItem>
+            <SelectItem value="30d" className="text-xs">
+              {t('feed.window30d')}
+            </SelectItem>
           </SelectContent>
         </Select>
-        {props.filtering && <p className="text-xs text-muted-foreground">{t('feedFiltersNote')}</p>}
+        {props.filtering && <p className="text-xs text-muted-foreground">{t('feed.filtersNote')}</p>}
       </PopoverContent>
     </Popover>
   );
@@ -355,7 +441,7 @@ export function FeedToolbar(props: FeedToolbarProps) {
         aria-pressed={onlyUnread}
         onClick={props.toggleUnread}
       >
-        {t('unreadOnly')} ({props.unreadCount})
+        {t('unread.only')} ({props.unreadCount})
       </Button>
 
       <div className="flex min-w-0 items-center gap-1">
@@ -370,7 +456,9 @@ export function FeedToolbar(props: FeedToolbarProps) {
             className="h-8 px-2 text-xs"
             aria-pressed={selectMode}
             onClick={props.toggleSelectMode}
-          >{selectMode ? t('feedSelectDone') : t('feedSelectMode')}</Button>
+          >
+            {selectMode ? t('feed.selectDone') : t('feed.selectMode')}
+          </Button>
         )}
         <Button
           type="button"
@@ -379,7 +467,7 @@ export function FeedToolbar(props: FeedToolbarProps) {
           className="size-8"
           onClick={props.onRefresh}
           disabled={refreshing}
-          aria-label={t('feedRefresh')}
+          aria-label={t('feed.refresh')}
         >
           <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
         </Button>
@@ -403,30 +491,48 @@ export function FeedBulkBar({ items, interactionPending, onAskAbout, onInteract,
   const t = useTranslations('dashboard');
   if (items.length === 0) return null;
   return (
-    <div role="group" aria-label={t('feedBulkBar')} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background p-2 text-xs">
-      <span className="font-semibold" role="status">{t('feedSelectedCount', { count: items.length })}</span>
+    <div
+      role="group"
+      aria-label={t('feed.bulkBar')}
+      className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-background p-2 text-xs"
+    >
+      <span className="font-semibold" role="status">
+        {t('feed.selectedCount', { count: items.length })}
+      </span>
       <Button
         type="button"
         size="sm"
         variant="outline"
-        onClick={() => onAskAbout(items.map(({ sourceId, documentId, documentVersionId }) => ({ sourceId, documentId, documentVersionId })))}
-      >{t('askAboutSelected', { count: items.length })}</Button>
+        onClick={() =>
+          onAskAbout(items.map(({ sourceId, documentId, documentVersionId }) => ({ sourceId, documentId, documentVersionId })))
+        }
+      >
+        {t('askAbout.selected', { count: items.length })}
+      </Button>
       <Button
         type="button"
         size="sm"
         variant="outline"
         disabled={interactionPending}
         onClick={() => items.forEach((item) => onInteract({ id: item.documentId, versionNumber: item.versionNumber, read: true }))}
-      >{t('feedMarkRead')}</Button>
+      >
+        {t('feed.markRead')}
+      </Button>
       <Button
         type="button"
         size="sm"
         variant="outline"
         disabled={interactionPending}
         onClick={() => items.forEach((item) => onInteract({ id: item.documentId, versionNumber: item.versionNumber, bookmarked: true }))}
-      >{t('feedSave')}</Button>
-      <Button type="button" size="sm" variant="outline" onClick={() => onHide(items)}>{t('feedNotRelevant')}</Button>
-      <Button type="button" size="sm" variant="ghost" onClick={onClear}>{t('feedClear')}</Button>
+      >
+        {t('feed.save')}
+      </Button>
+      <Button type="button" size="sm" variant="outline" onClick={() => onHide(items)}>
+        {t('feed.notRelevant')}
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={onClear}>
+        {t('feed.clear')}
+      </Button>
     </div>
   );
 }
@@ -447,8 +553,12 @@ export function FeedUndoBar({ lastHidden, undoFailed, hideFailed, interactionPen
   return (
     <>
       {/* The live region stays mounted so screen readers announce the text when it changes. */}
-      <div className={lastHidden.length > 0 ? 'flex items-center gap-2 rounded-md border border-border bg-background p-2 text-xs' : 'sr-only'}>
-        <span role="status" aria-live="polite">{lastHidden.length > 0 ? t('feedHiddenCount', { count: lastHidden.length }) : ''}</span>
+      <div
+        className={lastHidden.length > 0 ? 'flex items-center gap-2 rounded-md border border-border bg-background p-2 text-xs' : 'sr-only'}
+      >
+        <span role="status" aria-live="polite">
+          {lastHidden.length > 0 ? t('feed.hiddenCount', { count: lastHidden.length }) : ''}
+        </span>
         {lastHidden.length > 0 && (
           <Button
             ref={undoRef}
@@ -456,12 +566,24 @@ export function FeedUndoBar({ lastHidden, undoFailed, hideFailed, interactionPen
             size="sm"
             variant="ghost"
             aria-disabled={interactionPending || undefined}
-            onClick={() => { if (!interactionPending) onUndo(); }}
-          >{undoFailed ? t('feedUndoRetry') : t('feedUndo')}</Button>
+            onClick={() => {
+              if (!interactionPending) onUndo();
+            }}
+          >
+            {undoFailed ? t('feed.undoRetry') : t('feed.undo')}
+          </Button>
         )}
       </div>
-      {hideFailed && <p role="alert" className="text-xs text-destructive">{t('feedHideError')}</p>}
-      {undoFailed && <p role="alert" className="text-xs text-destructive">{t('feedUndoError')}</p>}
+      {hideFailed && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('feed.hideError')}
+        </p>
+      )}
+      {undoFailed && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('feed.undoError')}
+        </p>
+      )}
     </>
   );
 }

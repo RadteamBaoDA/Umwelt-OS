@@ -75,16 +75,18 @@ export function DashboardSwitcher(props: SwitcherProps) {
 
         <DropdownMenuSeparator />
 
-        {!isAdminViewer && <DropdownMenuItem disabled={layoutOperationPending} onClick={props.onCreate} className="text-xs gap-2 font-medium">
-          <Plus className="w-3.5 h-3.5" />
-          <span>{t('newDashboard')}</span>
-        </DropdownMenuItem>}
+        {!isAdminViewer && (
+          <DropdownMenuItem disabled={layoutOperationPending} onClick={props.onCreate} className="text-xs gap-2 font-medium">
+            <Plus className="w-3.5 h-3.5" />
+            <span>{t('newDashboard')}</span>
+          </DropdownMenuItem>
+        )}
 
         {!isAdminViewer && activeDashboard && (
           <>
             <DropdownMenuItem disabled={layoutOperationPending} onClick={props.onRename} className="text-xs gap-2">
               <Pencil className="w-3.5 h-3.5" />
-              <span>{t('renameDashboard')}</span>
+              <span>{t('renameDashboard.label')}</span>
             </DropdownMenuItem>
 
             <DropdownMenuItem
@@ -93,17 +95,19 @@ export function DashboardSwitcher(props: SwitcherProps) {
               className="text-xs gap-2 text-destructive focus:text-destructive"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>{t('deleteDashboard')}</span>
+              <span>{t('deleteDashboard.label')}</span>
             </DropdownMenuItem>
           </>
         )}
 
         {!isAdminViewer && <DropdownMenuSeparator />}
 
-        {!isAdminViewer && <DropdownMenuItem disabled={layoutOperationPending} onClick={props.onOpenPresets} className="text-xs gap-2">
-          <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
-          <span>{t('presets')}</span>
-        </DropdownMenuItem>}
+        {!isAdminViewer && (
+          <DropdownMenuItem disabled={layoutOperationPending} onClick={props.onOpenPresets} className="text-xs gap-2">
+            <Sparkles className="w-3.5 h-3.5 text-muted-foreground" />
+            <span>{t('presets.label')}</span>
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -122,12 +126,16 @@ export function DensityToggle() {
       type="button"
       variant={compact ? 'default' : 'outline'}
       aria-pressed={compact}
-      aria-label={`${t('densityLabel')}: ${compact ? t('densityCompact') : t('densityComfortable')}`}
-      title={t('densityLabel')}
-      onClick={() => { const next = compact ? 'comfortable' : 'compact'; applyDensity(next); setDensity(next); }}
+      aria-label={`${t('density.label')}: ${compact ? t('density.compact') : t('density.comfortable')}`}
+      title={t('density.label')}
+      onClick={() => {
+        const next = compact ? 'comfortable' : 'compact';
+        applyDensity(next);
+        setDensity(next);
+      }}
     >
       <AlignJustify className="w-4 h-4" aria-hidden="true" />
-      <span>{compact ? t('densityCompact') : t('densityComfortable')}</span>
+      <span>{compact ? t('density.compact') : t('density.comfortable')}</span>
     </Button>
   );
 }
@@ -158,19 +166,23 @@ export function DashboardHeader(props: HeaderProps) {
         {summary && <p className="m-0 text-sm text-muted-foreground">{summary}</p>}
       </div>
       <DensityToggle />
-      {!isAdminViewer && <Button
-        type="button"
-        variant={isEditMode ? 'default' : 'outline'}
-        className="font-semibold"
-        disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
-        onClick={props.onToggleEdit}
-      >
-        {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
-        <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
-      </Button>}
-      {isOwner && <Button type="button" variant="outline" onClick={props.onOpenManagement}>
-        {t('manageTopicsAndHighlights')}
-      </Button>}
+      {!isAdminViewer && (
+        <Button
+          type="button"
+          variant={isEditMode ? 'default' : 'outline'}
+          className="font-semibold"
+          disabled={layoutOperationPending || (!canEditLayout && !isEditMode)}
+          onClick={props.onToggleEdit}
+        >
+          {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
+          <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
+        </Button>
+      )}
+      {isOwner && (
+        <Button type="button" variant="outline" onClick={props.onOpenManagement}>
+          {t('manage.topicsAndHighlights')}
+        </Button>
+      )}
     </div>
   );
 }

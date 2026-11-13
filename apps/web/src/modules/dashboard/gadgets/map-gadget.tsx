@@ -136,13 +136,13 @@ function usePlotObservers() {
 
 /** Localized empty-state message: precise locations off or opt-in required, no source, layer disabled, or plain empty. */
 function mapEmptyMessage(
-  t: ReturnType<typeof useTranslations>,
+  t: ReturnType<typeof useTranslations<'dashboard'>>,
   precise: boolean,
   layer: ReturnType<typeof useMapObservations>['activeLayer'],
 ): string {
-  if (!precise || layer?.reason === 'privacy_opt_in_required') return t('mapPreciseDisabled');
-  if (layer?.reason === 'no_source_selected') return t('mapSourceRequired');
-  return layer?.enabled === false ? t('mapObservationLayerDisabled') : t('mapEmpty');
+  if (!precise || layer?.reason === 'privacy_opt_in_required') return t('map.preciseDisabled');
+  if (layer?.reason === 'no_source_selected') return t('map.sourceRequired');
+  return layer?.enabled === false ? t('map.observationLayerDisabled') : t('map.empty');
 }
 
 /** Detail card of the picked feature: metric, value, region/provider, source identity, quality and revision link. */
@@ -150,20 +150,20 @@ function SelectedFeatureCard({ selected }: { selected: NonNullable<ReturnType<ty
   const t = useTranslations('dashboard');
   return (
     <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">
-      {formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} ·{' '}
+      {formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weather.missingValue')} {selected.unit} ·{' '}
       {selected.region ?? formatProviderName(selected.provider)}
       <span className="block">
-        {t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}
+        {t('map.sourceIdentity')}: {selected.source_id} · {t('map.quality')}: {selected.quality}
       </span>
       {selected.document_version_number ? (
         <Link
           className="underline"
           href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}
         >
-          {t('mapOpenRevision', { version: selected.document_version_number })}
+          {t('map.openRevision', { version: selected.document_version_number })}
         </Link>
       ) : (
-        <span>{t('mapRevisionUnavailable')}</span>
+        <span>{t('map.revisionUnavailable')}</span>
       )}
     </p>
   );
@@ -189,9 +189,9 @@ function MapEvidence({
   return (
     <div className={`flex min-h-0 flex-col ${features.length > 0 ? 'flex-1' : 'shrink-0'}`}>
       {features.length > 0 && (
-        <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>
+        <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('map.evidenceList', { count: features.length })}</h3>
       )}
-      <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
+      <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('map.evidenceListLabel')}>
         {features.map((feature) => (
           <li key={feature.feature_id}>
             <BareButton
@@ -220,12 +220,12 @@ function MapEvidence({
           onClick={() => void observations.fetchNextPage()}
           className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50"
         >
-          {observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}
+          {observations.isFetchingNextPage ? t('observation.loading') : t('map.loadMore')}
         </BareButton>
       )}
       {truncated && (
         <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">
-          {t('observationTruncated')}
+          {t('observation.truncated')}
         </p>
       )}
     </div>
@@ -262,7 +262,7 @@ function MapNotices({
     <GadgetNotice
       kind="empty"
       message={emptyMessage}
-      action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }}
+      action={{ href: '/settings/sources', label: t('gadget.configureAction') }}
       className="shrink-0 px-0 py-1 text-xs"
     />
   );
@@ -273,12 +273,12 @@ function MapNotices({
       {needsSource && (
         <GadgetNotice
           kind="setup"
-          message={t('mapSourceRequired')}
-          action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }}
+          message={t('map.sourceRequired')}
+          action={{ href: '/settings/sources', label: t('gadget.configureAction') }}
           className="shrink-0 px-0 py-1 text-xs"
         />
       )}
-      {loadFailed && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
+      {loadFailed && <GadgetNotice kind="error" message={t('observation.loadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
       {/* On-demand phone state with no points: the notice renders in normal flow (an absolute notice in a collapsed plot is clipped). */}
       {!showPlot && empty}
     </>
@@ -314,7 +314,7 @@ function MapPlot({
   const t = useTranslations('dashboard');
   const rendererLoading = (
     <p role="status" className="p-2 text-xs text-muted-foreground">
-      {t('mapRendererLoading')}
+      {t('map.rendererLoading')}
     </p>
   );
   return (
@@ -322,20 +322,20 @@ function MapPlot({
       ref={setPlotNode}
       role="group"
       className="relative min-h-48 flex-[2] overflow-hidden rounded border border-border"
-      aria-label={t('mapPlotLabel')}
+      aria-label={t('map.plotLabel')}
     >
       {mapOnDemand && !mapEmpty && (
         <div className="flex h-full flex-col items-start justify-center gap-2 p-3">
-          <p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p>
+          <p className="text-xs text-muted-foreground">{t('map.onDemand')}</p>
           <Button type="button" variant="outline" onClick={() => setMapRequested(true)}>
-            {t('mapOpen')}
+            {t('map.open')}
           </Button>
         </div>
       )}
       {/* Loading sits over the plot instead of a separate skeleton block, so a drawn map is never pushed down. */}
       {loading && (
         <p role="status" className="absolute left-2 top-2 z-10 m-0 rounded bg-card/90 px-2 py-1 text-xs text-muted-foreground">
-          {t('observationLoading')}
+          {t('observation.loading')}
         </p>
       )}
       {/* Engines paint into an absolute layer so the canvas never sizes the plot: the plot takes its height from the card's flex layout, and the footer stays inside the card. */}
@@ -348,7 +348,7 @@ function MapPlot({
       )}
       {isPhone && mapRequested && (
         <Button type="button" variant="outline" className="absolute right-2 top-2 z-10" onClick={() => setMapRequested(false)}>
-          {t('mapHide')}
+          {t('map.hide')}
         </Button>
       )}
       {selected && <SelectedFeatureCard selected={selected} />}
@@ -418,7 +418,7 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
   return (
     <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
       {/* The gadget frame already shows the title; keep only the range line (the engine label is configuration noise). */}
-      <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p>
+      <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('map.range', { days })}</p>
       <MapNotices
         showPlot={showPlot}
         mapEmpty={mapEmpty}
@@ -443,7 +443,7 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
       )}
       <MapEvidence features={features} observations={observations} selectedFeatureId={selectedFeatureId} onPick={setSelectedFeatureId} />
       {/* The basemap credit describes a drawn map, so it shows only when the plot is rendered. This gadget has no weather overlay, so no Open-Meteo credit. */}
-      {showPlot && <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapBasemapCredit')}</p>}
+      {showPlot && <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('map.basemapCredit')}</p>}
     </section>
   );
 }

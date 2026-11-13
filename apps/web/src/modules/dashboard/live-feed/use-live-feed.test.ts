@@ -53,8 +53,8 @@ describe('mergeEvents', () => {
 
 describe('liveErrorKey', () => {
   it('maps the worker storage failure to its own key, not a source error', () => {
-    expect(liveErrorKey('storage', 'usgs')).toBe('liveMapStorageError');
-    expect(liveErrorKey('network', 'usgs')).toBe('liveMapSourceError');
+    expect(liveErrorKey('storage', 'usgs')).toBe('liveMap.storageError');
+    expect(liveErrorKey('network', 'usgs')).toBe('liveMap.sourceError');
   });
 });
 
@@ -62,7 +62,7 @@ describe('proxiedStatus', () => {
   const data = { items: [], fetched_at: '2026-11-10T00:00:00Z', truncated: false };
   it('marks old rows stale when a refetch failed but data is retained', () => {
     expect(proxiedStatus({ isError: true, error: new Error('x'), data }, 'usgs', true)).toEqual({
-      error: 'liveMapSourceError',
+      error: 'liveMap.sourceError',
       staleSince: data.fetched_at,
     });
   });

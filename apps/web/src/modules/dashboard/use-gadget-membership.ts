@@ -37,12 +37,13 @@ function identityMatches(
   expected: Omit<LayoutIdentity, 'dashboardId'> & { dashboardId: string },
   acceptRevision?: number,
 ): boolean {
-  return current.dashboardId === expected.dashboardId
-    && current.groupId === expected.groupId
-    && current.breakpoint === expected.breakpoint
-    && current.columns === expected.columns
-    && (current.baseRevision === expected.baseRevision
-      || (acceptRevision !== undefined && current.baseRevision === acceptRevision));
+  return (
+    current.dashboardId === expected.dashboardId &&
+    current.groupId === expected.groupId &&
+    current.breakpoint === expected.breakpoint &&
+    current.columns === expected.columns &&
+    (current.baseRevision === expected.baseRevision || (acceptRevision !== undefined && current.baseRevision === acceptRevision))
+  );
 }
 
 /** Projects the server layout of the requested breakpoint (mobile geometry may be unavailable). */
@@ -78,15 +79,18 @@ function resolveSizeForRenderer(
     ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + metrics.frameHeaderHeight + 2 + 12) / metrics.stride))
     : minimum.minH;
   // Desktop pages with a layout frame use the zone width/height; anything else keeps the roomy-default/minimum ladder.
-  const framed = breakpoint === 'desktop' && ctx.frame && ctx.frame !== 'free'
-    ? findFrameCoordinates(draft, ctx.frame, minimum.minW, defaultH, columns) : null;
+  const framed =
+    breakpoint === 'desktop' && ctx.frame && ctx.frame !== 'free'
+      ? findFrameCoordinates(draft, ctx.frame, minimum.minW, defaultH, columns)
+      : null;
   if (framed) return { width: framed.w, height: framed.h };
-  const candidates = breakpoint === 'mobile'
-    ? [{ width: columns, height: Math.max(floorHeight, defaultH) }]
-    : [
-      { width: Math.min(defaultW, columns), height: defaultH },
-      { width: Math.min(minimum.minW, columns), height: minimum.minH },
-    ];
+  const candidates =
+    breakpoint === 'mobile'
+      ? [{ width: columns, height: Math.max(floorHeight, defaultH) }]
+      : [
+          { width: Math.min(defaultW, columns), height: defaultH },
+          { width: Math.min(minimum.minW, columns), height: minimum.minH },
+        ];
   return candidates.find((size) => findFreeCoordinates(draft, size.width, size.height, columns)) ?? null;
 }
 
@@ -109,51 +113,79 @@ function placeReserved(occupied: DashboardPlacement[], r: AddReservation): { x: 
 function useAddReservations(session: LayoutSession, layoutOperationPending: boolean) {
   const t = useTranslations('dashboard');
   const { activeDashboard, activeGroupId, currentBreakpoint, layoutColumns, draftPlacements, gridMetrics } = session;
-  const { addReservationsRef, addReservationSequenceRef, membershipOperationCountRef, setMembershipMutationsPending, setSaveError } = session;
+  const { addReservationsRef, addReservationSequenceRef, membershipOperationCountRef, setMembershipMutationsPending, setSaveError } =
+    session;
 
-  const resolveAddSize = useCallback((renderer: string) => resolveSizeForRenderer(renderer, {
-    breakpoint: currentBreakpoint, columns: layoutColumns,
-    draft: draftPlacements.filter((placement) => activeDashboard?.instances.some((instance) =>
-      instance.id === placement.instance_id && instance.group_id === activeGroupId)), metrics: gridMetrics,
-    frame: getGroupFrame(activeGroupId),
-  }), [activeDashboard, activeGroupId, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns]);
+  const resolveAddSize = useCallback(
+    (renderer: string) =>
+      resolveSizeForRenderer(renderer, {
+        breakpoint: currentBreakpoint,
+        columns: layoutColumns,
+        draft: draftPlacements.filter((placement) =>
+          activeDashboard?.instances.some((instance) => instance.id === placement.instance_id && instance.group_id === activeGroupId),
+        ),
+        metrics: gridMetrics,
+        frame: getGroupFrame(activeGroupId),
+      }),
+    [activeDashboard, activeGroupId, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns],
+  );
 
   /** Checks bounded space before a quick definition or instance can be created. */
-  const canAddGadgetInstance = useCallback((renderer: string): boolean => {
-    if (!activeDashboard || !activeGroupId || layoutOperationPending || membershipOperationCountRef.current > 0) return false;
-    if (resolveAddSize(renderer)) return true;
-    setSaveError(t('noFreeDashboardSpace'));
-    return false;
-  }, [activeDashboard, activeGroupId, layoutOperationPending, membershipOperationCountRef, resolveAddSize, setSaveError, t]);
+  const canAddGadgetInstance = useCallback(
+    (renderer: string): boolean => {
+      if (!activeDashboard || !activeGroupId || layoutOperationPending || membershipOperationCountRef.current > 0) return false;
+      if (resolveAddSize(renderer)) return true;
+      setSaveError(t('noFreeDashboardSpace'));
+      return false;
+    },
+    [activeDashboard, activeGroupId, layoutOperationPending, membershipOperationCountRef, resolveAddSize, setSaveError, t],
+  );
 
   /** Reserves owner identity and a unique operation before quick-definition network work begins. */
-  const beginAddGadgetInstance = useCallback((renderer: string): string | null => {
-    if (!activeDashboard || !canAddGadgetInstance(renderer) || membershipOperationCountRef.current > 0) return null;
-    const size = resolveAddSize(renderer);
-    if (!size) return null;
-    const { width, height } = size;
-    const reservationId = `dashboard-add-${++addReservationSequenceRef.current}`;
-    addReservationsRef.current.set(reservationId, {
-      dashboardId: activeDashboard.id,
-      groupId: activeGroupId,
-      breakpoint: currentBreakpoint,
-      columns: layoutColumns,
-      baseRevision: activeDashboard.revision,
-      renderer,
-      width,
-      height,
-    });
-    membershipOperationCountRef.current += 1;
-    setMembershipMutationsPending((pending) => pending + 1);
-    return reservationId;
-  }, [activeDashboard, activeGroupId, addReservationSequenceRef, addReservationsRef, canAddGadgetInstance, currentBreakpoint, layoutColumns, membershipOperationCountRef, resolveAddSize, setMembershipMutationsPending]);
+  const beginAddGadgetInstance = useCallback(
+    (renderer: string): string | null => {
+      if (!activeDashboard || !canAddGadgetInstance(renderer) || membershipOperationCountRef.current > 0) return null;
+      const size = resolveAddSize(renderer);
+      if (!size) return null;
+      const { width, height } = size;
+      const reservationId = `dashboard-add-${++addReservationSequenceRef.current}`;
+      addReservationsRef.current.set(reservationId, {
+        dashboardId: activeDashboard.id,
+        groupId: activeGroupId,
+        breakpoint: currentBreakpoint,
+        columns: layoutColumns,
+        baseRevision: activeDashboard.revision,
+        renderer,
+        width,
+        height,
+      });
+      membershipOperationCountRef.current += 1;
+      setMembershipMutationsPending((pending) => pending + 1);
+      return reservationId;
+    },
+    [
+      activeDashboard,
+      activeGroupId,
+      addReservationSequenceRef,
+      addReservationsRef,
+      canAddGadgetInstance,
+      currentBreakpoint,
+      layoutColumns,
+      membershipOperationCountRef,
+      resolveAddSize,
+      setMembershipMutationsPending,
+    ],
+  );
 
   /** Releases one Add reservation idempotently after either stage of creation finishes. */
-  const releaseAddReservation = useCallback((reservationId: string) => {
-    if (!addReservationsRef.current.delete(reservationId)) return;
-    membershipOperationCountRef.current = Math.max(0, membershipOperationCountRef.current - 1);
-    setMembershipMutationsPending((pending) => Math.max(0, pending - 1));
-  }, [addReservationsRef, membershipOperationCountRef, setMembershipMutationsPending]);
+  const releaseAddReservation = useCallback(
+    (reservationId: string) => {
+      if (!addReservationsRef.current.delete(reservationId)) return;
+      membershipOperationCountRef.current = Math.max(0, membershipOperationCountRef.current - 1);
+      setMembershipMutationsPending((pending) => Math.max(0, pending - 1));
+    },
+    [addReservationsRef, membershipOperationCountRef, setMembershipMutationsPending],
+  );
 
   return { beginAddGadgetInstance, canAddGadgetInstance, releaseAddReservation };
 }
@@ -167,26 +199,32 @@ function useMembershipPlumbing(session: LayoutSession) {
   const { setDraftPlacements, setHistory, setHistoryIndex, setIsDirty, setEditOrigin } = session;
 
   /** Reconciles an already-committed membership response without rebinding its local draft owner. */
-  const reconcileMembershipDashboard = useCallback((requestedDashboardId: string, updated: Dashboard) => {
-    if (updated.id === requestedDashboardId) {
-      const cached = queryClient.getQueryData<Dashboard>(dashboardKeys.detail(updated.id));
-      if (!cached || cached.revision <= updated.revision) {
-        queryClient.setQueryData(dashboardKeys.detail(updated.id), updated);
+  const reconcileMembershipDashboard = useCallback(
+    (requestedDashboardId: string, updated: Dashboard) => {
+      if (updated.id === requestedDashboardId) {
+        const cached = queryClient.getQueryData<Dashboard>(dashboardKeys.detail(updated.id));
+        if (!cached || cached.revision <= updated.revision) {
+          queryClient.setQueryData(dashboardKeys.detail(updated.id), updated);
+        }
       }
-    }
-    void queryClient.invalidateQueries({ queryKey: dashboardKeys.detail(requestedDashboardId) });
-    void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
-  }, [queryClient]);
+      void queryClient.invalidateQueries({ queryKey: dashboardKeys.detail(requestedDashboardId) });
+      void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
+    },
+    [queryClient],
+  );
 
   /** Replaces the draft, history and dirty state after the server accepted a membership change. */
-  const rebaseDraft = useCallback((next: DashboardPlacement[], origin: LayoutEditOrigin) => {
-    const dirty = !sameLayout(next, origin.savedSnapshot);
-    setDraftPlacements(next);
-    setHistory([next]);
-    setHistoryIndex(0);
-    setIsDirty(dirty);
-    setEditOrigin(dirty ? origin : null);
-  }, [setDraftPlacements, setEditOrigin, setHistory, setHistoryIndex, setIsDirty]);
+  const rebaseDraft = useCallback(
+    (next: DashboardPlacement[], origin: LayoutEditOrigin) => {
+      const dirty = !sameLayout(next, origin.savedSnapshot);
+      setDraftPlacements(next);
+      setHistory([next]);
+      setHistoryIndex(0);
+      setIsDirty(dirty);
+      setEditOrigin(dirty ? origin : null);
+    },
+    [setDraftPlacements, setEditOrigin, setHistory, setHistoryIndex, setIsDirty],
+  );
 
   return { reconcileMembershipDashboard, rebaseDraft };
 }
@@ -208,56 +246,74 @@ function useAddGadget(session: LayoutSession, releaseAddReservation: (id: string
   const { layoutIdentityRef, liveLayoutRef, addReservationsRef, setSaveError } = session;
 
   /** Pre-flight + POST + draft application for one reserved add; throws on network failure. */
-  const createAndApply = useCallback(async (reservation: AddReservation, params: AddGadgetParams): Promise<boolean> => {
-    const live = liveLayoutRef.current;
-    if (!live.activeDashboard || live.activeDashboard.id !== reservation.dashboardId
-      || params.groupId !== reservation.groupId
-      || !identityMatches(layoutIdentityRef.current, reservation)
-      || live.activeDashboard.revision !== reservation.baseRevision) return false;
-    // Recheck live occupancy after asynchronous definition creation, immediately before POST.
-    const occupied = live.draftPlacements.filter((placement) => live.activeDashboard!.instances.some((instance) =>
-      instance.id === placement.instance_id && instance.group_id === reservation.groupId));
-    const coords = placeReserved(occupied, reservation);
-    if (!coords) {
-      setSaveError(t('noFreeDashboardSpace'));
-      return false;
-    }
-    const updatedDashboard = await createGadgetInstance(
-      reservation.dashboardId,
-      {
-        expected_revision: reservation.baseRevision,
-        group_id: reservation.groupId,
-        definition_id: params.definitionId,
-        title: params.title,
-      },
-      workspace.csrfToken,
-    );
-    reconcileMembershipDashboard(reservation.dashboardId, updatedDashboard);
-    if (updatedDashboard.id !== reservation.dashboardId
-      || !identityMatches(layoutIdentityRef.current, reservation, updatedDashboard.revision)) return false;
-    // Find newly added instance
-    const newInstance = updatedDashboard.instances.find(
-      (inst) => !live.activeDashboard!.instances.some((old) => old.id === inst.id),
-    );
-    if (!newInstance || newInstance.group_id !== reservation.groupId) return false;
-    const nextPlacements = [...live.draftPlacements, {
-      instance_id: newInstance.id, x: coords.x, y: coords.y, w: reservation.width, h: reservation.height,
-    }];
-    const serverSnapshot = serverSnapshotFor(updatedDashboard, reservation.breakpoint);
-    if (serverSnapshot.unavailable) {
-      setSaveError(t('mobileLayoutUnavailable'));
-      return false;
-    }
-    rebaseDraft(nextPlacements, {
-      dashboardId: updatedDashboard.id,
-      groupId: reservation.groupId,
-      breakpoint: reservation.breakpoint,
-      columns: reservation.columns,
-      baseRevision: updatedDashboard.revision,
-      savedSnapshot: serverSnapshot.placements.map((placement) => ({ ...placement })),
-    });
-    return true;
-  }, [layoutIdentityRef, liveLayoutRef, rebaseDraft, reconcileMembershipDashboard, setSaveError, t, workspace.csrfToken]);
+  const createAndApply = useCallback(
+    async (reservation: AddReservation, params: AddGadgetParams): Promise<boolean> => {
+      const live = liveLayoutRef.current;
+      if (
+        !live.activeDashboard ||
+        live.activeDashboard.id !== reservation.dashboardId ||
+        params.groupId !== reservation.groupId ||
+        !identityMatches(layoutIdentityRef.current, reservation) ||
+        live.activeDashboard.revision !== reservation.baseRevision
+      )
+        return false;
+      // Recheck live occupancy after asynchronous definition creation, immediately before POST.
+      const occupied = live.draftPlacements.filter((placement) =>
+        live.activeDashboard!.instances.some(
+          (instance) => instance.id === placement.instance_id && instance.group_id === reservation.groupId,
+        ),
+      );
+      const coords = placeReserved(occupied, reservation);
+      if (!coords) {
+        setSaveError(t('noFreeDashboardSpace'));
+        return false;
+      }
+      const updatedDashboard = await createGadgetInstance(
+        reservation.dashboardId,
+        {
+          expected_revision: reservation.baseRevision,
+          group_id: reservation.groupId,
+          definition_id: params.definitionId,
+          title: params.title,
+        },
+        workspace.csrfToken,
+      );
+      reconcileMembershipDashboard(reservation.dashboardId, updatedDashboard);
+      if (
+        updatedDashboard.id !== reservation.dashboardId ||
+        !identityMatches(layoutIdentityRef.current, reservation, updatedDashboard.revision)
+      )
+        return false;
+      // Find newly added instance
+      const newInstance = updatedDashboard.instances.find((inst) => !live.activeDashboard!.instances.some((old) => old.id === inst.id));
+      if (!newInstance || newInstance.group_id !== reservation.groupId) return false;
+      const nextPlacements = [
+        ...live.draftPlacements,
+        {
+          instance_id: newInstance.id,
+          x: coords.x,
+          y: coords.y,
+          w: reservation.width,
+          h: reservation.height,
+        },
+      ];
+      const serverSnapshot = serverSnapshotFor(updatedDashboard, reservation.breakpoint);
+      if (serverSnapshot.unavailable) {
+        setSaveError(t('mobile.layoutUnavailable'));
+        return false;
+      }
+      rebaseDraft(nextPlacements, {
+        dashboardId: updatedDashboard.id,
+        groupId: reservation.groupId,
+        breakpoint: reservation.breakpoint,
+        columns: reservation.columns,
+        baseRevision: updatedDashboard.revision,
+        savedSnapshot: serverSnapshot.placements.map((placement) => ({ ...placement })),
+      });
+      return true;
+    },
+    [layoutIdentityRef, liveLayoutRef, rebaseDraft, reconcileMembershipDashboard, setSaveError, t, workspace.csrfToken],
+  );
 
   /**
    * Captures owner identity before membership creation; late results cannot rebind another layout.
@@ -317,19 +373,17 @@ function useRemoveGadget(session: LayoutSession, layoutOperationPending: boolean
       membershipOperationCountRef.current += 1;
       setMembershipMutationsPending((pending) => pending + 1);
       try {
-        const updatedDashboard = await deleteGadgetInstance(
-          activeDashboard.id,
-          instanceId,
-          activeDashboard.revision,
-          workspace.csrfToken,
-        );
+        const updatedDashboard = await deleteGadgetInstance(activeDashboard.id, instanceId, activeDashboard.revision, workspace.csrfToken);
         reconcileMembershipDashboard(requested.dashboardId, updatedDashboard);
-        if (updatedDashboard.id !== requested.dashboardId
-          || !identityMatches(layoutIdentityRef.current, requested, updatedDashboard.revision)) return;
+        if (
+          updatedDashboard.id !== requested.dashboardId ||
+          !identityMatches(layoutIdentityRef.current, requested, updatedDashboard.revision)
+        )
+          return;
         const filtered = draftPlacements.filter((p) => p.instance_id !== instanceId);
         const serverSnapshot = serverSnapshotFor(updatedDashboard, requested.breakpoint);
         if (serverSnapshot.unavailable) {
-          setSaveError(t('mobileLayoutUnavailable'));
+          setSaveError(t('mobile.layoutUnavailable'));
           return;
         }
         rebaseDraft(filtered, {
@@ -338,7 +392,9 @@ function useRemoveGadget(session: LayoutSession, layoutOperationPending: boolean
           breakpoint: requested.breakpoint,
           columns: requested.columns,
           baseRevision: updatedDashboard.revision,
-          savedSnapshot: serverSnapshot.placements.filter((placement) => placement.instance_id !== instanceId).map((placement) => ({ ...placement })),
+          savedSnapshot: serverSnapshot.placements
+            .filter((placement) => placement.instance_id !== instanceId)
+            .map((placement) => ({ ...placement })),
         });
       } catch (err) {
         setSaveError(err instanceof Error ? err.message : t('saveFailed'));
@@ -347,7 +403,22 @@ function useRemoveGadget(session: LayoutSession, layoutOperationPending: boolean
         setMembershipMutationsPending((pending) => Math.max(0, pending - 1));
       }
     },
-    [activeDashboard, activeGroupId, currentBreakpoint, draftPlacements, layoutColumns, layoutIdentityRef, layoutOperationPending, membershipOperationCountRef, reconcileMembershipDashboard, rebaseDraft, setMembershipMutationsPending, setSaveError, t, workspace.csrfToken],
+    [
+      activeDashboard,
+      activeGroupId,
+      currentBreakpoint,
+      draftPlacements,
+      layoutColumns,
+      layoutIdentityRef,
+      layoutOperationPending,
+      membershipOperationCountRef,
+      reconcileMembershipDashboard,
+      rebaseDraft,
+      setMembershipMutationsPending,
+      setSaveError,
+      t,
+      workspace.csrfToken,
+    ],
   );
 
   return handleRemoveInstance;

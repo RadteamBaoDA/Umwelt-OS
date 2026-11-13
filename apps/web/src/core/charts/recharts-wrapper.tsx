@@ -240,7 +240,7 @@ export function ChartHistoryNote({ data }: { data: ChartDataPoint[] }) {
   const times = data.map((p) => new Date(p.timestamp).getTime()).filter((n) => !isNaN(n));
   const span = times.length > 1 ? Math.max(...times) - Math.min(...times) : 0;
   if (span >= 3_600_000) return null;
-  return <p className="mt-1 text-[11px] text-muted-foreground">{t('chartHistoryShort')}</p>;
+  return <p className="mt-1 text-[11px] text-muted-foreground">{t('chart.historyShort')}</p>;
 }
 
 /**
@@ -251,8 +251,8 @@ export function ChartHistoryNote({ data }: { data: ChartDataPoint[] }) {
  */
 export function ChartEmptyState({ title, message, className = '' }: ChartEmptyStateProps) {
   const ts = useTranslations('uiSweep');
-  title ??= ts('chNoData');
-  message ??= ts('chNoDataMsg');
+  title ??= ts('ch.noData');
+  message ??= ts('ch.noDataMsg');
   return (
     <div
       role="status"
@@ -317,7 +317,7 @@ export function ChartCustomTooltip({
       </div>
       {providerDelay && (
         <div className="mt-2 pt-1.5 border-t border-border/60 text-xs text-muted-foreground flex items-center justify-between">
-          <span>{ts('chFreshness')}</span>
+          <span>{ts('ch.freshness')}</span>
           <span className="tabular-nums">{providerDelay}</span>
         </div>
       )}
@@ -336,15 +336,15 @@ export function ChartAccessibleTable({ data, series, title }: { data: ChartDataP
   const ts = useTranslations('uiSweep');
   return (
     <div className="sr-only">
-      <h4>{title || ts('chSummary')}</h4>
+      <h4>{title || ts('ch.summary')}</h4>
       <table>
-        <caption>{ts('chTable')}</caption>
+        <caption>{ts('ch.table')}</caption>
         <thead>
           <tr>
-            <th scope="col">{ts('chTimestamp')}</th>
+            <th scope="col">{ts('ch.timestamp')}</th>
             {series.map((s) => (
               <th key={s.dataKey} scope="col">
-                {s.name} ({s.currency || s.unit || ts('chValue')})
+                {s.name} ({s.currency || s.unit || ts('ch.value')})
               </th>
             ))}
           </tr>
@@ -386,7 +386,7 @@ export function RechartsContainer({ height = '100%', minHeight = 140, className 
         className={`w-full flex items-center justify-center bg-rule motion-safe:animate-pulse rounded-lg ${className}`}
         style={{ height, minHeight }}
       >
-        <span className="sr-only">{ts('chLoading')}</span>
+        <span className="sr-only">{ts('ch.loading')}</span>
       </div>
     );
   }

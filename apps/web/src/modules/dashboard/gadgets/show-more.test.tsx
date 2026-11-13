@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import React from 'react';
 import { describe, expect, it } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import { ShowMoreButton, useShowMore } from './show-more';
 
 const nums = Array.from({ length: 8 }, (_, i) => i);
@@ -27,7 +27,7 @@ describe('ShowMoreButton', () => {
   function Harness({ items, locale = 'en-us' }: { items: number[]; locale?: 'en-us' | 'vi-vi' }) {
     const state = useShowMore(items, 5);
     return (
-      <NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ dashboard: dashboardMessages[locale] }}>
+      <NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ dashboard: getCatalog(locale, 'dashboard') }}>
         <ShowMoreButton state={state} />
       </NextIntlClientProvider>
     );

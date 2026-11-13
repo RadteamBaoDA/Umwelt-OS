@@ -5,10 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useNotificationFeed } from './notification-bell';
 
 const mocks = vi.hoisted(() => ({ apiRequest: vi.fn(), listNotifications: vi.fn(), setNotificationRead: vi.fn() }));
-const known = new Set(['kind_source_failed']);
-const t = Object.assign((key: string, values?: Record<string, unknown>) => `${key}:${JSON.stringify(values ?? {})}`, {
-  has: (key: string) => known.has(key),
-});
+const t = (key: string, values?: Record<string, unknown>) => `${key}:${JSON.stringify(values ?? {})}`;
 vi.mock('next-intl', () => ({ useTranslations: () => t }));
 vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, apiRequest: mocks.apiRequest }));
 vi.mock('./api', async (original) => ({
@@ -20,7 +17,7 @@ vi.mock('./api', async (original) => ({
 const item = (overrides: Record<string, unknown> = {}) =>
   ({
     id: 'n1',
-    kind: 'source.failed',
+    kind: 'tasks.due',
     title: 'Legacy',
     body: null,
     link: null,
@@ -54,7 +51,7 @@ describe('useNotificationFeed', () => {
   it('titleOf localizes known kinds with params and falls back to the stored title or kind', async () => {
     const { result } = setup();
     await waitFor(() => expect(result.current.page.isSuccess).toBe(true));
-    expect(result.current.titleOf(item())).toBe('kind_source_failed:{"name":"Feed"}');
+    expect(result.current.titleOf(item())).toBe('kind.tasksDue:{"name":"Feed"}');
     expect(result.current.titleOf(item({ kind: 'legacy.kind', title: 'Stored title' }))).toBe('Stored title');
     expect(result.current.titleOf(item({ kind: 'legacy.kind', title: null }))).toBe('legacy.kind');
   });

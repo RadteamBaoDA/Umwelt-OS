@@ -8,8 +8,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartAccessibleTable, formatChartValue, type ChartDataPoint, type ChartSeries } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
-import { dashboardMessages } from '@/core/messages/dashboard';
-import { uiSweepMessages } from '@/core/messages/ui-sweep';
+import { getCatalog } from '@locales';
+
 import { SampleDataBadge } from '../sample-data-badge';
 import { genUiCopy, resolveWidgetLocale } from '../../copy';
 import { ExportOverlay } from '../../sandbox/export-overlay';
@@ -313,7 +313,7 @@ export function GenerativePieChart({
           ) : (
             <NextIntlClientProvider
               locale={canonicalLocale}
-              messages={{ dashboard: dashboardMessages[resolvedLocale], uiSweep: uiSweepMessages[resolvedLocale] }}
+              messages={{ dashboard: getCatalog(resolvedLocale, 'dashboard'), uiSweep: getCatalog(resolvedLocale, 'uiSweep') }}
             >
               <ChartAccessibleTable data={accessibleData} series={accessibleSeries} title={title} />
               <div className="flex flex-col items-center justify-center overflow-x-auto" data-testid="pie-chart-canvas">

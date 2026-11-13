@@ -16,7 +16,7 @@ export type FeedView = (typeof FEED_VIEWS)[number];
 export function FeedViewToggle({ view, setView }: { view: FeedView; setView: (view: FeedView) => void }) {
   const t = useTranslations('dashboard');
   return (
-    <div role="group" aria-label={t('feedViewLabel')} className="flex items-center">
+    <div role="group" aria-label={t('feed.viewLabel')} className="flex items-center">
       {FEED_VIEWS.map((mode) => (
         <Button
           key={mode}
@@ -25,9 +25,15 @@ export function FeedViewToggle({ view, setView }: { view: FeedView; setView: (vi
           size="icon"
           className="size-8"
           aria-pressed={view === mode}
-          aria-label={mode === 'list' ? t('feedViewList') : t('feedViewCards')}
+          aria-label={mode === 'list' ? t('feed.viewList') : t('feed.viewCards')}
           onClick={() => setView(mode)}
-        >{mode === 'list' ? <List className="h-3.5 w-3.5" aria-hidden="true" /> : <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />}</Button>
+        >
+          {mode === 'list' ? (
+            <List className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+        </Button>
       ))}
     </div>
   );

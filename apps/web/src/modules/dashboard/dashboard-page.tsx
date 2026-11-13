@@ -95,14 +95,14 @@ function useMobileNoticeDismissal(): [boolean, () => void] {
 
 /** Joins the "updated" and "stale sources" fragments of the header summary; null when both are absent. */
 function buildHeaderSummary(
-  t: ReturnType<typeof useTranslations>,
+  t: ReturnType<typeof useTranslations<'dashboard'>>,
   lastUpdatedAt: number | null,
   staleCount: number,
   locale: string,
 ): string | null {
   const parts = [
     lastUpdatedAt !== null ? t('summaryUpdated', { time: formatRelativeAge(lastUpdatedAt, locale) }) : null,
-    staleCount > 0 ? t('staleSourcesSummary', { count: staleCount }) : null,
+    staleCount > 0 ? t('staleSources.summary', { count: staleCount }) : null,
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : null;
 }

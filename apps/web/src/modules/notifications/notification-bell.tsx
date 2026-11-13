@@ -17,6 +17,19 @@ function safeLink(link: string | null): string {
   return link === '/app' ? '/dashboard' : link;
 }
 
+/** Literal catalog keys per known notification kind (kinds are normalised with `\W` -> `_` before lookup). */
+const KIND_KEY = { brief_ready: 'kind.briefReady', tasks_due: 'kind.tasksDue' } as const;
+
+/**
+ * Catalog key of a known notification kind, or null for unknown kinds (the caller then shows the stored title/body).
+ *
+ * @param kind Raw `kind` from the notification payload.
+ */
+function kindKey(kind: string) {
+  const normalized = kind.replace(/\W/g, '_');
+  return normalized in KIND_KEY ? KIND_KEY[normalized as keyof typeof KIND_KEY] : null;
+}
+
 /**
  * Shared notification feed: list query (60 s refresh), read-marking mutation and the unread count.
  * Used by the header bell and by the mobile user menu so both show identical data.
@@ -33,8 +46,8 @@ export function useNotificationFeed() {
   const unread = page.data?.unread_count ?? 0;
   /** Localized title for a known kind, else the stored legacy title. */
   const titleOf = (item: AppNotification) => {
-    const key = `kind_${item.kind.replace(/\W/g, '_')}`;
-    return t.has(key) ? t(key, item.params) : (item.title ?? item.kind);
+    const key = kindKey(item.kind);
+    return key ? t(key, item.params) : (item.title ?? item.kind);
   };
   return { page, session, markRead, unread, titleOf };
 }
@@ -72,9 +85,7 @@ export function NotificationItems() {
               {!item.read_at && <span className="mr-1 rounded bg-primary px-1 text-[11px] text-primary-foreground">{t('unread')}</span>}
               {titleOf(item)}
             </span>
-            {!t.has(`kind_${item.kind.replace(/\W/g, '_')}`) && item.body && (
-              <span className="text-xs text-muted-foreground">{item.body}</span>
-            )}
+            {!kindKey(item.kind) && item.body && <span className="text-xs text-muted-foreground">{item.body}</span>}
             <span className="text-[11px] text-muted-foreground">{formatDateTime(item.created_at, display.locale, display.timezone)}</span>
           </Link>
         </DropdownMenuItem>

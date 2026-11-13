@@ -25,15 +25,34 @@ import { useSession } from '@/core/session';
 
 export { BriefText };
 
+/**
+ * Backend-provided widget `title_key` values (modules/dashboard/context.py) mapped to literal `daily` catalog keys;
+ * the payload keeps its legacy camelCase ids, so the mapping lives here rather than in a runtime key concatenation.
+ */
+const WIDGET_TITLE_KEY = {
+  dayTasks: 'day.tasks',
+  dayGoals: 'day.goals',
+  dayStories: 'day.stories',
+  dayEvents: 'day.events',
+} as const;
+
+/** Catalog key of a day-widget title; an id the backend adds later falls back to the events title. */
+function widgetTitleKey(titleKey: string) {
+  return WIDGET_TITLE_KEY[titleKey as keyof typeof WIDGET_TITLE_KEY] ?? WIDGET_TITLE_KEY.dayEvents;
+}
+
+/** Literal catalog keys for the relation chip shown when the selected day is not today. */
+const RELATION_KEY = { past: 'relation.past', today: 'relation.today', future: 'relation.future' } as const;
+
 /** Renders one current-record widget summary with its own updated-at and source status. */
 function WidgetSummary({ widget }: { widget: DailyWidgetData }) {
   const t = useTranslations('daily');
   const display = useDisplayPreferences();
   const titles = widget.items.slice(0, 5).map((item) => String(item.title));
   return (
-    <section aria-label={t(widget.title_key)} className="py-2.5 text-xs">
+    <section aria-label={t(widgetTitleKey(widget.title_key))} className="py-2.5 text-xs">
       <header className="flex items-center justify-between gap-2">
-        <h4 className="font-semibold">{t(widget.title_key)}</h4>
+        <h4 className="font-semibold">{t(widgetTitleKey(widget.title_key))}</h4>
         <span className="text-muted-foreground">{t('itemCount', { count: widget.items.length })}</span>
       </header>
       {widget.status === 'not_applicable' && <p className="mt-1 text-muted-foreground">{t('futureNoNews')}</p>}
@@ -88,13 +107,13 @@ function useDailyBrief(date: string, timezone: string, canReadOwnerWorkspace: bo
     mutationFn: () => generateBrief(date, timezone, session.data!.csrfToken),
     onSettled: () => client.invalidateQueries({ queryKey: dailyKeys.context(date, timezone) }),
   });
-  const errorKey =
+  const errorKey: 'generate.noInputs' | 'generate.unavailable' | null =
     generate.error instanceof ApiError
       ? generate.error.status === 409
-        ? 'generateNoInputs'
-        : 'generateUnavailable'
+        ? 'generate.noInputs'
+        : 'generate.unavailable'
       : generate.error
-        ? 'generateUnavailable'
+        ? 'generate.unavailable'
         : null;
   return { session, context, generate, errorKey };
 }
@@ -166,7 +185,7 @@ function BriefOwnerActions({
     <div className="flex flex-wrap gap-2">
       <Button type="button" size="sm" disabled={!canGenerate || generating} onClick={onGenerate}>
         <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-        {generating ? t('generating') : brief ? t('regenerate') : t('generate')}
+        {generating ? t('generating') : brief ? t('regenerate') : t('generate.label')}
       </Button>
       <Button
         type="button"
@@ -191,10 +210,10 @@ function CurrentRecords({ data, display }: { data: DailyContextData; display: Di
   return (
     <section aria-labelledby="current-records-heading" className="space-y-2">
       <h3 id="current-records-heading" className="text-sm font-semibold">
-        {t('currentRecords')}
+        {t('currentRecords.label')}
       </h3>
       <p className="text-xs text-muted-foreground">
-        {t('currentRecordsNote', { time: formatDateTime(data.widgets_updated_at, display.locale, display.timezone) })}
+        {t('currentRecords.note', { time: formatDateTime(data.widgets_updated_at, display.locale, display.timezone) })}
       </p>
       <div className="divide-y divide-border">
         {data.widgets.map((widget) => (
@@ -217,7 +236,7 @@ function OwnerBriefBody({
   context: ReturnType<typeof useDailyBrief>['context'];
   session: ReturnType<typeof useDailyBrief>['session'];
   generate: ReturnType<typeof useDailyBrief>['generate'];
-  errorKey: string | null;
+  errorKey: 'generate.noInputs' | 'generate.unavailable' | null;
   isOwner: boolean;
   display: DisplayPrefs;
 }) {
@@ -227,7 +246,7 @@ function OwnerBriefBody({
     <>
       {context.isLoading && (
         <p role="status" className="text-sm text-muted-foreground">
-          {t('loading')}
+          {t('loading.label')}
         </p>
       )}
       {context.isError && (
@@ -278,7 +297,7 @@ export function DailyBrief() {
       <header className="flex flex-nowrap items-center justify-between gap-2">
         <DateSelector />
         {canReadOwnerWorkspace && context.data && context.data.relation !== 'today' && (
-          <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(`relation_${context.data.relation}`)}</span>
+          <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(RELATION_KEY[context.data.relation])}</span>
         )}
       </header>
       {!canReadOwnerWorkspace && <SharedBriefs date={date} timezone={timezone} />}

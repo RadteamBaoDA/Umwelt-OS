@@ -51,7 +51,13 @@ function buildSeriesData(items: Observation[], sources: ReturnType<typeof useEff
   return [...groups.entries()].map(([key, group]) => {
     const rows = group.rows.sort((left, right) => left.observed_at.localeCompare(right.observed_at));
     const last = rows[rows.length - 1];
-    return { key, name: group.name, points: rows.map((row) => ({ timestamp: row.observed_at, value: row.value as number })), currency: last.currency ?? undefined, unit: last.currency ? undefined : (last.unit ?? undefined) };
+    return {
+      key,
+      name: group.name,
+      points: rows.map((row) => ({ timestamp: row.observed_at, value: row.value as number })),
+      currency: last.currency ?? undefined,
+      unit: last.currency ? undefined : (last.unit ?? undefined),
+    };
   });
 }
 
@@ -66,7 +72,12 @@ function useMultiFinanceData(instance: GadgetInstance) {
   const symbols = definition.scope?.symbols ?? [];
   const regions = definition.scope?.regions ?? [];
   const metrics = definition.scope?.metrics?.length ? definition.scope.metrics : ['close'];
-  const { lookbackDays, ready: lookbackReady, catalog, sources } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, CHART_FALLBACK_LOOKBACK_DAYS);
+  const {
+    lookbackDays,
+    ready: lookbackReady,
+    catalog,
+    sources,
+  } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, CHART_FALLBACK_LOOKBACK_DAYS);
   const catalogReady = !catalog.isPending;
   const queries = useQueries({
     queries: sourceIds.map((sourceId) => {
@@ -74,18 +85,44 @@ function useMultiFinanceData(instance: GadgetInstance) {
       const useSymbols = symbols.length > 0 && (!entry || entry.symbol_keyed);
       const useRegions = regions.length > 0 && (!entry || entry.region_keyed);
       return {
-        queryKey: ['world-observations', 'finance', instance.id, sourceId, useSymbols ? symbols : null, useRegions ? regions : null, metrics, lookbackDays],
+        queryKey: [
+          'world-observations',
+          'finance',
+          instance.id,
+          sourceId,
+          useSymbols ? symbols : null,
+          useRegions ? regions : null,
+          metrics,
+          lookbackDays,
+        ],
         queryFn: ({ signal }: { signal: AbortSignal }) => {
           const to = new Date(Date.now() + 86_400_000);
           const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
-          return listWorldObservationWindow({ sourceIds: [sourceId], symbols: useSymbols ? symbols : undefined, regions: useRegions ? regions : undefined, metrics, from, to, history: true }, signal);
+          return listWorldObservationWindow(
+            {
+              sourceIds: [sourceId],
+              symbols: useSymbols ? symbols : undefined,
+              regions: useRegions ? regions : undefined,
+              metrics,
+              from,
+              to,
+              history: true,
+            },
+            signal,
+          );
         },
-        enabled: lookbackReady && catalogReady, staleTime: 60_000,
+        enabled: lookbackReady && catalogReady,
+        staleTime: 60_000,
       };
     }),
   });
-  const items = queries.flatMap((query, index) => (query.data?.items ?? []).filter((item) => item.source_id === sourceIds[index] && item.value !== null));
-  const latest = items.reduce<Observation | undefined>((best, item) => (!best || item.collected_at > best.collected_at ? item : best), undefined);
+  const items = queries.flatMap((query, index) =>
+    (query.data?.items ?? []).filter((item) => item.source_id === sourceIds[index] && item.value !== null),
+  );
+  const latest = items.reduce<Observation | undefined>(
+    (best, item) => (!best || item.collected_at > best.collected_at ? item : best),
+    undefined,
+  );
   useReportGadgetFreshness(latest?.collected_at, null);
   return { queries, items, sources, ready: lookbackReady && catalogReady };
 }
@@ -104,13 +141,19 @@ function MultiFinanceChart(props: FinanceChartProps) {
   const { queries, items, sources, ready } = useMultiFinanceData(props.instance);
   // Recomputed per render (cheap, <= 5 sources); MetricsChart memoizes on the series identity it receives.
   const seriesData = buildSeriesData(items, sources);
-  if (queries.some((query) => query.isPending) || !ready) return <GadgetSkeleton variant="chart" label={t('observationLoading')} />;
-  if (queries.every((query) => query.isError)) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
-  if (seriesData.length === 0) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
-  return <>
-    {queries.some((query) => query.data?.truncated) && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">{t('observationTruncated')}</p>}
-    <MetricsChart {...props} seriesData={seriesData} />
-  </>;
+  if (queries.some((query) => query.isPending) || !ready) return <GadgetSkeleton variant="chart" label={t('observation.loading')} />;
+  if (queries.every((query) => query.isError)) return <GadgetNotice kind="error" message={t('observation.loadFailed')} />;
+  if (seriesData.length === 0) return <GadgetNotice kind="empty" message={t('observation.empty')} />;
+  return (
+    <>
+      {queries.some((query) => query.data?.truncated) && (
+        <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">
+          {t('observation.truncated')}
+        </p>
+      )}
+      <MetricsChart {...props} seriesData={seriesData} />
+    </>
+  );
 }
 
 /** What the single-source chart shows, decided from the loaded data in the original check order. */
@@ -148,7 +191,11 @@ function needsSeriesSetup(f: SingleChartFacts): boolean {
   const unseeded = !f.hasMetrics && !f.symbol && f.success && rows.length === 0;
   // A symbol-keyed provider (same rule as backend readiness `scope_required`) with no configured symbol never draws
   // whichever single series happens to exist: the owner must choose one, so the result does not depend on how many exist.
-  const symbolRequired = !f.symbol && f.success && rows.length > 0 && rows.every((item) => item.provider && catalog.data?.[item.provider]?.symbol_keyed === true);
+  const symbolRequired =
+    !f.symbol &&
+    f.success &&
+    rows.length > 0 &&
+    rows.every((item) => item.provider && catalog.data?.[item.provider]?.symbol_keyed === true);
   return !f.sourceId || unseeded || symbolRequired || (f.success && mixedSeries);
 }
 
@@ -175,7 +222,10 @@ function readSingleScope(definition: GadgetInstance['definition']) {
 /** Frame footer text: provider name and delay in seconds, or null when there is nothing to say. */
 function footerAttribution(selected: Observation | undefined): string | null {
   if (!selected) return null;
-  const parts = [selected.provider ? formatProviderName(selected.provider) : null, selected.provider_delay_seconds == null ? null : `${selected.provider_delay_seconds}s`];
+  const parts = [
+    selected.provider ? formatProviderName(selected.provider) : null,
+    selected.provider_delay_seconds == null ? null : `${selected.provider_delay_seconds}s`,
+  ];
   return parts.filter(Boolean).join(' · ') || null;
 }
 
@@ -188,19 +238,42 @@ function useSingleFinanceData(instance: GadgetInstance) {
   const { sourceId, symbol, region, metric } = readSingleScope(definition);
   // No stored lookback: start from the bound provider's catalog default (annual World Bank needs ~10 years, monthly
   // OECD ~2), else 90 days; the chart waits for that lookup (a failed one falls back to 90 rather than blocking).
-  const { lookbackDays, ready: lookbackReady, catalog } = useEffectiveLookback(sourceId, definition.scope?.lookback_days, CHART_FALLBACK_LOOKBACK_DAYS);
+  const {
+    lookbackDays,
+    ready: lookbackReady,
+    catalog,
+  } = useEffectiveLookback(sourceId, definition.scope?.lookback_days, CHART_FALLBACK_LOOKBACK_DAYS);
   const observations = useQuery({
     queryKey: ['world-observations', 'finance', instance.id, sourceId, symbol, region, metric, lookbackDays],
     queryFn: ({ signal }) => {
       // `to` runs one day ahead so a provider clock slightly in the future is not cut off; the window stays within the API's 3660-day maximum.
       const to = new Date(Date.now() + 86_400_000);
       const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
-      return listWorldObservationWindow({ sourceIds: [sourceId], symbols: symbol ? [symbol] : undefined, regions: region ? [region] : undefined, metrics: [metric], from, to, history: true }, signal);
+      return listWorldObservationWindow(
+        {
+          sourceIds: [sourceId],
+          symbols: symbol ? [symbol] : undefined,
+          regions: region ? [region] : undefined,
+          metrics: [metric],
+          from,
+          to,
+          history: true,
+        },
+        signal,
+      );
     },
-    enabled: Boolean(sourceId) && lookbackReady, staleTime: 60_000,
+    enabled: Boolean(sourceId) && lookbackReady,
+    staleTime: 60_000,
   });
   const rows = (observations.data?.items ?? [])
-    .filter((item) => item.source_id === sourceId && (!symbol || item.symbol === symbol) && (!region || item.region === region) && item.metric === metric && item.value !== null)
+    .filter(
+      (item) =>
+        item.source_id === sourceId &&
+        (!symbol || item.symbol === symbol) &&
+        (!region || item.region === region) &&
+        item.metric === metric &&
+        item.value !== null,
+    )
     .sort((left, right) => left.observed_at.localeCompare(right.observed_at));
   const selected = rows.at(-1);
   // Provider delay and name go to the frame footer instead of the chart header.
@@ -210,11 +283,16 @@ function useSingleFinanceData(instance: GadgetInstance) {
 }
 
 /** Provider delay and collection time text passed to the chart as its delay notice. */
-function providerDelayText(selected: Observation | undefined, t: ReturnType<typeof useTranslations>, locale: AppLocaleId, timezone: string): string | undefined {
+function providerDelayText(
+  selected: Observation | undefined,
+  t: ReturnType<typeof useTranslations<'dashboard'>>,
+  locale: AppLocaleId,
+  timezone: string,
+): string | undefined {
   if (!selected) return undefined;
   const delay = selected.provider_delay_seconds == null ? '' : `${selected.provider_delay_seconds}s · `;
   const provider = selected.provider ? ` · ${formatProviderName(selected.provider)}` : '';
-  return `${delay}${t('observationCollectedAt')} ${formatDateTime(selected.collected_at, locale, selected.timezone ?? timezone)}${provider}`;
+  return `${delay}${t('observation.collectedAt')} ${formatDateTime(selected.collected_at, locale, selected.timezone ?? timezone)}${provider}`;
 }
 
 /**
@@ -233,16 +311,43 @@ function SingleFinanceChart(props: FinanceChartProps) {
   const display = useDisplayPreferences();
   const { sourceId, symbol, hasMetrics, observations, rows, selected, comparable, catalog } = useSingleFinanceData(props.instance);
   const state = classifySingleChart({
-    sourceId, symbol, hasMetrics, success: observations.isSuccess, pending: observations.isPending, error: observations.isError, rows, comparable, catalog,
+    sourceId,
+    symbol,
+    hasMetrics,
+    success: observations.isSuccess,
+    pending: observations.isPending,
+    error: observations.isError,
+    rows,
+    comparable,
+    catalog,
   });
-  if (state === 'setup') return <GadgetNotice kind="setup" message={t('financeSourceSymbolRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />;
-  if (state === 'empty') return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
-  if (state === 'loading') return <GadgetSkeleton variant="chart" label={t('observationLoading')} />;
-  if (state === 'error') return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
-  if (state === 'mixedUnits') return <GadgetNotice kind="empty" message={t('observationMixedUnits')} />;
-  const points = rows.flatMap((item) => item.value === null ? [] : [{ timestamp: item.observed_at, value: item.value }]);
-  return <>
-    {observations.data?.truncated && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">{t('observationTruncated')}</p>}
-    <MetricsChart {...props} initialData={points} currency={selected?.currency ?? undefined} unit={selected?.currency ? undefined : selected?.unit} providerDelay={providerDelayText(selected, t, display.locale, display.timezone)} />
-  </>;
+  if (state === 'setup')
+    return (
+      <GadgetNotice
+        kind="setup"
+        message={t('financeSourceSymbolRequired')}
+        action={{ href: '/settings/sources', label: t('gadget.configureAction') }}
+      />
+    );
+  if (state === 'empty') return <GadgetNotice kind="empty" message={t('observation.empty')} />;
+  if (state === 'loading') return <GadgetSkeleton variant="chart" label={t('observation.loading')} />;
+  if (state === 'error') return <GadgetNotice kind="error" message={t('observation.loadFailed')} />;
+  if (state === 'mixedUnits') return <GadgetNotice kind="empty" message={t('observation.mixedUnits')} />;
+  const points = rows.flatMap((item) => (item.value === null ? [] : [{ timestamp: item.observed_at, value: item.value }]));
+  return (
+    <>
+      {observations.data?.truncated && (
+        <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">
+          {t('observation.truncated')}
+        </p>
+      )}
+      <MetricsChart
+        {...props}
+        initialData={points}
+        currency={selected?.currency ?? undefined}
+        unit={selected?.currency ? undefined : selected?.unit}
+        providerDelay={providerDelayText(selected, t, display.locale, display.timezone)}
+      />
+    </>
+  );
 }

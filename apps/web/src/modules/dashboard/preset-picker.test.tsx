@@ -4,16 +4,21 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
-import { dashboardMessages } from '@/core/messages/dashboard';
-import { gadgetSettingsMessages } from '@/core/messages/gadget-settings';
+import { getCatalog } from '@locales';
+
 import { sourcesMessages } from '@/core/messages/sources';
-import { uiSweepMessages } from '@/core/messages/ui-sweep';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
-vi.mock('next/link', () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock('next/link', () => ({
+  default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
+}));
 const api = vi.hoisted(() => ({
-  listDashboardPresets: vi.fn(), previewDashboardPreset: vi.fn(), applyDashboardPreset: vi.fn(), listGadgetRenderers: vi.fn(), listGadgetSources: vi.fn(),
+  listDashboardPresets: vi.fn(),
+  previewDashboardPreset: vi.fn(),
+  applyDashboardPreset: vi.fn(),
+  listGadgetRenderers: vi.fn(),
+  listGadgetSources: vi.fn(),
 }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
 
@@ -27,39 +32,108 @@ const renderer = (id: string) => {
   if (!found) throw new Error(`renderer fixture ${id} missing`);
   return found;
 };
-const messages = { dashboard: dashboardMessages['en-us'], gadgetSettings: gadgetSettingsMessages['en-us'], sources: sourcesMessages['en-us'], uiSweep: uiSweepMessages['en-us'] };
+const messages = {
+  dashboard: getCatalog('en-us', 'dashboard'),
+  gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
+  sources: sourcesMessages['en-us'],
+  uiSweep: getCatalog('en-us', 'uiSweep'),
+};
 
 /** Builds an active datasource fixture; measurement sources also carry `series`, the shape the single-source Chart accepts. */
-const source = (id: string, name: string, shapes: string[]) => ({ id, name, provider: 'binance', status: 'active', type: 'api', generation: 1, local_only: false, last_success_at: null, data_shapes: shapes.includes('measurement') ? [...shapes, 'series'] : shapes });
+const source = (id: string, name: string, shapes: string[]) => ({
+  id,
+  name,
+  provider: 'binance',
+  status: 'active',
+  type: 'api',
+  generation: 1,
+  local_only: false,
+  last_success_at: null,
+  data_shapes: shapes.includes('measurement') ? [...shapes, 'series'] : shapes,
+});
 /** Builds a finance preview whose chart slot carries the given warning codes. */
 const financePreview = (chartWarnings: string[], fingerprint = FINGERPRINT) => ({
-  template_version: 1, preset_id: 'finance', name: 'Finance', preview_fingerprint: fingerprint, target_dashboard_id: null, target_revision: null,
+  template_version: 1,
+  preset_id: 'finance',
+  name: 'Finance',
+  preview_fingerprint: fingerprint,
+  target_dashboard_id: null,
+  target_revision: null,
   slots: [
-    { slot_id: 'finance_chart', renderer: 'finance_chart', source_ids: [], scope: {}, filters: {}, highlight_rules: [], sources: [], warnings: chartWarnings.map((code) => ({ code })) },
+    {
+      slot_id: 'finance_chart',
+      renderer: 'finance_chart',
+      source_ids: [],
+      scope: {},
+      filters: {},
+      highlight_rules: [],
+      sources: [],
+      warnings: chartWarnings.map((code) => ({ code })),
+    },
     { slot_id: 'news_feed', renderer: 'news_feed', source_ids: [], scope: {}, filters: {}, highlight_rules: [], sources: [], warnings: [] },
   ],
 });
 
 /** Renders the picker open with query and intl providers. */
-const wrap = (target?: { id: string; revision: number }, initialPresetId?: string) => render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={messages}>
-      <PresetPicker open initialPresetId={initialPresetId} onOpenChange={() => {}} onPresetApplied={() => {}} currentDashboardId={target?.id} currentDashboardRevision={target?.revision} />
-    </NextIntlClientProvider>
-  </QueryClientProvider>);
+const wrap = (target?: { id: string; revision: number }, initialPresetId?: string) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={messages}>
+        <PresetPicker
+          open
+          initialPresetId={initialPresetId}
+          onOpenChange={() => {}}
+          onPresetApplied={() => {}}
+          currentDashboardId={target?.id}
+          currentDashboardRevision={target?.revision}
+        />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 
 beforeEach(async () => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.listDashboardPresets.mockResolvedValue([
-    { id: 'finance', label: 'Finance', family: 'purpose', slots: [{ slot_id: 'finance_chart', renderer: 'finance_chart' }, { slot_id: 'news_feed', renderer: 'news_feed' }] },
+    {
+      id: 'finance',
+      label: 'Finance',
+      family: 'purpose',
+      slots: [
+        { slot_id: 'finance_chart', renderer: 'finance_chart' },
+        { slot_id: 'news_feed', renderer: 'news_feed' },
+      ],
+    },
   ]);
   api.listGadgetRenderers.mockResolvedValue([renderer('finance_chart'), renderer('news_feed')]);
   api.listGadgetSources.mockResolvedValue({ items: [], next_cursor: null });
   api.previewDashboardPreset.mockResolvedValue({
-    template_version: 1, preset_id: 'finance', name: 'Finance', preview_fingerprint: FINGERPRINT, target_dashboard_id: null, target_revision: null,
+    template_version: 1,
+    preset_id: 'finance',
+    name: 'Finance',
+    preview_fingerprint: FINGERPRINT,
+    target_dashboard_id: null,
+    target_revision: null,
     slots: [
-      { slot_id: 'finance_chart', renderer: 'finance_chart', source_ids: [], scope: {}, filters: {}, highlight_rules: [], sources: [], warnings: [{ code: 'missing_source' }] },
-      { slot_id: 'news_feed', renderer: 'news_feed', source_ids: [], scope: {}, filters: {}, highlight_rules: [], sources: [], warnings: [{ code: 'missing_source' }] },
+      {
+        slot_id: 'finance_chart',
+        renderer: 'finance_chart',
+        source_ids: [],
+        scope: {},
+        filters: {},
+        highlight_rules: [],
+        sources: [],
+        warnings: [{ code: 'missing_source' }],
+      },
+      {
+        slot_id: 'news_feed',
+        renderer: 'news_feed',
+        source_ids: [],
+        scope: {},
+        filters: {},
+        highlight_rules: [],
+        sources: [],
+        warnings: [{ code: 'missing_source' }],
+      },
     ],
   });
 });
@@ -87,11 +161,29 @@ describe('PresetPicker', () => {
   });
 
   it('live map slot shows no datasource picker', async () => {
-    api.listDashboardPresets.mockResolvedValue([{ id: 'monitor', label: 'Monitor', family: 'purpose', slots: [{ slot_id: 'situation_map', renderer: 'map' }] }]);
+    api.listDashboardPresets.mockResolvedValue([
+      { id: 'monitor', label: 'Monitor', family: 'purpose', slots: [{ slot_id: 'situation_map', renderer: 'map' }] },
+    ]);
     api.listGadgetRenderers.mockResolvedValue([renderer('map')]);
     api.previewDashboardPreset.mockResolvedValue({
-      template_version: 1, preset_id: 'monitor', name: 'Monitor', preview_fingerprint: FINGERPRINT, target_dashboard_id: null, target_revision: null,
-      slots: [{ slot_id: 'situation_map', renderer: 'map', source_ids: [], scope: { live_map_providers: ['usgs'] }, filters: { map_mode: 'live' }, highlight_rules: [], sources: [], warnings: [] }],
+      template_version: 1,
+      preset_id: 'monitor',
+      name: 'Monitor',
+      preview_fingerprint: FINGERPRINT,
+      target_dashboard_id: null,
+      target_revision: null,
+      slots: [
+        {
+          slot_id: 'situation_map',
+          renderer: 'map',
+          source_ids: [],
+          scope: { live_map_providers: ['usgs'] },
+          filters: { map_mode: 'live' },
+          highlight_rules: [],
+          sources: [],
+          warnings: [],
+        },
+      ],
     });
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Monitor/ }));
@@ -119,11 +211,29 @@ describe('PresetPicker', () => {
   });
 
   it('renderers without data sources never offer a needs-setup link', async () => {
-    api.listDashboardPresets.mockResolvedValue([{ id: 'personal', label: 'Personal', family: 'purpose', slots: [{ slot_id: 'tasks', renderer: 'tasks' }] }]);
+    api.listDashboardPresets.mockResolvedValue([
+      { id: 'personal', label: 'Personal', family: 'purpose', slots: [{ slot_id: 'tasks', renderer: 'tasks' }] },
+    ]);
     api.listGadgetRenderers.mockResolvedValue([renderer('tasks')]);
     api.previewDashboardPreset.mockResolvedValue({
-      template_version: 1, preset_id: 'personal', name: 'Personal', preview_fingerprint: FINGERPRINT, target_dashboard_id: null, target_revision: null,
-      slots: [{ slot_id: 'tasks', renderer: 'tasks', source_ids: [], scope: {}, filters: {}, highlight_rules: [], sources: [], warnings: [{ code: 'missing_source' }] }],
+      template_version: 1,
+      preset_id: 'personal',
+      name: 'Personal',
+      preview_fingerprint: FINGERPRINT,
+      target_dashboard_id: null,
+      target_revision: null,
+      slots: [
+        {
+          slot_id: 'tasks',
+          renderer: 'tasks',
+          source_ids: [],
+          scope: {},
+          filters: {},
+          highlight_rules: [],
+          sources: [],
+          warnings: [{ code: 'missing_source' }],
+        },
+      ],
     });
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Personal/ }));
@@ -133,8 +243,24 @@ describe('PresetPicker', () => {
 
   it('a scope_required-only slot shows its warning and no Configure link', async () => {
     api.previewDashboardPreset.mockResolvedValue({
-      template_version: 1, preset_id: 'finance', name: 'Finance', preview_fingerprint: FINGERPRINT, target_dashboard_id: null, target_revision: null,
-      slots: [{ slot_id: 'finance_chart', renderer: 'finance_chart', source_ids: ['s1'], scope: {}, filters: {}, highlight_rules: [], sources: [], warnings: [{ code: 'scope_required' }] }],
+      template_version: 1,
+      preset_id: 'finance',
+      name: 'Finance',
+      preview_fingerprint: FINGERPRINT,
+      target_dashboard_id: null,
+      target_revision: null,
+      slots: [
+        {
+          slot_id: 'finance_chart',
+          renderer: 'finance_chart',
+          source_ids: ['s1'],
+          scope: {},
+          filters: {},
+          highlight_rules: [],
+          sources: [],
+          warnings: [{ code: 'scope_required' }],
+        },
+      ],
     });
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -144,8 +270,9 @@ describe('PresetPicker', () => {
 
   it('pages sources with cancelRefetch disabled so a pending page is never cancelled', async () => {
     const spy = vi.spyOn(InfiniteQueryObserver.prototype, 'fetchNextPage');
-    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
-      ? { items: [], next_cursor: null } : { items: [], next_cursor: 'p2' });
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) =>
+      cursor ? { items: [], next_cursor: null } : { items: [], next_cursor: 'p2' },
+    );
     wrap();
     await waitFor(() => expect(spy).toHaveBeenCalled());
     expect(spy.mock.calls.every(([options]) => options?.cancelRefetch === false)).toBe(true);
@@ -172,12 +299,20 @@ describe('PresetPicker', () => {
     expect(api.previewDashboardPreset.mock.calls[0][1].slot_sources).toEqual({ finance_chart: ['s1'] });
     await userEvent.click(screen.getByRole('button', { name: 'Apply preset' }));
     await waitFor(() => expect(api.applyDashboardPreset).toHaveBeenCalled());
-    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({ slot_sources: { finance_chart: ['s1'] }, preview_fingerprint: FINGERPRINT });
+    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({
+      slot_sources: { finance_chart: ['s1'] },
+      preview_fingerprint: FINGERPRINT,
+    });
   });
 
   it('leaves a slot unbound with several compatible sources, then re-previews on selection', async () => {
-    api.listGadgetSources.mockResolvedValue({ items: [source('s1', 'Binance spot', ['measurement']), source('s2', 'Kp feed', ['measurement'])], next_cursor: null });
-    api.previewDashboardPreset.mockResolvedValueOnce(financePreview(['source_unbound'])).mockResolvedValue(financePreview([], 'f'.repeat(22)));
+    api.listGadgetSources.mockResolvedValue({
+      items: [source('s1', 'Binance spot', ['measurement']), source('s2', 'Kp feed', ['measurement'])],
+      next_cursor: null,
+    });
+    api.previewDashboardPreset
+      .mockResolvedValueOnce(financePreview(['source_unbound']))
+      .mockResolvedValue(financePreview([], 'f'.repeat(22)));
     api.applyDashboardPreset.mockResolvedValue({ id: 'd1' });
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -189,13 +324,17 @@ describe('PresetPicker', () => {
     await waitFor(() => expect(screen.queryByText('Choose a datasource')).toBeNull());
     await userEvent.click(screen.getByRole('button', { name: 'Apply preset' }));
     await waitFor(() => expect(api.applyDashboardPreset).toHaveBeenCalled());
-    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({ slot_sources: { finance_chart: ['s2'] }, preview_fingerprint: 'f'.repeat(22) });
+    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({
+      slot_sources: { finance_chart: ['s2'] },
+      preview_fingerprint: 'f'.repeat(22),
+    });
   });
   it('re-previews when switching to Replace and applies with the replace-target fingerprint', async () => {
     const REPLACE = '9'.repeat(22);
     api.listGadgetSources.mockResolvedValue({ items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: null });
     api.previewDashboardPreset.mockImplementation(async (_id: string, body: { target_dashboard_id: string | null }) =>
-      body.target_dashboard_id ? { ...financePreview([], REPLACE), target_dashboard_id: 'd9' } : financePreview([]));
+      body.target_dashboard_id ? { ...financePreview([], REPLACE), target_dashboard_id: 'd9' } : financePreview([]),
+    );
     api.applyDashboardPreset.mockResolvedValue({ id: 'd9' });
     wrap({ id: 'd9', revision: 4 });
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -207,13 +346,18 @@ describe('PresetPicker', () => {
     await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
     await userEvent.click(apply);
     await waitFor(() => expect(api.applyDashboardPreset).toHaveBeenCalled());
-    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({ mode: 'replace', target_dashboard_id: 'd9', preview_fingerprint: REPLACE });
+    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({
+      mode: 'replace',
+      target_dashboard_id: 'd9',
+      preview_fingerprint: REPLACE,
+    });
   });
 
   it('appends to the current dashboard without a replace confirmation', async () => {
     const APPEND = 'append0123456789abcdef';
     api.previewDashboardPreset.mockImplementation(async (_id: string, body: { target_dashboard_id: string | null }) =>
-      body.target_dashboard_id ? { ...financePreview([], APPEND), target_dashboard_id: 'd9' } : financePreview([]));
+      body.target_dashboard_id ? { ...financePreview([], APPEND), target_dashboard_id: 'd9' } : financePreview([]),
+    );
     api.applyDashboardPreset.mockResolvedValue({ id: 'd9' });
     wrap({ id: 'd9', revision: 4 });
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -226,7 +370,13 @@ describe('PresetPicker', () => {
     await userEvent.click(apply);
     await waitFor(() => expect(api.applyDashboardPreset).toHaveBeenCalled());
     const body = api.applyDashboardPreset.mock.calls[0][1];
-    expect(body).toMatchObject({ mode: 'append', target_dashboard_id: 'd9', expected_revision: 4, preview_fingerprint: APPEND, name: null });
+    expect(body).toMatchObject({
+      mode: 'append',
+      target_dashboard_id: 'd9',
+      expected_revision: 4,
+      preview_fingerprint: APPEND,
+      name: null,
+    });
     expect(body.replace_confirmed).toBeUndefined();
   });
 
@@ -238,9 +388,11 @@ describe('PresetPicker', () => {
   });
 
   it('does not preselect a lone compatible source while more source pages remain', async () => {
-    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
-      ? { items: [source('s2', 'Second page', ['measurement'])], next_cursor: null }
-      : { items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: 'p2' });
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) =>
+      cursor
+        ? { items: [source('s2', 'Second page', ['measurement'])], next_cursor: null }
+        : { items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: 'p2' },
+    );
     api.previewDashboardPreset.mockResolvedValue(financePreview(['source_unbound']));
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -249,10 +401,12 @@ describe('PresetPicker', () => {
   });
   it('preselects a lone compatible source once the remaining pages prove it is the only one', async () => {
     let release: (value: unknown) => void = () => undefined;
-    const pageTwo = new Promise((resolve) => { release = resolve; });
-    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
-      ? pageTwo
-      : { items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: 'p2' });
+    const pageTwo = new Promise((resolve) => {
+      release = resolve;
+    });
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) =>
+      cursor ? pageTwo : { items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: 'p2' },
+    );
     api.previewDashboardPreset.mockResolvedValue(financePreview(['source_unbound']));
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -264,7 +418,12 @@ describe('PresetPicker', () => {
 
   it('preselects the lone compatible source when the preset is clicked before renderers load', async () => {
     let release: (value: unknown) => void = () => undefined;
-    api.listGadgetRenderers.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+    api.listGadgetRenderers.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
     api.listGadgetSources.mockResolvedValue({ items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: null });
     api.previewDashboardPreset.mockResolvedValue(financePreview(['source_unbound']));
     wrap();
@@ -277,10 +436,12 @@ describe('PresetPicker', () => {
 
   it('keeps a slot the owner already chose when late pages finish loading', async () => {
     let release: (value: unknown) => void = () => undefined;
-    const pageTwo = new Promise((resolve) => { release = resolve; });
-    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) => cursor
-      ? pageTwo
-      : { items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: 'p2' });
+    const pageTwo = new Promise((resolve) => {
+      release = resolve;
+    });
+    api.listGadgetSources.mockImplementation(async (_limit: number, cursor?: string) =>
+      cursor ? pageTwo : { items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: 'p2' },
+    );
     api.previewDashboardPreset.mockResolvedValue(financePreview(['source_unbound']));
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -297,7 +458,8 @@ describe('PresetPicker', () => {
     const REPLACE = '9'.repeat(22);
     api.listGadgetSources.mockResolvedValue({ items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: null });
     api.previewDashboardPreset.mockImplementation(async (_id: string, body: { target_dashboard_id: string | null }) =>
-      body.target_dashboard_id ? { ...financePreview([], REPLACE), target_dashboard_id: 'd9' } : financePreview([], CREATE));
+      body.target_dashboard_id ? { ...financePreview([], REPLACE), target_dashboard_id: 'd9' } : financePreview([], CREATE),
+    );
     api.applyDashboardPreset.mockResolvedValue({ id: 'n1' });
     wrap({ id: 'd9', revision: 4 });
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
@@ -310,10 +472,17 @@ describe('PresetPicker', () => {
     await waitFor(() => expect((apply as HTMLButtonElement).disabled).toBe(false));
     await userEvent.click(apply);
     await waitFor(() => expect(api.applyDashboardPreset).toHaveBeenCalled());
-    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({ mode: 'create', target_dashboard_id: null, preview_fingerprint: CREATE });
+    expect(api.applyDashboardPreset.mock.calls[0][1]).toMatchObject({
+      mode: 'create',
+      target_dashboard_id: null,
+      preview_fingerprint: CREATE,
+    });
   });
 
-  it.each([['dashboard_limit'], ['preview_changed']])('maps the %s 409 code to its own apply message', async (code) => {
+  it.each([
+    ['dashboard_limit', 'dashboardLimit'],
+    ['preview_changed', 'previewChanged'],
+  ] as const)('maps the %s 409 code to its own apply message', async (code, leaf) => {
     api.listGadgetSources.mockResolvedValue({ items: [source('s1', 'Binance spot', ['measurement'])], next_cursor: null });
     api.previewDashboardPreset.mockResolvedValue(financePreview([]));
     api.applyDashboardPreset.mockRejectedValue(new ApiError(409, 'x', { code }));
@@ -321,7 +490,7 @@ describe('PresetPicker', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Finance/ }));
     await screen.findByText('Chart');
     await userEvent.click(screen.getByRole('button', { name: 'Apply preset' }));
-    const expected = (dashboardMessages['en-us'].presetError as Record<string, string>)[code];
+    const expected = getCatalog('en-us', 'dashboard').preset.error[leaf];
     expect(expected).toBeTruthy();
     expect(await screen.findByText(expected)).toBeTruthy();
   });

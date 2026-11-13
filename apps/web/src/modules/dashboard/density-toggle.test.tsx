@@ -2,14 +2,21 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+import { getCatalog } from '@locales';
 import { DensityToggle } from './dashboard-header';
 
 describe('DensityToggle', () => {
-  beforeEach(() => { localStorage.clear(); document.documentElement.removeAttribute('data-density'); });
+  beforeEach(() => {
+    localStorage.clear();
+    document.documentElement.removeAttribute('data-density');
+  });
 
   it('sets data-density and persists it, then clears both on switching back', async () => {
-    render(<NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}><DensityToggle /></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+        <DensityToggle />
+      </NextIntlClientProvider>,
+    );
     await userEvent.click(screen.getByRole('button', { name: /Density: Comfortable/ }));
     expect(document.documentElement.getAttribute('data-density')).toBe('compact');
     expect(localStorage.getItem('umwelt-density')).toBe('compact');

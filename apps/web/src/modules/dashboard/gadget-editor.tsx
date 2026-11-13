@@ -104,13 +104,13 @@ interface ValidityFlags {
 }
 
 /** Why Save is disabled, in priority order; shown beside Save so a problem inside collapsed Advanced is never hidden. */
-function pickBlockReason(flags: ValidityFlags, t: ReturnType<typeof useTranslations>): string | null {
+function pickBlockReason(flags: ValidityFlags, t: ReturnType<typeof useTranslations<'gadgetSettings'>>): string | null {
   if (!flags.nameValid) return t('nameRequired');
-  if (!flags.sourceValid) return t('datasourceRequired');
+  if (!flags.sourceValid) return t('datasource.required');
   if (!flags.limitValid) return t('limitHelp');
   if (!flags.lookbackValid) return t('lookbackHelp');
   if (!flags.keywordsValid) return t('keywordsHelp');
-  return flags.catalogLoading ? t('metricCatalogLoading') : null;
+  return flags.catalogLoading ? t('metric.catalogLoading') : null;
 }
 
 /**
@@ -208,6 +208,16 @@ function useSaveDefinition(
   });
 }
 
+/** Literal `gadgetSettings` catalog keys per server 422 field-error code (also the allow-list of known codes). */
+const FIELD_ERROR_KEY = {
+  metric_not_in_catalog: 'fieldErrors.metric_not_in_catalog',
+  symbol_required: 'fieldErrors.symbol_required',
+  region_required: 'fieldErrors.region_required',
+  map_layer_unavailable: 'fieldErrors.map_layer_unavailable',
+  source_incompatible: 'fieldErrors.source_incompatible',
+  source_limit: 'fieldErrors.source_limit',
+} as const;
+
 /**
  * Maps a failed save to a field-scoped message. A 422 with a known code and `details.field` is shown under that
  * field; FastAPI's code-less pydantic 422 lists the offending `loc`, and a lookback range violation maps to its own
@@ -215,10 +225,15 @@ function useSaveDefinition(
  */
 function useSaveFailure(error: unknown) {
   const t = useTranslations('gadgetSettings');
-  const failure = error instanceof ApiError && error.status === 422 && t.has(`fieldErrors.${error.code}`)
-    ? { field: String((error.details as { field?: unknown } | null | undefined)?.field ?? ''), message: t(`fieldErrors.${error.code}` as 'name') }
-    : error instanceof ApiError && error.status === 422 && namesLookbackField(error.details)
-      ? { field: 'lookback_days', message: t('lookbackHelp') } : null;
+  const failure =
+    error instanceof ApiError && error.status === 422 && error.code && error.code in FIELD_ERROR_KEY
+      ? {
+          field: String((error.details as { field?: unknown } | null | undefined)?.field ?? ''),
+          message: t(FIELD_ERROR_KEY[error.code as keyof typeof FIELD_ERROR_KEY]),
+        }
+      : error instanceof ApiError && error.status === 422 && namesLookbackField(error.details)
+        ? { field: 'lookback_days', message: t('lookbackHelp') }
+        : null;
   /** Localized server error for one field name, or null when the failure belongs elsewhere. */
   const fieldError = (field: string) => (failure?.field === field ? failure.message : null);
   return { failure, fieldError };
@@ -312,19 +327,50 @@ function SourceField({ model }: { model: EditorModel }) {
   const sourceErrorId = `${nameId}-source-error`;
   const { sourceValid } = validity;
   if (sourceMode === 'none' || (draft.renderer === 'map' && draft.mapMode === 'live')) return null;
-  return <div>
-    <DatasourcePicker acceptedShapes={descriptor?.accepted_shapes ?? null} mode={sourceMode === 'single' ? 'single' : 'multi'} value={draft.sourceIds} onChange={model.changeSources}
-      invalid={!sourceValid} describedBy={!sourceValid ? sourceErrorId : undefined} sourcesHref={descriptor ? sourcesLinkFor(descriptor) : undefined} max={descriptor?.max_sources ?? undefined} />
-    {model.fieldError('source_ids') && <p role="alert" className="mt-1 text-xs text-destructive">{model.fieldError('source_ids')}</p>}
-    {!sourceValid && <p id={sourceErrorId} className="mt-1 text-xs text-muted-foreground">{t('datasourceRequired')}</p>}
-  </div>;
+  return (
+    <div>
+      <DatasourcePicker
+        acceptedShapes={descriptor?.accepted_shapes ?? null}
+        mode={sourceMode === 'single' ? 'single' : 'multi'}
+        value={draft.sourceIds}
+        onChange={model.changeSources}
+        invalid={!sourceValid}
+        describedBy={!sourceValid ? sourceErrorId : undefined}
+        sourcesHref={descriptor ? sourcesLinkFor(descriptor) : undefined}
+        max={descriptor?.max_sources ?? undefined}
+      />
+      {model.fieldError('source_ids') && (
+        <p role="alert" className="mt-1 text-xs text-destructive">
+          {model.fieldError('source_ids')}
+        </p>
+      )}
+      {!sourceValid && (
+        <p id={sourceErrorId} className="mt-1 text-xs text-muted-foreground">
+          {t('datasource.required')}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** Live / selected-sources mode select (map gadgets only). */
 function MapModeField({ nameId, draft, set }: { nameId: string; draft: GadgetDraft; set: EditorModel['set'] }) {
   const td = useTranslations('dashboard');
   if (draft.renderer !== 'map') return null;
-  return <div className="space-y-1.5"><Label htmlFor={`${nameId}-mode`}>{td('liveMapMode')}</Label><Select value={draft.mapMode} onValueChange={(value) => set('mapMode', value as 'live' | 'selected_sources')}><SelectTrigger id={`${nameId}-mode`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="live">{td('liveMapModeLive')}</SelectItem><SelectItem value="selected_sources">{td('liveMapModeSources')}</SelectItem></SelectContent></Select></div>;
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={`${nameId}-mode`}>{td('liveMap.mode')}</Label>
+      <Select value={draft.mapMode} onValueChange={(value) => set('mapMode', value as 'live' | 'selected_sources')}>
+        <SelectTrigger id={`${nameId}-mode`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="live">{td('liveMap.modeLive')}</SelectItem>
+          <SelectItem value="selected_sources">{td('liveMap.modeSources')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
 
 /** Footer: server error, Save-disabled reason and the action buttons. */

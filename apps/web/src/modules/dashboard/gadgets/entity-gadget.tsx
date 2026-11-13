@@ -29,20 +29,20 @@ function EntityRow({ entity }: { entity: Entity }) {
     <li className="flex items-baseline justify-between gap-3 py-2">
       <div className="min-w-0">
         <Link href={`/knowledge/entities/${entity.id}`} className="block truncate text-sm font-semibold text-foreground hover:underline">
-          {entity.name || entity.canonical_name || t('entityUnnamed')}
+          {entity.name || entity.canonical_name || t('entity.unnamed')}
         </Link>
         <p className="truncate text-xs text-muted-foreground">
           {[
             entity.type,
             entity.aliases && entity.aliases.length > 0
-              ? t('entityAliases', { aliases: entity.aliases.map((a) => a.alias).join(', ') })
-              : t('entityRevision', { revision: entity.revision }),
+              ? t('entity.aliases', { aliases: entity.aliases.map((a) => a.alias).join(', ') })
+              : t('entity.revision', { revision: entity.revision }),
           ].join(' · ')}
         </p>
         {entity.description && <p className="line-clamp-1 text-xs text-muted-foreground">{entity.description}</p>}
       </div>
       {lastSeen && (
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entitySeen', { time: lastSeen })}>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entity.seen', { time: lastSeen })}>
           {lastSeen}
         </span>
       )}
@@ -96,7 +96,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
             type="search"
             value={filterQuery}
             onChange={(e) => setFilterQuery(e.target.value)}
-            placeholder={ts('entFilterPlaceholder')}
+            placeholder={ts('ent.filterPlaceholder')}
             className="h-7 text-xs pl-7 bg-muted/20"
           />
         </div>
@@ -105,12 +105,12 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
           onClick={() => entitiesQuery.refetch()}
           disabled={entitiesQuery.isFetching}
           className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-          title={ts('entRefresh')}
-          aria-label={ts('entRefresh')}
+          title={ts('ent.refresh')}
+          aria-label={ts('ent.refresh')}
         >
           <RotateCw className={`w-3.5 h-3.5 ${entitiesQuery.isFetching ? 'animate-spin' : ''}`} />
         </BareButton>
-        <Link href="/knowledge/entities" className="p-1 text-muted-foreground hover:text-foreground" title={ts('entBrowse')}>
+        <Link href="/knowledge/entities" className="p-1 text-muted-foreground hover:text-foreground" title={ts('ent.browse')}>
           <ExternalLink className="w-3.5 h-3.5" />
         </Link>
       </div>
@@ -127,8 +127,8 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
       {!entitiesQuery.isLoading && entities.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Users className="w-8 h-8 mb-2 opacity-50" />
-          <p className="text-xs font-semibold text-foreground mb-1">{ts('entNone')}</p>
-          <p className="text-[11px] max-w-xs text-muted-foreground">{ts('entNoneHint')}</p>
+          <p className="text-xs font-semibold text-foreground mb-1">{ts('ent.none')}</p>
+          <p className="text-[11px] max-w-xs text-muted-foreground">{ts('ent.noneHint')}</p>
         </div>
       )}
 

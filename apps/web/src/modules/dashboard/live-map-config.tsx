@@ -69,6 +69,12 @@ function useLiveConfigMutations(configKey: (string | undefined)[], revision: num
 
 type ConfigMutations = ReturnType<typeof useLiveConfigMutations>;
 
+/** Literal catalog keys per provider-terms eligibility class; an unknown class reads as "review required". */
+const ELIGIBILITY_KEY = {
+  open: 'liveMap.eligibilityOpen', personal: 'liveMap.eligibilityPersonal',
+  noncommercial: 'liveMap.eligibilityNoncommercial', review: 'liveMap.eligibilityReview',
+} as const;
+
 /** Terms of the live data providers: acknowledgement checkboxes, use class, operator review and accept/revoke actions. */
 function TermsFieldset({ config, terms, mutations }: { config: Config; terms: TermsDraft; mutations: ConfigMutations }) {
   const t = useTranslations('dashboard');
@@ -76,14 +82,14 @@ function TermsFieldset({ config, terms, mutations }: { config: Config; terms: Te
   const workspace = useWorkspace();
   const { save, acceptTerms, revokeTerms } = mutations;
   const { termsSelected, setTermsSelected, termsUse, setTermsUse, termsReview, setTermsReview, termsEvidence, setTermsEvidence } = terms;
-  return <fieldset className="space-y-2"><legend className="text-xs font-semibold">{t('liveMapTerms')}</legend><p className="text-xs text-muted-foreground">{t('liveMapTermsHelp')}</p>
-    {(config.terms_catalog ?? []).map((term) => <div key={term.id} className="flex items-start gap-2 text-xs"><Checkbox aria-label={term.label} disabled={!workspace.isOwner || term.acknowledged} checked={term.acknowledged || termsSelected.includes(term.id)} onCheckedChange={(checked) => setTermsSelected((current) => checked === true ? [...current, term.id] : current.filter((value) => value !== term.id))} /><span>{term.label} · <a href={term.terms_url} target="_blank" rel="noreferrer" className="underline">{t('liveMapTermsLink')}</a> · {term.version} · {t(`liveMapEligibility_${term.eligibility}`)} {term.accepted ? `· ${t('liveMapTermsAccepted')}` : term.acknowledged ? `· ${t('liveMapTermsPending')}` : ''}<span className="block">{term.attribution}</span></span>{term.acknowledged && <Button type="button" size="sm" variant="outline" disabled={!workspace.isOwner || revokeTerms.isPending || acceptTerms.isPending || save.isPending} onClick={() => revokeTerms.mutate(term.id)}>{t('liveMapTermsRevoke', { provider: term.label })}</Button>}</div>)}
-    <Label htmlFor={`${id}-terms-use`}>{t('liveMapTermsUse')}</Label><Select value={termsUse} onValueChange={(value) => setTermsUse(value as typeof termsUse)}><SelectTrigger id={`${id}-terms-use`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="personal">{t('liveMapUsePersonal')}</SelectItem><SelectItem value="noncommercial">{t('liveMapUseNoncommercial')}</SelectItem><SelectItem value="commercial">{t('liveMapUseCommercial')}</SelectItem></SelectContent></Select>
-    <label className="flex items-start gap-2 text-xs"><Checkbox checked={termsReview} disabled={!workspace.isOwner || !config.is_operator} onCheckedChange={(value) => setTermsReview(value === true)} />{t('liveMapTermsReview')}</label>
-    <div><Label htmlFor={`${id}-terms-evidence`}>{t('liveMapTermsEvidence')}</Label><Input id={`${id}-terms-evidence`} value={termsEvidence} disabled={!workspace.isOwner || !config.is_operator} onChange={(event) => setTermsEvidence(event.target.value)} /></div>
-    {revokeTerms.isError && <p role="alert" className="text-xs text-destructive">{t('liveMapTermsRevokeError')}</p>}{revokeTerms.isSuccess && <p role="status" className="text-xs">{t('liveMapTermsRevoked')}</p>}
-    {acceptTerms.isError && <p role="alert" className="text-xs text-destructive">{t('liveMapTermsError')}</p>}{acceptTerms.isSuccess && <p role="status" className="text-xs">{t('liveMapTermsSaved')}</p>}
-    <Button type="button" size="sm" disabled={!workspace.isOwner || acceptTerms.isPending || revokeTerms.isPending || save.isPending || termsSelected.length === 0} onClick={() => acceptTerms.mutate()}>{t('liveMapTermsAccept')}</Button>
+  return <fieldset className="space-y-2"><legend className="text-xs font-semibold">{t('liveMap.terms')}</legend><p className="text-xs text-muted-foreground">{t('liveMap.termsHelp')}</p>
+    {(config.terms_catalog ?? []).map((term) => <div key={term.id} className="flex items-start gap-2 text-xs"><Checkbox aria-label={term.label} disabled={!workspace.isOwner || term.acknowledged} checked={term.acknowledged || termsSelected.includes(term.id)} onCheckedChange={(checked) => setTermsSelected((current) => checked === true ? [...current, term.id] : current.filter((value) => value !== term.id))} /><span>{term.label} · <a href={term.terms_url} target="_blank" rel="noreferrer" className="underline">{t('liveMap.termsLink')}</a> · {term.version} · {t(ELIGIBILITY_KEY[term.eligibility as keyof typeof ELIGIBILITY_KEY] ?? ELIGIBILITY_KEY.review)} {term.accepted ? `· ${t('liveMap.termsAccepted')}` : term.acknowledged ? `· ${t('liveMap.termsPending')}` : ''}<span className="block">{term.attribution}</span></span>{term.acknowledged && <Button type="button" size="sm" variant="outline" disabled={!workspace.isOwner || revokeTerms.isPending || acceptTerms.isPending || save.isPending} onClick={() => revokeTerms.mutate(term.id)}>{t('liveMap.termsRevoke', { provider: term.label })}</Button>}</div>)}
+    <Label htmlFor={`${id}-terms-use`}>{t('liveMap.termsUse')}</Label><Select value={termsUse} onValueChange={(value) => setTermsUse(value as typeof termsUse)}><SelectTrigger id={`${id}-terms-use`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="personal">{t('liveMap.usePersonal')}</SelectItem><SelectItem value="noncommercial">{t('liveMap.useNoncommercial')}</SelectItem><SelectItem value="commercial">{t('liveMap.useCommercial')}</SelectItem></SelectContent></Select>
+    <label className="flex items-start gap-2 text-xs"><Checkbox checked={termsReview} disabled={!workspace.isOwner || !config.is_operator} onCheckedChange={(value) => setTermsReview(value === true)} />{t('liveMap.termsReview')}</label>
+    <div><Label htmlFor={`${id}-terms-evidence`}>{t('liveMap.termsEvidence')}</Label><Input id={`${id}-terms-evidence`} value={termsEvidence} disabled={!workspace.isOwner || !config.is_operator} onChange={(event) => setTermsEvidence(event.target.value)} /></div>
+    {revokeTerms.isError && <p role="alert" className="text-xs text-destructive">{t('liveMap.termsRevokeError')}</p>}{revokeTerms.isSuccess && <p role="status" className="text-xs">{t('liveMap.termsRevoked')}</p>}
+    {acceptTerms.isError && <p role="alert" className="text-xs text-destructive">{t('liveMap.termsError')}</p>}{acceptTerms.isSuccess && <p role="status" className="text-xs">{t('liveMap.termsSaved')}</p>}
+    <Button type="button" size="sm" disabled={!workspace.isOwner || acceptTerms.isPending || revokeTerms.isPending || save.isPending || termsSelected.length === 0} onClick={() => acceptTerms.mutate()}>{t('liveMap.termsAccept')}</Button>
   </fieldset>;
 }
 
@@ -93,7 +99,7 @@ function KeyField({ id, label, value, onChange, configured, remove, onRemove }: 
 }) {
   const t = useTranslations('dashboard');
   const workspace = useWorkspace();
-  return <div><Label htmlFor={id}>{label}</Label><PasswordInput id={id} autoComplete="new-password" value={value} disabled={!workspace.isOwner || remove} onChange={(event) => onChange(event.target.value)} /><p className="text-xs text-muted-foreground">{configured ? t('liveMapConfigured') : t('liveMapNotConfigured')}</p>{configured && <label className="flex gap-2 text-xs"><Checkbox checked={remove} disabled={!workspace.isOwner} onCheckedChange={(checked) => onRemove(checked === true)} />{t('liveMapRemoveKey')}</label>}</div>;
+  return <div><Label htmlFor={id}>{label}</Label><PasswordInput id={id} autoComplete="new-password" value={value} disabled={!workspace.isOwner || remove} onChange={(event) => onChange(event.target.value)} /><p className="text-xs text-muted-foreground">{configured ? t('liveMap.configured') : t('liveMap.notConfigured')}</p>{configured && <label className="flex gap-2 text-xs"><Checkbox checked={remove} disabled={!workspace.isOwner} onCheckedChange={(checked) => onRemove(checked === true)} />{t('liveMap.removeKey')}</label>}</div>;
 }
 
 /** Provider keys, SEC contact email, save feedback and the Save button (enabled only with an unsaved change). */
@@ -104,11 +110,11 @@ function CredentialsFields({ config, creds, mutations }: { config: Config; creds
   const { save, acceptTerms, revokeTerms } = mutations;
   const { weatherKey, firmsKey, removeWeather, removeFirms, email, emailChanged } = creds;
   return <>
-    <KeyField id={`${id}-weather`} label={t('liveMapWeatherKey')} value={weatherKey} onChange={creds.setWeatherKey} configured={config.openweather_configured} remove={removeWeather} onRemove={creds.setRemoveWeather} />
-    <KeyField id={`${id}-firms`} label={t('liveMapFirmsKey')} value={firmsKey} onChange={creds.setFirmsKey} configured={config.firms_configured} remove={removeFirms} onRemove={creds.setRemoveFirms} />
-    <div><Label htmlFor={`${id}-email`}>{t('liveMapSecEmail')}</Label><Input id={`${id}-email`} type="email" disabled={!workspace.isOwner} value={emailChanged ? email : config.sec_contact_email ?? ''} onChange={(event) => { creds.setEmail(event.target.value); creds.setEmailChanged(true); }} /></div>
-    {save.isError && <p role="alert" className="text-xs text-destructive">{t('liveMapConfigSaveError')}</p>}{save.isSuccess && <p role="status" className="text-xs">{t('liveMapConfigSaved')}</p>}
-    <Button type="button" size="sm" disabled={!workspace.isOwner || save.isPending || acceptTerms.isPending || revokeTerms.isPending || !(weatherKey || firmsKey || removeWeather || removeFirms || emailChanged)} onClick={() => save.mutate()}>{t('liveMapConfigSave')}</Button>
+    <KeyField id={`${id}-weather`} label={t('liveMap.weatherKey')} value={weatherKey} onChange={creds.setWeatherKey} configured={config.openweather_configured} remove={removeWeather} onRemove={creds.setRemoveWeather} />
+    <KeyField id={`${id}-firms`} label={t('liveMap.firmsKey')} value={firmsKey} onChange={creds.setFirmsKey} configured={config.firms_configured} remove={removeFirms} onRemove={creds.setRemoveFirms} />
+    <div><Label htmlFor={`${id}-email`}>{t('liveMap.secEmail')}</Label><Input id={`${id}-email`} type="email" disabled={!workspace.isOwner} value={emailChanged ? email : config.sec_contact_email ?? ''} onChange={(event) => { creds.setEmail(event.target.value); creds.setEmailChanged(true); }} /></div>
+    {save.isError && <p role="alert" className="text-xs text-destructive">{t('liveMap.configSaveError')}</p>}{save.isSuccess && <p role="status" className="text-xs">{t('liveMap.configSaved')}</p>}
+    <Button type="button" size="sm" disabled={!workspace.isOwner || save.isPending || acceptTerms.isPending || revokeTerms.isPending || !(weatherKey || firmsKey || removeWeather || removeFirms || emailChanged)} onClick={() => save.mutate()}>{t('liveMap.configSave')}</Button>
   </>;
 }
 
@@ -123,10 +129,10 @@ export function LiveMapConfig() {
   // Clear unsaved secrets immediately when workspace authority changes.
   useResetOnChange([workspace.selection?.id], () => { creds.setWeatherKey(''); creds.setFirmsKey(''); creds.setEmail(''); creds.setEmailChanged(false); creds.setRemoveWeather(false); creds.setRemoveFirms(false); terms.setTermsSelected([]); terms.setTermsReview(false); terms.setTermsEvidence(''); });
   const mutations = useLiveConfigMutations(key, config.data?.revision, terms, creds);
-  if (config.isPending) return <p role="status" className="text-xs">{t('liveMapSourceLoading')}</p>;
-  if (config.isError || !config.data) return <p role="alert" className="text-xs text-destructive">{t('liveMapConfigLoadError')} <Button type="button" variant="outline" size="sm" onClick={() => void config.refetch()}>{t('retry')}</Button></p>;
-  return <div className="space-y-2 rounded border border-border p-2"><h5 className="text-xs font-semibold">{t('liveMapConfig')}</h5>
-    <p className="text-xs text-muted-foreground">{t('liveMapConfigHelp')}</p>
+  if (config.isPending) return <p role="status" className="text-xs">{t('liveMap.sourceLoading')}</p>;
+  if (config.isError || !config.data) return <p role="alert" className="text-xs text-destructive">{t('liveMap.configLoadError')} <Button type="button" variant="outline" size="sm" onClick={() => void config.refetch()}>{t('retry')}</Button></p>;
+  return <div className="space-y-2 rounded border border-border p-2"><h5 className="text-xs font-semibold">{t('liveMap.config')}</h5>
+    <p className="text-xs text-muted-foreground">{t('liveMap.configHelp')}</p>
     <TermsFieldset config={config.data} terms={terms} mutations={mutations} />
     <CredentialsFields config={config.data} creds={creds} mutations={mutations} />
   </div>;

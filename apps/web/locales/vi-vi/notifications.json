@@ -1,0 +1,8 @@
+{
+  "open": "Thông báo, {count} chưa đọc",
+  "empty": "Không có thông báo.",
+  "loadError": "Không thể tải thông báo.",
+  "unread": "Chưa đọc",
+  "kind.briefReady": "Bản tóm tắt ngày {date} đã sẵn sàng (bản sửa đổi {revision})",
+  "kind.tasksDue": "{count, plural, other {# công việc chưa xong đến hạn hôm nay}}"
+}

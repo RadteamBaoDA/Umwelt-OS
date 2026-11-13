@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { uiSweepMessages } from '@/core/messages/ui-sweep';
+import { getCatalog } from '@locales';
 
 const core = vi.hoisted(() => ({ apiRequest: vi.fn() }));
 vi.mock('@/core/api', async (original) => ({ ...(await original<typeof import('@/core/api')>()), apiRequest: core.apiRequest }));
@@ -17,13 +17,20 @@ vi.mock('@/modules/sources/api', async (original) => ({
 import { Upload } from './upload';
 
 describe('Upload', () => {
-  afterEach(() => { cleanup(); core.apiRequest.mockReset(); });
+  afterEach(() => {
+    cleanup();
+    core.apiRequest.mockReset();
+  });
 
   it('submits without source_id so the server files it under the default Uploads source', async () => {
     core.apiRequest.mockResolvedValue({ run_id: 'r1' });
-    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <NextIntlClientProvider locale="en-US" messages={{ uiSweep: uiSweepMessages['en-us'] }}><Upload /></NextIntlClientProvider>
-    </QueryClientProvider>);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <NextIntlClientProvider locale="en-US" messages={{ uiSweep: getCatalog('en-us', 'uiSweep') }}>
+          <Upload />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
     await userEvent.upload(screen.getByLabelText('File'), new File(['hi'], 'a.txt', { type: 'text/plain' }));
     // jsdom's required-file validity ignores userEvent's injected files, so dispatch submit directly.
     fireEvent.submit(screen.getByLabelText('File').closest('form') as HTMLFormElement);

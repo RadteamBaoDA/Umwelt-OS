@@ -16,27 +16,27 @@ import { useCallback, useSyncExternalStore } from 'react';
 // Recharts-free weather helpers, split from weather-card.tsx so the header summary does not pull the chart library.
 
 export type ConditionKey =
-  | 'weatherClear'
-  | 'weatherMainlyClear'
-  | 'weatherPartlyCloudy'
-  | 'weatherCloudy'
-  | 'weatherFog'
-  | 'weatherDrizzle'
-  | 'weatherRain'
-  | 'weatherSnow'
-  | 'weatherShowers'
-  | 'weatherThunder';
+  | 'weather.clear'
+  | 'weather.mainlyClear'
+  | 'weather.partlyCloudy'
+  | 'weather.cloudy'
+  | 'weather.fog'
+  | 'weather.drizzle'
+  | 'weather.rain'
+  | 'weather.snow'
+  | 'weather.showers'
+  | 'weather.thunder';
 export type Unit = 'c' | 'f';
 /** Per-device temperature unit choice; Celsius unless the owner picked Fahrenheit. */
 export const WEATHER_UNIT_KEY = 'umwelt.weather.unit';
 /** Ordered WMO code rules for the non-clear conditions; the first match wins (unknown codes read as cloudy). */
 const CONDITION_RULES: { match: (code: number) => boolean; key: ConditionKey; Icon: LucideIcon }[] = [
-  { match: (code) => code === 45 || code === 48, key: 'weatherFog', Icon: CloudFog },
-  { match: (code) => code >= 51 && code <= 57, key: 'weatherDrizzle', Icon: CloudDrizzle },
-  { match: (code) => code >= 61 && code <= 67, key: 'weatherRain', Icon: CloudRain },
-  { match: (code) => (code >= 71 && code <= 77) || code === 85 || code === 86, key: 'weatherSnow', Icon: CloudSnow },
-  { match: (code) => code >= 80 && code <= 82, key: 'weatherShowers', Icon: CloudRain },
-  { match: (code) => code >= 95, key: 'weatherThunder', Icon: CloudLightning },
+  { match: (code) => code === 45 || code === 48, key: 'weather.fog', Icon: CloudFog },
+  { match: (code) => code >= 51 && code <= 57, key: 'weather.drizzle', Icon: CloudDrizzle },
+  { match: (code) => code >= 61 && code <= 67, key: 'weather.rain', Icon: CloudRain },
+  { match: (code) => (code >= 71 && code <= 77) || code === 85 || code === 86, key: 'weather.snow', Icon: CloudSnow },
+  { match: (code) => code >= 80 && code <= 82, key: 'weather.showers', Icon: CloudRain },
+  { match: (code) => code >= 95, key: 'weather.thunder', Icon: CloudLightning },
 ];
 
 /**
@@ -47,11 +47,11 @@ const CONDITION_RULES: { match: (code: number) => boolean; key: ConditionKey; Ic
  */
 export function weatherCondition(code: number, isDay: boolean | null | undefined): { key: ConditionKey; Icon: LucideIcon } {
   const night = isDay === false;
-  if (code === 0) return { key: 'weatherClear', Icon: night ? Moon : Sun };
+  if (code === 0) return { key: 'weather.clear', Icon: night ? Moon : Sun };
   if (code === 1 || code === 2)
-    return { key: code === 1 ? 'weatherMainlyClear' : 'weatherPartlyCloudy', Icon: night ? CloudMoon : CloudSun };
+    return { key: code === 1 ? 'weather.mainlyClear' : 'weather.partlyCloudy', Icon: night ? CloudMoon : CloudSun };
   const rule = CONDITION_RULES.find((candidate) => candidate.match(code));
-  return rule ? { key: rule.key, Icon: rule.Icon } : { key: 'weatherCloudy', Icon: Cloud };
+  return rule ? { key: rule.key, Icon: rule.Icon } : { key: 'weather.cloudy', Icon: Cloud };
 }
 
 /** Converts Celsius to the chosen unit. */

@@ -11,9 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetFilters, GadgetInstance, GadgetScope } from '../api';
+import { liveMapWeatherKey } from '../gadget-editor-model';
 import { safeLiveLink } from '../live-map-data';
 import { LiveMapConfig } from '../live-map-config';
-import { LIVE_TAGS, providerMeta } from '../live-feed/sources';
+import { LIVE_TAG_KEY, LIVE_TAGS, providerMeta } from '../live-feed/sources';
 import type { StoredEvent } from '../live-feed/store';
 import { termsAccepted, useLiveFeed, type ProviderStatus } from '../live-feed/use-live-feed';
 
@@ -65,12 +66,12 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
   const [engine, setEngine] = useState<'globe' | 'flat'>('globe');
   const engineSelect = (
     <Select value={engine} onValueChange={(next) => setEngine(next as 'globe' | 'flat')}>
-      <SelectTrigger aria-label={t('mapEngineLabel')} className="h-8 w-36">
+      <SelectTrigger aria-label={t('map.engineLabel')} className="h-8 w-36">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="globe">{t('mapGlobeEngine')}</SelectItem>
-        <SelectItem value="flat">{t('mapFlatEngine')}</SelectItem>
+        <SelectItem value="globe">{t('map.globeEngine')}</SelectItem>
+        <SelectItem value="flat">{t('map.flatEngine')}</SelectItem>
       </SelectContent>
     </Select>
   );
@@ -103,19 +104,19 @@ function EventLinks({ event, separator }: { event: { url?: string | null; source
             {' '}
             ·{' '}
             <a className="underline" href={href} target="_blank" rel="noreferrer">
-              {t('liveMapOpenEvent')}
+              {t('liveMap.openEvent')}
             </a>
           </>
         ) : (
           <a className="underline" href={href} target="_blank" rel="noreferrer">
-            {t('liveMapOpenEvent')}
+            {t('liveMap.openEvent')}
           </a>
         ))}
       {event.sources?.map(
         ({ url }) =>
           safeLiveLink(url) && (
             <a key={url} className="block underline" href={safeLiveLink(url) ?? undefined} target="_blank" rel="noreferrer">
-              {t('liveMapProviderSource')}
+              {t('liveMap.providerSource')}
             </a>
           ),
       )}
@@ -157,7 +158,7 @@ function LiveEventList({
   }, [display.locale, display.timezone]);
   return (
     <div className={inDialog ? 'min-h-0' : 'min-h-0 flex-1 overflow-y-auto'}>
-      <ul aria-label={t('liveMapEvents')} className="divide-y divide-border">
+      <ul aria-label={t('liveMap.events')} className="divide-y divide-border">
         {shown.visible.map((event) => (
           <li key={event.key} className="py-1 text-xs">
             <Button
@@ -173,7 +174,7 @@ function LiveEventList({
               {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
                 <time dateTime={event.observed_at}>{format(event.observed_at)}</time>
               ) : (
-                t('liveMapTimeUnknown')
+                t('liveMap.timeUnknown')
               )}
             </span>
             <EventLinks event={event} separator />
@@ -205,18 +206,18 @@ function LiveSourceStatus({
   /** Status text for one provider; terms and config problems outrank fetch state. */
   const stateOf = (provider: string) => {
     const status = statuses[provider];
-    if (config.isError) return t('liveMapConfigLoadError');
+    if (config.isError) return t('liveMap.configLoadError');
     // The sources dialog (overview) has no gadget settings, so its wording points at the dialog itself.
-    if (config.data && !termsAccepted(config, provider)) return t(inDialog ? 'liveMapTermsRequiredHere' : 'liveMapTermsRequired');
+    if (config.data && !termsAccepted(config, provider)) return t(inDialog ? 'liveMap.termsRequiredHere' : 'liveMap.termsRequired');
     if (status?.error) return t(status.error);
     return status?.fetchedAt
-      ? t('liveMapSourceUpdated', { when: formatDateTime(status.fetchedAt, display.locale, display.timezone) })
-      : t('liveMapSourceLoading');
+      ? t('liveMap.sourceUpdated', { when: formatDateTime(status.fetchedAt, display.locale, display.timezone) })
+      : t('liveMap.sourceLoading');
   };
   return (
     <div
       className={inDialog ? 'text-xs text-muted-foreground' : 'max-h-20 shrink-0 overflow-y-auto text-xs text-muted-foreground'}
-      aria-label={t('liveMapSources')}
+      aria-label={t('liveMap.sources')}
     >
       {providers.map((provider) => {
         const meta = providerMeta(provider);
@@ -233,9 +234,9 @@ function LiveSourceStatus({
             : {stateOf(provider)}
             {attribution && <span className="block">{attribution}</span>}
             {statuses[provider]?.staleSince
-              ? ` · ${t('liveMapStaleNote', { when: formatDateTime(statuses[provider].staleSince, display.locale, display.timezone) })}`
+              ? ` · ${t('liveMap.staleNote', { when: formatDateTime(statuses[provider].staleSince, display.locale, display.timezone) })}`
               : ''}
-            {statuses[provider]?.truncated ? ` · ${t('observationTruncated')}` : ''}
+            {statuses[provider]?.truncated ? ` · ${t('observation.truncated')}` : ''}
           </p>
         );
       })}
@@ -261,32 +262,32 @@ function LiveWeatherNotes({
   if (!isOwner)
     return (
       <p role="status" className="text-xs text-muted-foreground">
-        {t('liveMapOwnerOnly')}
+        {t('liveMap.ownerOnly')}
       </p>
     );
   return (
     <>
       {weatherState === 'ready' && (
         <p className="text-xs text-muted-foreground">
-          {t(`liveMapWeather_${weatherLayer}` as 'liveMapWeather_none')} ·{' '}
+          {t(liveMapWeatherKey(weatherLayer))} ·{' '}
           <a href="https://openweathermap.org/api/weathermaps" target="_blank" rel="noreferrer" className="underline">
-            {t('liveMapWeatherLegend')}
+            {t('liveMap.weatherLegend')}
           </a>{' '}
           ·{' '}
           <a href="https://openweathermap.org/" target="_blank" rel="noreferrer" className="underline">
-            {t('liveMapWeatherCredit')}
+            {t('liveMap.weatherCredit')}
           </a>{' '}
           {config.data?.terms_catalog?.find((term) => term.id === 'openweather')?.attribution}
         </p>
       )}
       {config.data && !config.data.terms_catalog.some((term) => term.id === 'openweather' && term.accepted) && (
         <p role="status" className="text-xs text-destructive">
-          {t('liveMapTermsRequired')}
+          {t('liveMap.termsRequired')}
         </p>
       )}
       {(weatherState === 'error' || config.isError) && (
         <p role="status" className="text-xs text-destructive">
-          {t('liveMapWeatherError')}
+          {t('liveMap.weatherError')}
         </p>
       )}
     </>
@@ -303,7 +304,7 @@ function SelectedEventPopup({ event, onClose }: { event: StoredEvent; onClose: (
         variant="ghost"
         size="icon"
         className="absolute right-0.5 top-0.5 h-6 w-6"
-        aria-label={t('liveMapCloseEvent')}
+        aria-label={t('liveMap.closeEvent')}
         onClick={onClose}
       >
         <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -372,7 +373,7 @@ function LiveMapToolbar({
   return (
     <div className="flex shrink-0 flex-wrap gap-2">
       {toolbarStart}
-      <div role="group" aria-label={t('liveMapCategory')} className="flex flex-wrap items-center gap-1">
+      <div role="group" aria-label={t('liveMap.category')} className="flex flex-wrap items-center gap-1">
         <Button
           type="button"
           size="sm"
@@ -380,7 +381,7 @@ function LiveMapToolbar({
           aria-pressed={tags.length === 0}
           onClick={() => onTags([])}
         >
-          {t('liveMapCategory_all')}
+          {t('liveMap.categoryAll')}
         </Button>
         {LIVE_TAGS.map((tag) => (
           <Button
@@ -391,7 +392,7 @@ function LiveMapToolbar({
             aria-pressed={tags.includes(tag)}
             onClick={() => onTags((current) => (current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]))}
           >
-            {t(`liveMapTag_${tag}`)}
+            {t(LIVE_TAG_KEY[tag])}
           </Button>
         ))}
       </div>
@@ -399,28 +400,28 @@ function LiveMapToolbar({
         type="search"
         value={query}
         onChange={(event) => onQuery(event.target.value)}
-        aria-label={t('liveMapSearch')}
-        placeholder={t('liveMapSearch')}
+        aria-label={t('liveMap.search')}
+        placeholder={t('liveMap.search')}
         className="h-8 w-40"
       />
       <Button type="button" size="sm" variant="outline" disabled={results.some((result) => result.isFetching)} onClick={onRefresh}>
-        {t('liveMapRefresh')}
+        {t('liveMap.refresh')}
       </Button>
       <Select value={days} onValueChange={onDays}>
-        <SelectTrigger aria-label={t('liveMapPeriod')} className="h-8 w-32">
+        <SelectTrigger aria-label={t('liveMap.period')} className="h-8 w-32">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {['1', '7', '30'].map((value) => (
             <SelectItem key={value} value={value}>
-              {t('mapRange', { days: Number(value) })}
+              {t('map.range', { days: Number(value) })}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
       {onOpenSources && (
         <Button type="button" size="sm" variant="outline" onClick={onOpenSources}>
-          {t('liveMapSources')}
+          {t('liveMap.sources')}
         </Button>
       )}
     </div>
@@ -446,7 +447,7 @@ function LiveSourcesDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl" closeLabel={t('close')}>
         <DialogHeader>
-          <DialogTitle>{t('liveMapSources')}</DialogTitle>
+          <DialogTitle>{t('liveMap.sources')}</DialogTitle>
         </DialogHeader>
         {children}
         <LiveMapConfig />
@@ -470,28 +471,28 @@ function LiveEmptyState({
   onOpenSources?: () => void;
 }) {
   const t = useTranslations('dashboard');
-  if (config.isPending) return <p role="status">{t('liveMapConfigLoading')}</p>;
+  if (config.isPending) return <p role="status">{t('liveMap.configLoading')}</p>;
   if (config.isError)
     return (
       <div role="status" className="flex flex-wrap items-center gap-2">
-        <span>{t('liveMapConfigLoadError')}</span>
+        <span>{t('liveMap.configLoadError')}</span>
         <Button type="button" size="sm" variant="outline" onClick={() => void config.refetch()}>
-          {t('liveMapConfigRetry')}
+          {t('liveMap.configRetry')}
         </Button>
       </div>
     );
   if (accepted.length === 0)
     return onOpenSources ? (
       <div className="flex flex-wrap items-center gap-2">
-        <span>{t('liveMapNoSources')}</span>
+        <span>{t('liveMap.noSources')}</span>
         <Button type="button" size="sm" variant="outline" onClick={onOpenSources}>
-          {t('liveMapEnableSources')}
+          {t('liveMap.enableSources')}
         </Button>
       </div>
     ) : (
-      <p>{t('liveMapTermsRequired')}</p>
+      <p>{t('liveMap.termsRequired')}</p>
     );
-  return <p>{t('liveMapEmpty')}</p>;
+  return <p>{t('liveMap.empty')}</p>;
 }
 
 /**
@@ -564,12 +565,12 @@ function LiveMapContent({
       <div
         ref={setNode}
         role="group"
-        aria-label={t('mapPlotLabel')}
+        aria-label={t('map.plotLabel')}
         className={`relative overflow-hidden rounded border border-border ${overview ? 'h-[clamp(11rem,30vh,20rem)] shrink-0' : 'min-h-48 flex-[2]'}`}
       >
         {size.width > 0 && size.height > 0 && (
           <div className="absolute inset-0">
-            <Suspense fallback={<p role="status">{t('mapRendererLoading')}</p>}>
+            <Suspense fallback={<p role="status">{t('map.rendererLoading')}</p>}>
               <WorldMap {...mapProps} projection={engine === 'globe' ? 'globe' : 'mercator'} />
             </Suspense>
           </div>
@@ -577,11 +578,11 @@ function LiveMapContent({
         {selectedEvent && <SelectedEventPopup event={selectedEvent} onClose={() => setSelected(null)} />}
       </div>
       <LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />
-      <p className="shrink-0 text-xs text-muted-foreground">{t('mapBasemapCredit')}</p>
+      <p className="shrink-0 text-xs text-muted-foreground">{t('map.basemapCredit')}</p>
       {overview ? (
         <>
           <h3 className="shrink-0 text-xs font-medium text-muted-foreground">
-            {t('liveMapEvents')} ({filtered.length})
+            {t('liveMap.events')} ({filtered.length})
           </h3>
           <LiveEventList events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
           <LiveSourcesDialog open={sourcesOpen} onOpenChange={setSourcesOpen}>

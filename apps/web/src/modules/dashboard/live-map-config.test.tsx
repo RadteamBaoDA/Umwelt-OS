@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { dashboardMessages } from '@/core/messages/dashboard';
+
 import { getCatalog } from '@locales';
 
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: 'workspace' }, isOwner: true }) }));
@@ -41,7 +41,10 @@ describe('live map consent', () => {
     );
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], common: getCatalog('en-us', 'common') }}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), common: getCatalog('en-us', 'common') }}
+        >
           <LiveMapConfig />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -80,7 +83,10 @@ describe('live map consent', () => {
     );
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], common: getCatalog('en-us', 'common') }}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), common: getCatalog('en-us', 'common') }}
+        >
           <LiveMapConfig />
         </NextIntlClientProvider>
       </QueryClientProvider>,

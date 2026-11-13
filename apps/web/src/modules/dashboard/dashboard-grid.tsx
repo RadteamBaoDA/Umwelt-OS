@@ -75,7 +75,7 @@ function useGridWidth(gridRef: React.RefObject<HTMLDivElement | null>): number {
 
 /** Live-region text and gesture status for the running gesture (or the last keyboard announcement). */
 function describeGesture(
-  t: ReturnType<typeof useTranslations>,
+  t: ReturnType<typeof useTranslations<'dashboard'>>,
   gesture: ActiveGesture | null,
   placements: DashboardPlacement[],
   announcement: string,

@@ -22,8 +22,6 @@ type LegacyNamespace =
   | 'vizRouter'
   | 'todos'
   | 'n8n'
-  | 'dashboard'
-  | 'gadgetSettings'
   | 'entities'
   | 'observability'
   | 'exports'
@@ -31,10 +29,7 @@ type LegacyNamespace =
   | 'detail'
   | 'documents'
   | 'news'
-  | 'daily'
-  | 'github'
   | 'automations'
-  | 'notifications'
   | 'pick'
   | 'workspaces'
   | 'globalSettings'
@@ -42,7 +37,6 @@ type LegacyNamespace =
   | 'workspaceMembers'
   | 'sharing'
   | 'translations'
-  | 'uiSweep'
   | 'routeErrors';
 
 declare module 'next-intl' {

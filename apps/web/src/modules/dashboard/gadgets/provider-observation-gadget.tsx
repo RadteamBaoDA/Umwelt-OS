@@ -182,7 +182,7 @@ function useProviderObservations(instance: GadgetInstance) {
   // Provider attribution + freshness live in the frame footer, not in the body.
   useReportGadgetFreshness(
     items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null),
-    providerNames ? t('providerObsAttribution', { provider: providerNames }) : null,
+    providerNames ? t('providerObs.attribution', { provider: providerNames }) : null,
   );
   return { sourceIds, sourceId, query, items, history, sources, sourceQuery };
 }
@@ -198,9 +198,9 @@ function ObservationNotes({ items }: { items: WorldObservation[] }) {
         return (
           <div key={item.id}>
             {kind === 'referenceDate' && item.reference_date && (
-              <p>{t('providerObsReferenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>
+              <p>{t('providerObs.referenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>
             )}
-            {kind === 'annualPeriod' && item.period && <p>{t('providerObsPeriod', { period: item.period })}</p>}
+            {kind === 'annualPeriod' && item.period && <p>{t('providerObs.period', { period: item.period })}</p>}
           </div>
         );
       })}
@@ -239,9 +239,9 @@ function ObservationRows({
   /** Tooltip text listing the observed / published / collected times of one reading. */
   const timesTitle = (item: WorldObservation) =>
     [
-      `${t('providerObsObserved')}: ${fmt(item.observed_at)}`,
-      item.published_at ? `${t('providerObsPublished')}: ${fmt(item.published_at)}` : null,
-      `${t('observationCollectedAt')}: ${fmt(item.collected_at)}`,
+      `${t('providerObs.observed')}: ${fmt(item.observed_at)}`,
+      item.published_at ? `${t('providerObs.published')}: ${fmt(item.published_at)}` : null,
+      `${t('observation.collectedAt')}: ${fmt(item.collected_at)}`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -261,7 +261,7 @@ function ObservationRows({
         title={timesTitle(single)}
         data-testid="observation-row"
         role="group"
-        aria-label={single.value === null ? t('weatherMissingValue') : `${single.value} ${single.currency ?? single.unit}`}
+        aria-label={single.value === null ? t('weather.missingValue') : `${single.value} ${single.currency ?? single.unit}`}
       >
         <GadgetKpi
           label={labelOf(single)}
@@ -277,7 +277,7 @@ function ObservationRows({
     );
   }
   const list = (
-    <ul className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`} aria-label={instance.title || t('providerObsTitle')}>
+    <ul className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`} aria-label={instance.title || t('providerObs.title')}>
       {items.map((item) => (
         <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
           <SeriesRow
@@ -299,7 +299,7 @@ function ObservationRows({
     <>
       <ul
         data-testid="observation-kpi-strip"
-        aria-label={instance.title || t('providerObsTitle')}
+        aria-label={instance.title || t('providerObs.title')}
         className="hidden gap-x-6 @[48rem]/gadget:grid"
         style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
       >
@@ -337,11 +337,11 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const t = useTranslations('dashboard');
   const { sourceIds, sourceId, query, items, history, sources, sourceQuery } = useProviderObservations(instance);
 
-  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />;
-  if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observationLoading')} />;
+  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObs.sourceRequired')} action={{ href: '/settings/sources', label: t('gadget.configureAction') }} />;
+  if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observation.loading')} />;
   // No last good value to fall back on: plain error.
-  if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
-  if (!items.length) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
+  if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observation.loadFailed')} />;
+  if (!items.length) return <GadgetNotice kind="empty" message={t('observation.empty')} />;
 
   const interval = sourceQuery.data?.configuration.schedule_interval_minutes;
   const lastCollected = items.reduce((max, item) => (item.collected_at > max ? item.collected_at : max), items[0].collected_at);
@@ -351,12 +351,12 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
     <section className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
       {query.isError && (
         <p role="alert" className="text-xs text-destructive">
-          {t('providerObsRefreshFailed')}
+          {t('providerObs.refreshFailed')}
         </p>
       )}
       {stale && (
         <p role="status" className="text-xs text-muted-foreground">
-          {t('providerObsStale')}
+          {t('providerObs.stale')}
         </p>
       )}
       <ObservationRows instance={instance} items={items} history={history} sources={sources} sourceIds={sourceIds} />

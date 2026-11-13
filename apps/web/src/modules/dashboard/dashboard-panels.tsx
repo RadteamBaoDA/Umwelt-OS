@@ -15,7 +15,12 @@ import { TodayHeader } from './today-header';
 import type { LayoutEditOrigin } from './layout-geometry';
 
 /** Persistent panel tab list inside the page's Tabs root; Add stays outside the keyboard roving set. */
-export function GroupTabs({ groups, onAdd, canAdd, updatedGroupIds }: {
+export function GroupTabs({
+  groups,
+  onAdd,
+  canAdd,
+  updatedGroupIds,
+}: {
   groups: DashboardGroup[];
   /** Groups whose sources refreshed since the owner last opened them; shown as a dot (no count). */
   updatedGroupIds?: ReadonlySet<string>;
@@ -27,28 +32,40 @@ export function GroupTabs({ groups, onAdd, canAdd, updatedGroupIds }: {
     <div className="flex shrink-0 items-center gap-3 border-b border-border pb-2">
       <div className="min-w-0 flex-1 overflow-x-auto">
         <TabsList className="h-9 min-w-max bg-muted/30 p-0.5">
-          {[...groups].sort((a, b) => Number(b.is_overview) - Number(a.is_overview) || a.position - b.position).map((group) => (
-            <TabsTrigger key={group.id} value={group.id} className="h-8 px-3 text-xs">
-              {group.is_overview ? t('overviewTab') : group.name}
-              {updatedGroupIds?.has(group.id) && (
-                <>
-                  <span aria-hidden="true" className="ml-1.5 inline-block size-1.5 rounded-full bg-primary" />
-                  <span className="sr-only">{t('tabUpdated')}</span>
-                </>
-              )}
-            </TabsTrigger>
-          ))}
+          {[...groups]
+            .sort((a, b) => Number(b.is_overview) - Number(a.is_overview) || a.position - b.position)
+            .map((group) => (
+              <TabsTrigger key={group.id} value={group.id} className="h-8 px-3 text-xs">
+                {group.is_overview ? t('overview.tab') : group.name}
+                {updatedGroupIds?.has(group.id) && (
+                  <>
+                    <span aria-hidden="true" className="ml-1.5 inline-block size-1.5 rounded-full bg-primary" />
+                    <span className="sr-only">{t('tabUpdated')}</span>
+                  </>
+                )}
+              </TabsTrigger>
+            ))}
         </TabsList>
       </div>
-      {canAdd && <Button type="button" size="sm" variant="outline" onClick={onAdd} className="shrink-0">
-        <Plus className="size-4" aria-hidden="true" />{t('addPanel')}
-      </Button>}
+      {canAdd && (
+        <Button type="button" size="sm" variant="outline" onClick={onAdd} className="shrink-0">
+          <Plus className="size-4" aria-hidden="true" />
+          {t('addPanel')}
+        </Button>
+      )}
     </div>
   );
 }
 
 /** Status banners above the grid: frozen-origin notice, unavailable mobile layout and the dismissible mobile hint. */
-export function LayoutNotices({ editOrigin, selectedDashboardId, requestedBreakpoint, mobileProjectionUnavailable, showMobileHint, onDismissMobileHint }: {
+export function LayoutNotices({
+  editOrigin,
+  selectedDashboardId,
+  requestedBreakpoint,
+  mobileProjectionUnavailable,
+  showMobileHint,
+  onDismissMobileHint,
+}: {
   editOrigin: LayoutEditOrigin | null;
   selectedDashboardId: string | null;
   requestedBreakpoint: 'desktop' | 'mobile';
@@ -62,23 +79,31 @@ export function LayoutNotices({ editOrigin, selectedDashboardId, requestedBreakp
     <>
       {frozen && (
         <p role="status" className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-          {t('mobileEditOrigin', {
-            breakpoint: t(editOrigin.breakpoint === 'mobile' ? 'mobileLayout' : 'desktopLayout'),
-            requested: t(requestedBreakpoint === 'mobile' ? 'mobileLayout' : 'desktopLayout'),
+          {t('mobile.editOrigin', {
+            breakpoint: t(editOrigin.breakpoint === 'mobile' ? 'mobile.layout' : 'desktopLayout'),
+            requested: t(requestedBreakpoint === 'mobile' ? 'mobile.layout' : 'desktopLayout'),
           })}
         </p>
       )}
 
       {mobileProjectionUnavailable && (
         <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {t('mobileLayoutUnavailable')}
+          {t('mobile.layoutUnavailable')}
         </p>
       )}
 
       {showMobileHint && (
-        <p role="status" className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-          <span className="min-w-0 flex-1">{t('mobileReadingProjection')}</span>
-          <BareButton type="button" aria-label={t('dismissNotice')} onClick={onDismissMobileHint} className="shrink-0 rounded p-0.5 hover:bg-primary/10">
+        <p
+          role="status"
+          className="flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm text-muted-foreground"
+        >
+          <span className="min-w-0 flex-1">{t('mobile.readingProjection')}</span>
+          <BareButton
+            type="button"
+            aria-label={t('dismissNotice')}
+            onClick={onDismissMobileHint}
+            className="shrink-0 rounded p-0.5 hover:bg-primary/10"
+          >
             <X className="size-4" aria-hidden="true" />
           </BareButton>
         </p>
@@ -91,7 +116,14 @@ export function LayoutNotices({ editOrigin, selectedDashboardId, requestedBreakp
  * Dashed empty-state card. `variant="none"` is shown when the workspace has no dashboards; `"empty"` when the
  * dashboard (or selected group) has no gadgets. Actions are hidden from read-only administrators.
  */
-export function DashboardEmptyState({ variant, isAdminViewer, canEditLayout, onOpenPresets, onCreateDashboard, onStartEmpty }: {
+export function DashboardEmptyState({
+  variant,
+  isAdminViewer,
+  canEditLayout,
+  onOpenPresets,
+  onCreateDashboard,
+  onStartEmpty,
+}: {
   variant: 'none' | 'empty';
   isAdminViewer: boolean;
   canEditLayout: boolean;
@@ -104,33 +136,43 @@ export function DashboardEmptyState({ variant, isAdminViewer, canEditLayout, onO
   return (
     <section className="dashboard-empty flex flex-wrap items-center gap-6 rounded-lg border border-dashed border-border bg-card p-8">
       <div className="min-w-0 flex-[1_1_360px]">
-        <h2 className="m-0 mb-1 text-xl font-semibold leading-snug text-foreground">{none ? t('noDashboardsYet') : t('emptyTitle')}</h2>
-        <p className="m-0 text-sm text-muted-foreground">{none ? t('noDashboardsDesc') : t('emptyDesc')}</p>
+        <h2 className="m-0 mb-1 text-xl font-semibold leading-snug text-foreground">{none ? t('noDashboards.yet') : t('empty.title')}</h2>
+        <p className="m-0 text-sm text-muted-foreground">{none ? t('noDashboards.desc') : t('empty.desc')}</p>
       </div>
-      {!isAdminViewer && none && <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" onClick={onOpenPresets}>
-          <Sparkles className="size-4" aria-hidden="true" />
-          {t('presets')}
-        </Button>
-        <Button type="button" className="font-semibold" onClick={onCreateDashboard}>
-          <Plus className="size-4" aria-hidden="true" />
-          {t('createFirstDashboard')}
-        </Button>
-      </div>}
-      {!isAdminViewer && !none && <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" disabled={!canEditLayout} onClick={onStartEmpty}>
-          {t('startEmpty')}
-        </Button>
-        <Button type="button" className="font-semibold" onClick={onOpenPresets}>
-          {t('choosePreset')}
-        </Button>
-      </div>}
+      {!isAdminViewer && none && (
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onOpenPresets}>
+            <Sparkles className="size-4" aria-hidden="true" />
+            {t('presets.label')}
+          </Button>
+          <Button type="button" className="font-semibold" onClick={onCreateDashboard}>
+            <Plus className="size-4" aria-hidden="true" />
+            {t('createFirstDashboard')}
+          </Button>
+        </div>
+      )}
+      {!isAdminViewer && !none && (
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" disabled={!canEditLayout} onClick={onStartEmpty}>
+            {t('startEmpty')}
+          </Button>
+          <Button type="button" className="font-semibold" onClick={onOpenPresets}>
+            {t('choosePreset')}
+          </Button>
+        </div>
+      )}
     </section>
   );
 }
 
 /** Collapsible list of sources whose latest error is newer than their latest success. */
-export function StaleSourcesPanel({ sources, open, onToggle, locale, timezone }: {
+export function StaleSourcesPanel({
+  sources,
+  open,
+  onToggle,
+  locale,
+  timezone,
+}: {
   sources: Source[];
   open: boolean;
   onToggle: () => void;
@@ -139,13 +181,18 @@ export function StaleSourcesPanel({ sources, open, onToggle, locale, timezone }:
 }) {
   const t = useTranslations('dashboard');
   return (
-    <section aria-label={t('staleSourcesTitle')} className="space-y-2 rounded-md border border-border bg-card px-3 py-1 text-sm">
+    <section aria-label={t('staleSources.title')} className="space-y-2 rounded-md border border-border bg-card px-3 py-1 text-sm">
       {/* One summary line; the per-source detail list is a disclosure so it never dominates the page. */}
       <div className="flex flex-wrap items-center gap-x-2">
-        <h2 className="text-sm font-semibold">{t('staleSourcesSummary', { count: sources.length })}</h2>
-        <span aria-hidden="true" className="text-muted-foreground">·</span>
-        <Link href="/settings/sources" className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4">
-          {t('staleSourcesReview')}
+        <h2 className="text-sm font-semibold">{t('staleSources.summary', { count: sources.length })}</h2>
+        <span aria-hidden="true" className="text-muted-foreground">
+          ·
+        </span>
+        <Link
+          href="/settings/sources"
+          className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-xs font-semibold text-primary underline underline-offset-4"
+        >
+          {t('staleSources.review')}
         </Link>
         <Button
           type="button"
@@ -156,17 +203,22 @@ export function StaleSourcesPanel({ sources, open, onToggle, locale, timezone }:
           aria-controls="stale-sources-details"
           onClick={onToggle}
         >
-          {t('staleSourcesDetails')}
+          {t('staleSources.details')}
         </Button>
       </div>
       {open && (
         <ul id="stale-sources-details" className="space-y-2 pb-2">
           {sources.map((s) => (
             <li key={s.id} className="space-y-0.5">
-              <p>{t('staleSourceLine', { name: s.name, code: s.last_error_code ?? s.collection_error_code ?? s.processing_error_code ?? '—' })}</p>
+              <p>
+                {t('staleSource.line', {
+                  name: s.name,
+                  code: s.last_error_code ?? s.collection_error_code ?? s.processing_error_code ?? '—',
+                })}
+              </p>
               <p className="text-xs text-muted-foreground">
-                {t('staleSourceTimes', {
-                  success: s.last_success_at ? formatDateTime(s.last_success_at, locale, timezone) : t('staleSourceNever'),
+                {t('staleSource.times', {
+                  success: s.last_success_at ? formatDateTime(s.last_success_at, locale, timezone) : t('staleSource.never'),
                   error: formatDateTime(s.last_error_at!, locale, timezone),
                 })}
               </p>
@@ -184,7 +236,10 @@ export function TimezoneFooter({ locale, timezone }: { locale: AppLocaleId; time
   return (
     <p className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
       <span>{t('timesShownIn', { timezone: formatTimeZoneLabel(timezone, locale) })}</span>
-      <Link href="/settings/sources" className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-foreground underline underline-offset-4">
+      <Link
+        href="/settings/sources"
+        className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-foreground underline underline-offset-4"
+      >
         {t('openSourceStatus')}
       </Link>
     </p>

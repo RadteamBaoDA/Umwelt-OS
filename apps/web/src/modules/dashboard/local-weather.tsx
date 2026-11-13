@@ -90,14 +90,14 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
           <BareButton
             type="button"
             onClick={locate}
-            title={t('localWeatherPrivacy')}
+            title={t('localWeather.privacy')}
             aria-describedby="local-weather-privacy"
             className="cursor-pointer border-0 bg-transparent p-0 text-sm font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground"
           >
             {t('showLocalWeather')}
           </BareButton>
           <span id="local-weather-privacy" className="sr-only">
-            {t('localWeatherPrivacy')}
+            {t('localWeather.privacy')}
           </span>
         </>
       )}
@@ -158,7 +158,7 @@ function WeatherSummary({ data }: { data: LocalWeatherReading }) {
         <PopoverTrigger asChild>
           <BareButton
             type="button"
-            aria-label={t('weatherDetails')}
+            aria-label={t('weather.details')}
             onPointerEnter={hoverOpen}
             onPointerLeave={hoverClose}
             className="ml-1 inline-flex size-6 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 align-middle text-muted-foreground hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"

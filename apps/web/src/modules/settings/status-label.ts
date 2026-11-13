@@ -7,4 +7,14 @@ export function statusLabel(t: ReturnType<typeof useTranslations<'globalSettings
 }
 
 /** Maps backend component ids to `uiSweep` message keys; shared by System status and Global settings so both show the same service names. */
-export const serviceLabelKeys: Record<string, string> = { postgres: 'svcPostgres', redis: 'svcRedis', worker: 'svcWorker', chat_worker: 'svcChatWorker', model_worker: 'svcModelWorker', model_gateway: 'svcModelGateway', graph: 'svcGraph', n8n: 'svcN8n', browser: 'svcBrowser' };
+export const serviceLabelKeys = {
+  postgres: 'svc.postgres',
+  redis: 'svc.redis',
+  worker: 'svc.worker',
+  chat_worker: 'svc.chatWorker',
+  model_worker: 'svc.modelWorker',
+  model_gateway: 'svc.modelGateway',
+  graph: 'svc.graph',
+  n8n: 'svc.n8n',
+  browser: 'svc.browser',
+} as const;

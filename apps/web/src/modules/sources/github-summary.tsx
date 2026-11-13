@@ -33,13 +33,19 @@ export function GitHubSummary({ sourceId }: { sourceId: string }) {
       ]
     : [];
   return (
-    <section aria-label={t('summaryTitle')} className="space-y-2">
-      <h4 className="text-sm font-semibold text-foreground">{t('summaryTitle')}</h4>
-      {query.isLoading && <p role="status" className="text-xs text-muted-foreground">{t('summaryLoading')}</p>}
-      {query.isError && <p role="alert" className="text-xs text-destructive">{t('summaryError')}</p>}
-      {data && rows.every(([, value]) => value === 0) && (
-        <p className="text-xs text-muted-foreground">{t('summaryEmpty')}</p>
+    <section aria-label={t('summary.title')} className="space-y-2">
+      <h4 className="text-sm font-semibold text-foreground">{t('summary.title')}</h4>
+      {query.isLoading && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('summary.loading')}
+        </p>
       )}
+      {query.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('summary.error')}
+        </p>
+      )}
+      {data && rows.every(([, value]) => value === 0) && <p className="text-xs text-muted-foreground">{t('summary.empty')}</p>}
       {data && rows.some(([, value]) => value > 0) && (
         <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
           {rows.map(([label, value]) => (
@@ -72,15 +78,42 @@ export function GitHubWebhookStatus() {
     queryFn: ({ signal }) => getGitHubWebhookStatus(signal),
     refetchInterval: 30_000,
   });
-  return <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4" aria-labelledby="github-webhook-heading">
-    <h3 id="github-webhook-heading" className="m-0 text-base font-semibold">{t('githubWebhookStatus')}</h3>
-    {webhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
-    {webhook.isError && <p className="error" role="alert">{t('githubWebhookUnavailable')} <Button variant="outline" onClick={() => webhook.refetch()}>{t('retry')}</Button></p>}
-    {webhook.data && <>
-      <p role="status">{t(webhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} · {t('githubWebhookRevision', { revision: webhook.data.receiver_revision })}</p>
-      <p className="text-muted-foreground">{t('githubWebhookBacklog', { pending: webhook.data.pending_count, deliveries: webhook.data.pending_deliveries, hints: webhook.data.pending_hints, capacity: 100000 })}</p>
-      <p className="text-muted-foreground">{t('githubWebhookAttention', { count: webhook.data.needs_attention })}</p>
-      {webhook.data.oldest_pending_at && <p className="text-muted-foreground">{t('githubWebhookOldest', { time: formatDateTime(webhook.data.oldest_pending_at, display.locale, display.timezone) })}</p>}
-    </>}
-  </section>;
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4" aria-labelledby="github-webhook-heading">
+      <h3 id="github-webhook-heading" className="m-0 text-base font-semibold">
+        {t('githubWebhookStatus')}
+      </h3>
+      {webhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
+      {webhook.isError && (
+        <p className="error" role="alert">
+          {t('githubWebhookUnavailable')}{' '}
+          <Button variant="outline" onClick={() => webhook.refetch()}>
+            {t('retry')}
+          </Button>
+        </p>
+      )}
+      {webhook.data && (
+        <>
+          <p role="status">
+            {t(webhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} ·{' '}
+            {t('githubWebhookRevision', { revision: webhook.data.receiver_revision })}
+          </p>
+          <p className="text-muted-foreground">
+            {t('githubWebhookBacklog', {
+              pending: webhook.data.pending_count,
+              deliveries: webhook.data.pending_deliveries,
+              hints: webhook.data.pending_hints,
+              capacity: 100000,
+            })}
+          </p>
+          <p className="text-muted-foreground">{t('githubWebhookAttention', { count: webhook.data.needs_attention })}</p>
+          {webhook.data.oldest_pending_at && (
+            <p className="text-muted-foreground">
+              {t('githubWebhookOldest', { time: formatDateTime(webhook.data.oldest_pending_at, display.locale, display.timezone) })}
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
 }

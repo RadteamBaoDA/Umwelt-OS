@@ -1,12 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import {
-  ExternalLink,
-  History,
-  Link as LinkIcon,
-  RotateCw,
-} from 'lucide-react';
+import { ExternalLink, History, Link as LinkIcon, RotateCw } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import React, { useMemo } from 'react';
@@ -30,7 +25,10 @@ function TimelineDay({ day }: { day: { key: string; label: string; items: Timeli
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const display = useDisplayPreferences();
-  const timeLabel = useMemo(() => getDateTimeFormat(display.locale, { timeStyle: 'short', timeZone: display.timezone }), [display.locale, display.timezone]);
+  const timeLabel = useMemo(
+    () => getDateTimeFormat(display.locale, { timeStyle: 'short', timeZone: display.timezone }),
+    [display.locale, display.timezone],
+  );
   return (
     <section aria-label={day.label}>
       <h4 className="sticky top-0 z-10 bg-card py-1 text-xs font-semibold text-muted-foreground">{day.label}</h4>
@@ -41,16 +39,14 @@ function TimelineDay({ day }: { day: { key: string; label: string; items: Timeli
             <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-foreground" aria-hidden="true" />
             <div className="space-y-0.5">
               <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-                {evt.started_at && !Number.isNaN(Date.parse(evt.started_at)) && <time dateTime={evt.started_at}>{timeLabel.format(new Date(evt.started_at))}</time>}
-                <span>{evt.type}</span>
-                {evt.origin === 'derived' && (
-                  <span title={ts('tlDerived')}>{t('timelineDerived')}</span>
+                {evt.started_at && !Number.isNaN(Date.parse(evt.started_at)) && (
+                  <time dateTime={evt.started_at}>{timeLabel.format(new Date(evt.started_at))}</time>
                 )}
+                <span>{evt.type}</span>
+                {evt.origin === 'derived' && <span title={ts('tl.derived')}>{t('timeline.derived')}</span>}
               </div>
               <h5 className="text-sm font-semibold leading-snug text-foreground">{evt.title}</h5>
-              {evt.summary && (
-                <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{evt.summary}</p>
-              )}
+              {evt.summary && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{evt.summary}</p>}
               {evt.participants && evt.participants.length > 0 && (
                 <div className="flex flex-wrap gap-2 pt-0.5">
                   {evt.participants.slice(0, 3).map((p, idx) => (
@@ -60,7 +56,7 @@ function TimelineDay({ day }: { day: { key: string; label: string; items: Timeli
                       className="inline-flex items-center gap-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
                     >
                       <LinkIcon className="w-2.5 h-2.5" aria-hidden="true" />
-                      <span>{p.role || t('timelineParticipant')}</span>
+                      <span>{p.role || t('timeline.participant')}</span>
                     </Link>
                   ))}
                 </div>
@@ -74,7 +70,10 @@ function TimelineDay({ day }: { day: { key: string; label: string; items: Timeli
 }
 
 /** Loading skeleton, error-with-retry and empty states of the timeline slice (shown instead of the event list). */
-function TimelineStatus({ query, eventCount }: {
+function TimelineStatus({
+  query,
+  eventCount,
+}: {
   query: { isLoading: boolean; isError: boolean; refetch: () => unknown };
   eventCount: number;
 }) {
@@ -96,11 +95,8 @@ function TimelineStatus({ query, eventCount }: {
       {/* Error state */}
       {timelineQuery.isError && events.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground">
-          <p className="text-destructive mb-2">{ts('tlFailed')}</p>
-          <Button
-            onClick={() => timelineQuery.refetch()}
-            className="secondary text-xs h-7"
-          >
+          <p className="text-destructive mb-2">{ts('tl.failed')}</p>
+          <Button onClick={() => timelineQuery.refetch()} className="secondary text-xs h-7">
             {tc('retry')}
           </Button>
         </div>
@@ -110,10 +106,8 @@ function TimelineStatus({ query, eventCount }: {
       {!timelineQuery.isLoading && events.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <History className="w-8 h-8 mb-2 opacity-50" />
-          <p className="text-xs font-semibold text-foreground mb-1">{ts('tlNone')}</p>
-          <p className="text-[11px] max-w-xs text-muted-foreground">
-            {ts('tlNoneHint')}
-          </p>
+          <p className="text-xs font-semibold text-foreground mb-1">{ts('tl.none')}</p>
+          <p className="text-[11px] max-w-xs text-muted-foreground">{ts('tl.noneHint')}</p>
         </div>
       )}
     </>
@@ -165,7 +159,10 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
 
   const events = useMemo(() => timelineQuery.data ?? initialEvents ?? [], [timelineQuery.data, initialEvents]);
   // Group by the owner's local day so the sticky day label replaces a full timestamp on every row.
-  const dayLabel = useMemo(() => getDateTimeFormat(display.locale, { dateStyle: 'medium', timeZone: display.timezone }), [display.locale, display.timezone]);
+  const dayLabel = useMemo(
+    () => getDateTimeFormat(display.locale, { dateStyle: 'medium', timeZone: display.timezone }),
+    [display.locale, display.timezone],
+  );
   const days = useMemo(() => {
     const groups: { key: string; label: string; items: TimelineEvent[] }[] = [];
     for (const evt of events) {
@@ -183,27 +180,20 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
     <div className="flex flex-col h-full bg-card text-card-foreground p-3 space-y-3 overflow-y-auto overflow-x-hidden">
       {/* Quiet top row: localized event count, refresh and the full-timeline link. */}
       <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground tabular-nums">
-          {t('timelineEventCount', { count: events.length })}
-        </span>
+        <span className="text-muted-foreground tabular-nums">{t('timeline.eventCount', { count: events.length })}</span>
         <div className="flex items-center gap-1.5">
           <BareButton
             type="button"
             onClick={() => timelineQuery.refetch()}
             disabled={timelineQuery.isFetching}
             className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors"
-            title={ts('tlRefresh')}
-            aria-label={ts('tlRefresh')}
+            title={ts('tl.refresh')}
+            aria-label={ts('tl.refresh')}
           >
-            <RotateCw
-              className={`w-3.5 h-3.5 ${timelineQuery.isFetching ? 'animate-spin' : ''}`}
-            />
+            <RotateCw className={`w-3.5 h-3.5 ${timelineQuery.isFetching ? 'animate-spin' : ''}`} />
           </BareButton>
-          <Link
-            href="/timeline"
-            className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
-          >
-            <span>{ts('tlFull')}</span>
+          <Link href="/timeline" className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline">
+            <span>{ts('tl.full')}</span>
             <ExternalLink className="w-3 h-3" />
           </Link>
         </div>
@@ -214,7 +204,9 @@ export function TimelineGadget({ instance, initialEvents }: TimelineGadgetProps)
       {/* Events grouped by day: sticky day label, ink dot, time-only meta. */}
       {events.length > 0 && (
         <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-          {days.map((day) => <TimelineDay key={day.key} day={day} />)}
+          {days.map((day) => (
+            <TimelineDay key={day.key} day={day} />
+          ))}
         </div>
       )}
     </div>

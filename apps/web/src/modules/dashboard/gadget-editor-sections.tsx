@@ -10,20 +10,22 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { templateName } from '@/core/renderer-labels';
+import { templateDescription, templateName } from '@/core/renderer-labels';
 import type { CoinGeckoCoin } from '@/modules/sources';
 import type { GadgetRenderer, GadgetTemplate, ProviderMetrics } from './api';
 import { providerMeta } from './live-feed/sources';
 import {
   defaultMetric,
   LIVE_PROVIDERS,
+  liveMapWeatherKey,
+  MAP_LAYER_KEY,
   MAP_LAYERS,
   splitList,
   type FieldKey,
   type GadgetDraft,
   type WeatherLayer,
 } from './gadget-editor-model';
-import { CoinGeckoSymbolPicker, HighlightRulesField, MetricPicker, SymbolPicker, templateDescription } from './gadget-editor-pickers';
+import { CoinGeckoSymbolPicker, HighlightRulesField, MetricPicker, SymbolPicker } from './gadget-editor-pickers';
 import { GadgetTemplateSample } from './gadget-template-sample';
 import { LiveMapConfig } from './live-map-config';
 import { sourcesLinkFor } from './sources-link';
@@ -87,7 +89,7 @@ function TemplateTile({
         <span className="block text-xs text-muted-foreground">{templateDescription(item.renderer, t)}</span>
         {count !== null && (
           <span className="block text-xs text-muted-foreground">
-            {count === 0 ? t('addCompatibleSource') : t('compatibleCount', { count })}
+            {count === 0 ? t('addCompatibleSource') : t('compatible.count', { count })}
           </span>
         )}
       </span>
@@ -139,7 +141,7 @@ export function TemplateChooser({ renderers, templates, counts, onChoose, onCanc
       )}
       {counts.isError && (
         <p role="status" className="text-xs text-muted-foreground">
-          {t('compatibleCountsFailed')}{' '}
+          {t('compatible.countsFailed')}{' '}
           <Button
             type="button"
             size="sm"
@@ -186,7 +188,7 @@ export function MetricsField({ draft, set, facts }: DraftAccess & { facts: Secti
     <div data-field="metrics" className="space-y-1.5">
       {/* A checkbox group has no single control to point `for` at, so it is named through aria-labelledby instead. */}
       <Label id={`${nameId}-met-label`} htmlFor={metricGroup ? undefined : `${nameId}-met`} className="text-xs font-semibold">
-        {t('metricLabel')}
+        {t('metric.label')}
       </Label>
       {entry && entry.metrics.length > 0 ? (
         <MetricPicker
@@ -206,7 +208,7 @@ export function MetricsField({ draft, set, facts }: DraftAccess & { facts: Secti
             renderer === 'finance_chart'
               ? 'close, volume'
               : renderer === 'provider_observation'
-                ? td('providerObsMetricsPlaceholder')
+                ? td('providerObs.metricsPlaceholder')
                 : 'temperature_2m, precipitation'
           }
           className="h-8 font-mono text-xs"
@@ -290,7 +292,7 @@ export function RegionField({ draft, set, facts }: DraftAccess & { facts: Sectio
   return (
     <div data-field="regions" className="space-y-1.5">
       <Label id={`${nameId}-reg-label`} className="text-xs font-semibold">
-        {t('regionLabel')}
+        {t('region.label')}
       </Label>
       <SearchableSelect
         value={draft.region}
@@ -298,13 +300,13 @@ export function RegionField({ draft, set, facts }: DraftAccess & { facts: Sectio
         allowCustom
         aria-labelledby={`${nameId}-reg-label`}
         aria-describedby={`${nameId}-reg-help`}
-        placeholder={t('regionPlaceholder')}
-        searchLabel={t('regionSearch')}
-        emptyLabel={t('regionEmpty')}
+        placeholder={t('region.placeholder')}
+        searchLabel={t('region.search')}
+        emptyLabel={t('region.empty')}
         onValueChange={(next) => set('region', next.trim())}
       />
       <p id={`${nameId}-reg-help`} className="text-xs text-muted-foreground">
-        {t('regionHelp')}
+        {t('region.help')}
       </p>
       {fieldError('regions') && (
         <p role="alert" className="text-xs text-destructive">
@@ -379,7 +381,7 @@ function LimitAndLookbackFields({ draft, set, facts }: DraftAccess & { facts: Se
       {fields.has('lookback') && (
         <div className="space-y-1.5">
           <Label htmlFor={`${nameId}-look`} className="text-xs font-semibold">
-            {td('observationLookback')}
+            {td('observation.lookback')}
           </Label>
           <Input
             id={`${nameId}-look`}
@@ -415,16 +417,16 @@ function LimitAndLookbackFields({ draft, set, facts }: DraftAccess & { facts: Se
 function LiveMapOptions({ draft, set, nameId }: DraftAccess & { nameId: string }) {
   const td = useTranslations('dashboard');
   const textFields = [
-    [td('liveMapCountry'), draft.country, 'country'],
-    [td('liveMapGithubOwner'), draft.githubOwner, 'githubOwner'],
-    [td('liveMapGithubRepo'), draft.githubRepo, 'githubRepo'],
-    [td('liveMapSecCik'), draft.secCik, 'secCik'],
+    [td('liveMap.country'), draft.country, 'country'],
+    [td('liveMap.githubOwner'), draft.githubOwner, 'githubOwner'],
+    [td('liveMap.githubRepo'), draft.githubRepo, 'githubRepo'],
+    [td('liveMap.secCik'), draft.secCik, 'secCik'],
   ] as const;
   return (
     <>
       <LiveMapConfig />
       <fieldset className="space-y-2">
-        <legend className="text-xs font-semibold">{td('liveMapProviders')}</legend>
+        <legend className="text-xs font-semibold">{td('liveMap.providers')}</legend>
         {LIVE_PROVIDERS.map((provider) => (
           <label key={provider} className="flex items-center gap-2 text-xs">
             <Checkbox
@@ -446,7 +448,7 @@ function LiveMapOptions({ draft, set, nameId }: DraftAccess & { nameId: string }
         ))}
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor={`${nameId}-weather`}>{td('liveMapWeather')}</Label>
+        <Label htmlFor={`${nameId}-weather`}>{td('liveMap.weather')}</Label>
         <Select value={draft.weatherLayer} onValueChange={(value) => set('weatherLayer', value as WeatherLayer)}>
           <SelectTrigger id={`${nameId}-weather`}>
             <SelectValue />
@@ -454,7 +456,7 @@ function LiveMapOptions({ draft, set, nameId }: DraftAccess & { nameId: string }
           <SelectContent>
             {(['none', 'temperature', 'precipitation', 'wind', 'clouds'] as const).map((item) => (
               <SelectItem key={item} value={item}>
-                {td(`liveMapWeather_${item}`)}
+                {td(liveMapWeatherKey(item))}
               </SelectItem>
             ))}
           </SelectContent>
@@ -471,7 +473,7 @@ function SelectedSourcesMapOptions({ draft, set, facts }: DraftAccess & { facts:
   return (
     <>
       <fieldset data-field="map_layer_ids" className="space-y-2">
-        <legend className="text-xs font-semibold">{td('mapLayerLabel')}</legend>
+        <legend className="text-xs font-semibold">{td('map.layerLabel')}</legend>
         {MAP_LAYERS.map((layerId) => (
           <label key={layerId} className="flex items-start gap-2 text-xs">
             <Checkbox
@@ -482,8 +484,8 @@ function SelectedSourcesMapOptions({ draft, set, facts }: DraftAccess & { facts:
               }
             />
             <span>
-              {td(`mapLayer_${layerId}`)}
-              {layerId !== 'world_observations' && <span className="block text-muted-foreground">{td('mapLayerUnavailable')}</span>}
+              {td(MAP_LAYER_KEY[layerId])}
+              {layerId !== 'world_observations' && <span className="block text-muted-foreground">{td('map.layerUnavailable')}</span>}
             </span>
           </label>
         ))}
@@ -495,7 +497,7 @@ function SelectedSourcesMapOptions({ draft, set, facts }: DraftAccess & { facts:
       </fieldset>
       <label className="flex items-start gap-2 text-xs">
         <Checkbox checked={draft.precise} onCheckedChange={(checked) => set('precise', checked === true)} />
-        <span>{td('mapPreciseLocationOptIn')}</span>
+        <span>{td('map.preciseLocationOptIn')}</span>
       </label>
     </>
   );
@@ -509,15 +511,15 @@ function MapOptions({ draft, set, facts }: DraftAccess & { facts: SectionFacts }
     <>
       <div className="space-y-1.5">
         <Label htmlFor={`${nameId}-eng`} className="text-xs font-semibold">
-          {td('mapEngineLabel')}
+          {td('map.engineLabel')}
         </Label>
         <Select value={draft.engine} onValueChange={(next) => set('engine', next as 'globe' | 'flat')}>
           <SelectTrigger id={`${nameId}-eng`} className="h-9">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="globe">{td('mapGlobeEngine')}</SelectItem>
-            <SelectItem value="flat">{td('mapFlatEngine')}</SelectItem>
+            <SelectItem value="globe">{td('map.globeEngine')}</SelectItem>
+            <SelectItem value="flat">{td('map.flatEngine')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -534,25 +536,25 @@ function ScopeSection({ draft, set, facts }: DraftAccess & { facts: SectionFacts
   const { renderer, mapMode } = draft;
   return (
     <section className="space-y-3 rounded-md border border-border p-3">
-      <h4 className="text-sm font-semibold">{renderer === 'map' ? td('mapScopeTitle') : td('intelligenceScopeTitle')}</h4>
+      <h4 className="text-sm font-semibold">{renderer === 'map' ? td('map.scopeTitle') : td('intelligence.scopeTitle')}</h4>
       {(renderer !== 'map' || mapMode === 'selected_sources') && (
         <>
           <div className="space-y-1.5">
             <Label htmlFor={`${nameId}-reg`} className="text-xs font-semibold">
-              {td('mapRegionsLabel')}
+              {td('map.regionsLabel')}
             </Label>
             <Input
               id={`${nameId}-reg`}
               value={draft.regions}
               onChange={(event) => set('regions', event.target.value)}
-              placeholder={td('mapRegionsPlaceholder')}
+              placeholder={td('map.regionsPlaceholder')}
               className="h-8 font-mono text-xs"
             />
-            <p className="text-xs text-muted-foreground">{td('mapRegionsHelp')}</p>
+            <p className="text-xs text-muted-foreground">{td('map.regionsHelp')}</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor={`${nameId}-mlook`} className="text-xs font-semibold">
-              {td('mapLookbackLabel')}
+              {td('map.lookbackLabel')}
             </Label>
             <Input
               id={`${nameId}-mlook`}
@@ -570,7 +572,7 @@ function ScopeSection({ draft, set, facts }: DraftAccess & { facts: SectionFacts
       {fields.has('cii') && (
         <div className="space-y-1.5">
           <Label htmlFor={`${nameId}-cii`} className="text-xs font-semibold">
-            {td('ciiCountryScopeLabel')}
+            {td('cii.countryScopeLabel')}
           </Label>
           <Input
             id={`${nameId}-cii`}
@@ -579,7 +581,7 @@ function ScopeSection({ draft, set, facts }: DraftAccess & { facts: SectionFacts
             placeholder="US, VN"
             className="h-8 font-mono text-xs uppercase"
           />
-          <p className="text-xs text-muted-foreground">{td('ciiCountryScopeHelp')}</p>
+          <p className="text-xs text-muted-foreground">{td('cii.countryScopeHelp')}</p>
         </div>
       )}
     </section>
@@ -604,7 +606,7 @@ export const AdvancedSection = React.forwardRef<HTMLDetailsElement, DraftAccess 
         {fields.has('channels') && (
           <div className="space-y-1.5">
             <Label htmlFor={`${nameId}-tg`} className="text-xs font-semibold">
-              {td('telegramChannels')}
+              {td('telegram.channels')}
             </Label>
             <Input
               id={`${nameId}-tg`}
@@ -615,7 +617,7 @@ export const AdvancedSection = React.forwardRef<HTMLDetailsElement, DraftAccess 
               className="h-8 font-mono text-xs"
             />
             <p id={`${nameId}-tg-help`} className="text-xs text-muted-foreground">
-              {td('telegramChannelsHelp')}
+              {td('telegram.channelsHelp')}
             </p>
           </div>
         )}

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
-import { dashboardMessages } from '@/core/messages/dashboard';
+
 import { JobListGadget } from './job-list';
 
 const api = vi.hoisted(() => ({ list: vi.fn() }));
@@ -36,7 +36,10 @@ describe('JobListGadget', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], common: getCatalog('en-us', 'common') }}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), common: getCatalog('en-us', 'common') }}
+        >
           <JobListGadget instance={{ id: 'g1', title: '', definition: { source_ids: ['s1'] } } as never} />
         </NextIntlClientProvider>
       </QueryClientProvider>,
@@ -56,7 +59,10 @@ describe('JobListGadget', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], common: getCatalog('en-us', 'common') }}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), common: getCatalog('en-us', 'common') }}
+        >
           <JobListGadget instance={{ id: 'g1', title: '', definition: { source_ids: ['s1'] } } as never} />
         </NextIntlClientProvider>
       </QueryClientProvider>,

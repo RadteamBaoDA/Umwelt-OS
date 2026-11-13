@@ -40,7 +40,11 @@ function weeklySeries(timestamps: string[], now: number): { timestamp: number; v
 }
 
 /** Borderless 4-up figures with a weekly spark each (from the loaded events, client-side). */
-function GithubCounts({ counts, events, now }: {
+function GithubCounts({
+  counts,
+  events,
+  now,
+}: {
   counts: { issues: number; pull_requests: number; commits: number; releases: number };
   events: TimelineEvent[];
   now: number;
@@ -49,19 +53,41 @@ function GithubCounts({ counts, events, now }: {
   const tDash = useTranslations('dashboard');
   return (
     <dl className="grid grid-cols-4 gap-3">
-      {([['issues', counts.issues, 'github_issue'], ['pullRequests', counts.pull_requests, 'github_pull'], ['commits', counts.commits, 'github_commit'], ['releases', counts.releases, 'github_release']] as const).map(([key, value, type]) => {
-        const series = weeklySeries(events.filter((e) => e.type === type).map((e) => e.started_at || e.occurred_date || e.observed_at), now);
+      {(
+        [
+          ['issues', counts.issues, 'github_issue'],
+          ['pullRequests', counts.pull_requests, 'github_pull'],
+          ['commits', counts.commits, 'github_commit'],
+          ['releases', counts.releases, 'github_release'],
+        ] as const
+      ).map(([key, value, type]) => {
+        const series = weeklySeries(
+          events.filter((e) => e.type === type).map((e) => e.started_at || e.occurred_date || e.observed_at),
+          now,
+        );
         return (
           <div key={key} className="min-w-0">
             <dt className="truncate text-[11px] text-muted-foreground">{t(key)}</dt>
             <dd className="text-figure-sm m-0">{value}</dd>
-            {series.length > 0 && <div title={tDash('githubActivityPerWeek', { label: t(key) })}><Sparkline data={series} height={20} width={96} line /></div>}
+            {series.length > 0 && (
+              <div title={tDash('githubActivityPerWeek', { label: t(key) })}>
+                <Sparkline data={series} height={20} width={96} line />
+              </div>
+            )}
           </div>
         );
       })}
     </dl>
   );
 }
+
+/** Literal `github` catalog keys per timeline event type; other types show the raw type string. */
+const EVENT_TYPE_KEY = {
+  github_issue: 'type.githubIssue',
+  github_pull: 'type.githubPull',
+  github_commit: 'type.githubCommit',
+  github_release: 'type.githubRelease',
+} as const;
 
 /** One recent activity event: type chip, time, title, provider link and repository entity link. */
 function GithubEventItem({ event }: { event: TimelineEvent }) {
@@ -73,7 +99,7 @@ function GithubEventItem({ event }: { event: TimelineEvent }) {
     <li className="space-y-0.5 border-b border-border pb-2 last:border-b-0">
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
         <span className="rounded bg-muted px-1.5 py-0.5 text-foreground">
-          {t.has(`type_${event.type}`) ? t(`type_${event.type}`) : event.type}
+          {event.type in EVENT_TYPE_KEY ? t(EVENT_TYPE_KEY[event.type as keyof typeof EVENT_TYPE_KEY]) : event.type}
         </span>
         <time dateTime={when}>{formatDateTime(when, display.locale, display.timezone)}</time>
       </div>
@@ -81,14 +107,18 @@ function GithubEventItem({ event }: { event: TimelineEvent }) {
       <div className="flex flex-wrap gap-2 text-[11px]">
         {url && (
           <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">
-            {t('openOnGithub')}<ExternalLink className="h-3 w-3" />
+            {t('openOnGithub')}
+            <ExternalLink className="h-3 w-3" />
           </a>
         )}
-        {event.participants.filter((p) => p.role === 'repository').slice(0, 1).map((p) => (
-          <Link key={p.entity_id} href={`/knowledge/entities/${p.entity_id}`} className="text-primary hover:underline">
-            {t('repositoryEntity')}
-          </Link>
-        ))}
+        {event.participants
+          .filter((p) => p.role === 'repository')
+          .slice(0, 1)
+          .map((p) => (
+            <Link key={p.entity_id} href={`/knowledge/entities/${p.entity_id}`} className="text-primary hover:underline">
+              {t('repositoryEntity')}
+            </Link>
+          ))}
       </div>
     </li>
   );
@@ -115,8 +145,13 @@ function useGithubProjectData(instance: GadgetInstance) {
     queryKey: ['dashboard-github-project', instance.id, sourceId],
     queryFn: async () => {
       const page = await listTimeline({
-        date_from: '', date_to: '', timezone: display.timezone, source_id: sourceId,
-        entity_id: '', precision: 'all', type: 'github_',
+        date_from: '',
+        date_to: '',
+        timezone: display.timezone,
+        source_id: sourceId,
+        entity_id: '',
+        precision: 'all',
+        type: 'github_',
       });
       // Keep the whole page: the weekly sparks bucket all of it, the list shows only `limit`.
       return page.items;
@@ -147,9 +182,16 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
   const tDash = useTranslations('dashboard');
   const { sourceId, limit, summary, events, allEvents, now } = useGithubProjectData(instance);
 
-  if (!sourceId) return <GadgetNotice kind="setup" message={t('gadgetNoSource')} action={{ href: '/settings/sources', label: tDash('gadgetConfigureAction') }} />;
+  if (!sourceId)
+    return (
+      <GadgetNotice
+        kind="setup"
+        message={t('gadget.noSource')}
+        action={{ href: '/settings/sources', label: tDash('gadget.configureAction') }}
+      />
+    );
   if (summary.error && (summary.error as { status?: number }).status === 404) {
-    return <GadgetNotice kind="error" message={t('gadgetNotGithub')} />;
+    return <GadgetNotice kind="error" message={t('gadget.notGithub')} />;
   }
   const counts = summary.data?.resource_counts;
   const items = allEvents.slice(0, limit);
@@ -157,34 +199,56 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
       <div className="flex items-center justify-end gap-1.5">
         <Button
-          type="button" variant="ghost" size="icon" aria-label={t('refresh')} className="size-7"
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={t('refresh')}
+          className="size-7"
           disabled={events.isFetching}
-          onClick={() => { void events.refetch(); void summary.refetch(); }}
+          onClick={() => {
+            void events.refetch();
+            void summary.refetch();
+          }}
         >
           <RotateCw className={events.isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
         </Button>
         <Link href="/timeline" className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
-          {t('fullTimeline')}<ExternalLink className="h-3 w-3" />
+          {t('fullTimeline')}
+          <ExternalLink className="h-3 w-3" />
         </Link>
       </div>
       {counts && <GithubCounts counts={counts} events={allEvents} now={now} />}
-      {summary.data && !summary.data.live_verified && (
-        <p className="text-[11px] text-muted-foreground">{t('liveNotVerified')}</p>
-      )}
+      {summary.data && !summary.data.live_verified && <p className="text-[11px] text-muted-foreground">{t('liveNotVerified')}</p>}
       <h3 className="text-xs font-medium text-muted-foreground">{t('recentActivity')}</h3>
-      {events.isLoading && <GadgetSkeleton variant="list" label={t('summaryLoading')} className="px-0" />}
+      {events.isLoading && <GadgetSkeleton variant="list" label={t('summary.loading')} className="px-0" />}
       {events.isError && (
         <div role="alert" className="text-xs text-destructive">
           {t('loadError')}{' '}
-          <Button type="button" variant="outline" size="sm" onClick={() => { void events.refetch(); }}>{t('retry')}</Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void events.refetch();
+            }}
+          >
+            {t('retry')}
+          </Button>
         </div>
       )}
       {!events.isLoading && !events.isError && items.length === 0 && (
-        <GadgetNotice kind="empty" message={t('noActivity')} action={{ href: '/settings/sources', label: tDash('gadgetConfigureAction') }} className="my-auto px-0 py-1 text-xs" />
+        <GadgetNotice
+          kind="empty"
+          message={t('noActivity')}
+          action={{ href: '/settings/sources', label: tDash('gadget.configureAction') }}
+          className="my-auto px-0 py-1 text-xs"
+        />
       )}
       {items.length > 0 && (
         <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto">
-          {items.map((event) => <GithubEventItem key={event.id} event={event} />)}
+          {items.map((event) => (
+            <GithubEventItem key={event.id} event={event} />
+          ))}
         </ol>
       )}
     </section>

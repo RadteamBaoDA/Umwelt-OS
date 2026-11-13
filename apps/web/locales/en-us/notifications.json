@@ -1,0 +1,8 @@
+{
+  "open": "Notifications, {count} unread",
+  "empty": "No notifications.",
+  "loadError": "Notifications could not be loaded.",
+  "unread": "Unread",
+  "kind.briefReady": "Your daily brief for {date} is ready (revision {revision})",
+  "kind.tasksDue": "{count, plural, one {# open task is due today} other {# open tasks are due today}}"
+}

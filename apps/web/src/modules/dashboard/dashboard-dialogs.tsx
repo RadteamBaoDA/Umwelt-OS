@@ -22,14 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { TopicSettings } from '@/modules/news';
 import { HighlightRuleEditor } from '@/modules/settings';
-import {
-  createDashboard,
-  createDashboardGroup,
-  dashboardKeys,
-  deleteDashboard,
-  renameDashboard,
-  type Dashboard,
-} from './api';
+import { createDashboard, createDashboardGroup, dashboardKeys, deleteDashboard, renameDashboard, type Dashboard } from './api';
 import { setGroupFrame } from './group-frame';
 import { LAYOUT_FRAMES, type LayoutFrame } from './layout-geometry';
 import type { ManagementDialogState } from './use-dashboard-data';
@@ -70,7 +63,9 @@ export function NameDialog(props: NameDialogProps) {
           <DialogDescription className="text-xs text-muted-foreground">{title}</DialogDescription>
         </DialogHeader>
         <div className="space-y-2 py-2">
-          <Label htmlFor={inputId} className="text-xs">{label}</Label>
+          <Label htmlFor={inputId} className="text-xs">
+            {label}
+          </Label>
           <Input
             id={inputId}
             value={value}
@@ -99,7 +94,13 @@ export function NameDialog(props: NameDialogProps) {
 }
 
 /** Destructive confirmation shown before deleting the active dashboard. */
-export function DeleteDashboardDialog({ open, dashboardName, pending, onCancel, onConfirm }: {
+export function DeleteDashboardDialog({
+  open,
+  dashboardName,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
   open: boolean;
   dashboardName: string;
   pending: boolean;
@@ -113,14 +114,16 @@ export function DeleteDashboardDialog({ open, dashboardName, pending, onCancel, 
         <AlertDialogHeader>
           <AlertDialogTitle className="text-destructive flex items-center gap-2">
             <Trash2 className="w-4 h-4" />
-            <span>{t('deleteDashboardTitle')}</span>
+            <span>{t('deleteDashboard.title')}</span>
           </AlertDialogTitle>
           <AlertDialogDescription className="text-xs text-muted-foreground">
-            {t('deleteDashboardConfirm', { name: dashboardName })}
+            {t('deleteDashboard.confirm', { name: dashboardName })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="gap-2">
-          <Button type="button" className="secondary text-xs" onClick={onCancel}>{t('cancel')}</Button>
+          <Button type="button" className="secondary text-xs" onClick={onCancel}>
+            {t('cancel')}
+          </Button>
           <Button
             type="button"
             disabled={pending}
@@ -135,16 +138,40 @@ export function DeleteDashboardDialog({ open, dashboardName, pending, onCancel, 
   );
 }
 
+/** Literal catalog keys per frame so every key stays greppable and type-checked (no runtime key concatenation). */
+const FRAME_LABEL_KEY = {
+  free: 'group.frameFree',
+  three_columns: 'group.frameThreeColumns',
+  main_rail: 'group.frameMainRail',
+  hero_grid: 'group.frameHeroGrid',
+  board: 'group.frameBoard',
+} as const satisfies Record<LayoutFrame, string>;
+
+/** Literal catalog keys per page-template shortcut (see {@link FRAME_LABEL_KEY}). */
+const TEMPLATE_LABEL_KEY = {
+  news: 'group.templateNews',
+  markets: 'group.templateMarkets',
+  work: 'group.templateWork',
+} as const;
+
 /** Zone widths (grid units) drawn as bars in each frame's preview; `free` shows a single wide bar. */
 const FRAME_PREVIEW: Record<LayoutFrame, number[]> = {
-  free: [20], three_columns: [7, 7, 6], main_rail: [14, 6], hero_grid: [20, 7, 7, 6], board: [5, 5, 5, 5],
+  free: [20],
+  three_columns: [7, 7, 6],
+  main_rail: [14, 6],
+  hero_grid: [20, 7, 7, 6],
+  board: [5, 5, 5, 5],
 };
 
 /**
  * Layout-frame radio group for a new page (with a small column-bar preview per option) plus template shortcuts.
  * The frame only shapes where gadgets are auto-placed; it never moves existing ones.
  */
-function GroupFramePicker({ frame, onChange, onFromTemplate }: {
+function GroupFramePicker({
+  frame,
+  onChange,
+  onFromTemplate,
+}: {
   frame: LayoutFrame;
   onChange: (frame: LayoutFrame) => void;
   onFromTemplate?: (presetId: string) => void;
@@ -152,7 +179,7 @@ function GroupFramePicker({ frame, onChange, onFromTemplate }: {
   const t = useTranslations('dashboard');
   return (
     <div className="space-y-3 pt-2">
-      <p className="text-xs font-medium">{t('groupFrameLabel')}</p>
+      <p className="text-xs font-medium">{t('group.frameLabel')}</p>
       <RadioGroup value={frame} onValueChange={(value) => onChange(value as LayoutFrame)} className="grid grid-cols-1 gap-1.5">
         {LAYOUT_FRAMES.map((id) => (
           <Label key={id} htmlFor={`group-frame-${id}`} className="flex items-center gap-2 text-xs font-normal">
@@ -162,17 +189,17 @@ function GroupFramePicker({ frame, onChange, onFromTemplate }: {
                 <span key={i} style={{ width: `${w * 5}%` }} className="h-2 border border-background bg-muted-foreground/40" />
               ))}
             </span>
-            {t(`groupFrame_${id}`)}
+            {t(FRAME_LABEL_KEY[id])}
           </Label>
         ))}
       </RadioGroup>
       {onFromTemplate && (
         <div className="space-y-1.5 border-t border-border pt-2">
-          <p className="text-xs text-muted-foreground">{t('groupFromTemplate')}</p>
+          <p className="text-xs text-muted-foreground">{t('group.fromTemplate')}</p>
           <div className="flex flex-wrap gap-1.5">
             {(['news', 'markets', 'work'] as const).map((id) => (
               <Button key={id} type="button" size="sm" variant="outline" className="text-xs" onClick={() => onFromTemplate(id)}>
-                {t(`groupTemplate_${id}`)}
+                {t(TEMPLATE_LABEL_KEY[id])}
               </Button>
             ))}
           </div>
@@ -190,16 +217,24 @@ export function ManagementDialog({ management }: { management: ManagementDialogS
     <Dialog open={management.open} onOpenChange={management.setOpen}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{t('manageTopicsAndHighlights')}</DialogTitle>
-          <DialogDescription>{t('manageTopicsAndHighlightsDescription')}</DialogDescription>
+          <DialogTitle>{t('manage.topicsAndHighlights')}</DialogTitle>
+          <DialogDescription>{t('manage.topicsAndHighlightsDescription')}</DialogDescription>
         </DialogHeader>
         <Tabs value={management.tab} onValueChange={(value) => management.setTab(value as 'topics' | 'rules')}>
-          <TabsList aria-label={t('manageTopicsAndHighlights')}>
-            <TabsTrigger value="topics" className="min-h-9 pointer-coarse:min-h-11">{t('manageTopics')}</TabsTrigger>
-            <TabsTrigger value="rules" className="min-h-9 pointer-coarse:min-h-11">{t('manageHighlights')}</TabsTrigger>
+          <TabsList aria-label={t('manage.topicsAndHighlights')}>
+            <TabsTrigger value="topics" className="min-h-9 pointer-coarse:min-h-11">
+              {t('manage.topics')}
+            </TabsTrigger>
+            <TabsTrigger value="rules" className="min-h-9 pointer-coarse:min-h-11">
+              {t('manage.highlights')}
+            </TabsTrigger>
           </TabsList>
-          <TabsContent value="topics" className="pt-4"><TopicSettings csrfToken={session.csrfToken} /></TabsContent>
-          <TabsContent value="rules" className="pt-4"><HighlightRuleEditor /></TabsContent>
+          <TabsContent value="topics" className="pt-4">
+            <TopicSettings csrfToken={session.csrfToken} />
+          </TabsContent>
+          <TabsContent value="rules" className="pt-4">
+            <HighlightRuleEditor />
+          </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
@@ -290,10 +325,26 @@ export function useDashboardCrud({ activeDashboard, dashboards, layoutOperationP
     },
   });
   return {
-    createOpen, setCreateOpen, createName, setCreateName, createMutation,
-    renameOpen, setRenameOpen, renameValue, setRenameValue, renameMutation,
-    deleteOpen, setDeleteOpen, deleteMutation,
-    groupOpen, setGroupOpen, groupName, setGroupName, groupMutation, groupFrame, setGroupFrameChoice,
+    createOpen,
+    setCreateOpen,
+    createName,
+    setCreateName,
+    createMutation,
+    renameOpen,
+    setRenameOpen,
+    renameValue,
+    setRenameValue,
+    renameMutation,
+    deleteOpen,
+    setDeleteOpen,
+    deleteMutation,
+    groupOpen,
+    setGroupOpen,
+    groupName,
+    setGroupName,
+    groupMutation,
+    groupFrame,
+    setGroupFrameChoice,
   };
 }
 
@@ -307,7 +358,12 @@ export type DashboardCrud = ReturnType<typeof useDashboardCrud>;
  * @param activeDashboardName Name shown in the delete confirmation.
  * @param layoutOperationPending Blocks add-group while a layout operation is running.
  */
-export function DashboardCrudDialogs({ crud, activeDashboardName, layoutOperationPending, onFromTemplate }: {
+export function DashboardCrudDialogs({
+  crud,
+  activeDashboardName,
+  layoutOperationPending,
+  onFromTemplate,
+}: {
   crud: DashboardCrud;
   /** Opens the preset picker in append mode on the chosen purpose preset; hides the template row when absent. */
   onFromTemplate?: (presetId: string) => void;
@@ -319,27 +375,49 @@ export function DashboardCrudDialogs({ crud, activeDashboardName, layoutOperatio
   return (
     <>
       <NameDialog
-        open={crud.createOpen} onOpenChange={crud.setCreateOpen} title={t('createDashboardTitle')}
-        inputId="create-name" label={t('dashboardName')} placeholder={ts('dpOverview')}
-        value={crud.createName} onValueChange={crud.setCreateName} cancelLabel={t('cancel')}
-        confirmLabel={t('create')} confirmDisabled={!crud.createName.trim() || crud.createMutation.isPending}
+        open={crud.createOpen}
+        onOpenChange={crud.setCreateOpen}
+        title={t('createDashboard.title')}
+        inputId="create-name"
+        label={t('dashboardName')}
+        placeholder={ts('dp.overview')}
+        value={crud.createName}
+        onValueChange={crud.setCreateName}
+        cancelLabel={t('cancel')}
+        confirmLabel={t('create')}
+        confirmDisabled={!crud.createName.trim() || crud.createMutation.isPending}
         onConfirm={(name) => crud.createMutation.mutate(name)}
       />
       <NameDialog
-        open={crud.renameOpen} onOpenChange={crud.setRenameOpen} title={t('renameDashboardTitle')}
-        inputId="rename-name" label={t('dashboardName')}
-        value={crud.renameValue} onValueChange={crud.setRenameValue} cancelLabel={t('cancel')}
-        confirmLabel={t('save')} confirmDisabled={!crud.renameValue.trim() || crud.renameMutation.isPending}
+        open={crud.renameOpen}
+        onOpenChange={crud.setRenameOpen}
+        title={t('renameDashboard.title')}
+        inputId="rename-name"
+        label={t('dashboardName')}
+        value={crud.renameValue}
+        onValueChange={crud.setRenameValue}
+        cancelLabel={t('cancel')}
+        confirmLabel={t('save')}
+        confirmDisabled={!crud.renameValue.trim() || crud.renameMutation.isPending}
         onConfirm={(name) => crud.renameMutation.mutate(name)}
       />
       <DeleteDashboardDialog
-        open={crud.deleteOpen} dashboardName={activeDashboardName} pending={crud.deleteMutation.isPending}
-        onCancel={() => crud.setDeleteOpen(false)} onConfirm={() => crud.deleteMutation.mutate()}
+        open={crud.deleteOpen}
+        dashboardName={activeDashboardName}
+        pending={crud.deleteMutation.isPending}
+        onCancel={() => crud.setDeleteOpen(false)}
+        onConfirm={() => crud.deleteMutation.mutate()}
       />
       <NameDialog
-        open={crud.groupOpen} onOpenChange={crud.setGroupOpen} title={t('addGroupTitle')}
-        inputId="new-group-name" label={t('groupName')} placeholder={ts('dpMarketFocus')}
-        value={crud.groupName} onValueChange={crud.setGroupName} cancelLabel={t('cancel')}
+        open={crud.groupOpen}
+        onOpenChange={crud.setGroupOpen}
+        title={t('addGroup.title')}
+        inputId="new-group-name"
+        label={t('group.name')}
+        placeholder={ts('dp.marketFocus')}
+        value={crud.groupName}
+        onValueChange={crud.setGroupName}
+        cancelLabel={t('cancel')}
         confirmLabel={t('create')}
         confirmDisabled={!crud.groupName.trim() || crud.groupMutation.isPending || layoutOperationPending}
         onConfirm={(name) => crud.groupMutation.mutate(name)}

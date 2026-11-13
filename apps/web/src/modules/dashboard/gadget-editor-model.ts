@@ -48,12 +48,39 @@ export const DEFAULT_LIVE_PROVIDERS = [
 /** Map layers offered by the selected-sources map. */
 export const MAP_LAYERS = ['world_observations', 'military', 'economic', 'disaster', 'escalation'] as const;
 
+/** Literal `dashboard` catalog keys per map layer checkbox label (no runtime key concatenation). */
+export const MAP_LAYER_KEY = {
+  world_observations: 'map.layerWorldObservations',
+  military: 'map.layerMilitary',
+  economic: 'map.layerEconomic',
+  disaster: 'map.layerDisaster',
+  escalation: 'map.layerEscalation',
+} as const satisfies Record<(typeof MAP_LAYERS)[number], string>;
+
 /** Editor field groups a renderer may expose. */
 export type FieldKey = 'keywords' | 'limit' | 'symbols' | 'metrics' | 'lookback' | 'map' | 'cii' | 'channels' | 'rules';
 const LIST_RENDERERS = ['news_feed', 'text_panel', 'table_panel', 'job_list', 'video_panel', 'telegram_feed', 'highlights', 'watch_rules'];
 
 /** Weather overlay choices of the live map. */
 export type WeatherLayer = 'none' | 'temperature' | 'precipitation' | 'wind' | 'clouds';
+
+/** Literal `dashboard` catalog keys per weather overlay choice, so no key is ever built by string concatenation. */
+const LIVE_MAP_WEATHER_KEY = {
+  none: 'liveMap.weatherNone',
+  temperature: 'liveMap.weatherTemperature',
+  precipitation: 'liveMap.weatherPrecipitation',
+  wind: 'liveMap.weatherWind',
+  clouds: 'liveMap.weatherClouds',
+} as const satisfies Record<WeatherLayer, string>;
+
+/**
+ * Catalog key for a weather overlay label.
+ *
+ * @param layer A {@link WeatherLayer}, or any stored string (unknown values fall back to the "none" label).
+ */
+export function liveMapWeatherKey(layer: string) {
+  return LIVE_MAP_WEATHER_KEY[(layer in LIVE_MAP_WEATHER_KEY ? layer : 'none') as WeatherLayer];
+}
 
 /**
  * Editor fields that matter to one renderer. `symbols` is only a candidate here: the editor additionally requires the

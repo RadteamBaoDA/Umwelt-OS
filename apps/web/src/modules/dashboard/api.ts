@@ -522,15 +522,16 @@ export function applyDashboardPreset(
   });
 }
 
-const highlightRuleErrorKeys: Record<string, string> = {
-  rule_sources_not_subset: 'ruleErrSources',
-  rule_excludes_all_sources: 'ruleErrExcludesAll',
-  rule_topic_unknown: 'ruleErrTopic',
-};
+const highlightRuleErrorKeys = {
+  rule_sources_not_subset: 'rule.errSources',
+  rule_excludes_all_sources: 'rule.errExcludesAll',
+  rule_topic_unknown: 'rule.errTopic',
+} as const;
 
 /** Maps a rule-condition 422 to a localized gadgetSettings key, or null when the code is not a rule error. */
-export function highlightRuleErrorKey(error: unknown): string | null {
-  return error instanceof ApiError && error.status === 422 ? (highlightRuleErrorKeys[error.code ?? ''] ?? null) : null;
+export function highlightRuleErrorKey(error: unknown): (typeof highlightRuleErrorKeys)[keyof typeof highlightRuleErrorKeys] | null {
+  const code = error instanceof ApiError && error.status === 422 ? (error.code ?? '') : '';
+  return Object.hasOwn(highlightRuleErrorKeys, code) ? highlightRuleErrorKeys[code as keyof typeof highlightRuleErrorKeys] : null;
 }
 
 /** Current local weather returned by the owner-only proxy; coordinates are never echoed back. */
