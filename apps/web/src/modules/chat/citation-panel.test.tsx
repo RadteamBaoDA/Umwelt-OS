@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { chatMessages } from '@/core/messages/chat';
+import { getCatalog } from '@messages';
 import type { Citation } from './api';
 import { CitationPanel } from './citation-panel';
 
@@ -21,7 +21,7 @@ const doc = (url: string | null): Citation => ({
 /** Renders the rail card variant with English chat messages. */
 function renderRail(citations: Citation[]) {
   return render(
-    <NextIntlClientProvider locale="en-US" messages={{ chat: chatMessages['en-us'] }}>
+    <NextIntlClientProvider locale="en-US" messages={{ chat: getCatalog('en-us', 'chat') }}>
       <CitationPanel citations={citations} variant="card" />
     </NextIntlClientProvider>,
   );

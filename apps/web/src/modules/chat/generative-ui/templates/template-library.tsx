@@ -46,7 +46,9 @@ export function TemplateLibrary({ onSendPrompt, locale, csrfToken, conversationI
     // Local `tpl-` entries are not on the server yet, so they can only travel inline in the prompt.
     const selected = conversationId && csrfToken && !id.startsWith('tpl-') && (await setPendingTemplate(conversationId, id, csrfToken));
     onSendPrompt(
-      selected ? fmt(copy.shellTemplatesApplyPendingPrompt, { title }) : fmt(copy.shellTemplatesApplyPrompt, { title, template: content }),
+      selected
+        ? fmt(copy.shell.templatesApplyPendingPrompt, { title })
+        : fmt(copy.shell.templatesApplyPrompt, { title, template: content }),
     );
     setOpen(false);
   };
@@ -57,18 +59,18 @@ export function TemplateLibrary({ onSendPrompt, locale, csrfToken, conversationI
         <DialogTrigger asChild>
           <Button type="button" variant="outline" size="sm" data-testid="template-library-open">
             <BookmarkIcon className="size-3.5" aria-hidden="true" />
-            {copy.shellTemplatesOpen}
+            {copy.shell.templatesOpen}
           </Button>
         </DialogTrigger>
       )}
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md" data-testid="template-library">
         <DialogHeader>
-          <DialogTitle>{copy.shellTemplatesTitle}</DialogTitle>
-          <DialogDescription>{copy.shellTemplatesDescription}</DialogDescription>
+          <DialogTitle>{copy.shell.templatesTitle}</DialogTitle>
+          <DialogDescription>{copy.shell.templatesDescription}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
-          <section aria-label={copy.shellTemplatesBuiltIn} className="flex flex-col gap-2">
-            <h3 className="text-xs font-semibold text-muted-foreground">{copy.shellTemplatesBuiltIn}</h3>
+          <section aria-label={copy.shell.templatesBuiltIn} className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground">{copy.shell.templatesBuiltIn}</h3>
             {SEED_HTML_TEMPLATES.map((tpl) => (
               <div
                 key={tpl.id}
@@ -76,23 +78,23 @@ export function TemplateLibrary({ onSendPrompt, locale, csrfToken, conversationI
                 className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-3"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">{copy[tpl.titleKey]}</p>
-                  <p className="text-xs text-muted-foreground">{copy[tpl.descKey]}</p>
+                  <p className="truncate text-sm font-medium text-foreground">{tpl.titleOf(copy)}</p>
+                  <p className="text-xs text-muted-foreground">{tpl.descOf(copy)}</p>
                 </div>
                 <Button
                   type="button"
                   size="sm"
                   variant="secondary"
-                  onClick={() => void apply(tpl.id, copy[tpl.titleKey], JSON.stringify(tpl.sandbox))}
+                  onClick={() => void apply(tpl.id, tpl.titleOf(copy), JSON.stringify(tpl.sandbox))}
                 >
-                  {copy.shellTemplatesApply}
+                  {copy.shell.templatesApply}
                 </Button>
               </div>
             ))}
           </section>
-          <section aria-label={copy.shellTemplatesMine} className="flex flex-col gap-2">
-            <h3 className="text-xs font-semibold text-muted-foreground">{copy.shellTemplatesMine}</h3>
-            {mine.length === 0 && <p className="text-xs text-muted-foreground">{copy.shellTemplatesEmpty}</p>}
+          <section aria-label={copy.shell.templatesMine} className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground">{copy.shell.templatesMine}</h3>
+            {mine.length === 0 && <p className="text-xs text-muted-foreground">{copy.shell.templatesEmpty}</p>}
             {mine.map((tpl) => (
               <div
                 key={tpl.id}
@@ -102,13 +104,13 @@ export function TemplateLibrary({ onSendPrompt, locale, csrfToken, conversationI
                 <p className="min-w-0 truncate text-sm font-medium text-foreground">{tpl.title}</p>
                 <div className="flex shrink-0 gap-1">
                   <Button type="button" size="sm" variant="secondary" onClick={() => void apply(tpl.id, tpl.title, tpl.content)}>
-                    {copy.shellTemplatesApply}
+                    {copy.shell.templatesApply}
                   </Button>
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
-                    aria-label={fmt(copy.shellTemplatesDelete, { title: tpl.title })}
+                    aria-label={fmt(copy.shell.templatesDelete, { title: tpl.title })}
                     onClick={() => deleteUserTemplate(tpl.id, csrfToken)}
                   >
                     <Trash2Icon className="size-4" aria-hidden="true" />
@@ -161,10 +163,10 @@ export function SaveTemplateButton({ sandbox, title, locale, csrfToken }: SaveTe
         }}
       >
         <BookmarkPlusIcon className="size-3.5" aria-hidden="true" />
-        {copy.shellTemplatesSave}
+        {copy.shell.templatesSave}
       </Button>
       <span role="status" className={`text-xs ${status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>
-        {{ idle: '', saving: copy.shellTemplatesSaving, saved: copy.shellTemplatesSaved, failed: copy.shellTemplatesSaveFailed }[status]}
+        {{ idle: '', saving: copy.shell.templatesSaving, saved: copy.shell.templatesSaved, failed: copy.shell.templatesSaveFailed }[status]}
       </span>
     </div>
   );

@@ -37,18 +37,18 @@ function PreviewBody({
   const settled = Boolean(documentId) && preview.isSuccess && !preview.isFetching;
   return (
     <>
-      {!documentId && <p className="text-sm text-muted-foreground">{unavailableMessage ?? t('previewUnavailable')}</p>}
+      {!documentId && <p className="text-sm text-muted-foreground">{unavailableMessage ?? t('preview.unavailable')}</p>}
       {documentId && preview.isFetching && (
         <p role="status" className="text-sm text-muted-foreground">
-          {t('previewLoading')}
+          {t('preview.loading')}
         </p>
       )}
       {documentId && preview.isError && (
         <p role="alert" className="text-sm text-destructive">
-          {t('previewUnavailable')}
+          {t('preview.unavailable')}
         </p>
       )}
-      {settled && !preview.data?.matches && <p className="text-sm text-muted-foreground">{t('previewVersionChanged')}</p>}
+      {settled && !preview.data?.matches && <p className="text-sm text-muted-foreground">{t('preview.versionChanged')}</p>}
       {settled && preview.data?.matches && (
         <pre className="max-h-[60dvh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 text-sm text-foreground">
           {preview.data.content}
@@ -87,7 +87,7 @@ export function ChatDocumentPreview({ documentId, versionId, title, children, un
       <DialogContent className="max-h-[80dvh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="break-words">{title}</DialogTitle>
-          <DialogDescription>{t('previewTextOnly')}</DialogDescription>
+          <DialogDescription>{t('preview.textOnly')}</DialogDescription>
         </DialogHeader>
         <PreviewBody documentId={documentId ?? undefined} preview={preview} unavailableMessage={unavailableMessage} />
       </DialogContent>

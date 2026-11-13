@@ -120,7 +120,7 @@ function useDraftNotice() {
   const [notice, setNotice] = React.useState<string | null>(null);
   const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const showNotice = React.useCallback((outcome: { kind: 'drafted' | 'blocked'; message?: string }) => {
-    setNotice(outcome.kind === 'drafted' ? genUiCopy().genUiPromptDrafted : (outcome.message ?? genUiCopy().genUiPromptComposerBusy));
+    setNotice(outcome.kind === 'drafted' ? genUiCopy().genUi.prompt.drafted : (outcome.message ?? genUiCopy().genUi.prompt.composerBusy));
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setNotice(null), NOTICE_MS);
   }, []);

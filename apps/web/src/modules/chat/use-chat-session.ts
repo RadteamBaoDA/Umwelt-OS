@@ -383,7 +383,7 @@ export function useWidgetPromptHandlers(p: {
    */
   const onDraftPrompt = React.useCallback(
     (prompt: string) => {
-      if (chatCtrl.draft.trim()) throw new Error(t('genUiPromptComposerBusy'));
+      if (chatCtrl.draft.trim()) throw new Error(t('genUi.prompt.composerBusy'));
       chatCtrl.setDraft(prompt);
       // Wait one tick so the textarea already shows the drafted text when it takes focus.
       setTimeout(() => {
@@ -396,12 +396,12 @@ export function useWidgetPromptHandlers(p: {
   );
   /** Submits a widget follow-up; rejects with a localized error while busy so the bridge reports a retryable failure. */
   const onSendPrompt = React.useCallback(
-    (prompt: string): Promise<void> => settleWidgetPrompt(busy, () => handleSend(prompt), t('genUiPromptBusy'), t('genUiPromptFailed')),
+    (prompt: string): Promise<void> => settleWidgetPrompt(busy, () => handleSend(prompt), t('genUi.prompt.busy'), t('genUi.prompt.failed')),
     [handleSend, busy, t],
   );
   const onTranscriptSendPrompt = React.useCallback(
     (prompt: string) => {
-      onSendPrompt(prompt).catch((err: unknown) => setError(err instanceof Error ? err.message : t('genUiPromptBusy')));
+      onSendPrompt(prompt).catch((err: unknown) => setError(err instanceof Error ? err.message : t('genUi.prompt.busy')));
     },
     [onSendPrompt, setError, t],
   );

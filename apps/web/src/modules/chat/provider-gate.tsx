@@ -65,14 +65,14 @@ export function ProviderGateAlert({ onDismiss }: { onDismiss: () => void }) {
       className="mx-4 mb-2 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3 text-sm text-foreground"
     >
       <div className="min-w-0 flex-1">
-        <p className="font-medium">{t('providerGateTitle')}</p>
-        <p className="text-muted-foreground">{t('providerGateBody')}</p>
+        <p className="font-medium">{t('provider.gateTitle')}</p>
+        <p className="text-muted-foreground">{t('provider.gateBody')}</p>
       </div>
       <Button asChild size="sm">
-        <Link href={MODELS_SETTINGS_HREF}>{t('providerGateAction')}</Link>
+        <Link href={MODELS_SETTINGS_HREF}>{t('provider.gateAction')}</Link>
       </Button>
       <Button size="sm" variant="ghost" onClick={onDismiss}>
-        {t('providerGateDismiss')}
+        {t('provider.gateDismiss')}
       </Button>
     </div>
   );

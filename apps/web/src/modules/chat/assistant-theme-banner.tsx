@@ -75,16 +75,21 @@ export function AssistantThemeBanner({ mode, csrfToken, onResolved }: AssistantT
   };
 
   return (
-    <div role="status" data-testid="assistant-theme-banner" className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-secondary px-4 py-2 text-xs">
+    <div
+      role="status"
+      data-testid="assistant-theme-banner"
+      className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-secondary px-4 py-2 text-xs"
+    >
       <span className="text-muted-foreground">
-        {t('assistantThemeChanged')}{failed ? ` ${t('assistantThemeKeepFailed')}` : ''}
+        {t('assistant.themeChanged')}
+        {failed ? ` ${t('assistant.themeKeepFailed')}` : ''}
       </span>
       <span className="flex gap-2">
         <Button type="button" size="sm" disabled={saving || !confirmedPreferences} onClick={() => void keep()}>
-          {t('assistantThemeKeep')}
+          {t('assistant.themeKeep')}
         </Button>
         <Button type="button" size="sm" variant="outline" disabled={saving} onClick={revert}>
-          {t('assistantThemeRevert')}
+          {t('assistant.themeRevert')}
         </Button>
       </span>
     </div>

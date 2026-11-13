@@ -4,14 +4,7 @@ import * as React from 'react';
 import { CalendarIcon, CheckCircle2Icon, ClockIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import type { AppLocaleId } from '@/core/i18n';
 import { INPUT_DECLINE } from '../../api';
 import { genUiCopy, INPUT_COPY, MEETING_COPY, resolveWidgetLocale } from '../copy';
@@ -101,12 +94,8 @@ function normalizeSlots(
   const rawList = slots && slots.length > 0 ? slots : (timeSlots ?? []);
   return rawList.map((slot, index) => {
     const resolvedTime =
-      slot.time ??
-      (slot.start_time && slot.end_time
-        ? `${slot.start_time} - ${slot.end_time}`
-        : slot.start_time ?? '');
-    const fallbackLabel =
-      slot.label ?? slot.duration ?? (meetingDuration ? `${meetingDuration} min` : undefined);
+      slot.time ?? (slot.start_time && slot.end_time ? `${slot.start_time} - ${slot.end_time}` : (slot.start_time ?? ''));
+    const fallbackLabel = slot.label ?? slot.duration ?? (meetingDuration ? `${meetingDuration} min` : undefined);
     return {
       ...slot,
       id: slot.id ?? `slot-${index + 1}`,
@@ -125,13 +114,18 @@ type InputCopy = (typeof INPUT_COPY)[keyof typeof INPUT_COPY];
 /** Border/background classes of a slot button by availability and selection. */
 function slotClass(isAvailable: boolean, isSelected: boolean): string {
   if (!isAvailable) return 'cursor-not-allowed border-border bg-muted/30 opacity-60';
-  return isSelected
-    ? 'border-primary bg-primary/10 text-foreground'
-    : 'border-border bg-background hover:bg-muted/50 text-foreground';
+  return isSelected ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background hover:bg-muted/50 text-foreground';
 }
 
 /** One selectable slot: date, time and the recommended / label / availability badges. */
-function SlotButton({ slot, isSelected, isRecommended, disabled, copy, onSelect }: {
+function SlotButton({
+  slot,
+  isSelected,
+  isRecommended,
+  disabled,
+  copy,
+  onSelect,
+}: {
   slot: NormalizedMeetingTimeSlot;
   isSelected: boolean;
   isRecommended: boolean;
@@ -168,10 +162,7 @@ function SlotButton({ slot, isSelected, isRecommended, disabled, copy, onSelect 
             {slot.label}
           </Badge>
         )}
-        <Badge
-          variant={!isAvailable ? 'outline' : isSelected ? 'default' : 'secondary'}
-          className="text-[11px]"
-        >
+        <Badge variant={!isAvailable ? 'outline' : isSelected ? 'default' : 'secondary'} className="text-[11px]">
           {isAvailable ? copy.availableBadge : copy.unavailableBadge}
         </Badge>
       </div>
@@ -180,7 +171,15 @@ function SlotButton({ slot, isSelected, isRecommended, disabled, copy, onSelect 
 }
 
 /** Status banners under the slot list: confirmed, request closed, send failed and declined. */
-function MeetingBanners({ confirmedSlot, showClosed, inputState, submitFailed, isDeclined, copy, inputCopy }: {
+function MeetingBanners({
+  confirmedSlot,
+  showClosed,
+  inputState,
+  submitFailed,
+  isDeclined,
+  copy,
+  inputCopy,
+}: {
   confirmedSlot: NormalizedMeetingTimeSlot | null;
   /** Request path only: the request expired/was cancelled without an accepted answer. */
   showClosed: boolean;
@@ -298,9 +297,7 @@ function useMeetingSelection(args: {
     }
     setConfirmedSlot(selectedSlot);
     setIsDeclined(false);
-    onSendPrompt?.(
-      copy.confirmPrompt(displayTitle, selectedSlot.date, selectedSlot.time, selectedSlot.label),
-    );
+    onSendPrompt?.(copy.confirmPrompt(displayTitle, selectedSlot.date, selectedSlot.time, selectedSlot.label));
   }, [copy, displayTitle, onSendPrompt, selectedSlot, submitAnswer, viaRequest]);
 
   /** Declines the proposed slots and asks the assistant for alternative times. */
@@ -317,7 +314,19 @@ function useMeetingSelection(args: {
     onSendPrompt?.(copy.declinePrompt(displayTitle));
   }, [copy, displayTitle, onSendPrompt, submitAnswer, viaRequest]);
 
-  return { viaRequest, selectedSlotId, selectedSlot, confirmedSlot, isDeclined, submitState, submitFailed, locked, handleSelectSlot, handleConfirm, handleDecline };
+  return {
+    viaRequest,
+    selectedSlotId,
+    selectedSlot,
+    confirmedSlot,
+    isDeclined,
+    submitState,
+    submitFailed,
+    locked,
+    handleSelectSlot,
+    handleConfirm,
+    handleDecline,
+  };
 }
 
 /** Card header: calendar glyph, title, optional description and the timezone badge. */
@@ -330,14 +339,8 @@ function PickerHeader({ title, description, timezone }: { title: string; descrip
             <CalendarIcon className="size-4" aria-hidden="true" />
           </span>
           <div>
-            <CardTitle className="text-base font-semibold text-foreground">
-              {title}
-            </CardTitle>
-            {description && (
-              <CardDescription className="mt-0.5 text-xs text-muted-foreground">
-                {description}
-              </CardDescription>
-            )}
+            <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
+            {description && <CardDescription className="mt-0.5 text-xs text-muted-foreground">{description}</CardDescription>}
           </div>
         </div>
         {timezone && (
@@ -382,21 +385,14 @@ export function MeetingTimePicker({
 
   const resolvedDuration = meetingDuration ?? duration_minutes;
   const displayTitle = title || reasonForScheduling || copy.defaultTitle;
-  const displayDescription =
-    description ?? subtitle ?? (title && reasonForScheduling ? reasonForScheduling : undefined);
+  const displayDescription = description ?? subtitle ?? (title && reasonForScheduling ? reasonForScheduling : undefined);
 
-  const normalizedSlots = React.useMemo(
-    () => normalizeSlots(slots, timeSlots, resolvedDuration),
-    [resolvedDuration, slots, timeSlots],
-  );
+  const normalizedSlots = React.useMemo(() => normalizeSlots(slots, timeSlots, resolvedDuration), [resolvedDuration, slots, timeSlots]);
   const sel = useMeetingSelection({ normalizedSlots, copy, displayTitle, requestId, onSubmitInput, onSendPrompt, inputState });
   const { selectedSlot, locked } = sel;
 
   return (
-    <Card
-      data-testid="generative-meeting-time-picker"
-      className="my-2 w-full max-w-md border-border bg-surface text-foreground"
-    >
+    <Card data-testid="generative-meeting-time-picker" className="my-2 w-full max-w-md border-border bg-surface text-foreground">
       <PickerHeader title={displayTitle} description={displayDescription} timezone={timezone} />
 
       <CardContent className="space-y-2.5 pt-4">
@@ -444,7 +440,7 @@ export function MeetingTimePicker({
           onClick={sel.handleConfirm}
           data-testid="meeting-confirm-button"
         >
-          {catalog.genUiTimeConfirm}
+          {catalog.genUi.time.confirm}
         </Button>
       </CardFooter>
     </Card>

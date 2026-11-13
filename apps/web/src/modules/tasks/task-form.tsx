@@ -54,7 +54,7 @@ export function TaskForm({ task, csrfToken, onSuccess, onCancel, canSave = true,
     onSettled: () => onPendingChange?.(false),
   });
   const conflict = mutation.error instanceof ApiError && mutation.error.status === 409;
-  const saveError = t(ownerFailureKey(mutation.error, 'taskOwnerMissing', 'taskWriteFailed'));
+  const saveError = t(ownerFailureKey(mutation.error, 'task.ownerMissing', 'task.writeFailed'));
 
   /** Loads the latest owner revision for review without changing the retained form draft. */
   const refreshCurrentTask = async () => {
@@ -63,7 +63,7 @@ export function TaskForm({ task, csrfToken, onSuccess, onCancel, canSave = true,
     setRefreshError('');
     setCurrentTask(null);
     try { setCurrentTask(await getTask(task.id)); }
-    catch (error) { setRefreshError(t(ownerFailureKey(error, 'taskOwnerMissing', 'taskReadFailed'))); }
+    catch (error) { setRefreshError(t(ownerFailureKey(error, 'task.ownerMissing', 'task.readFailed'))); }
     finally { setRefreshing(false); }
   };
 
@@ -79,13 +79,13 @@ export function TaskForm({ task, csrfToken, onSuccess, onCancel, canSave = true,
     {task && <p className="text-xs text-muted-foreground">{t('editingRevision', { revision: expectedRevision ?? task.revision })}</p>}
     <div><Label htmlFor="task-title">{t('title')}</Label><Input id="task-title" value={title} onChange={(event) => setTitle(event.target.value)} required maxLength={500} /></div>
     <div><Label htmlFor="task-description">{t('description')}</Label><Input id="task-description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={10000} /></div>
-    <div><Label htmlFor="task-goal-id">{t('goalReferenceId')}</Label><Input id="task-goal-id" value={goalId} onChange={(event) => setGoalId(event.target.value)} aria-describedby="task-goal-help" /><p id="task-goal-help" className="text-xs text-muted-foreground">{t('goalReferenceHelp')}</p></div>
-    <div><Label htmlFor="task-entities">{t('entityReferencesLabel')}</Label><Input id="task-entities" value={entityIds} onChange={(event) => setEntityIds(event.target.value)} aria-describedby="task-entities-help" /><p id="task-entities-help" className="text-xs text-muted-foreground">{t('entityReferencesHelp')}</p></div>
+    <div><Label htmlFor="task-goal-id">{t('goal.referenceId')}</Label><Input id="task-goal-id" value={goalId} onChange={(event) => setGoalId(event.target.value)} aria-describedby="task-goal-help" /><p id="task-goal-help" className="text-xs text-muted-foreground">{t('goal.referenceHelp')}</p></div>
+    <div><Label htmlFor="task-entities">{t('entity.referencesLabel')}</Label><Input id="task-entities" value={entityIds} onChange={(event) => setEntityIds(event.target.value)} aria-describedby="task-entities-help" /><p id="task-entities-help" className="text-xs text-muted-foreground">{t('entity.referencesHelp')}</p></div>
     <div><Label htmlFor="task-status">{t('status')}</Label><Select value={status} onValueChange={(value) => setStatus(value as TaskStatus)}><SelectTrigger id="task-status"><SelectValue /></SelectTrigger><SelectContent>{STATUSES.map((value) => <SelectItem key={value} value={value}>{statusLabels[value]}</SelectItem>)}</SelectContent></Select></div>
     <div><Label htmlFor="task-due-date">{t('dateOnlyDeadline')}</Label><Input id="task-due-date" type="date" value={dueDate} disabled={!!dueAt} onChange={(event) => setDueDate(event.target.value)} /></div>
     <div><Label htmlFor="task-due-at">{t('dueInstantLabel')}</Label><Input id="task-due-at" type="text" placeholder="2026-10-04T09:30:00+07:00" value={dueAt} onChange={(event) => setDueAt(event.target.value)} /></div>
     {dueAt && !/(Z|[+-]\d{2}:\d{2})$/i.test(dueAt.trim()) && <p role="alert" className="text-xs text-destructive">{t('dueInstantOffsetRequired')}</p>}
-    {mutation.error && <div role="alert" className="text-sm text-destructive"><p>{conflict ? t('taskConflictDraftRetained') : saveError}</p>{conflict && <Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshCurrentTask()}>{refreshing ? t('loading') : t('loadCurrentTask')}</Button>}{refreshError && <p>{refreshError}</p>}{currentTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: currentTask.title, status: statusLabels[currentTask.status], revision: currentTask.revision })}</p><p>{currentTask.description ?? t('none')} · {currentTask.due_at ?? currentTask.due_date ?? t('noDueDate')}</p><p>{t('goalReferenceId')}: {currentTask.goal_id ?? t('none')} · {t('entityReferences', { ids: currentTask.entity_ids.join(', ') || t('none') })}</p><Button type="button" variant="outline" size="sm" onClick={() => { setExpectedRevision(currentTask.revision); setCurrentTask(null); mutation.reset(); }}>{t('useCurrentRevisionKeepDraft', { revision: currentTask.revision })}</Button></div>}</div>}
+    {mutation.error && <div role="alert" className="text-sm text-destructive"><p>{conflict ? t('task.conflictDraftRetained') : saveError}</p>{conflict && <Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshCurrentTask()}>{refreshing ? t('loading') : t('load.currentTask')}</Button>}{refreshError && <p>{refreshError}</p>}{currentTask && <div className="rounded border border-border p-2"><p>{t('current.taskRevision', { title: currentTask.title, status: statusLabels[currentTask.status], revision: currentTask.revision })}</p><p>{currentTask.description ?? t('none')} · {currentTask.due_at ?? currentTask.due_date ?? t('no.dueDate')}</p><p>{t('goal.referenceId')}: {currentTask.goal_id ?? t('none')} · {t('entity.references', { ids: currentTask.entity_ids.join(', ') || t('none') })}</p><Button type="button" variant="outline" size="sm" onClick={() => { setExpectedRevision(currentTask.revision); setCurrentTask(null); mutation.reset(); }}>{t('use.currentRevisionKeepDraft', { revision: currentTask.revision })}</Button></div>}</div>}
     <div className="flex justify-end gap-2">{onCancel && <Button type="button" variant="outline" disabled={mutation.isPending} onClick={onCancel}>{t('cancel')}</Button>}<Button type="submit" disabled={!canSave || mutation.isPending || !title.trim() || (!!dueAt && !/(Z|[+-]\d{2}:\d{2})$/i.test(dueAt.trim()))}>{mutation.isPending ? t('saving') : task ? t('saveTask') : t('createTask')}</Button></div>
   </form>;
 }

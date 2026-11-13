@@ -73,7 +73,7 @@ function GoalsBody({
       <header className="flex items-center justify-end gap-2">
         {!isAdminViewer && (
           <Button type="button" size="sm" onClick={() => setCreating(true)}>
-            {t('newGoal')}
+            {t('new.goal')}
           </Button>
         )}
       </header>
@@ -85,7 +85,7 @@ function GoalsBody({
         cacheScope={scopeKey}
         onSelectGoal={setSelected}
       />
-      {proposal && <p className="text-xs text-muted-foreground">{t('proposalAvailable')}</p>}
+      {proposal && <p className="text-xs text-muted-foreground">{t('proposal.available')}</p>}
     </>
   );
 }
@@ -104,7 +104,7 @@ export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
   const filters = definition.filters;
   const unsupported = unsupportedListFilters(filters);
   const scopeKey = `${instance.id}:${definition.id}:${definition.revision}`;
-  if (unsupported.length) return <GadgetNotice kind="error" message={t('unsupportedGoalFilters', { fields: unsupported.join(', ') })} />;
+  if (unsupported.length) return <GadgetNotice kind="error" message={t('unsupported.goalFilters', { fields: unsupported.join(', ') })} />;
   if (session.isLoading) return <GadgetSkeleton variant="list" label={t('loadingSession')} />;
   if (!session.data) return <GadgetNotice kind="error" message={t('sessionUnavailable')} />;
   const token = session.data.csrfToken;
@@ -120,7 +120,7 @@ export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
       />
     ) : (
       <div className="p-3 text-sm" role={linkedTask.isError ? 'alert' : 'status'}>
-        {linkedTask.isLoading ? t('loadingTask') : t('linkedTaskUnavailable')}{' '}
+        {linkedTask.isLoading ? t('loadingTask') : t('linked.taskUnavailable')}{' '}
         <Button type="button" variant="outline" onClick={() => setLinkedTaskId(null)}>
           {t('back')}
         </Button>
@@ -130,7 +130,7 @@ export function GoalsGadget({ instance, proposal }: GoalsGadgetProps) {
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3">
       {definition.source_ids.length > 0 && (
         <p role="status" className="rounded border border-border p-2 text-xs text-muted-foreground">
-          {t('goalSourceFilterUnavailable', { count: definition.source_ids.length })}
+          {t('goal.sourceFilterUnavailable', { count: definition.source_ids.length })}
         </p>
       )}
       <GoalsBody

@@ -2,7 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chatMessages } from '@/core/messages/chat';
+import { getCatalog } from '@messages';
 import { useChatScroll } from '../../use-chat-scroll';
 import { useRevealBlocks } from '../../reveal-blocks';
 import { ToolReasoning } from '../components/tool-reasoning';
@@ -16,9 +16,23 @@ vi.mock('@/core/workspace-context', () => ({
   useWorkspace: () => ({ workspaces: [{ id: 'w1', owner_user_id: 1, is_default: true }] }),
 }));
 
+/** Flattens the nested chat catalog to dotted leaf keys so parity checks see every string. */
+function flatCatalog(l: 'en-us' | 'vi-vi'): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (node: Record<string, unknown>, prefix: string) => {
+    for (const [key, value] of Object.entries(node)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (typeof value === 'string') out[path] = value;
+      else walk(value as Record<string, unknown>, path);
+    }
+  };
+  walk(getCatalog(l, 'chat'), '');
+  return out;
+}
+
 const SHELL_KEYS = (l: 'en-us' | 'vi-vi') =>
-  Object.keys(chatMessages[l])
-    .filter((k) => k.startsWith('shell'))
+  Object.keys(flatCatalog(l))
+    .filter((k) => k.startsWith('shell.'))
     .sort();
 
 beforeEach(() => {
@@ -32,7 +46,7 @@ describe('shell message catalog', () => {
     expect(SHELL_KEYS('vi-vi')).toEqual(SHELL_KEYS('en-us'));
     expect(SHELL_KEYS('en-us').length).toBeGreaterThan(15);
     for (const key of SHELL_KEYS('en-us')) {
-      const ph = (l: 'en-us' | 'vi-vi') => ((chatMessages[l] as unknown as Record<string, string>)[key].match(/\{\w+\}/g) ?? []).sort();
+      const ph = (l: 'en-us' | 'vi-vi') => (flatCatalog(l)[key].match(/\{\w+\}/g) ?? []).sort();
       expect(ph('vi-vi')).toEqual(ph('en-us'));
     }
   });
@@ -64,13 +78,13 @@ describe('TemplateLibrary', () => {
       </>,
     );
     await user.click(screen.getByTestId('save-template'));
-    expect(screen.getByRole('status')).toHaveTextContent(chatMessages['vi-vi'].shellTemplatesSaved);
+    expect(screen.getByRole('status')).toHaveTextContent(getCatalog('vi-vi', 'chat').shell.templatesSaved);
     expect(listUserTemplates()).toHaveLength(1);
     await user.click(screen.getByTestId('template-library-open'));
     expect(screen.getByText('Mine')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Xóa mẫu Mine' }));
     expect(listUserTemplates()).toHaveLength(0);
-    expect(screen.getByText(chatMessages['vi-vi'].shellTemplatesEmpty)).toBeInTheDocument();
+    expect(screen.getByText(getCatalog('vi-vi', 'chat').shell.templatesEmpty)).toBeInTheDocument();
   });
 
   it('reports failure when storage throws and tolerates corrupt stored data', async () => {

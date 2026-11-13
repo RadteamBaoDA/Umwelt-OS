@@ -35,7 +35,7 @@ export function ToolReasoning({ name, data, locale }: ToolReasoningProps) {
       <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
         <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" aria-hidden="true" />
         <WrenchIcon className="size-3.5" aria-hidden="true" />
-        <span>{fmt(copy.shellToolReasoning, { name })}</span>
+        <span>{fmt(copy.shell.toolReasoning, { name })}</span>
       </summary>
       <pre className="max-h-64 overflow-auto border-t border-border p-3 text-foreground">{body}</pre>
     </details>

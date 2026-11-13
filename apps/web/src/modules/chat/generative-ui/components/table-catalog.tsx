@@ -561,7 +561,7 @@ export function TableCatalog({
         visibleCount={filteredAndSortedRows.length}
         totalCount={resolvedRows.length}
         filterText={filterText}
-        filterPlaceholder={catalog.genUiTableFilterPlaceholder}
+        filterPlaceholder={catalog.genUi.table.filterPlaceholder}
         onFilter={(value) => {
           setFilterText(value);
           pager.setPage(1);

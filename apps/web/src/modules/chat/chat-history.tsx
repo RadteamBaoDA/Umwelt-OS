@@ -54,12 +54,12 @@ export interface ChatHistoryProps {
 type GroupKey = 'pinned' | 'today' | 'yesterday' | 'last7' | 'last30' | 'older';
 const GROUP_ORDER: GroupKey[] = ['pinned', 'today', 'yesterday', 'last7', 'last30', 'older'];
 const GROUP_LABEL = {
-  pinned: 'historyPinned',
-  today: 'historyToday',
-  yesterday: 'historyYesterday',
-  last7: 'historyLast7Days',
-  last30: 'historyLast30Days',
-  older: 'historyOlder',
+  pinned: 'conversationList.pinned',
+  today: 'conversationList.today',
+  yesterday: 'conversationList.yesterday',
+  last7: 'conversationList.last7Days',
+  last30: 'conversationList.last30Days',
+  older: 'conversationList.older',
 } as const;
 
 /**
@@ -236,9 +236,9 @@ function HistoryStatus({
 }) {
   const t = useTranslations('chat');
   const empty = searching
-    ? { text: t('historySearchEmpty'), label: t('historyClearSearch'), onAction: onClearSearch }
+    ? { text: t('conversationList.searchEmpty'), label: t('conversationList.clearSearch'), onAction: onClearSearch }
     : archived
-      ? { text: t('historyArchivedEmpty'), label: t('historyBackToList'), onAction: onBackToList }
+      ? { text: t('conversationList.archivedEmpty'), label: t('conversationList.backToList'), onAction: onBackToList }
       : null;
   return (
     <>
@@ -250,7 +250,7 @@ function HistoryStatus({
 
       {isError && (
         <div role="alert" className="flex flex-col items-center gap-2 p-4 text-center text-xs text-destructive">
-          <span>{t('historyLoadFailed')}</span>
+          <span>{t('conversationList.loadFailed')}</span>
           <Button type="button" variant="outline" size="sm" onClick={onRetry}>
             {t('retry')}
           </Button>
@@ -358,7 +358,7 @@ function ConversationRow({
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={() => actions.rename({ id: conv.id, title: conv.title })}>
               <PencilIcon aria-hidden="true" />
-              {t('renameConversation')}
+              {t('rename.conversation')}
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => actions.setPinned(conv.id, !conv.pinned)}>
               {conv.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
@@ -378,7 +378,7 @@ function ConversationRow({
       </div>
       {actions.flagError === conv.id && (
         <p role="alert" className="px-2 pb-1 text-xs text-destructive">
-          {t('historyFlagFailed')}
+          {t('conversationList.flagFailed')}
         </p>
       )}
     </div>
@@ -413,11 +413,11 @@ function HistoryToolbar({
         <Button
           type="button"
           onClick={onNewConversation}
-          title={t('newChatShortcut')}
+          title={t('new.chatShortcut')}
           className="flex min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
         >
           <PlusIcon className="size-4" aria-hidden="true" />
-          <span>{t('newChat')}</span>
+          <span>{t('new.chat')}</span>
         </Button>
         {onCollapse && (
           <Button
@@ -444,8 +444,8 @@ function HistoryToolbar({
           size="icon"
           className="size-9 shrink-0"
           aria-pressed={showArchived}
-          title={t('historyShowArchived')}
-          aria-label={t('historyShowArchived')}
+          title={t('conversationList.showArchived')}
+          aria-label={t('conversationList.showArchived')}
           onClick={onToggleArchived}
         >
           <ArchiveIcon className="size-4" aria-hidden="true" />
@@ -507,7 +507,7 @@ export function ChatHistory({
 
         {showArchived && !data.isLoading && (
           <h3 data-testid="history-archived-label" className="px-2 pb-1 pt-2 text-xs font-semibold text-muted-foreground">
-            {t('historyArchivedLabel')}
+            {t('conversationList.archivedLabel')}
           </h3>
         )}
 
@@ -539,7 +539,7 @@ export function ChatHistory({
             disabled={data.loadingMore}
             onClick={data.loadMore}
           >
-            {data.loadingMore ? t('loading') : t('historyLoadMore')}
+            {data.loadingMore ? t('loading') : t('conversationList.loadMore')}
           </Button>
         )}
       </div>

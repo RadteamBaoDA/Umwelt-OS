@@ -186,7 +186,7 @@ describe('ChatHistory', () => {
 
   it('puts the localized shortcut in the New chat title (D8)', () => {
     renderHistory();
-    expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('title')).toBe(messages['en-us'].chat.newChatShortcut);
+    expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('title')).toBe(messages['en-us'].chat.new.chatShortcut);
   });
 });
 

@@ -93,7 +93,7 @@ function TaskViewSelect({ vm }: { vm: TaskListVm }) {
   const { t, view, setView, viewLabels } = vm;
   return (
     <Select value={view} onValueChange={(next) => setView(next as TaskView)}>
-      <SelectTrigger aria-label={t('taskViews')} className="w-full sm:w-48"><SelectValue /></SelectTrigger>
+      <SelectTrigger aria-label={t('task.views')} className="w-full sm:w-48"><SelectValue /></SelectTrigger>
       <SelectContent>{VIEWS.map((item) => <SelectItem key={item} value={item}>{viewLabels[item]}</SelectItem>)}</SelectContent>
     </Select>
   );
@@ -106,10 +106,10 @@ function TaskListNotices({ vm }: { vm: TaskListVm }) {
   return (
 <>
     {isLoading && <p role="status" className="py-5 text-sm text-muted-foreground">{t('loadingTasks')}</p>}
-    {isError && <div role="alert" className="rounded border border-destructive/40 p-3 text-sm"><p>{error instanceof ApiError && error.status === 403 ? t('unsupportedTaskFilter') : t('taskLoadFailed')}</p><Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>{t('retry')}</Button></div>}
-    {!!missing.length && <p role="status" className="text-xs text-muted-foreground">{t('missingTaskIds', { ids: missing.join(', ') })}</p>}
+    {isError && <div role="alert" className="rounded border border-destructive/40 p-3 text-sm"><p>{error instanceof ApiError && error.status === 403 ? t('unsupported.taskFilter') : t('task.loadFailed')}</p><Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>{t('retry')}</Button></div>}
+    {!!missing.length && <p role="status" className="text-xs text-muted-foreground">{t('missing.taskIds', { ids: missing.join(', ') })}</p>}
     {boundedIds.length < (ids?.length ?? 0) && <p role="status" className="text-xs text-muted-foreground">{t('selectedIdsTruncated', { count: (ids?.length ?? 0) - boundedIds.length, limit: 100 })}</p>}
-    {!isLoading && !isError && tasks.length === 0 && <p className="py-5 text-sm text-muted-foreground">{canAdvance ? t('noTasksThisPage') : view === 'all' && !ids && !normalizedFilters.keywords.length && !normalizedFilters.exclude.length ? t('noTasksYet') : t('noTasks')}</p>}
+    {!isLoading && !isError && tasks.length === 0 && <p className="py-5 text-sm text-muted-foreground">{canAdvance ? t('no.tasksThisPage') : view === 'all' && !ids && !normalizedFilters.keywords.length && !normalizedFilters.exclude.length ? t('no.tasksYet') : t('no.tasks')}</p>}
 </>
   );
 }
@@ -120,7 +120,7 @@ function TaskRows({ vm }: { vm: TaskListVm }) {
   return (
     <ul className="flex flex-col gap-2">{tasks.map((task) => <li key={task.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
       <Checkbox checked={task.status === 'done'} disabled={isAdminViewer || toggleMutation.isPending} onCheckedChange={(checked) => toggleMutation.mutate({ task, done: checked === true })} aria-label={t('toggleTask', { title: task.title, state: task.status === 'done' ? t('incomplete') : t('complete') })} />
-      <BareButton type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{statusLabels[task.status]} · {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : task.due_date ?? t('noDueDate')}</span></BareButton>
+      <BareButton type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}><span className="block truncate text-sm font-medium">{task.title}</span><span className="text-xs text-muted-foreground">{statusLabels[task.status]} · {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : task.due_date ?? t('no.dueDate')}</span></BareButton>
     </li>)}</ul>
   );
 }
@@ -130,7 +130,7 @@ function TaskListFooter({ vm }: { vm: TaskListVm }) {
   const { t, boundedIds, pageKey, pageIndex, setActivePage, conflictedTask, conflictLoadError, onSelectTask, limit, isFetchingNextPage, toggleMutation, canAdvance, loadNextOwnerPage, statusLabels } = vm;
   return (
 <>
-    {toggleMutation.error && <div role="alert" className="text-sm text-destructive"><p>{t('taskUpdateFailed')}</p>{conflictLoadError && <p>{t('currentTaskLoadFailed')}: {conflictLoadError}</p>}{conflictedTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: conflictedTask.title, status: statusLabels[conflictedTask.status], revision: conflictedTask.revision })}</p><Button type="button" variant="outline" size="sm" onClick={() => onSelectTask?.(conflictedTask)}>{t('reviewCurrentTask')}</Button></div>}</div>}
+    {toggleMutation.error && <div role="alert" className="text-sm text-destructive"><p>{t('task.updateFailed')}</p>{conflictLoadError && <p>{t('current.taskLoadFailed')}: {conflictLoadError}</p>}{conflictedTask && <div className="rounded border border-border p-2"><p>{t('current.taskRevision', { title: conflictedTask.title, status: statusLabels[conflictedTask.status], revision: conflictedTask.revision })}</p><Button type="button" variant="outline" size="sm" onClick={() => onSelectTask?.(conflictedTask)}>{t('reviewCurrentTask')}</Button></div>}</div>}
     {!boundedIds.length && (pageIndex > 0 || canAdvance) && <p className="text-xs text-muted-foreground">{t('ownerPageNumber', { page: pageIndex + 1 })} · {t('pageResultBound', { count: Math.min(100, Math.max(1, limit)) })}</p>}
     {pageIndex > 0 && <Button type="button" variant="outline" disabled={isFetchingNextPage} onClick={() => setActivePage({ key: pageKey, index: pageIndex - 1 })}>{t('previousPage')}</Button>}
     {canAdvance && !boundedIds.length && <Button type="button" variant="outline" disabled={isFetchingNextPage} onClick={() => void loadNextOwnerPage()}>{isFetchingNextPage ? t('loading') : t('nextOwnerPage')}</Button>}
@@ -186,7 +186,7 @@ function useTaskToggle(p: ReturnType<typeof useTaskListQuery>) {
           const latest = await getTask(variables.task.id);
           setConflictedTask(latest);
           void queryClient.invalidateQueries({ queryKey });
-        } catch (refreshError) { setConflictLoadError(t(ownerFailureKey(refreshError, 'taskOwnerMissing', 'taskReadFailed'))); }
+        } catch (refreshError) { setConflictLoadError(t(ownerFailureKey(refreshError, 'task.ownerMissing', 'task.readFailed'))); }
       }
     },
   });
@@ -216,7 +216,7 @@ function deriveTaskListView(p: ReturnType<typeof useTaskToggle>) {
     if (!result.isError && result.data && result.data.pages.length > pageIndex + 1) setActivePage({ key: pageKey, index: pageIndex + 1 });
   };
 
-  const viewLabels: Record<TaskView, string> = { inbox: t('viewInbox'), today: t('viewToday'), upcoming: t('viewUpcoming'), blocked: t('viewBlocked'), completed: t('viewCompleted'), all: t('viewAll') };
+  const viewLabels: Record<TaskView, string> = { inbox: t('view.inbox'), today: t('view.today'), upcoming: t('view.upcoming'), blocked: t('view.blocked'), completed: t('view.completed'), all: t('view.all') };
 
   const statusLabels: Record<TaskStatus, string> = { inbox: t('statusInbox'), todo: t('statusTodo'), in_progress: t('statusInProgress'), blocked: t('statusBlocked'), done: t('statusDone'), cancelled: t('statusCancelled') };
 

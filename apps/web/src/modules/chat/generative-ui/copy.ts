@@ -1,5 +1,8 @@
 import type { AppLocaleId } from '@/core/i18n';
-import { chatMessages } from '@/core/messages/chat';
+import { getCatalog, jsonCatalogs } from '@messages';
+
+/** Nested `chat` catalog tree for one locale (the shape of messages/<locale>/chat.json). */
+export type ChatCatalog = (typeof jsonCatalogs)['en-us']['chat'];
 
 /**
  * Resolves the effective widget locale from an explicit prop or the document `lang` attribute,
@@ -23,10 +26,10 @@ export function resolveWidgetLocale(locale?: AppLocaleId): AppLocaleId {
  * `genUi*` copy; widgets must not keep local en-us/vi-vi dictionaries).
  *
  * @param locale - Optional explicit locale identifier (falls back to document lang).
- * @returns Flat message catalog for the resolved locale.
+ * @returns Nested `chat` catalog for the resolved locale (genUi copy lives under `genUi.<feature>.<key>`).
  */
-export function genUiCopy(locale?: AppLocaleId): (typeof chatMessages)[AppLocaleId] {
-  return chatMessages[resolveWidgetLocale(locale)];
+export function genUiCopy(locale?: AppLocaleId): ChatCatalog {
+  return getCatalog(resolveWidgetLocale(locale), 'chat');
 }
 
 /**
@@ -37,91 +40,81 @@ export function genUiCopy(locale?: AppLocaleId): (typeof chatMessages)[AppLocale
  * @returns Interpolated string.
  */
 export function fmt(template: string, values: Record<string, string | number>): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) =>
-    key in values ? String(values[key]) : match,
-  );
+  return template.replace(/\{(\w+)\}/g, (match, key: string) => (key in values ? String(values[key]) : match));
 }
 
-/** Builds one stable copy object per locale at module load (chatMessages is static). */
+/** Builds one stable copy object per locale at module load (the catalogs are static JSON imports). */
 function perLocale<T>(build: (c: ReturnType<typeof genUiCopy>) => T): Record<AppLocaleId, T> {
-  return { 'en-us': build(chatMessages['en-us']), 'vi-vi': build(chatMessages['vi-vi']) };
+  return { 'en-us': build(getCatalog('en-us', 'chat')), 'vi-vi': build(getCatalog('vi-vi', 'chat')) };
 }
 
 /** Adapter exposing PlanCard copy from the shared catalog (keeps call sites readable). */
 export const PLAN_COPY = perLocale((c) => ({
-    progressLabel: (completed: number, total: number) => fmt(c.genUiPlanProgress, { completed, total }),
-    statusCompleted: c.genUiPlanStatusCompleted,
-    statusInProgress: c.genUiPlanStatusInProgress,
-    statusPending: c.genUiPlanStatusPending,
-    approvedNotice: c.genUiPlanApproved,
-    approachLabel: c.genUiPlanApproach,
-    technologyLabel: c.genUiPlanTechnology,
-    approvePrompt: (title: string, steps: string[]) =>
-      fmt(c.genUiPlanApprovePrompt, { title, steps: steps.join('; ') }),
-    refinePrompt: (title: string) => fmt(c.genUiPlanRefinePrompt, { title }),
+  progressLabel: (completed: number, total: number) => fmt(c.genUi.plan.progress, { completed, total }),
+  statusCompleted: c.genUi.plan.statusCompleted,
+  statusInProgress: c.genUi.plan.statusInProgress,
+  statusPending: c.genUi.plan.statusPending,
+  approvedNotice: c.genUi.plan.approved,
+  approachLabel: c.genUi.plan.approach,
+  technologyLabel: c.genUi.plan.technology,
+  approvePrompt: (title: string, steps: string[]) => fmt(c.genUi.plan.approvePrompt, { title, steps: steps.join('; ') }),
+  refinePrompt: (title: string) => fmt(c.genUi.plan.refinePrompt, { title }),
 }));
 
 /** Adapter exposing MeetingTimePicker copy from the shared catalog. */
 export const MEETING_COPY = perLocale((c) => ({
-    defaultTitle: c.genUiMeetingDefaultTitle,
-    availableBadge: c.genUiMeetingAvailable,
-    unavailableBadge: c.genUiMeetingUnavailable,
-    recommendedBadge: c.genUiMeetingRecommended,
-    suggestAlternative: c.genUiMeetingSuggestAlternative,
-    confirmedStatus: (date: string, time: string) => fmt(c.genUiMeetingConfirmed, { date, time }),
-    declinedStatus: c.genUiMeetingDeclined,
-    confirmPrompt: (title: string, date: string, time: string, label?: string) =>
-      fmt(c.genUiMeetingConfirmPrompt, { title, date, time, label: label ? ` (${label})` : '' }),
-    declinePrompt: (title: string) => fmt(c.genUiMeetingDeclinePrompt, { title }),
+  defaultTitle: c.genUi.meeting.defaultTitle,
+  availableBadge: c.genUi.meeting.available,
+  unavailableBadge: c.genUi.meeting.unavailable,
+  recommendedBadge: c.genUi.meeting.recommended,
+  suggestAlternative: c.genUi.meeting.suggestAlternative,
+  confirmedStatus: (date: string, time: string) => fmt(c.genUi.meeting.confirmed, { date, time }),
+  declinedStatus: c.genUi.meeting.declined,
+  confirmPrompt: (title: string, date: string, time: string, label?: string) =>
+    fmt(c.genUi.meeting.confirmPrompt, { title, date, time, label: label ? ` (${label})` : '' }),
+  declinePrompt: (title: string) => fmt(c.genUi.meeting.declinePrompt, { title }),
 }));
 
 /** Adapter exposing the user-input request card copy (HITL `request_user_input`). */
 export const INPUT_COPY = perLocale((c) => ({
-    submit: c.genUiInputSubmit,
-    textPlaceholder: c.genUiInputTextPlaceholder,
-    answered: (label: string) => fmt(c.genUiInputAnswered, { label }),
-    declined: c.genUiInputDeclined,
-    expired: c.genUiInputExpired,
-    cancelled: c.genUiInputCancelled,
-    failed: c.genUiInputFailed,
+  submit: c.genUi.input.submit,
+  textPlaceholder: c.genUi.input.textPlaceholder,
+  answered: (label: string) => fmt(c.genUi.input.answered, { label }),
+  declined: c.genUi.input.declined,
+  expired: c.genUi.input.expired,
+  cancelled: c.genUi.input.cancelled,
+  failed: c.genUi.input.failed,
 }));
 
 /** Adapter exposing TableCatalog copy from the shared catalog. */
 export const TABLE_COPY = perLocale((c) => ({
-    emptyTitle: c.genUiTableEmpty,
-    emptyFiltered: c.genUiTableEmptyFiltered,
-    sourcePrefix: c.genUiTableSource,
-    actionsHeader: c.genUiTableActions,
-    defaultActionLabel: c.genUiTableAnalyze,
-    rowCountLabel: (visible: number, total: number) =>
-      visible === total
-        ? fmt(c.genUiTableRowCountAll, { total })
-        : fmt(c.genUiTableRowCountSome, { visible, total }),
-    sortByLabel: (label: string) => fmt(c.genUiTableSortBy, { label }),
-    rowPrompt: (title: string, summary: string) => fmt(c.genUiTableRowPrompt, { title, summary }),
+  emptyTitle: c.genUi.table.empty,
+  emptyFiltered: c.genUi.table.emptyFiltered,
+  sourcePrefix: c.genUi.table.source,
+  actionsHeader: c.genUi.table.actions,
+  defaultActionLabel: c.genUi.table.analyze,
+  rowCountLabel: (visible: number, total: number) =>
+    visible === total ? fmt(c.genUi.table.rowCountAll, { total }) : fmt(c.genUi.table.rowCountSome, { visible, total }),
+  sortByLabel: (label: string) => fmt(c.genUi.table.sortBy, { label }),
+  rowPrompt: (title: string, summary: string) => fmt(c.genUi.table.rowPrompt, { title, summary }),
 }));
-
-/** Keys of the `chat` catalog whose value is a plain string (excludes nested objects). */
-export type StringCopyKey = {
-  [K in keyof (typeof chatMessages)['en-us']]: (typeof chatMessages)['en-us'][K] extends string ? K : never;
-}[keyof (typeof chatMessages)['en-us']];
 
 /** Adapter exposing generic Form widget copy from the shared catalog. */
 export const FORM_COPY = perLocale((c) => ({
-    defaultSubmit: c.genUiFormDefaultSubmit,
-    required: (label: string) => fmt(c.genUiFormRequired, { label }),
-    maxLength: (label: string, max: number) => fmt(c.genUiFormMaxLength, { label, max }),
-    numberInvalid: (label: string) => fmt(c.genUiFormNumberInvalid, { label }),
-    min: (label: string, min: number) => fmt(c.genUiFormMin, { label, min }),
-    max: (label: string, max: number) => fmt(c.genUiFormMax, { label, max }),
-    tooLong: c.genUiFormTooLong,
-    selectPlaceholder: c.genUiFormSelectPlaceholder,
-    sending: c.genUiFormSending,
-    submitted: c.genUiFormSubmitted,
-    sendFailed: c.genUiFormSendFailed,
-    promptHeader: (title: string) => fmt(c.genUiFormPromptHeader, { title }),
-    yes: c.genUiFormYes,
-    no: c.genUiFormNo,
-    empty: c.genUiFormEmpty,
-    optional: c.genUiFormOptional,
+  defaultSubmit: c.genUi.form.defaultSubmit,
+  required: (label: string) => fmt(c.genUi.form.required, { label }),
+  maxLength: (label: string, max: number) => fmt(c.genUi.form.maxLength, { label, max }),
+  numberInvalid: (label: string) => fmt(c.genUi.form.numberInvalid, { label }),
+  min: (label: string, min: number) => fmt(c.genUi.form.min, { label, min }),
+  max: (label: string, max: number) => fmt(c.genUi.form.max, { label, max }),
+  tooLong: c.genUi.form.tooLong,
+  selectPlaceholder: c.genUi.form.selectPlaceholder,
+  sending: c.genUi.form.sending,
+  submitted: c.genUi.form.submitted,
+  sendFailed: c.genUi.form.sendFailed,
+  promptHeader: (title: string) => fmt(c.genUi.form.promptHeader, { title }),
+  yes: c.genUi.form.yes,
+  no: c.genUi.form.no,
+  empty: c.genUi.form.empty,
+  optional: c.genUi.form.optional,
 }));

@@ -120,7 +120,7 @@ export function ModelPicker({
   locked?: boolean;
 }) {
   const t = useTranslations('chat');
-  const text = triggerText(picker, t('modelDefaultPrefix'), t('modelDefault'));
+  const text = triggerText(picker, t('model.defaultPrefix'), t('model.default'));
   return (
     <Select
       disabled={disabled || locked}
@@ -128,7 +128,7 @@ export function ModelPicker({
       onValueChange={(next) => picker.onChange(picker.options.find((o) => refOf(o) === next) ?? null)}
     >
       <SelectTrigger
-        aria-label={t('modelPickerLabel')}
+        aria-label={t('model.pickerLabel')}
         aria-describedby={locked ? MODEL_LOCKED_HINT_ID : undefined}
         title={text.title}
         className="h-8 w-auto max-w-48 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
@@ -137,7 +137,7 @@ export function ModelPicker({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={DEFAULT_VALUE}>
-          {picker.defaultModel ? t('modelDefaultNamed', { model: picker.defaultModel }) : t('modelDefault')}
+          {picker.defaultModel ? t('model.defaultNamed', { model: picker.defaultModel }) : t('model.default')}
         </SelectItem>
         {picker.options.map((o) => (
           <SelectItem key={refOf(o)} value={refOf(o)}>

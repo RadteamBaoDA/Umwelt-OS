@@ -81,7 +81,7 @@ function InvalidPayload({ catalog }: { catalog: RenderContext['catalog'] }) {
       data-testid="generative-ui-invalid-payload"
       className="rounded-lg border border-destructive bg-surface p-3 text-sm text-destructive"
     >
-      {catalog.genUiInvalidPayload}
+      {catalog.genUi.invalid.payload}
     </div>
   );
 }
@@ -103,8 +103,8 @@ function renderSandbox({ payload, catalog }: RenderContext): React.ReactNode {
       status={payload.status}
       title={payload.title ?? payload.sandbox?.title}
       labels={{
-        expand: catalog.genUiExpandFullscreen,
-        exportHtml: catalog.genUiExportHtml,
+        expand: catalog.genUi.expand.fullscreen,
+        exportHtml: catalog.genUi.export.html,
       }}
     />
   );
@@ -116,7 +116,7 @@ function renderPlan({ payload, raw, catalog, locale, onSendPrompt }: RenderConte
   if (!isValid(planPayloadSchema, planObj)) return <InvalidPayload catalog={catalog} />;
   return (
     <PlanCard
-      title={titleOf(planObj, payload, catalog.genUiTitlePlan)}
+      title={titleOf(planObj, payload, catalog.genUi.title.plan)}
       description={descriptionOf(planObj)}
       steps={arr<PlanStep>(planObj, 'steps')}
       todos={arr<PlanStep>(planObj, 'todos')}
@@ -136,7 +136,7 @@ function renderTable({ payload, raw, catalog, locale, onSendPrompt }: RenderCont
   if (!isValid(tablePayloadSchema, tableObj)) return <InvalidPayload catalog={catalog} />;
   return (
     <TableCatalog
-      title={titleOf(tableObj, payload, catalog.genUiTitleTable)}
+      title={titleOf(tableObj, payload, catalog.genUi.title.table)}
       description={descriptionOf(tableObj)}
       columns={arr<TableColumn | string>(tableObj, 'columns') ?? []}
       rows={arr<TableRowData>(tableObj, 'rows')}
@@ -178,7 +178,7 @@ function renderBarChart({ payload, raw, catalog, locale }: RenderContext): React
   const chartType = chartObj.chart_type;
   return (
     <GenerativeBarChart
-      title={titleOf(chartObj, payload, catalog.genUiTitleBar)}
+      title={titleOf(chartObj, payload, catalog.genUi.title.bar)}
       data={arr<GenerativeBarDatum>(chartObj, 'data') ?? []}
       {...chartCommon(chartObj)}
       locale={locale}
@@ -193,7 +193,7 @@ function renderPieChart({ payload, raw, catalog, locale }: RenderContext): React
   if (!isValid(chartPayloadSchema, chartObj)) return <InvalidPayload catalog={catalog} />;
   return (
     <GenerativePieChart
-      title={titleOf(chartObj, payload, catalog.genUiTitlePie)}
+      title={titleOf(chartObj, payload, catalog.genUi.title.pie)}
       data={arr<GenerativePieDatum>(chartObj, 'data') ?? []}
       {...chartCommon(chartObj)}
       locale={locale}

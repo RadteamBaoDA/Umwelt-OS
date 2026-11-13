@@ -51,17 +51,33 @@ const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/templ
   loading: () => <div aria-hidden="true" className="h-8 w-32" />,
 });
 
-const KNOWN_REASONS = [
-  'not_configured',
-  'query_too_long',
-  'empty_query',
-  'local_only_context',
-  'daily_limit',
-  'timeout',
-  'provider_error',
-  'network_denied',
-  'run_inactive',
-];
+type WebReasonKey =
+  | 'web.reason_not_configured'
+  | 'web.reason_query_too_long'
+  | 'web.reason_empty_query'
+  | 'web.reason_local_only_context'
+  | 'web.reason_daily_limit'
+  | 'web.reason_timeout'
+  | 'web.reason_provider_error'
+  | 'web.reason_network_denied'
+  | 'web.reason_run_inactive'
+  | 'web.reason_unknown';
+
+/**
+ * Server web-search reason code to its localized sentence key. A Map (not a dotted-key template) so next-intl
+ * type-checks each key and unknown or prototype-named codes fall through to `web.reason_unknown`.
+ */
+const WEB_REASON_KEYS = new Map<string, WebReasonKey>([
+  ['not_configured', 'web.reason_not_configured'],
+  ['query_too_long', 'web.reason_query_too_long'],
+  ['empty_query', 'web.reason_empty_query'],
+  ['local_only_context', 'web.reason_local_only_context'],
+  ['daily_limit', 'web.reason_daily_limit'],
+  ['timeout', 'web.reason_timeout'],
+  ['provider_error', 'web.reason_provider_error'],
+  ['network_denied', 'web.reason_network_denied'],
+  ['run_inactive', 'web.reason_run_inactive'],
+]);
 
 /**
  * Markdown for a settled assistant answer whose top-level blocks fade in once on first view.
@@ -93,8 +109,8 @@ function WebSearchProvider({ provider, fallback }: { provider?: string | null; f
   if (!provider) return null;
   return (
     <>
-      {t('webSearchedVia', { provider: PROVIDER_NAMES[provider] ?? provider })}
-      {fallback ? t('webSearchedFallback') : null}
+      {t('web.searchedVia', { provider: PROVIDER_NAMES[provider] ?? provider })}
+      {fallback ? t('web.searchedFallback') : null}
     </>
   );
 }
@@ -112,7 +128,7 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
     const count = outcome.result_count ?? 0;
     return (
       <p data-testid="web-search-query" className="mt-1 text-xs text-muted-foreground">
-        {count > 0 ? t('webSearchedQueryCount', { query: outcome.query, count }) : t('webSearchedQuery', { query: outcome.query })}
+        {count > 0 ? t('web.searchedQueryCount', { query: outcome.query, count }) : t('web.searchedQuery', { query: outcome.query })}
         <WebSearchProvider provider={outcome.provider} fallback={outcome.fallback} />
       </p>
     );
@@ -120,7 +136,7 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
   if (outcome?.status === 'used' && outcome.reason === 'no_results') {
     return (
       <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">
-        {t('webNoResults')}
+        {t('web.noResults')}
       </p>
     );
   }
@@ -131,23 +147,23 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
 /** Notice for a search that was skipped or unavailable, with a localized reason (unknown codes use generic copy). */
 function WebSearchSkippedNotice({ outcome }: { outcome: WebSearchOutcome }) {
   const t = useTranslations('chat');
-  const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
-  const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');
+  const reason = t((outcome.reason && WEB_REASON_KEYS.get(outcome.reason)) || 'web.reason_unknown');
+  const title = outcome.status === 'skipped' ? t('web.skipped') : t('web.unavailable');
   return (
     <p
       data-testid="web-search-notice"
       className={`mt-1 text-xs ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}
     >
-      {t('webNotice', { title, reason })}
+      {t('web.notice', { title, reason })}
     </p>
   );
 }
 
 /** Workspace-relevant starter prompts as chat message keys (title shown, prompt sent). */
 const STARTER_PROMPTS = [
-  { title: 'starterNewsTitle', prompt: 'starterNewsPrompt' },
-  { title: 'starterWatchlistTitle', prompt: 'starterWatchlistPrompt' },
-  { title: 'starterBtcTitle', prompt: 'starterBtcPrompt' },
+  { title: 'starter.newsTitle', prompt: 'starter.newsPrompt' },
+  { title: 'starter.watchlistTitle', prompt: 'starter.watchlistPrompt' },
+  { title: 'starter.btcTitle', prompt: 'starter.btcPrompt' },
 ] as const;
 
 /** One capability chip of the empty state: toggles a composer option or opens the file picker. */
@@ -267,11 +283,11 @@ function ProviderMissingNotice() {
   return (
     <div role="status" className="flex max-w-prose flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-foreground">{t('providerGateTitle')}</p>
-        <p className="text-muted-foreground">{t('emptyProviderMissingBody')}</p>
+        <p className="font-medium text-foreground">{t('provider.gateTitle')}</p>
+        <p className="text-muted-foreground">{t('empty.providerMissingBody')}</p>
       </div>
       <Button asChild size="sm">
-        <Link href="/settings/models">{t('providerGateAction')}</Link>
+        <Link href="/settings/models">{t('provider.gateAction')}</Link>
       </Button>
     </div>
   );
@@ -292,8 +308,8 @@ function EmptyIntro({ onSendPrompt, capabilities }: { onSendPrompt: (prompt: str
   return (
     <div className="mt-auto flex flex-col gap-4 py-8">
       <div className="flex flex-col gap-1">
-        <h2 className="text-lg font-semibold text-foreground">{t('emptyStateTitle')}</h2>
-        <p className="max-w-prose text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
+        <h2 className="text-lg font-semibold text-foreground">{t('empty.stateTitle')}</h2>
+        <p className="max-w-prose text-sm text-muted-foreground">{t('empty.stateDescription')}</p>
       </div>
       {capabilities?.providerMissing ? (
         <ProviderMissingNotice />
@@ -310,9 +326,9 @@ function EmptyIntro({ onSendPrompt, capabilities }: { onSendPrompt: (prompt: str
                     type="button"
                     variant="outline"
                     className="h-auto whitespace-normal text-left"
-                    onClick={() => onSendPrompt(t('starterTopicPrompt', { topic }))}
+                    onClick={() => onSendPrompt(t('starter.topicPrompt', { topic }))}
                   >
-                    {t('starterTopicTitle', { topic })}
+                    {t('starter.topicTitle', { topic })}
                   </Button>
                 ))
               : STARTER_PROMPTS.map(({ title, prompt }) => (
@@ -406,7 +422,11 @@ interface MessageViewProps {
  * @param revised - The message it revises, when loaded.
  * @param t - `chat` translator.
  */
-function relationshipLabelFor(msg: ChatMessage, revised: ChatMessage | undefined, t: ReturnType<typeof useTranslations>): string | null {
+function relationshipLabelFor(
+  msg: ChatMessage,
+  revised: ChatMessage | undefined,
+  t: ReturnType<typeof useTranslations<'chat'>>,
+): string | null {
   const isUser = msg.role === 'user';
   if (revised?.role === 'assistant') return t(isUser ? 'regeneratedPrompt' : 'regeneratedAnswer');
   if (revised?.role === 'user') return t(isUser ? 'editedPrompt' : 'editedPromptAnswer');
@@ -429,7 +449,7 @@ function MessageBody({
   const isUser = msg.role === 'user';
   return (
     <div className={isUser ? 'rounded-lg bg-raised px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}>
-      <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}</span>
+      <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistant.fallback')}</span>
 
       {relationshipLabel && (
         <p className="text-xs text-muted-foreground" aria-label={relationshipLabel}>
@@ -1098,8 +1118,8 @@ function EmptyState({ onSendPrompt, capabilities }: { onSendPrompt?: (prompt: st
   if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} capabilities={capabilities} />;
   return (
     <div className="mt-auto flex flex-col gap-1 py-8">
-      <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
-      <p className="text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
+      <h2 className="text-base font-semibold text-foreground">{t('empty.stateTitle')}</h2>
+      <p className="text-sm text-muted-foreground">{t('empty.stateDescription')}</p>
     </div>
   );
 }

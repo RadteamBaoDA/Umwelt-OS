@@ -4,14 +4,7 @@ import * as React from 'react';
 import { CheckCircle2Icon, CircleDotIcon, ClockIcon, ListChecksIcon, SparklesIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy, PLAN_COPY, resolveWidgetLocale } from '../copy';
@@ -86,10 +79,7 @@ export { resolveWidgetLocale };
  * @param locale - Active application locale.
  * @returns Badge variant and localized status string.
  */
-function getStepBadgeMeta(
-  status: PlanStepStatus,
-  locale: AppLocaleId,
-): { variant: 'default' | 'secondary' | 'outline'; label: string } {
+function getStepBadgeMeta(status: PlanStepStatus, locale: AppLocaleId): { variant: 'default' | 'secondary' | 'outline'; label: string } {
   const copy = PLAN_COPY[locale];
   if (status === 'completed') {
     return { variant: 'default', label: copy.statusCompleted };
@@ -117,8 +107,7 @@ function normalizePlanSteps(
   return rawList.map((step, index) => {
     const id = step.id || `step-${index + 1}`;
     const label = step.label || step.title || step.text || `Step ${index + 1}`;
-    const baseStatus: PlanStepStatus =
-      step.status ?? (step.completed ? 'completed' : 'pending');
+    const baseStatus: PlanStepStatus = step.status ?? (step.completed ? 'completed' : 'pending');
     return {
       ...step,
       id,
@@ -178,11 +167,7 @@ function PlanStepItem({ step, locale, onToggle }: { step: NormalizedStep; locale
             )}
             {step.label}
           </label>
-          {step.description && (
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {step.description}
-            </p>
-          )}
+          {step.description && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{step.description}</p>}
         </div>
       </div>
 
@@ -197,7 +182,16 @@ function PlanStepItem({ step, locale, onToggle }: { step: NormalizedStep; locale
 }
 
 /** Card header: title, progress counter, description, approach/technology/key elements and the progress bar. */
-function PlanHeader({ title, description, approach, technology, keyElements, copy, completedCount, totalCount }: {
+function PlanHeader({
+  title,
+  description,
+  approach,
+  technology,
+  keyElements,
+  copy,
+  completedCount,
+  totalCount,
+}: {
   title: string;
   description?: string;
   approach?: string;
@@ -218,33 +212,23 @@ function PlanHeader({ title, description, approach, technology, keyElements, cop
           </span>
           <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
         </div>
-        <Badge
-          variant="secondary"
-          data-testid="plan-progress-counter"
-          className="tabular-nums text-xs"
-        >
+        <Badge variant="secondary" data-testid="plan-progress-counter" className="tabular-nums text-xs">
           {copy.progressLabel(completedCount, totalCount)}
         </Badge>
       </div>
 
-      {description && (
-        <CardDescription className="text-xs leading-relaxed text-muted-foreground">
-          {description}
-        </CardDescription>
-      )}
+      {description && <CardDescription className="text-xs leading-relaxed text-muted-foreground">{description}</CardDescription>}
 
       {hasMeta && (
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           {approach && (
             <span>
-              <strong className="font-medium text-foreground">{copy.approachLabel}:</strong>{' '}
-              {approach}
+              <strong className="font-medium text-foreground">{copy.approachLabel}:</strong> {approach}
             </span>
           )}
           {technology && (
             <span>
-              <strong className="font-medium text-foreground">{copy.technologyLabel}:</strong>{' '}
-              {technology}
+              <strong className="font-medium text-foreground">{copy.technologyLabel}:</strong> {technology}
             </span>
           )}
           {keyElements?.map((element) => (
@@ -264,10 +248,7 @@ function PlanHeader({ title, description, approach, technology, keyElements, cop
         aria-label={copy.progressLabel(completedCount, totalCount)}
         className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted"
       >
-        <div
-          className="h-full bg-primary transition-all duration-200"
-          style={{ width: `${progressPercent}%` }}
-        />
+        <div className="h-full bg-primary transition-all duration-200" style={{ width: `${progressPercent}%` }} />
       </div>
     </CardHeader>
   );
@@ -277,28 +258,28 @@ function PlanHeader({ title, description, approach, technology, keyElements, cop
  * Plan state: local status overrides layered over the server steps, progress counts and the approve / refine / toggle
  * handlers (approve dispatches the execution prompt with the current step labels).
  */
-function usePlanState({ steps, todos, title, copy, onSendPrompt, onStepToggle }: Pick<PlanCardProps, 'steps' | 'todos' | 'title' | 'onSendPrompt' | 'onStepToggle'> & { copy: PlanCopy }) {
+function usePlanState({
+  steps,
+  todos,
+  title,
+  copy,
+  onSendPrompt,
+  onStepToggle,
+}: Pick<PlanCardProps, 'steps' | 'todos' | 'title' | 'onSendPrompt' | 'onStepToggle'> & { copy: PlanCopy }) {
   const [statusOverrides, setStatusOverrides] = React.useState<Record<string, PlanStepStatus>>({});
   const [isApproved, setIsApproved] = React.useState(false);
 
-  const stepItems = React.useMemo(
-    () => normalizePlanSteps(steps, todos, statusOverrides),
-    [steps, todos, statusOverrides],
-  );
+  const stepItems = React.useMemo(() => normalizePlanSteps(steps, todos, statusOverrides), [steps, todos, statusOverrides]);
 
   const totalCount = stepItems.length;
-  const completedCount = React.useMemo(
-    () => stepItems.filter((step) => step.status === 'completed').length,
-    [stepItems],
-  );
+  const completedCount = React.useMemo(() => stepItems.filter((step) => step.status === 'completed').length, [stepItems]);
 
   /** Toggles a single step between 'completed' and 'pending' when interacted with by the user. */
   const handleToggleStep = React.useCallback(
     (stepId: string) => {
       const target = stepItems.find((step) => step.id === stepId);
       if (!target) return;
-      const nextStatus: PlanStepStatus =
-        target.status === 'completed' ? 'pending' : 'completed';
+      const nextStatus: PlanStepStatus = target.status === 'completed' ? 'pending' : 'completed';
       onStepToggle?.(stepId, nextStatus);
       setStatusOverrides((prev) => ({ ...prev, [stepId]: nextStatus }));
     },
@@ -346,13 +327,17 @@ export function PlanCard({
   const catalog = genUiCopy(resolvedLocale);
   const resolvedKeyElements = keyElements ?? key_elements;
 
-  const { stepItems, totalCount, completedCount, isApproved, handleToggleStep, handleApprove, handleRefine } = usePlanState({ steps, todos, title, copy, onSendPrompt, onStepToggle });
+  const { stepItems, totalCount, completedCount, isApproved, handleToggleStep, handleApprove, handleRefine } = usePlanState({
+    steps,
+    todos,
+    title,
+    copy,
+    onSendPrompt,
+    onStepToggle,
+  });
 
   return (
-    <Card
-      data-testid="generative-plan-card"
-      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
-    >
+    <Card data-testid="generative-plan-card" className="my-2 w-full max-w-2xl border-border bg-surface text-foreground">
       <PlanHeader
         title={title}
         description={description}
@@ -384,26 +369,13 @@ export function PlanCard({
       </CardContent>
 
       <CardFooter className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleRefine}
-          data-testid="plan-refine-button"
-        >
-          {catalog.genUiPlanRefine}
+        <Button type="button" variant="outline" size="sm" onClick={handleRefine} data-testid="plan-refine-button">
+          {catalog.genUi.plan.refine}
         </Button>
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          onClick={handleApprove}
-          data-testid="plan-approve-button"
-        >
-          {catalog.genUiPlanApprove}
+        <Button type="button" variant="default" size="sm" onClick={handleApprove} data-testid="plan-approve-button">
+          {catalog.genUi.plan.approve}
         </Button>
       </CardFooter>
     </Card>
   );
 }
-

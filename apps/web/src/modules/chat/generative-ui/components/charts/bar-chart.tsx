@@ -444,7 +444,7 @@ export function GenerativeBarChart({
     title,
     description: resolvedDescription,
     source,
-    sourceLabel: catalog.genUiTableSource,
+    sourceLabel: catalog.genUi.table.source,
     locale: resolvedLocale,
     chartType,
     ctx,
@@ -465,7 +465,7 @@ export function GenerativeBarChart({
         <CardContent className="pt-4">
           {normalizedData.length === 0 ? (
             <p role="status" data-testid="bar-chart-empty" className="py-8 text-center text-xs text-muted-foreground">
-              {catalog.genUiBarEmpty}
+              {catalog.genUi.bar.empty}
             </p>
           ) : (
             <NextIntlClientProvider
@@ -484,7 +484,7 @@ export function GenerativeBarChart({
         {source && (
           <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
             <span data-testid="bar-chart-source">
-              <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
+              <strong className="font-medium text-foreground">{catalog.genUi.table.source}:</strong> {source}
             </span>
           </CardFooter>
         )}

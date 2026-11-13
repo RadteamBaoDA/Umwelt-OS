@@ -28,7 +28,7 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
   const web = useWebSearchToggle(data, full);
   if (!full) return undefined;
   const attachBlocked = data.busy || data.attachmentsUnavailable || data.attachments.full;
-  const webReason = web && !web.available ? t('webSearchNotSetUp') : web?.profileBlocked ? t('webSearchProfileOnly') : undefined;
+  const webReason = web && !web.available ? t('web.searchNotSetUp') : web?.profileBlocked ? t('web.searchProfileOnly') : undefined;
   return {
     providerMissing: !data.providerReady,
     webSearch: web && {
@@ -40,7 +40,7 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
       onActivate: () => web.onChange(!web.enabled),
     },
     attach: {
-      disabledReason: data.attachmentsUnavailable ? t('attachmentUnavailableBlock') : undefined,
+      disabledReason: data.attachmentsUnavailable ? t('attachment.unavailableBlock') : undefined,
       disabled: attachBlocked,
       onActivate: () => data.composer.fileInputRef.current?.click(),
     },

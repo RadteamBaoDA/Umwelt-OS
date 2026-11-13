@@ -7,10 +7,22 @@ const tc = ((key: string, values?: { query?: string }) => (values?.query ? `${ke
 /** Builds a minimal option context; individual tests override the parts they exercise. */
 function context(overrides: Record<string, unknown> = {}) {
   return {
-    query: '', scope: 'all', role: 'owner', availability: undefined, t, tc,
-    close: vi.fn(), go: vi.fn(), setDraft: vi.fn(), openDrawer: vi.fn(), selectConversation: vi.fn(),
+    query: '',
+    scope: 'all',
+    role: 'owner',
+    availability: undefined,
+    t,
+    tc,
+    close: vi.fn(),
+    go: vi.fn(),
+    setDraft: vi.fn(),
+    openDrawer: vi.fn(),
+    selectConversation: vi.fn(),
     wants: { docs: true, entities: true, events: true, conversations: true },
-    docs: undefined, entities: undefined, events: undefined, conversations: undefined,
+    docs: undefined,
+    entities: undefined,
+    events: undefined,
+    conversations: undefined,
     ...overrides,
   } as Parameters<typeof buildPaletteOptions>[0];
 }
@@ -25,18 +37,24 @@ describe('buildPaletteOptions', () => {
   it('puts the query actions first and keeps collect-now inert', () => {
     const options = buildPaletteOptions(context({ query: 'zzzz-no-destination' }));
     expect(options.map((option) => option.id)).toEqual(['ask-ai', 'create-rule', 'collect-now']);
-    expect(options[2].disabledReason).toBe('paletteCollectUnavailable');
-    expect(options[0].label).toBe('paletteAskAi:zzzz-no-destination');
+    expect(options[2].disabledReason).toBe('palette.collectUnavailable');
+    expect(options[0].label).toBe('palette.askAi:zzzz-no-destination');
   });
 
   it('lists only search hits outside the All scope, in documents, entities, events, conversations order', () => {
     const go = vi.fn();
-    const options = buildPaletteOptions(context({
-      scope: 'entities', query: 'ab', go,
-      entities: { items: [{ id: 'e/1', name: null, type: 'person' }] },
-      docs: { items: [{ chunk_id: 'c', title: 'D', source: { name: 'S' }, version_number: 2, document_id: 'd', document_version_id: 'v' }] },
-      wants: { docs: false, entities: true, events: false, conversations: false },
-    }));
+    const options = buildPaletteOptions(
+      context({
+        scope: 'entities',
+        query: 'ab',
+        go,
+        entities: { items: [{ id: 'e/1', name: null, type: 'person' }] },
+        docs: {
+          items: [{ chunk_id: 'c', title: 'D', source: { name: 'S' }, version_number: 2, document_id: 'd', document_version_id: 'v' }],
+        },
+        wants: { docs: false, entities: true, events: false, conversations: false },
+      }),
+    );
     expect(options).toHaveLength(1);
     expect(options[0]).toMatchObject({ id: 'ent-e/1', group: 'entities', label: 'e/1', badge: 'person' });
     options[0].run();
@@ -46,7 +64,16 @@ describe('buildPaletteOptions', () => {
   it('selects the conversation before navigating to Chat', () => {
     const go = vi.fn();
     const selectConversation = vi.fn();
-    const [option] = buildPaletteOptions(context({ scope: 'conversations', query: 'ab', go, selectConversation, wants: { docs: false, entities: false, events: false, conversations: true }, conversations: [{ id: 'k', title: '' }] }));
+    const [option] = buildPaletteOptions(
+      context({
+        scope: 'conversations',
+        query: 'ab',
+        go,
+        selectConversation,
+        wants: { docs: false, entities: false, events: false, conversations: true },
+        conversations: [{ id: 'k', title: '' }],
+      }),
+    );
     expect(option.label).toBe('untitledConversation');
     option.run();
     expect(selectConversation).toHaveBeenCalledWith('k');

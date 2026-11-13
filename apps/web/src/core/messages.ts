@@ -17,7 +17,6 @@ import { accountMessages } from './messages/account';
 import { accountDeletionMessages } from './messages/account-deletion';
 import { jsonCatalogs } from '@messages';
 import { sourcesMessages } from './messages/sources';
-import { chatMessages } from './messages/chat';
 import { memoryMessages } from './messages/memory';
 import { memoryPrivacyMessages } from './messages/memory-privacy';
 import { aiSettingsMessages } from './messages/ai-settings';
@@ -28,7 +27,6 @@ import { todosMessages } from './messages/todos';
 import { n8nMessages } from './messages/n8n';
 import { dashboardMessages } from './messages/dashboard';
 import { gadgetSettingsMessages } from './messages/gadget-settings';
-import { taskGoalMessages } from './messages/task-goal';
 import { searchEntitiesMessages } from './messages/search';
 import { detailMessages } from './messages/detail';
 import { documentsMessages } from './messages/documents';
@@ -60,7 +58,7 @@ export const messages = {
     accountDeletion: accountDeletionMessages['en-us'],
     common: jsonCatalogs['en-us'].common,
     sources: sourcesMessages['en-us'],
-    chat: chatMessages['en-us'],
+    chat: jsonCatalogs['en-us'].chat,
     memory: memoryMessages['en-us'],
     memoryPrivacy: memoryPrivacyMessages['en-us'],
     aiSettings: aiSettingsMessages['en-us'],
@@ -71,7 +69,7 @@ export const messages = {
     n8n: n8nMessages['en-us'],
     dashboard: dashboardMessages['en-us'],
     gadgetSettings: gadgetSettingsMessages['en-us'],
-    taskGoal: taskGoalMessages['en-us'],
+    taskGoal: jsonCatalogs['en-us'].taskGoal,
     entities: searchEntitiesMessages['en-us'],
     observability: observabilityMessages['en-us'],
     exports: exportMessages['en-us'],
@@ -106,7 +104,7 @@ export const messages = {
     accountDeletion: accountDeletionMessages['vi-vi'],
     common: jsonCatalogs['vi-vi'].common,
     sources: sourcesMessages['vi-vi'],
-    chat: chatMessages['vi-vi'],
+    chat: jsonCatalogs['vi-vi'].chat,
     memory: memoryMessages['vi-vi'],
     memoryPrivacy: memoryPrivacyMessages['vi-vi'],
     aiSettings: aiSettingsMessages['vi-vi'],
@@ -117,7 +115,7 @@ export const messages = {
     n8n: n8nMessages['vi-vi'],
     dashboard: dashboardMessages['vi-vi'],
     gadgetSettings: gadgetSettingsMessages['vi-vi'],
-    taskGoal: taskGoalMessages['vi-vi'],
+    taskGoal: jsonCatalogs['vi-vi'].taskGoal,
     entities: searchEntitiesMessages['vi-vi'],
     observability: observabilityMessages['vi-vi'],
     exports: exportMessages['vi-vi'],

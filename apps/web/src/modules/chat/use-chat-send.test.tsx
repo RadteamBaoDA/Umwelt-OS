@@ -198,7 +198,7 @@ describe('useChatSend', () => {
     expect(ok).toBe(false);
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hello');
-    expect(live.patch).toHaveBeenLastCalledWith({ error: 'contextSelectionTooLarge' });
+    expect(live.patch).toHaveBeenLastCalledWith({ error: 'context.selectionTooLarge' });
   });
 
   it('restores the draft and localizes a rejected send (not accepted)', async () => {
@@ -211,7 +211,7 @@ describe('useChatSend', () => {
     });
     expect(ok).toBe(false);
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hello');
-    expect(live.patch).toHaveBeenLastCalledWith({ error: 'errorConflict' });
+    expect(live.patch).toHaveBeenLastCalledWith({ error: 'error.conflict' });
   });
 
   it('shows the user message at once (keyed by client_request_id) and removes it when the server rejects', async () => {

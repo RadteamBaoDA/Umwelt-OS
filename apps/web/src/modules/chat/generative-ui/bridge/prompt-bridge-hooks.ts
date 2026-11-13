@@ -175,19 +175,19 @@ export function useSandboxPromptDraft({
       const draft = onDraftPromptRef.current;
       if (disabledRef.current || !draft) {
         // The owner sees why the widget action did nothing (the widget alone gets the English wire error).
-        onNotice?.({ kind: 'blocked', message: genUiCopy().genUiPromptBusy });
+        onNotice?.({ kind: 'blocked', message: genUiCopy().genUi.prompt.busy });
         fail('Prompt bridge is disabled');
         return;
       }
       const parsed = sendPromptParameters.safeParse({ text: rawPrompt });
       if (!parsed.success) {
-        onNotice?.({ kind: 'blocked', message: genUiCopy().genUiPromptFailed });
+        onNotice?.({ kind: 'blocked', message: genUiCopy().genUi.prompt.failed });
         fail('Invalid prompt');
         return;
       }
       const now = Date.now();
       if (isRateLimited(lastAcceptedAtRef.current, now, cooldownMs)) {
-        onNotice?.({ kind: 'blocked', message: genUiCopy().genUiPromptBusy });
+        onNotice?.({ kind: 'blocked', message: genUiCopy().genUi.prompt.busy });
         fail('Prompt rate limited');
         return;
       }

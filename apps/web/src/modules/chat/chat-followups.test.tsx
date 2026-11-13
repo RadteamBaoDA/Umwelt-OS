@@ -16,8 +16,17 @@ vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEvent
 /** Minimal persisted message. */
 function msg(id: string, role: 'user' | 'assistant', over: Partial<ChatMessage> = {}): ChatMessage {
   return {
-    id, conversation_id: 'c1', role, content: `${role} ${id}`, client_request_id: null, model_identity: null, citations: [],
-    response_id: `r-${id}`, revision_of_message_id: null, created_at: '2026-11-10T10:00:00Z', ...over,
+    id,
+    conversation_id: 'c1',
+    role,
+    content: `${role} ${id}`,
+    client_request_id: null,
+    model_identity: null,
+    citations: [],
+    response_id: `r-${id}`,
+    revision_of_message_id: null,
+    created_at: '2026-11-10T10:00:00Z',
+    ...over,
   };
 }
 
@@ -81,7 +90,7 @@ describe('processing step list', () => {
 
   it('lists localized running and finished steps while streaming', () => {
     renderTranscript({ isStreaming: true, steps });
-    const list = screen.getByRole('list', { name: messages['en-us'].chat.stepsLabel });
+    const list = screen.getByRole('list', { name: messages['en-us'].chat.steps.label });
     expect(list.textContent).toContain('Found 3 documents');
     expect(list.textContent).toContain('Searching the web…');
     // The running step replaces the single status line.
@@ -89,18 +98,27 @@ describe('processing step list', () => {
   });
 
   it('uses generic copy and the label for unknown tools', () => {
-    renderTranscript({ isStreaming: true, steps: [{ tool: 'frobnicate', state: 'running', label: 'Widget' }, { tool: 'read_skill', state: 'done', label: 'budgeting' }] });
+    renderTranscript({
+      isStreaming: true,
+      steps: [
+        { tool: 'frobnicate', state: 'running', label: 'Widget' },
+        { tool: 'read_skill', state: 'done', label: 'budgeting' },
+      ],
+    });
     expect(screen.getByText('Working: Widget…')).toBeTruthy();
     expect(screen.getByText('Read skill budgeting')).toBeTruthy();
   });
 
   it('collapses to a one-line summary after the answer and expands on demand', async () => {
-    renderTranscript({ messages: [msg('u1', 'user'), msg('a1', 'assistant')], steps: [steps[0], { tool: 'web_search', state: 'done' }, { tool: 'read_skill', state: 'done', label: 's' }] });
+    renderTranscript({
+      messages: [msg('u1', 'user'), msg('a1', 'assistant')],
+      steps: [steps[0], { tool: 'web_search', state: 'done' }, { tool: 'read_skill', state: 'done', label: 's' }],
+    });
     const toggle = screen.getByRole('button', { name: /3 steps/ });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByRole('list', { name: messages['en-us'].chat.stepsLabel })).toBeNull();
+    expect(screen.queryByRole('list', { name: messages['en-us'].chat.steps.label })).toBeNull();
     await userEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByRole('list', { name: messages['en-us'].chat.stepsLabel }).querySelectorAll('li')).toHaveLength(3);
+    expect(screen.getByRole('list', { name: messages['en-us'].chat.steps.label }).querySelectorAll('li')).toHaveLength(3);
   });
 });

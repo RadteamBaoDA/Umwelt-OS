@@ -17,11 +17,11 @@ import { ChatDocumentPreview } from './chat-document-preview';
 export function useContextLabel(context: ChatContext | null) {
   const t = useTranslations('chat');
   if (!context) return null;
-  if (context.kind === 'day') return t('contextDay', { date: String(context.date ?? ''), timezone: String(context.timezone ?? '') });
-  if (context.kind === 'document') return t('contextDocument', { title: String(context.resource_id ?? '') });
-  if (context.kind === 'entity') return t('contextEntity', { name: String(context.resource_id ?? '') });
-  if (context.kind === 'gadget') return t('contextGadget', { title: String(context.title || context.gadgetId || '') });
-  return t('contextSelection', { count: context.items?.length ?? 1 });
+  if (context.kind === 'day') return t('context.day', { date: String(context.date ?? ''), timezone: String(context.timezone ?? '') });
+  if (context.kind === 'document') return t('context.document', { title: String(context.resource_id ?? '') });
+  if (context.kind === 'entity') return t('context.entity', { name: String(context.resource_id ?? '') });
+  if (context.kind === 'gadget') return t('context.gadget', { title: String(context.title || context.gadgetId || '') });
+  return t('context.selection', { count: context.items?.length ?? 1 });
 }
 
 /** Drops client-only chip titles from selection items; the server rejects unknown item fields. */
@@ -63,18 +63,18 @@ function ContextPickerResults({
 }) {
   const t = useTranslations('chat');
   return (
-    <div role="group" aria-label={t('contextPickerResults')} className="flex max-h-[40dvh] flex-col gap-1 overflow-y-auto">
+    <div role="group" aria-label={t('context.pickerResults')} className="flex max-h-[40dvh] flex-col gap-1 overflow-y-auto">
       {/* Always mounted so assistive tech announces the text change. */}
       <p role="status" className="text-sm text-muted-foreground">
-        {searching ? t('contextPickerSearching') : ''}
+        {searching ? t('context.pickerSearching') : ''}
       </p>
       {results.isError && (
         <p role="alert" className="text-sm text-destructive">
-          {t('contextPickerError')}
+          {t('context.pickerError')}
         </p>
       )}
       {results.isSuccess && !results.isFetching && hits.length === 0 && (
-        <p className="text-sm text-muted-foreground">{t('contextPickerEmpty')}</p>
+        <p className="text-sm text-muted-foreground">{t('context.pickerEmpty')}</p>
       )}
       {hits.map((hit) => {
         const already = taken.has(hit.document_id);
@@ -153,15 +153,15 @@ function ContextPicker({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('contextPickerTitle')}</DialogTitle>
-          <DialogDescription>{t('contextPickerHint', { max: MAX_ITEMS })}</DialogDescription>
+          <DialogTitle>{t('context.pickerTitle')}</DialogTitle>
+          <DialogDescription>{t('context.pickerHint', { max: MAX_ITEMS })}</DialogDescription>
         </DialogHeader>
         <Input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('contextPickerSearch')}
-          aria-label={t('contextPickerSearch')}
+          placeholder={t('context.pickerSearch')}
+          aria-label={t('context.pickerSearch')}
           autoFocus
         />
         <ContextPickerResults
@@ -174,11 +174,11 @@ function ContextPicker({
           onToggle={toggle}
         />
         <p className="text-xs text-muted-foreground" role="status">
-          {t('contextPickerCount', { count: current.length + picked.size, max: MAX_ITEMS })}
+          {t('context.pickerCount', { count: current.length + picked.size, max: MAX_ITEMS })}
         </p>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={close}>
-            {t('contextPickerCancel')}
+            {t('context.pickerCancel')}
           </Button>
           <Button
             type="button"
@@ -188,7 +188,7 @@ function ContextPicker({
               close();
             }}
           >
-            {t('contextPickerAdd')}
+            {t('context.pickerAdd')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -233,7 +233,7 @@ function ContextChip({
             type="button"
             variant="ghost"
             className="h-7 min-w-0 gap-1 px-1 text-xs font-normal"
-            aria-label={t('previewDocument', { title: text })}
+            aria-label={t('preview.document', { title: text })}
           >
             <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span className="max-w-48 truncate">{text}</span>
@@ -253,8 +253,8 @@ function ContextChip({
         className="-my-2 rounded-full text-muted-foreground"
         data-chip-remove
         onClick={remove}
-        title={t('contextRemove', { label: text })}
-        aria-label={t('contextRemove', { label: text })}
+        title={t('context.remove', { label: text })}
+        aria-label={t('context.remove', { label: text })}
       >
         <XIcon className="size-3.5" aria-hidden="true" />
       </Button>
@@ -277,15 +277,15 @@ function makeContextItemEditor(
   onChange: ((context: ChatContext | null) => void) | undefined,
   barId: string,
   setAnnounce: (message: string) => void,
-  t: ReturnType<typeof useTranslations>,
+  t: ReturnType<typeof useTranslations<'chat'>>,
 ) {
   const setItems = (next: Item[]) => {
     const unique = next.filter((i, k, a) => a.findIndex((x) => x.documentId === i.documentId) === k).slice(0, MAX_ITEMS);
     onChange?.(unique.length ? { kind: 'selection', items: unique } : null);
   };
-  const nameOf = (i: Item, idx: number) => i.title ?? t('contextDocumentItem', { n: idx + 1 });
+  const nameOf = (i: Item, idx: number) => i.title ?? t('context.documentItem', { n: idx + 1 });
   const removeAt = (idx: number) => {
-    const msg = t('contextRemoved', { label: nameOf(items[idx], idx) });
+    const msg = t('context.removed', { label: nameOf(items[idx], idx) });
     setAnnounce('');
     setTimeout(() => setAnnounce(msg), 50);
     setItems(items.filter((_, k) => k !== idx));
@@ -345,7 +345,7 @@ function ContextRow({
   const { setItems, nameOf, removeAt } = makeContextItemEditor(items, onChange, barId, setAnnounce, t);
   return (
     <div id={barId} className={barClass(variant, items.length > 0 || !!label)}>
-      {label && <span className="sr-only">{t('contextLabel')}</span>}
+      {label && <span className="sr-only">{t('context.label')}</span>}
       {canPick && items.length > 0
         ? items.map((i, idx) => (
             <ContextChip

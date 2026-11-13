@@ -11,7 +11,7 @@ import { genUiCopy } from '../copy';
 export function SampleDataBadge({ locale }: { locale?: AppLocaleId }) {
   return (
     <Badge variant="outline" data-testid="sample-data-badge" className="text-xs">
-      {genUiCopy(locale).genUiSampleData}
+      {genUiCopy(locale).genUi.sample.data}
     </Badge>
   );
 }

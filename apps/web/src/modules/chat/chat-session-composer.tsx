@@ -38,7 +38,7 @@ export function useWebSearchToggle(data: ChatSessionData, full: boolean) {
   if (!full || !WEB_SEARCH_SEND_ENABLED) return undefined;
   return {
     available: data.webSearch.available,
-    provider: WEB_SEARCH_PROVIDER_LABELS[data.webSearch.provider ?? ''] ?? t('webSearchProviderGeneric'),
+    provider: WEB_SEARCH_PROVIDER_LABELS[data.webSearch.provider ?? ''] ?? t('web.searchProviderGeneric'),
     profileBlocked: data.profileBlocked,
     enabled: data.composer.webSearchOn,
     onChange: data.composer.setWebSearchOn,

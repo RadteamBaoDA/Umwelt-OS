@@ -26,7 +26,7 @@ function RailSources({ citations, conversationId }: { citations: Citation[]; con
     <div className="flex flex-col gap-1">
       {scope && scope.length < citations.length && (
         <Button type="button" variant="ghost" className="min-h-9 w-fit px-2 text-xs pointer-coarse:min-h-11" onClick={showAllCitations}>
-          {t('railViewAll', { count: citations.length })}
+          {t('rail.viewAll', { count: citations.length })}
         </Button>
       )}
       <CitationPanel citations={scope ? [...scope] : citations} variant="card" highlightedKeys={focus.keys} focusNonce={focus.nonce} />
@@ -50,7 +50,7 @@ export function ChatSideRail({ citations, conversationId }: { citations: Citatio
   return (
     <aside
       id="chat-evidence-rail"
-      aria-label={t('railLabel')}
+      aria-label={t('rail.label')}
       className={`hidden shrink-0 flex-col overflow-y-auto border-l border-border bg-surface min-[1100px]:flex ${collapsed ? 'w-12 items-center p-0' : 'w-[320px] p-3'}`}
     >
       <Button
@@ -100,18 +100,18 @@ export function ChatSourcesSheet({ citations, conversationId }: { citations: Cit
           type="button"
           variant="outline"
           className="gap-2 px-3 text-xs min-[1100px]:hidden"
-          aria-label={t('railOpen')}
+          aria-label={t('rail.open')}
           onClick={showAllCitations}
         >
           <BookOpenIcon className="size-4" aria-hidden="true" />
-          <span className="hidden min-[480px]:inline">{t('railSources')}</span>
+          <span className="hidden min-[480px]:inline">{t('rail.sources')}</span>
           <span>({citations.length})</span>
         </Button>
       </SheetTrigger>
       <SheetContent side="right" className="w-full overflow-y-auto p-3 sm:max-w-sm">
         <SheetHeader>
-          <SheetTitle>{t('railLabel')}</SheetTitle>
-          <SheetDescription className="sr-only">{t('railSheetDescription')}</SheetDescription>
+          <SheetTitle>{t('rail.label')}</SheetTitle>
+          <SheetDescription className="sr-only">{t('rail.sheetDescription')}</SheetDescription>
         </SheetHeader>
         <RailSources citations={citations} conversationId={conversationId} />
       </SheetContent>

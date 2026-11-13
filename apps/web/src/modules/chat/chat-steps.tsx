@@ -11,12 +11,28 @@ type Translator = ReturnType<typeof useTranslations<'chat'>>;
 /** Message keys (running, finished) of the tools whose copy needs no placeholder. */
 const STEP_KEYS: Record<
   string,
-  readonly ['stepRetrievalRunning' | 'stepWebRunning' | 'stepDataRunning', 'stepRetrievalDoneNoCount' | 'stepWebDone' | 'stepDataDone']
+  readonly [
+    'steps.retrievalRunning' | 'steps.webRunning' | 'steps.dataRunning',
+    'steps.retrievalDoneNoCount' | 'steps.webDone' | 'steps.dataDone',
+  ]
 > = {
-  retrieval: ['stepRetrievalRunning', 'stepRetrievalDoneNoCount'],
-  web_search: ['stepWebRunning', 'stepWebDone'],
-  query_collected_data: ['stepDataRunning', 'stepDataDone'],
+  retrieval: ['steps.retrievalRunning', 'steps.retrievalDoneNoCount'],
+  web_search: ['steps.webRunning', 'steps.webDone'],
+  query_collected_data: ['steps.dataRunning', 'steps.dataDone'],
 };
+
+/**
+ * Subject-taking step copy keyed by state: `[withLabel, withoutLabel]`. Written as literal key tables (not built from
+ * strings) so next-intl type-checks every key.
+ */
+const SKILL_STEP_KEYS = {
+  running: ['steps.skillRunning', 'steps.skillRunningNoLabel'],
+  done: ['steps.skillDone', 'steps.skillDoneNoLabel'],
+} as const;
+const GENERIC_STEP_KEYS = {
+  running: ['steps.genericRunningLabel', 'steps.genericRunning'],
+  done: ['steps.genericDoneLabel', 'steps.genericDone'],
+} as const;
 
 /**
  * Outcome sentence of a finished collected-data step from its counts-only detail, or null when the server sent none.
@@ -26,10 +42,12 @@ const STEP_KEYS: Record<
  */
 function dataOutcomeText(t: Translator, step: ToolStep): string | null {
   const { detail } = step;
-  if (isStepFailed(step)) return t('stepDataFailed');
+  if (isStepFailed(step)) return t('steps.dataFailed');
   if (typeof detail?.rows !== 'number') return null;
-  if (detail.rows === 0) return t('stepDataEmpty');
-  return detail.sources ? t('stepDataRows', { rows: detail.rows, sources: detail.sources }) : t('stepDataRowsNoSources', { rows: detail.rows });
+  if (detail.rows === 0) return t('steps.dataEmpty');
+  return detail.sources
+    ? t('steps.dataRows', { rows: detail.rows, sources: detail.sources })
+    : t('steps.dataRowsNoSources', { rows: detail.rows });
 }
 
 /**
@@ -44,7 +62,7 @@ export function stepText(t: Translator, step: ToolStep): string {
   const running = step.state === 'running';
   const { tool, label, detail } = step;
   if (tool === 'retrieval' && !running) {
-    return typeof detail?.documents === 'number' ? t('stepRetrievalDone', { count: detail.documents }) : t('stepRetrievalDoneNoCount');
+    return typeof detail?.documents === 'number' ? t('steps.retrievalDone', { count: detail.documents }) : t('steps.retrievalDoneNoCount');
   }
   if (tool === 'query_collected_data' && !running) {
     const outcome = dataOutcomeText(t, step);
@@ -54,10 +72,9 @@ export function stepText(t: Translator, step: ToolStep): string {
   const plain = STEP_KEYS[tool];
   if (plain) return t(running ? plain[0] : plain[1]);
   // Skills and unknown tools take the optional label as a subject.
-  const family = tool === 'read_skill' ? 'stepSkill' : 'stepGeneric';
-  const state = running ? 'Running' : 'Done';
-  if (label) return t(`${family}${state}${family === 'stepSkill' ? '' : 'Label'}` as 'stepSkillRunning', { label });
-  return t(`${family}${state}${family === 'stepSkill' ? 'NoLabel' : ''}` as 'stepGenericRunning');
+  const [withLabel, withoutLabel] = (tool === 'read_skill' ? SKILL_STEP_KEYS : GENERIC_STEP_KEYS)[running ? 'running' : 'done'];
+  if (label) return t(withLabel, { label });
+  return t(withoutLabel);
 }
 
 /**
@@ -114,12 +131,12 @@ export function ChatStepList({ steps: allSteps, streaming }: { steps: ToolStep[]
           ) : (
             <ChevronRightIcon className="size-3.5" aria-hidden="true" />
           )}
-          <span>{t('stepsSummary', { count: steps.length })}</span>
-          <span className="sr-only">{open ? t('stepsHide') : t('stepsShow')}</span>
+          <span>{t('steps.summary', { count: steps.length })}</span>
+          <span className="sr-only">{open ? t('steps.hide') : t('steps.show')}</span>
         </Button>
       )}
       {expanded && (
-        <ul id={listId} aria-label={t('stepsLabel')} className="flex flex-col gap-1 pl-1">
+        <ul id={listId} aria-label={t('steps.label')} className="flex flex-col gap-1 pl-1">
           {steps.map((step, index) => (
             <li key={`${step.tool}:${index}`} data-state={step.state} className="flex items-center gap-2">
               {step.state === 'running' ? (

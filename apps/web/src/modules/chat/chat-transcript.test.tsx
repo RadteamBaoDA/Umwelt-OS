@@ -38,7 +38,7 @@ describe('ChatTranscript empty state', () => {
   it('shows one sentence and three plain prompt buttons that send their prompt', async () => {
     const onSendPrompt = vi.fn();
     renderTranscript({ onSendPrompt });
-    expect(screen.getByText(messages['en-us'].chat.emptyStateDescription)).toBeTruthy();
+    expect(screen.getByText(messages['en-us'].chat.empty.stateDescription)).toBeTruthy();
     const group = screen.getByTestId('starter-suggestions');
     const buttons = group.querySelectorAll('button');
     expect(buttons).toHaveLength(3);
@@ -188,10 +188,10 @@ describe('ChatTranscript capability chips', () => {
   it('replaces the starters with a model setup notice when no chat model is configured (C16)', () => {
     renderTranscript({ onSendPrompt: vi.fn(), capabilities: { providerMissing: true } });
     expect(screen.queryByTestId('starter-suggestions')).toBeNull();
-    expect(screen.getByRole('link', { name: messages['en-us'].chat.providerGateAction }).getAttribute('href')).toBe('/settings/models');
+    expect(screen.getByRole('link', { name: messages['en-us'].chat.provider.gateAction }).getAttribute('href')).toBe('/settings/models');
     // The notice says the chat needs a model; the composer-gate wording ("your message is kept") would be wrong here.
     expect(screen.getByText('Chat needs a model. Add one in Settings to start.')).toBeTruthy();
-    expect(screen.queryByText(messages['en-us'].chat.providerGateBody)).toBeNull();
+    expect(screen.queryByText(messages['en-us'].chat.provider.gateBody)).toBeNull();
   });
 
   it('toggles composer options and opens the picker without sending a message', async () => {

@@ -219,7 +219,7 @@ function MenuTrigger({ disabled }: { disabled: boolean }) {
         variant="ghost"
         size="icon"
         className="text-muted-foreground"
-        aria-label={t('composerMenu')}
+        aria-label={t('composer.menu')}
         disabled={disabled}
       >
         <PlusIcon className="size-4" aria-hidden="true" />
@@ -268,8 +268,8 @@ function WebSearchMenuItem({
           <Link href="/settings/web-search" data-testid="chat-web-search-setup">
             <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
             <span className="flex flex-col">
-              {t('webSearchToggle')}
-              <span className="text-xs text-muted-foreground">{t('webSearchNotSetUp')}</span>
+              {t('web.searchToggle')}
+              <span className="text-xs text-muted-foreground">{t('web.searchNotSetUp')}</span>
             </span>
           </Link>
         </DropdownMenuItem>
@@ -283,11 +283,11 @@ function WebSearchMenuItem({
         >
           <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
           <span className="flex flex-col">
-            {t('webSearchToggle')}
+            {t('web.searchToggle')}
             {/* Disabled items give no reason; explain why so the owner knows what to fix. */}
             {webSearch.profileBlocked && (
               <span className="text-xs text-muted-foreground" data-testid="chat-web-search-hint">
-                {t('webSearchProfileOnly')}
+                {t('web.searchProfileOnly')}
               </span>
             )}
           </span>
@@ -334,7 +334,7 @@ function FullMenu({
           onCheckedChange={(checked) => menu.share.onChange(checked === true)}
         >
           <CloudIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-          {t('attachmentShareToggle')}
+          {t('attachment.shareToggle')}
         </DropdownMenuCheckboxItem>
         {menu.onTemplates && (
           <DropdownMenuItem inset onSelect={menu.onTemplates}>
@@ -355,7 +355,7 @@ function FullMenu({
 function ModelLine({ modelLabel, sourcesCount, hasPicker }: { modelLabel: string | null; sourcesCount: number; hasPicker: boolean }) {
   const t = useTranslations('chat');
   if (hasPicker) return <span className="min-w-0 flex-1" />;
-  const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : null;
+  const modelText = modelLabel ? t('model.line', { model: modelLabel }) : null;
   return (
     <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
       {modelText}
@@ -418,7 +418,7 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
           {webSearchChecked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-xs" data-testid="chat-web-search-badge">
               <GlobeIcon className="size-3" aria-hidden="true" />
-              {t('webSearchBadge')}
+              {t('web.searchBadge')}
             </Badge>
           )}
           <ModelLine modelLabel={modelLabel} sourcesCount={sourcesCount} hasPicker={Boolean(modelPicker)} />
@@ -428,7 +428,7 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
         </div>
         {modelLocked && modelPicker && (
           <p id={MODEL_LOCKED_HINT_ID} className="text-xs text-muted-foreground" data-testid="chat-model-locked-hint">
-            {t('modelLockedByAgent')}
+            {t('model.lockedByAgent')}
           </p>
         )}
       </div>
@@ -463,14 +463,14 @@ export function ChatComposer(props: ChatComposerProps) {
       onChange={handleChange}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
-      placeholder={placeholder ?? t(isStreaming ? 'composerPlaceholderStreaming' : 'composerPlaceholder')}
+      placeholder={placeholder ?? t(isStreaming ? 'composer.placeholderStreaming' : 'composer.placeholder')}
       // readOnly + aria-disabled (not disabled) so the textarea keeps focus while a send is dispatching.
       readOnly={disabled}
       aria-disabled={disabled || undefined}
       rows={1}
       // The surrounding box owns the border and focus ring in both layouts, so the field itself is borderless.
       className="block field-sizing-fixed max-h-[200px] min-h-9 w-full sm:min-h-14 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 text-base text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 aria-disabled:opacity-50 dark:bg-transparent"
-      aria-label={t('composerPlaceholder')}
+      aria-label={t('composer.placeholder')}
     />
   );
   const action = isStreaming ? (

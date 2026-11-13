@@ -19,11 +19,11 @@ import { searchDocuments, searchEntities, type SearchFilters } from '@/modules/s
 type Scope = 'all' | 'entities' | 'documents' | 'events' | 'conversations';
 const scopes: Scope[] = ['all', 'entities', 'documents', 'events', 'conversations'];
 const scopeKeys = {
-  all: 'scopeAll',
-  entities: 'scopeEntities',
-  documents: 'scopeDocuments',
-  events: 'scopeEvents',
-  conversations: 'scopeConversations',
+  all: 'scope.all',
+  entities: 'scope.entities',
+  documents: 'scope.documents',
+  events: 'scope.events',
+  conversations: 'scope.conversations',
 } as const;
 const noFilters: SearchFilters = { source_ids: [], date_from: null, date_to: null, content_types: [] };
 const MIN_QUERY = 2;
@@ -84,7 +84,7 @@ function queryActionOptions({ query, tc, go, setDraft, openDrawer, close }: Opti
     {
       id: 'ask-ai',
       group: 'actions',
-      label: tc('paletteAskAi', { query }),
+      label: tc('palette.askAi', { query }),
       run: () => {
         setDraft(query);
         openDrawer();
@@ -94,15 +94,15 @@ function queryActionOptions({ query, tc, go, setDraft, openDrawer, close }: Opti
     {
       id: 'create-rule',
       group: 'actions',
-      label: tc('paletteCreateRule'),
-      meta: tc('paletteCreateRuleHint'),
+      label: tc('palette.createRule'),
+      meta: tc('palette.createRuleHint'),
       run: () => go('/dashboard?manage=highlights'),
     },
     {
       id: 'collect-now',
       group: 'actions',
-      label: tc('paletteCollectNow'),
-      disabledReason: tc('paletteCollectUnavailable'),
+      label: tc('palette.collectNow'),
+      disabledReason: tc('palette.collectUnavailable'),
       run: () => undefined,
     },
   ];
@@ -115,7 +115,7 @@ function quickActionOptions({ t, tc, go, openDrawer, close }: OptionContext): Pa
       id: 'quick-chat',
       group: 'actions',
       label: tc('quickChat'),
-      meta: tc('newChat'),
+      meta: tc('new.chat'),
       run: () => {
         openDrawer();
         close();
@@ -125,15 +125,15 @@ function quickActionOptions({ t, tc, go, openDrawer, close }: OptionContext): Pa
     {
       id: 'create-rule',
       group: 'actions',
-      label: tc('paletteCreateRule'),
-      meta: tc('paletteCreateRuleHint'),
+      label: tc('palette.createRule'),
+      meta: tc('palette.createRuleHint'),
       run: () => go('/dashboard?manage=highlights'),
     },
     {
       id: 'collect-now',
       group: 'actions',
-      label: tc('paletteCollectNow'),
-      disabledReason: tc('paletteCollectUnavailable'),
+      label: tc('palette.collectNow'),
+      disabledReason: tc('palette.collectUnavailable'),
       run: () => undefined,
     },
   ];
@@ -226,12 +226,12 @@ export function buildPaletteOptions(ctx: OptionContext): PaletteOption[] {
 
 /** Heading translation keys per option group. */
 const groupLabelKeys = {
-  goTo: 'paletteGoTo',
-  actions: 'paletteActions',
-  documents: 'paletteDocuments',
-  entities: 'paletteEntities',
-  events: 'paletteEvents',
-  conversations: 'paletteConversations',
+  goTo: 'palette.goTo',
+  actions: 'palette.actions',
+  documents: 'palette.documents',
+  entities: 'palette.entities',
+  events: 'palette.events',
+  conversations: 'palette.conversations',
 } as const;
 
 /** Registers Ctrl/Cmd+K and renders the combobox/listbox palette for destinations, actions and search results. */
@@ -269,7 +269,7 @@ export function CommandPalette() {
             inputRef.current?.focus();
           }}
         >
-          <DialogTitle className="sr-only">{tc('paletteTitle')}</DialogTitle>
+          <DialogTitle className="sr-only">{tc('palette.title')}</DialogTitle>
           <DialogDescription className="sr-only">{t('workspace.commands')}</DialogDescription>
           <PaletteInputRow vm={vm} />
           <PaletteScopeTabs vm={vm} />
@@ -314,7 +314,7 @@ function PaletteInputRow({ vm }: { vm: CommandPaletteVm }) {
       <input
         ref={inputRef}
         role="combobox"
-        aria-label={tc('paletteInputLabel')}
+        aria-label={tc('palette.inputLabel')}
         aria-expanded={options.length > 0}
         aria-controls="palette-listbox"
         aria-autocomplete="list"
@@ -336,7 +336,11 @@ function PaletteInputRow({ vm }: { vm: CommandPaletteVm }) {
 function PaletteScopeTabs({ vm }: { vm: CommandPaletteVm }) {
   const { tc, inputRef, scope, setScope, setActiveIndex, mode } = vm;
   return (
-    <div role="tablist" aria-label={tc('paletteScopes')} className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5">
+    <div
+      role="tablist"
+      aria-label={tc('palette.scopes')}
+      className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5"
+    >
       {scopes.map((item) => (
         <button
           key={item}
@@ -354,7 +358,7 @@ function PaletteScopeTabs({ vm }: { vm: CommandPaletteVm }) {
         </button>
       ))}
       {mode && (
-        <span className="ml-auto text-xs text-muted-foreground">{mode === 'lexical' ? tc('paletteLexical') : tc('paletteHybrid')}</span>
+        <span className="ml-auto text-xs text-muted-foreground">{mode === 'lexical' ? tc('palette.lexical') : tc('palette.hybrid')}</span>
       )}
     </div>
   );
@@ -364,7 +368,7 @@ function PaletteScopeTabs({ vm }: { vm: CommandPaletteVm }) {
 function PaletteListbox({ vm }: { vm: CommandPaletteVm }) {
   const { tc, setActiveIndex, active, optionId, groupLabel, groups } = vm;
   return (
-    <div role="listbox" id="palette-listbox" aria-label={tc('paletteTitle')}>
+    <div role="listbox" id="palette-listbox" aria-label={tc('palette.title')}>
       {groups.map(({ group, items }) => (
         <div key={group} role="group" aria-label={groupLabel(group)}>
           <div className="px-3 pb-1 pt-2.5 text-xs font-semibold text-muted-foreground" aria-hidden="true">
@@ -410,16 +414,16 @@ function PaletteStatus({ vm }: { vm: CommandPaletteVm }) {
   const { tc, query, scope, online, options, loading, failed, needsQuery, showEmpty } = vm;
   return (
     <div role="status" aria-live="polite" className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-      {loading && <p>{tc('paletteSearching')}</p>}
-      {!loading && options.length > 0 && <p className="sr-only">{tc('paletteResultCount', { count: options.length })}</p>}
-      {showEmpty && <p>{tc('paletteNoResults')}</p>}
-      {(scope === 'all' || scope === 'events') && query.length >= MIN_QUERY && <p>{tc('paletteEventsNote')}</p>}
-      {needsQuery && <p>{tc('paletteTypeToSearch')}</p>}
-      {(scope === 'all' || scope === 'conversations') && query.length >= MIN_QUERY && <p>{tc('paletteConversationsNote')}</p>}
-      {!online && <p>{tc('paletteOffline')}</p>}
+      {loading && <p>{tc('palette.searching')}</p>}
+      {!loading && options.length > 0 && <p className="sr-only">{tc('palette.resultCount', { count: options.length })}</p>}
+      {showEmpty && <p>{tc('palette.noResults')}</p>}
+      {(scope === 'all' || scope === 'events') && query.length >= MIN_QUERY && <p>{tc('palette.eventsNote')}</p>}
+      {needsQuery && <p>{tc('palette.typeToSearch')}</p>}
+      {(scope === 'all' || scope === 'conversations') && query.length >= MIN_QUERY && <p>{tc('palette.conversationsNote')}</p>}
+      {!online && <p>{tc('palette.offline')}</p>}
       {failed && (
         <p role="alert" className="text-destructive">
-          {tc('paletteError')}
+          {tc('palette.error')}
         </p>
       )}
     </div>
@@ -432,19 +436,19 @@ function PaletteHints({ vm }: { vm: CommandPaletteVm }) {
   return (
     <div className="hidden flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs sm:flex text-muted-foreground">
       <span>
-        <kbd className="palette-kbd">↑</kbd> <kbd className="palette-kbd">↓</kbd> {tc('paletteHintMove')}
+        <kbd className="palette-kbd">↑</kbd> <kbd className="palette-kbd">↓</kbd> {tc('palette.hintMove')}
       </span>
       <span>
-        <kbd className="palette-kbd">Enter</kbd> {tc('paletteHintOpen')}
+        <kbd className="palette-kbd">Enter</kbd> {tc('palette.hintOpen')}
       </span>
       <span>
-        <kbd className="palette-kbd">Esc</kbd> {tc('paletteHintClose')}
+        <kbd className="palette-kbd">Esc</kbd> {tc('palette.hintClose')}
       </span>
       <span>
-        <kbd className="palette-kbd">{tc('paletteShortcutKeys')}</kbd> {tc('paletteHintCommands')}
+        <kbd className="palette-kbd">{tc('palette.shortcutKeys')}</kbd> {tc('palette.hintCommands')}
       </span>
       <span>
-        <kbd className="palette-kbd">/</kbd> {tc('paletteHintSearch')}
+        <kbd className="palette-kbd">/</kbd> {tc('palette.hintSearch')}
       </span>
     </div>
   );

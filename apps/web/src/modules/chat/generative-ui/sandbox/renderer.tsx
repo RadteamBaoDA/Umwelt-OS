@@ -76,7 +76,7 @@ function usePlaceholderRotation(active: boolean, customMessages?: string[], inte
   const phrases =
     customMessages && customMessages.length > 0
       ? customMessages
-      : [catalog.genUiLoadingPhrase1, catalog.genUiLoadingPhrase2, catalog.genUiLoadingPhrase3];
+      : [catalog.genUi.loading.phrase1, catalog.genUi.loading.phrase2, catalog.genUi.loading.phrase3];
   const [index, setIndex] = React.useState(0);
 
   React.useEffect(() => {
@@ -355,7 +355,7 @@ function resolveStatus(explicitStatus: 'streaming' | 'completed' | undefined, pa
  * @param rotating - Current rotating placeholder phrase.
  */
 function resolvePlaceholder(payload: GenerativeUIPayload | undefined, rotating: string): string {
-  return payload?.rebuilding ? genUiCopy().genUiRebuilding : rotating;
+  return payload?.rebuilding ? genUiCopy().genUi.rebuilding : rotating;
 }
 
 /**
@@ -386,7 +386,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const rotatingPlaceholder = usePlaceholderRotation(isStreaming, mergedRawArgs.placeholderMessages, placeholderIntervalMs);
   // A discarded widget keeps its frame while the model rebuilds it; say so instead of showing generic progress.
   const activePlaceholder = resolvePlaceholder(payload, rotatingPlaceholder);
-  const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUiDefaultWidgetTitle;
+  const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUi.default.widgetTitle;
   const { frameNonce, baseSrcDoc, previewSrcDoc } = useSandboxDocuments(mergedRawArgs, isCompleted, resolvedTheme, resolvedTitle);
   const [reportedHeight, setReportedHeight] = React.useState<number | null>(null);
   const handleFrameLoad = useSandboxFrameSync({

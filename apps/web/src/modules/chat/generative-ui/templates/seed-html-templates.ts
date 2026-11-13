@@ -1,15 +1,13 @@
-import type { StringCopyKey } from '../copy';
-
-type CopyKey = StringCopyKey;
+import type { ChatCatalog } from '../copy';
 
 /** Built-in widget template: static, network-free sandbox markup. */
 export interface SeedHtmlTemplate {
   /** Stable identifier. */
   id: string;
-  /** Catalog key of the localized title. */
-  titleKey: CopyKey;
-  /** Catalog key of the localized description. */
-  descKey: CopyKey;
+  /** Reads the localized title from the nested `chat` catalog (typed path, no runtime key lookup). */
+  titleOf: (copy: ChatCatalog) => string;
+  /** Reads the localized description from the nested `chat` catalog. */
+  descOf: (copy: ChatCatalog) => string;
   /** Sandbox payload fields (html/css only: no scripts, no network, fictional data). */
   sandbox: { title: string; css: string; html: string };
 }
@@ -24,8 +22,8 @@ const BASE_CSS =
 export const SEED_HTML_TEMPLATES: readonly SeedHtmlTemplate[] = [
   {
     id: 'seed-weather-ny',
-    titleKey: 'shellTplWeatherTitle',
-    descKey: 'shellTplWeatherDesc',
+    titleOf: (copy) => copy.shell.tplWeatherTitle,
+    descOf: (copy) => copy.shell.tplWeatherDesc,
     sandbox: {
       title: 'Weather: New York',
       css: BASE_CSS,
@@ -37,8 +35,8 @@ export const SEED_HTML_TEMPLATES: readonly SeedHtmlTemplate[] = [
   },
   {
     id: 'seed-invoice-northwind',
-    titleKey: 'shellTplInvoiceTitle',
-    descKey: 'shellTplInvoiceDesc',
+    titleOf: (copy) => copy.shell.tplInvoiceTitle,
+    descOf: (copy) => copy.shell.tplInvoiceDesc,
     sandbox: {
       title: 'Invoice: Northwind Labs',
       css: BASE_CSS,
@@ -52,8 +50,8 @@ export const SEED_HTML_TEMPLATES: readonly SeedHtmlTemplate[] = [
   },
   {
     id: 'seed-kpi-q1',
-    titleKey: 'shellTplKpiTitle',
-    descKey: 'shellTplKpiDesc',
+    titleOf: (copy) => copy.shell.tplKpiTitle,
+    descOf: (copy) => copy.shell.tplKpiDesc,
     sandbox: {
       title: 'Q1 KPI dashboard',
       css: BASE_CSS,

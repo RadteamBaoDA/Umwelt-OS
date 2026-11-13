@@ -109,8 +109,8 @@ function ConversationDialogs({
       >
         <DialogContent closeLabel={t('cancel')}>
           <DialogHeader>
-            <DialogTitle>{t('renameConversation')}</DialogTitle>
-            <DialogDescription className="sr-only">{t('renameLabel')}</DialogDescription>
+            <DialogTitle>{t('rename.conversation')}</DialogTitle>
+            <DialogDescription className="sr-only">{t('rename.label')}</DialogDescription>
           </DialogHeader>
           <form
             className="grid gap-3"
@@ -123,12 +123,12 @@ function ConversationDialogs({
             <Input
               value={renameValue}
               onChange={(event) => setRenameValue(event.target.value)}
-              aria-label={t('renameLabel')}
+              aria-label={t('rename.label')}
               maxLength={200}
             />
             {renameMutation.isError && (
               <p role="alert" className="text-xs text-destructive">
-                {t('renameFailed')}
+                {t('rename.failed')}
               </p>
             )}
             <DialogFooter>
@@ -136,7 +136,7 @@ function ConversationDialogs({
                 {t('cancel')}
               </Button>
               <Button type="submit" disabled={!renameValue.trim() || renameMutation.isPending}>
-                {t('renameSave')}
+                {t('rename.save')}
               </Button>
             </DialogFooter>
           </form>

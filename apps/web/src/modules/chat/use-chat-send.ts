@@ -19,6 +19,8 @@ import type { IsCurrentView } from './use-chat-stream';
 
 type ChatController = ReturnType<typeof useChatController>;
 type Translator = (key: string, values?: Record<string, string | number>) => string;
+/** Typed `chat` translator; keys must be literal dotted paths from messages/<locale>/chat.json. */
+type ChatTranslator = ReturnType<typeof useTranslations<'chat'>>;
 
 /** Everything the send/mutation callbacks read from the surrounding session (all values are render-time snapshots). */
 export interface ChatSendDeps {
@@ -46,7 +48,7 @@ export interface ChatSendDeps {
   setActiveAgentRunId: (id: string) => void;
   streamResponseRun: (responseId: string, conversationId: string, isCurrentView: IsCurrentView) => Promise<void>;
   queryClient: QueryClient;
-  t: Translator;
+  t: ChatTranslator;
   tAgents: Translator;
 }
 
@@ -228,7 +230,7 @@ async function ensureConversation(
   day: { date: string; timezone: string } | null,
 ): Promise<void> {
   const { chatCtrl, refs } = d;
-  const titleExcerpt = content.slice(0, 48).trim() || d.t('newConversation');
+  const titleExcerpt = content.slice(0, 48).trim() || d.t('new.conversation');
   const created = await createConversation(
     {
       title: titleExcerpt,
@@ -354,9 +356,9 @@ function describeSendError(d: ChatSendDeps, attempt: SendAttempt, err: unknown, 
   const selectionFailure =
     attempt.selectionStage && hasSelectionItems && err instanceof ApiError && !!err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
   if (err instanceof LocalizedError) return err.message;
-  if (selectionFailure) return d.t(chatFailureKey(err, 'errorSending'));
+  if (selectionFailure) return d.t(chatFailureKey(err, 'error.sending'));
   if (attempt.attemptedProfileRun?.prompt === content) return d.tAgents('agentStartFailed');
-  return d.t(chatFailureKey(err, 'errorSending'));
+  return d.t(chatFailureKey(err, 'error.sending'));
 }
 
 /**
@@ -523,7 +525,7 @@ export function useChatSend(deps: Omit<ChatSendDeps, 'queryClient' | 't' | 'tAge
   handleSend: (content: string) => Promise<boolean>;
 } {
   const queryClient = useQueryClient();
-  const t = useTranslations('chat') as unknown as Translator;
+  const t = useTranslations('chat');
   const tAgents = useTranslations('aiSettings') as unknown as Translator;
   // Rebuilt only when a real input changes (mirrors the dependency lists of the callbacks this replaced).
   const full = React.useMemo<ChatSendDeps>(

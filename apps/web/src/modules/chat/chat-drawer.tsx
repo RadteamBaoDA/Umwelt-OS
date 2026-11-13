@@ -57,11 +57,11 @@ export function ChatDrawer() {
               onClick={chatCtrl.closeDrawer}
               className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
             >
-              {t('openInChat')}
+              {t('open.inChat')}
               <ExternalLinkIcon className="size-3" aria-hidden="true" />
             </Link>
           )}
-          <SheetDescription className="sr-only">{t('emptyStateDescription')}</SheetDescription>
+          <SheetDescription className="sr-only">{t('empty.stateDescription')}</SheetDescription>
         </SheetHeader>
 
         {/* 44px ghost close (QuickChat.dc.html); SheetClose keeps Radix focus return and Escape handling. */}

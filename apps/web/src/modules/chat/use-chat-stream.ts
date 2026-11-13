@@ -22,6 +22,9 @@ export const RESUME_BACKOFF_MS = 500;
 /** Guard that is true only while the stream's originating view (mounted, send generation, selection) is still current. */
 export type IsCurrentView = () => boolean;
 
+/** Typed `chat` translator; keys must be literal dotted paths from messages/<locale>/chat.json. */
+type ChatTranslator = ReturnType<typeof useTranslations<'chat'>>;
+
 /** Mutable bookkeeping shared by the handlers of one stream attachment. */
 interface StreamRunState {
   /** The run reached message.done or a terminal status; anything else is a lost stream to recover. */
@@ -42,7 +45,7 @@ interface StreamContext {
   live: ChatLiveActions;
   refs: ChatSessionRefs;
   queryClient: QueryClient;
-  t: (key: string, values?: Record<string, string | number>) => string;
+  t: ChatTranslator;
   abortCtrl: AbortController;
   run: StreamRunState;
 }
@@ -359,7 +362,7 @@ export function useChatStream(
             isStreaming: false,
             isPending: false,
             activeResponseId: null,
-            error: t(chatFailureKey(streamError, 'errorSending')),
+            error: t(chatFailureKey(streamError, 'error.sending')),
           });
         }
         throw streamError;

@@ -17,6 +17,9 @@ import {
 } from './api';
 import { ChatDocumentPreview } from './chat-document-preview';
 
+/** Translator bound to the `chat` namespace (typed keys, so a dynamic key must be a literal union). */
+type ChatTranslator = ReturnType<typeof useTranslations<'chat'>>;
+
 type Item = NonNullable<ChatContext['items']>[number];
 
 /** One composer attachment: local upload state plus the server Document once accepted. */
@@ -42,13 +45,13 @@ const MAX_POLL_MS = 10 * 60_000;
 const allowed = new Set(ATTACHMENT_ACCEPT.split(','));
 
 /** Maps an upload failure to localized copy; the server's English detail is never shown verbatim. */
-function uploadErrorKey(err: unknown): 'attachmentTooBig' | 'attachmentType' | 'attachmentInactive' | 'attachmentUploadFailed' {
+function uploadErrorKey(err: unknown): 'attachment.tooBig' | 'attachment.type' | 'attachment.inactive' | 'attachment.uploadFailed' {
   if (err instanceof ApiError) {
-    if (err.status === 413) return 'attachmentTooBig';
-    if (err.status === 415) return 'attachmentType';
-    if (err.status === 409) return 'attachmentInactive';
+    if (err.status === 413) return 'attachment.tooBig';
+    if (err.status === 415) return 'attachment.type';
+    if (err.status === 409) return 'attachment.inactive';
   }
-  return 'attachmentUploadFailed';
+  return 'attachment.uploadFailed';
 }
 
 /**
@@ -92,28 +95,28 @@ function sendState(entries: AttachmentEntry[], unavailable: boolean, askPending:
   let sendBlock: string | null = null;
   let advisory: string | null = null;
   let showReattach = false;
-  if (askPending) sendBlock = t('attachmentShareAsk');
-  else if (unavailable && entries.length) sendBlock = t('attachmentUnavailableBlock');
-  else if (entries.some((e) => e.state === 'uploading' || e.state === 'pending')) sendBlock = t('attachmentPendingBlock');
+  if (askPending) sendBlock = t('attachment.shareAsk');
+  else if (unavailable && entries.length) sendBlock = t('attachment.unavailableBlock');
+  else if (entries.some((e) => e.state === 'uploading' || e.state === 'pending')) sendBlock = t('attachment.pendingBlock');
   else if (entries.some((e) => e.state === 'failed' || e.state === 'too_large' || e.state === 'rejected'))
-    sendBlock = t('attachmentFailedBlock');
+    sendBlock = t('attachment.failedBlock');
   if (!sendBlock && entries.some((e) => e.doc?.local_only)) {
-    advisory = t('attachmentLocalOnlyHint');
+    advisory = t('attachment.localOnlyHint');
     showReattach = true;
   }
   return { items, sendBlock, advisory, showReattach };
 }
 
 type AttachmentBlockKey =
-  'attachmentShareAsk' | 'attachmentUnavailableBlock' | 'attachmentPendingBlock' | 'attachmentFailedBlock' | 'attachmentLocalOnlyHint';
+  'attachment.shareAsk' | 'attachment.unavailableBlock' | 'attachment.pendingBlock' | 'attachment.failedBlock' | 'attachment.localOnlyHint';
 
 /**
  * Creates the entry for one picked file, rejecting a disallowed extension or an oversize file locally
  * (the server re-validates both).
  */
-function newEntry(file: File, t: (key: 'attachmentType' | 'attachmentTooBig') => string): AttachmentEntry {
+function newEntry(file: File, t: ChatTranslator): AttachmentEntry {
   const ext = file.name.includes('.') ? `.${file.name.split('.').pop()!.toLowerCase()}` : '';
-  const error = !allowed.has(ext) ? t('attachmentType') : file.size > ATTACHMENT_MAX_BYTES ? t('attachmentTooBig') : undefined;
+  const error = !allowed.has(ext) ? t('attachment.type') : file.size > ATTACHMENT_MAX_BYTES ? t('attachment.tooBig') : undefined;
   return {
     key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     name: file.name,
@@ -205,7 +208,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
   /** Polls one accepted Document until ingest settles; see `pollAttachment`. */
   const poll = React.useCallback(
     (key: string, documentId: string, signal: AbortSignal) =>
-      pollAttachment(documentId, signal, (next) => patch(key, next), t('attachmentTimedOut')),
+      pollAttachment(documentId, signal, (next) => patch(key, next), t('attachment.timedOut')),
     [patch, t],
   );
 
@@ -326,13 +329,13 @@ function AttachmentChip({ entry: e, statusText: status, onRemove }: { entry: Att
       <ChatDocumentPreview
         {...previewTarget(e)}
         title={e.name}
-        unavailableMessage={e.state === 'uploading' || e.state === 'pending' ? t('attachmentPreviewWaiting') : t('previewUnavailable')}
+        unavailableMessage={e.state === 'uploading' || e.state === 'pending' ? t('attachment.previewWaiting') : t('preview.unavailable')}
       >
         <Button
           type="button"
           variant="ghost"
           className="h-7 min-w-0 gap-1 px-1 text-xs font-normal"
-          aria-label={t('previewDocument', { title: e.name })}
+          aria-label={t('preview.document', { title: e.name })}
         >
           {e.doc?.local_only && e.state === 'ready' ? (
             <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -351,8 +354,8 @@ function AttachmentChip({ entry: e, statusText: status, onRemove }: { entry: Att
         className="-my-1.5 rounded-full text-muted-foreground"
         data-attachment-remove
         onClick={onRemove}
-        title={t('attachmentRemove', { name: e.name })}
-        aria-label={t('attachmentRemove', { name: e.name })}
+        title={t('attachment.remove', { name: e.name })}
+        aria-label={t('attachment.remove', { name: e.name })}
       >
         <XIcon className="size-3.5" aria-hidden="true" />
       </Button>
@@ -370,7 +373,7 @@ function HeldAttachmentChip({ file, onRemove }: { file: File; onRemove: () => vo
   return (
     <AttachmentChip
       entry={{ key: `held-${file.name}`, name: file.name, file, state: 'uploading' }}
-      statusText={t('attachmentHeld')}
+      statusText={t('attachment.held')}
       onRemove={onRemove}
     />
   );
@@ -400,25 +403,25 @@ export function ChatAttachmentBar({
   /** Removes an entry, announces it, and moves focus to a neighbouring remove button (or the + menu) so it never falls to <body>. */
   const removeEntry = (remove: () => void, name: string, idx: number) => {
     remove();
-    setRemovedNote(t('attachmentRemoved', { name }));
+    setRemovedNote(t('attachment.removed', { name }));
     setTimeout(() => {
       const btns = rootRef.current?.querySelectorAll<HTMLButtonElement>('button[data-attachment-remove]');
       (btns && btns.length ? btns[Math.min(idx, btns.length - 1)] : document.getElementById(COMPOSER_MENU_ID))?.focus();
     }, 0);
   };
   const statusText = (e: AttachmentEntry) => {
-    if (e.state === 'rejected') return e.error ?? t('attachmentUploadFailed');
-    if (e.state === 'uploading') return t('attachmentUploading');
-    if (e.state === 'pending') return t('attachmentProcessing');
-    if (e.state === 'ready') return e.doc?.local_only ? t('attachmentLocalOnly') : t('attachmentReady');
-    if (e.state === 'too_large') return t('attachmentTooLargeContext');
-    return e.error ?? t('attachmentFailed');
+    if (e.state === 'rejected') return e.error ?? t('attachment.uploadFailed');
+    if (e.state === 'uploading') return t('attachment.uploading');
+    if (e.state === 'pending') return t('attachment.processing');
+    if (e.state === 'ready') return e.doc?.local_only ? t('attachment.localOnly') : t('attachment.ready');
+    if (e.state === 'too_large') return t('attachment.tooLargeContext');
+    return e.error ?? t('attachment.failed');
   };
   const note =
     state.dropped > 0
-      ? t('attachmentDropped', { max: MAX_ATTACHMENTS })
+      ? t('attachment.dropped', { max: MAX_ATTACHMENTS })
       : state.entries.length
-        ? t('attachmentNote', { max: MAX_ATTACHMENTS })
+        ? t('attachment.note', { max: MAX_ATTACHMENTS })
         : '';
   const statusLine = state.sendBlock ?? state.advisory ?? note;
   return (
@@ -469,16 +472,16 @@ export function ChatAttachmentBar({
           {state.pendingShare.length > 0 && (
             <>
               <Button type="button" variant="outline" size="sm" onClick={() => state.resolveShare(true)}>
-                {t('attachmentShareYes')}
+                {t('attachment.shareYes')}
               </Button>
               <Button type="button" variant="outline" size="sm" onClick={() => state.resolveShare(false)}>
-                {t('attachmentShareNo')}
+                {t('attachment.shareNo')}
               </Button>
             </>
           )}
           {state.showReattach && (
             <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={state.reattachShared}>
-              {t('attachmentReattachShared')}
+              {t('attachment.reattachShared')}
             </Button>
           )}
         </div>

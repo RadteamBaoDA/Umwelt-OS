@@ -54,12 +54,12 @@ type OverlayLabels = Record<'expand' | 'exportHtml' | 'copyHtml' | 'copiedHtml' 
 function resolveOverlayLabels(labels: ExportOverlayProps['labels']): OverlayLabels {
   const fallback = genUiCopy();
   return {
-    expand: labels?.expand ?? fallback.genUiFullscreenPreview,
-    exportHtml: labels?.exportHtml ?? fallback.genUiExportHtml,
-    copyHtml: labels?.copyHtml ?? fallback.genUiCopyHtml,
-    copiedHtml: labels?.copiedHtml ?? fallback.genUiCopied,
-    close: labels?.close ?? fallback.genUiClose,
-    previewDescription: labels?.previewDescription ?? fallback.genUiPreviewDescription,
+    expand: labels?.expand ?? fallback.genUi.fullscreen.preview,
+    exportHtml: labels?.exportHtml ?? fallback.genUi.export.html,
+    copyHtml: labels?.copyHtml ?? fallback.genUi.copy.html,
+    copiedHtml: labels?.copiedHtml ?? fallback.genUi.copied,
+    close: labels?.close ?? fallback.genUi.close,
+    previewDescription: labels?.previewDescription ?? fallback.genUi.preview.description,
   };
 }
 
@@ -267,7 +267,7 @@ function FullscreenDialog(props: FullscreenDialogProps) {
             <iframe
               // The document travels in `name`, which does not navigate on change: remount when the HTML changes.
               key={hashString(previewHtml)}
-              title={fmt(genUiCopy().genUiFullscreenFrameTitle, { title })}
+              title={fmt(genUiCopy().genUi.fullscreen.frameTitle, { title })}
               sandbox="allow-scripts"
               {...frameDocumentProps(previewHtml)}
               onLoad={onPreviewLoad}

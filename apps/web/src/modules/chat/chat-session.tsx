@@ -160,10 +160,10 @@ export function ChatSession({
       onSendPrompt={widget.onSendPrompt}
       onDraftPrompt={widget.onDraftPrompt}
       linkConfirmLabels={{
-        title: t('genUiLinkConfirmTitle'),
-        description: t('genUiLinkConfirmBody'),
-        open: t('genUiLinkConfirmOpen'),
-        cancel: t('genUiLinkConfirmCancel'),
+        title: t('genUi.link.confirmTitle'),
+        description: t('genUi.link.confirmBody'),
+        open: t('genUi.link.confirmOpen'),
+        cancel: t('genUi.link.confirmCancel'),
       }}
     >
       <ChatDropZone

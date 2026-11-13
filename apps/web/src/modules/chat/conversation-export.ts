@@ -108,7 +108,10 @@ export function useConversationExport(title: string, messages: readonly ChatMess
   const t = useTranslations('chat');
   const handler = React.useCallback(() => {
     const markdown = conversationToMarkdown(title, messages, {
-      user: t('userSpeaker'), assistant: t('assistantFallback'), sources: t('exportAnswerSources'), untitled: t('title'),
+      user: t('userSpeaker'),
+      assistant: t('assistant.fallback'),
+      sources: t('exportAnswerSources'),
+      untitled: t('title'),
     });
     downloadMarkdown(exportFilename(title), markdown);
   }, [title, messages, t]);

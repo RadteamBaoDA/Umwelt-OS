@@ -287,7 +287,7 @@ export function GenerativePieChart({
     title,
     description: resolvedDescription,
     source,
-    sourceLabel: catalog.genUiTableSource,
+    sourceLabel: catalog.genUi.table.source,
     slices: normalizedSlices,
     fmt,
   });
@@ -300,7 +300,7 @@ export function GenerativePieChart({
           description={resolvedDescription}
           isSample={isSample}
           hasSlices={normalizedSlices.length > 0}
-          totalLabel={catalog.genUiPieTotal}
+          totalLabel={catalog.genUi.pie.total}
           totalValue={totalValue}
           fmt={fmt}
         />
@@ -308,7 +308,7 @@ export function GenerativePieChart({
         <CardContent className="pt-4">
           {normalizedSlices.length === 0 ? (
             <p role="status" data-testid="pie-chart-empty" className="py-8 text-center text-xs text-muted-foreground">
-              {catalog.genUiPieEmpty}
+              {catalog.genUi.pie.empty}
             </p>
           ) : (
             <NextIntlClientProvider
@@ -327,7 +327,7 @@ export function GenerativePieChart({
         {source && (
           <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
             <span data-testid="pie-chart-source">
-              <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
+              <strong className="font-medium text-foreground">{catalog.genUi.table.source}:</strong> {source}
             </span>
           </CardFooter>
         )}

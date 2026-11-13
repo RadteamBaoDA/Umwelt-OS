@@ -86,7 +86,7 @@ function MoreMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        {onRenameConversation && <DropdownMenuItem onSelect={onRenameConversation}>{t('renameConversation')}</DropdownMenuItem>}
+        {onRenameConversation && <DropdownMenuItem onSelect={onRenameConversation}>{t('rename.conversation')}</DropdownMenuItem>}
         {onSetPinned && (
           <DropdownMenuItem onSelect={() => onSetPinned(!pinned)}>{t(pinned ? 'unpinConversation' : 'pinConversation')}</DropdownMenuItem>
         )}
@@ -158,10 +158,10 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
           type="button"
           onClick={onNewChat}
           className={`secondary inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-2 px-4 text-sm font-semibold transition-colors ${full ? 'hidden' : ''}`}
-          title={t('newChat')}
+          title={t('new.chat')}
         >
           <PlusIcon className="size-4" />
-          <span>{t('newChat')}</span>
+          <span>{t('new.chat')}</span>
         </Button>
         {full && headerTrailing}
       </div>

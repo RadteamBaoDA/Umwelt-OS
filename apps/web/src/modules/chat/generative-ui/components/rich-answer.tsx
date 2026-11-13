@@ -48,10 +48,24 @@ function CitationChips({ numbers, citations }: { numbers: unknown; citations?: C
       {nums.map((n) => {
         const citation = citations?.[n - 1];
         const href = citation?.sourceType === 'web' ? safeHttpUrl(citation.url) : null;
-        const cls = 'inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border bg-surface px-1 text-[11px] font-medium text-muted-foreground';
-        return href
-          ? <a key={n} data-cite={n} className={`${cls} hover:text-foreground`} href={href} target="_blank" rel="noopener noreferrer nofollow">{n}</a>
-          : <span key={n} data-cite={n} className={cls}>{n}</span>;
+        const cls =
+          'inline-flex h-5 min-w-5 items-center justify-center rounded-full border border-border bg-surface px-1 text-[11px] font-medium text-muted-foreground';
+        return href ? (
+          <a
+            key={n}
+            data-cite={n}
+            className={`${cls} hover:text-foreground`}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+          >
+            {n}
+          </a>
+        ) : (
+          <span key={n} data-cite={n} className={cls}>
+            {n}
+          </span>
+        );
       })}
     </span>
   );
@@ -69,9 +83,24 @@ function AnswerTile({ image, extra }: { image: AnswerImage; extra?: string }) {
   return (
     <figure className="relative m-0 overflow-hidden rounded-xl bg-muted">
       {/* eslint-disable-next-line @next/next/no-img-element -- signed same-origin media proxy; next/image would re-proxy it */}
-      <img src={image.src} alt={image.alt ?? ''} loading="lazy" decoding="async" onError={() => setFailed(true)} className="aspect-[16/10] w-full object-cover" />
-      {image.source_host ? <figcaption className="absolute inset-x-0 bottom-0 truncate bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground">{image.source_host}</figcaption> : null}
-      {extra ? <span className="absolute inset-0 flex items-center justify-center bg-background/60 text-lg font-semibold text-foreground">{extra}</span> : null}
+      <img
+        src={image.src}
+        alt={image.alt ?? ''}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className="aspect-[16/10] w-full object-cover"
+      />
+      {image.source_host ? (
+        <figcaption className="absolute inset-x-0 bottom-0 truncate bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground">
+          {image.source_host}
+        </figcaption>
+      ) : null}
+      {extra ? (
+        <span className="absolute inset-0 flex items-center justify-center bg-background/60 text-lg font-semibold text-foreground">
+          {extra}
+        </span>
+      ) : null}
     </figure>
   );
 }
@@ -90,13 +119,19 @@ function ImageStrip({ images, moreLabel }: { images: unknown; moreLabel: (count:
   const more = all.length - shown.length;
   return (
     <div className="grid grid-cols-3 gap-2" data-testid="answer-gallery">
-      {shown.map((image, i) => <AnswerTile key={`${image.src}-${i}`} image={image} extra={more > 0 && i === shown.length - 1 ? moreLabel(more) : undefined} />)}
+      {shown.map((image, i) => (
+        <AnswerTile key={`${image.src}-${i}`} image={image} extra={more > 0 && i === shown.length - 1 ? moreLabel(more) : undefined} />
+      ))}
     </div>
   );
 }
 
 /** Shared rendering context for blocks. */
-interface BlockContext { citations?: Citation[]; locale?: AppLocaleId; copy: ReturnType<typeof genUiCopy> }
+interface BlockContext {
+  citations?: Citation[];
+  locale?: AppLocaleId;
+  copy: ReturnType<typeof genUiCopy>;
+}
 
 /**
  * Renders one block; unknown or incomplete blocks render nothing.
@@ -108,7 +143,7 @@ interface BlockContext { citations?: Citation[]; locale?: AppLocaleId; copy: Ret
  */
 function renderBlock(block: Partial<AnswerBlock>, i: number, ctx: BlockContext): React.ReactNode {
   const { citations, locale, copy } = ctx;
-  const moreLabel = (count: number) => fmt(copy.genUiAnswerMoreImages, { count });
+  const moreLabel = (count: number) => fmt(copy.genUi.answer.moreImages, { count });
   switch (block.type) {
     case 'gallery':
       return <ImageStrip key={i} images={block.images} moreLabel={moreLabel} />;
@@ -116,36 +151,57 @@ function renderBlock(block: Partial<AnswerBlock>, i: number, ctx: BlockContext):
       return (
         <div key={i} className="flex flex-wrap items-center gap-2">
           <Badge variant={TONE_VARIANT[block.tone ?? 'neutral'] ?? 'secondary'}>{block.label}</Badge>
-          {block.updated_at ? <span className="text-sm text-muted-foreground">{fmt(copy.genUiAnswerUpdated, { date: formatDate(block.updated_at) })}</span> : null}
+          {block.updated_at ? (
+            <span className="text-sm text-muted-foreground">{fmt(copy.genUi.answer.updated, { date: formatDate(block.updated_at) })}</span>
+          ) : null}
         </div>
       );
     case 'key_value':
       return (
         <div key={i} className="flex flex-col gap-2">
           <p className="m-0 text-3xl font-semibold text-foreground">{block.value}</p>
-          {block.caption ? <div className="text-sm text-muted-foreground"><ChatMarkdown content={block.caption} citations={citations} locale={locale} /></div> : null}
+          {block.caption ? (
+            <div className="text-sm text-muted-foreground">
+              <ChatMarkdown content={block.caption} citations={citations} locale={locale} />
+            </div>
+          ) : null}
           <CitationChips numbers={block.citations} citations={citations} />
         </div>
       );
     case 'stats':
       return (
         <div key={i} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {list<{ label?: string; value?: string; citations?: number[] }>(block.items).filter(Boolean).map((item, j) => (
-            <Card key={j} className="gap-1 p-4">
-              <span className="text-sm text-muted-foreground">{item.label}</span>
-              <span className="text-2xl font-semibold text-foreground">{item.value}<CitationChips numbers={item.citations} citations={citations} /></span>
-            </Card>
-          ))}
+          {list<{ label?: string; value?: string; citations?: number[] }>(block.items)
+            .filter(Boolean)
+            .map((item, j) => (
+              <Card key={j} className="gap-1 p-4">
+                <span className="text-sm text-muted-foreground">{item.label}</span>
+                <span className="text-2xl font-semibold text-foreground">
+                  {item.value}
+                  <CitationChips numbers={item.citations} citations={citations} />
+                </span>
+              </Card>
+            ))}
         </div>
       );
     case 'table':
       return (
         <div key={i}>
           <Table>
-            <TableHeader><TableRow>{list<string>(block.columns).map((c, j) => <TableHead key={j}>{c}</TableHead>)}</TableRow></TableHeader>
+            <TableHeader>
+              <TableRow>
+                {list<string>(block.columns).map((c, j) => (
+                  <TableHead key={j}>{c}</TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
             <TableBody>
               {list<string[]>(block.rows).map((row, r) => (
-                <TableRow key={r}>{list<string>(row).map((cell, c) => <TableCell key={c}>{cell}</TableCell>)}</TableRow>
+                <TableRow key={r}>
+                  {list<string>(row).map((cell, c) => (
+                    <TableCell key={c}>{cell}</TableCell>
+                  ))}
+                </TableRow>
               ))}
             </TableBody>
           </Table>
@@ -162,7 +218,11 @@ function renderBlock(block: Partial<AnswerBlock>, i: number, ctx: BlockContext):
         </section>
       );
     case 'note':
-      return block.markdown ? <div key={i} className="text-sm text-muted-foreground"><ChatMarkdown content={block.markdown} citations={citations} locale={locale} /></div> : null;
+      return block.markdown ? (
+        <div key={i} className="text-sm text-muted-foreground">
+          <ChatMarkdown content={block.markdown} citations={citations} locale={locale} />
+        </div>
+      ) : null;
     default:
       return null;
   }

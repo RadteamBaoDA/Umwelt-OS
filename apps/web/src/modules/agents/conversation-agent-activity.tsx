@@ -45,17 +45,26 @@ export function ConversationAgentActivity({ conversationId, csrfToken, watch = f
   return (
     <aside aria-label={t('agentActivity')} className="shrink-0 space-y-3 border-b border-border p-4">
       <h2 className="text-sm font-semibold text-foreground">{t('agentActivity')}</h2>
-      {approvals.isError && <p role="status" className="text-sm text-destructive">{t('approvalLoadFailed')}</p>}
-      {mutation.isError && <p role="alert" className="text-sm text-destructive">{t('approvalDecisionFailed')}</p>}
-      {!approvals.isError && approvals.data?.map((approval) => (
-        <ApprovalCard
-          key={approval.id}
-          approval={approval}
-          disabled={approvals.isError}
-          busy={mutation.isPending && mutation.variables?.approval.id === approval.id}
-          onDecision={(item, decision) => mutation.mutate({ approval: item, decision })}
-        />
-      ))}
+      {approvals.isError && (
+        <p role="status" className="text-sm text-destructive">
+          {t('approval.loadFailed')}
+        </p>
+      )}
+      {mutation.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {t('approval.decisionFailed')}
+        </p>
+      )}
+      {!approvals.isError &&
+        approvals.data?.map((approval) => (
+          <ApprovalCard
+            key={approval.id}
+            approval={approval}
+            disabled={approvals.isError}
+            busy={mutation.isPending && mutation.variables?.approval.id === approval.id}
+            onDecision={(item, decision) => mutation.mutate({ approval: item, decision })}
+          />
+        ))}
     </aside>
   );
 }

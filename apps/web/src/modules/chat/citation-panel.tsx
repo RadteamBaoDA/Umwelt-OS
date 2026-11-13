@@ -76,9 +76,9 @@ function OriginalLink({ href, className }: { href: string; className: string }) 
       target="_blank"
       rel="noopener noreferrer nofollow"
       className={className}
-      aria-label={t('openOriginalFor', { host: webHost(href) })}
+      aria-label={t('open.originalFor', { host: webHost(href) })}
     >
-      {t('openOriginal')}
+      {t('open.original')}
       <ExternalLinkIcon className="size-3" aria-hidden="true" />
     </a>
   );
@@ -127,14 +127,14 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
             target="_blank"
             rel="noopener noreferrer nofollow"
             className={linkClass}
-            aria-label={t('openWebResultFor', { host: webHost(citation.url) })}
+            aria-label={t('open.webResultFor', { host: webHost(citation.url) })}
           >
-            {t('openWebResult')}
+            {t('open.webResult')}
             <ExternalLinkIcon className="size-3" aria-hidden="true" />
           </a>
         ) : (
           <Link href={href} className={linkClass}>
-            {t('openExactItem')}
+            {t('open.exactItem')}
           </Link>
         ))}
       {externalHref && <OriginalLink href={externalHref} className={linkClass} />}
@@ -154,7 +154,7 @@ function WebCitation({ citation, index }: Omit<CitationViewProps, 'citation'> & 
         </span>
         <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground">
           <GlobeIcon className="size-3" aria-hidden="true" />
-          {t('webBadge')}
+          {t('web.badge')}
         </span>
       </div>
       {citation.quote && (
@@ -168,9 +168,9 @@ function WebCitation({ citation, index }: Omit<CitationViewProps, 'citation'> & 
             target="_blank"
             rel="noopener noreferrer nofollow"
             className="inline-flex min-h-9 pointer-coarse:min-h-11 shrink-0 items-center gap-1 text-primary hover:underline"
-            aria-label={t('openWebResultFor', { host: webHost(citation.url) })}
+            aria-label={t('open.webResultFor', { host: webHost(citation.url) })}
           >
-            <span>{t('openWebResult')}</span>
+            <span>{t('open.webResult')}</span>
             <ExternalLinkIcon className="size-3" aria-hidden="true" />
           </a>
         )}
@@ -199,7 +199,7 @@ function DocumentCitation({ citation, index, locale, timezone }: Omit<CitationVi
           <Link
             href={docHref}
             className="inline-flex items-center gap-1 text-xs text-primary hover:underline font-medium"
-            title={t('openDocument')}
+            title={t('open.document')}
           >
             <span>{t('document')}</span>
             <ExternalLinkIcon className="size-3" aria-hidden="true" />

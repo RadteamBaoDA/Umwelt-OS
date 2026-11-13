@@ -227,17 +227,17 @@ export function ChatMarkdown({
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.setAttribute('data-code-copy', 'true');
-      btn.setAttribute('aria-label', labels.markdownCopyCode);
-      btn.textContent = labels.markdownCopy;
+      btn.setAttribute('aria-label', labels.markdown.copyCode);
+      btn.textContent = labels.markdown.copy;
       btn.className =
         'absolute right-2 top-2 rounded border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground opacity-0 [@media(hover:none)]:opacity-100 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-foreground';
       btn.addEventListener('click', () => {
         const codeEl = pre.querySelector('code');
         const rawCode = codeEl?.textContent ?? pre.textContent ?? '';
         void navigator.clipboard?.writeText(rawCode).then(() => {
-          btn.textContent = labels.markdownCopied;
+          btn.textContent = labels.markdown.copied;
           window.setTimeout(() => {
-            btn.textContent = labels.markdownCopy;
+            btn.textContent = labels.markdown.copy;
           }, 1500);
         });
       });
