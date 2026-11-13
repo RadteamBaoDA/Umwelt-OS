@@ -50,6 +50,17 @@ Module persistence models stay private. The following SQL projections are approv
 
 Cross-module mutations use owner commands on the caller's `AsyncSession`; commands preserve source generation fences, row-lock ordering, and transaction boundaries without committing early.
 
+## UI strings (i18n)
+
+All user-facing strings are flat dotted JSON under `apps/web/locales/<locale>/<namespace>.json`, where locale is `en-us` or `vi-vi` and the file name is the next-intl namespace.
+
+- **Flat dotted keys:** write `"composer.send": "Send"`, grouping related keys by a shared first segment (`composer.*`, `history.*`). Use two levels unless the data is genuinely nested. A name cannot be a leaf and a group at once.
+- **Add a key:** add it to both `locales/en-us/<ns>.json` and `locales/vi-vi/<ns>.json` (same key, same `{placeholder}` names), then call `t('group.key')` from `useTranslations('<ns>')`. TypeScript rejects unknown keys; `npx vitest run locales` checks parity.
+- **Add a namespace:** create the two JSON files, regenerate the `<gen:catalogs>` region of `locales/index.ts` (import both files and list them in `flatCatalogs` and `jsonCatalogs`), and use `PUBLIC_NAMESPACES` in `src/core/message-namespaces.ts` only if a public page needs it.
+- **Reading outside React:** `getCatalog(locale, ns)` from `@locales`; `@/core/messages` keeps the composed `messages[locale][ns]` object used by the layouts and tests.
+- **No dynamic keys:** use a literal `as const` table for enum-like server values instead of building a key with a template string.
+- The one-off migration codemod that produced this layout is not part of the repo.
+
 ## Quality gates
 
 Formatting commit `ea870297` is a one-off mechanical `ruff format`; hide it from blame with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
