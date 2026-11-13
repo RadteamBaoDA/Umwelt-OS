@@ -1,8 +1,8 @@
 import type { AppLocaleId } from '@/core/i18n';
-import { getCatalog, jsonCatalogs } from '@locales';
+import { getWidgetCatalog } from '../../../../locales/widget-catalogs';
 
 /** Nested `chat` catalog tree for one locale (the shape of messages/<locale>/chat.json). */
-export type ChatCatalog = (typeof jsonCatalogs)['en-us']['chat'];
+export type ChatCatalog = ReturnType<typeof getWidgetCatalog<'chat'>>;
 
 /**
  * Resolves the effective widget locale from an explicit prop or the document `lang` attribute,
@@ -29,7 +29,7 @@ export function resolveWidgetLocale(locale?: AppLocaleId): AppLocaleId {
  * @returns Nested `chat` catalog for the resolved locale (genUi copy lives under `genUi.<feature>.<key>`).
  */
 export function genUiCopy(locale?: AppLocaleId): ChatCatalog {
-  return getCatalog(resolveWidgetLocale(locale), 'chat');
+  return getWidgetCatalog(resolveWidgetLocale(locale), 'chat');
 }
 
 /**
@@ -45,7 +45,7 @@ export function fmt(template: string, values: Record<string, string | number>): 
 
 /** Builds one stable copy object per locale at module load (the catalogs are static JSON imports). */
 function perLocale<T>(build: (c: ReturnType<typeof genUiCopy>) => T): Record<AppLocaleId, T> {
-  return { 'en-us': build(getCatalog('en-us', 'chat')), 'vi-vi': build(getCatalog('vi-vi', 'chat')) };
+  return { 'en-us': build(getWidgetCatalog('en-us', 'chat')), 'vi-vi': build(getWidgetCatalog('vi-vi', 'chat')) };
 }
 
 /** Adapter exposing PlanCard copy from the shared catalog (keeps call sites readable). */

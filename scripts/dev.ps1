@@ -5,6 +5,8 @@ param(
   [string]$PytestTarget,
   [string]$E2eTarget,
   [switch]$E2eOnly,
+  [ValidateSet('en-us', 'vi-vi')]
+  [string]$E2eLocale,
   [string]$Workspace,
   [string]$ConfirmFingerprint
 )
@@ -124,6 +126,9 @@ try {
       $previousPlaywrightUrl = $env:PLAYWRIGHT_BASE_URL
       $previousExternalServer = $env:PLAYWRIGHT_EXTERNAL_SERVER
       $previousAllowPublic = $env:E2E_ALLOW_PUBLIC_PROVIDERS
+      $previousE2eLocale = $env:E2E_LOCALE
+      # Owner UI locale for the browser specs (tests/e2e/fixtures.ts); -E2eLocale wins over an inherited E2E_LOCALE.
+      if ($E2eLocale) { $env:E2E_LOCALE = $E2eLocale }
       $webPort = Get-FreePort
       $apiPort = Get-FreePort
       while ($apiPort -eq $webPort) { $apiPort = Get-FreePort }
@@ -227,6 +232,8 @@ try {
         else { $env:PLAYWRIGHT_EXTERNAL_SERVER = $previousExternalServer }
         if ($null -eq $previousAllowPublic) { Remove-Item Env:E2E_ALLOW_PUBLIC_PROVIDERS -ErrorAction SilentlyContinue }
         else { $env:E2E_ALLOW_PUBLIC_PROVIDERS = $previousAllowPublic }
+        if ($null -eq $previousE2eLocale) { Remove-Item Env:E2E_LOCALE -ErrorAction SilentlyContinue }
+        else { $env:E2E_LOCALE = $previousE2eLocale }
       }
     }
     'load-test' {

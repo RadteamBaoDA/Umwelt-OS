@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { ChatControllerProvider } from '@/core/app-shell/chat-controller';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { englishMessageFallback, useLocaleMessages } from '@/core/locale-messages';
+import { missingKeyHandlers } from '@/core/i18n-missing';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { RealtimeProvider } from '@/core/realtime-provider';
 import { WorkspaceProvider } from '@/core/workspace-context';
@@ -24,7 +25,7 @@ export function WorkspaceProviders({ english, children }: { english: AbstractInt
     <NextIntlClientProvider
       locale={normalizeFormattingLocale(locale)}
       messages={localeMessages}
-      getMessageFallback={({ namespace, key }) => englishMessageFallback(english, namespace, key)}
+      {...missingKeyHandlers((namespace, key) => englishMessageFallback(english, namespace, key))}
     >
       <ChatControllerProvider key={authGeneration}>
         <WorkspaceProvider>

@@ -4,6 +4,12 @@ set -euo pipefail
 pytest_target="${PYTEST_TARGET:-}"
 e2e_target="${E2E_TARGET:-}"
 e2e_only="${E2E_ONLY_RUN:-}"
+# Owner UI locale for the browser specs (read by tests/e2e/fixtures.ts); anything else is a typo, not a locale.
+export E2E_LOCALE="${E2E_LOCALE:-en-us}"
+if [[ "$E2E_LOCALE" != en-us && "$E2E_LOCALE" != vi-vi ]]; then
+  echo "E2E_LOCALE must be en-us or vi-vi, got $E2E_LOCALE." >&2
+  exit 2
+fi
 if [[ -n "$pytest_target" && ( -n "$e2e_target" || -n "$e2e_only" ) ]]; then
   echo 'Choose only one of PYTEST_TARGET or E2E_TARGET.' >&2
   exit 2

@@ -10,6 +10,7 @@ import { GuardedNavigationProvider } from '@/core/guarded-navigation';
 import { OwnerPreferences, PreferenceValues } from '@/core/preferences';
 import { clearAccountBrowserStorage, subscribeToAccountErasure } from '@/core/account-erasure';
 import { englishMessageFallback, useLocaleMessages } from '@/core/locale-messages';
+import { missingKeyHandlers } from '@/core/i18n-missing';
 
 type PreviewState = { value: PreferenceValues; generation: number } | null;
 
@@ -184,7 +185,7 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
       <NextIntlClientProvider
         locale={normalizeFormattingLocale(effective.locale)}
         messages={localeMessages}
-        getMessageFallback={({ namespace, key }) => englishMessageFallback(english, namespace, key)}
+        {...missingKeyHandlers((namespace, key) => englishMessageFallback(english, namespace, key))}
       >
         {/* Workspace-only providers (chat controller, workspace, realtime) mount in app/(workspace)/layout.tsx. */}
         {children}

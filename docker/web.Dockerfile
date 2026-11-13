@@ -7,6 +7,10 @@ RUN npm ci
 FROM node:24.20.0-alpine3.23 AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1 API_INTERNAL_URL=http://api:8000
+# E2E-only missing-translation detector (see apps/web/src/core/i18n-missing.ts). NEXT_PUBLIC_* is inlined at build time, so
+# it is a build arg; only docker-compose.test.yml sets it to 1. Empty default keeps every other image unchanged.
+ARG NEXT_PUBLIC_E2E_FAIL_ON_MISSING_I18N=
+ENV NEXT_PUBLIC_E2E_FAIL_ON_MISSING_I18N=$NEXT_PUBLIC_E2E_FAIL_ON_MISSING_I18N
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY apps/web ./apps/web

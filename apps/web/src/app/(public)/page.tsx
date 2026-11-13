@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
-import { NextIntlClientProvider } from 'next-intl';
+import { PublicIntlProvider } from '@/core/public-intl-provider';
 import { messages } from '@/core/messages';
 import { pickNamespaces } from '@/core/message-namespaces';
 import type { AppLocaleId } from '@/core/i18n';
@@ -16,9 +16,9 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   const nextLocale = locale === 'vi-vi' ? 'vi-VN' : 'en-US';
 
   return (
-    <NextIntlClientProvider locale={nextLocale} messages={pickNamespaces(messages[locale], ['landing', 'shell'])}>
+    <PublicIntlProvider locale={nextLocale} messages={pickNamespaces(messages[locale], ['landing', 'shell'])}>
       <LandingEntry />
-    </NextIntlClientProvider>
+    </PublicIntlProvider>
   );
 }
 

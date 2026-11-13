@@ -16,6 +16,25 @@ export interface ApprovalCardProps {
   onDecision: (approval: AgentApproval, decision: 'approve' | 'deny') => void;
 }
 
+/** Literal message keys per approval status, so no key is built at runtime and the static key check can verify each one. */
+const APPROVAL_STATUS_KEYS = {
+  pending: 'approvalStatus.pending',
+  approved: 'approvalStatus.approved',
+  denied: 'approvalStatus.denied',
+  expired: 'approvalStatus.expired',
+  cancelled: 'approvalStatus.cancelled',
+  requires_review: 'approvalStatus.requires_review',
+} as const satisfies Record<AgentApproval['status'], string>;
+
+/** Literal message keys per effect status (see {@link APPROVAL_STATUS_KEYS}). */
+const EFFECT_STATUS_KEYS = {
+  reserved: 'effectStatus.reserved',
+  in_flight: 'effectStatus.in_flight',
+  succeeded: 'effectStatus.succeeded',
+  failed: 'effectStatus.failed',
+  requires_review: 'effectStatus.requires_review',
+} as const satisfies Record<NonNullable<AgentApproval['effect_status']>, string>;
+
 /** Ticks while an approval is still pending so expiry is evaluated outside render. */
 function useNow(active: boolean) {
   const [now, setNow] = React.useState(() => Date.now());
@@ -49,7 +68,7 @@ export function ApprovalCard({ approval, busy = false, disabled = false, onDecis
             {approval.tool_name} · {approval.tool_version}
           </p>
         </div>
-        <Badge variant="outline">{expired ? t('approvalStatus.expired') : t(`approvalStatus.${approval.status}`)}</Badge>
+        <Badge variant="outline">{t(expired ? 'approvalStatus.expired' : APPROVAL_STATUS_KEYS[approval.status])}</Badge>
       </div>
       <dl className="grid gap-2 sm:grid-cols-2">
         <div>
@@ -63,7 +82,7 @@ export function ApprovalCard({ approval, busy = false, disabled = false, onDecis
       </dl>
       {approval.effect_status && (
         <p className="text-sm text-muted-foreground">
-          {t('approval.effectStatus')}: {t(`effectStatus.${approval.effect_status}`)}
+          {t('approval.effectStatus')}: {t(EFFECT_STATUS_KEYS[approval.effect_status])}
         </p>
       )}
       {expired && (

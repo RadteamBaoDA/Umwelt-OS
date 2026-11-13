@@ -39,6 +39,10 @@ services:
       POSTGRES_PASSWORD: bbd-os-test-db-only
 
   web:
+    build:
+      args:
+        # Disposable e2e image only: log `[i18n-missing] ns.key` for any unresolved message (specs fail on it).
+        NEXT_PUBLIC_E2E_FAIL_ON_MISSING_I18N: "1"
     environment:
       PUBLIC_ORIGIN: ${TEST_PUBLIC_ORIGIN:-http://localhost:3300}
 
