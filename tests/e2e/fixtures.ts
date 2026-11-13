@@ -39,13 +39,14 @@ export async function expectNoRawKeys(page: Page): Promise<void> {
  * Switch the owner's stored locale preference to `locale` when it differs. Needs the current CSRF token from the session
  * read and the preference revision; the optimistic-concurrency PUT mirrors what the preferences dialog sends.
  */
-async function ensureOwnerLocale(page: Page, csrfToken: string, locale: string): Promise<void> {
+async function ensureOwnerLocale(page: Page, csrfToken: string, origin: string, locale: string): Promise<void> {
   const prefs = await page.request.get('/api/v1/settings/preferences');
   expect(prefs.ok(), 'read owner preferences').toBe(true);
   const current = (await prefs.json()) as { configuration_revision: number; theme: string; locale: string; timezone: string; display_name?: string | null };
   if (current.locale === locale) return;
+  // Origin must be the served web origin (PLAYWRIGHT_BASE_URL, a dynamic port in Docker); page.url() is about:blank here.
   const put = await page.request.put('/api/v1/settings/preferences', {
-    headers: { 'X-CSRF-Token': csrfToken, Origin: new URL(page.url() === 'about:blank' ? 'http://localhost:3000' : page.url()).origin },
+    headers: { 'X-CSRF-Token': csrfToken, Origin: origin },
     data: { expected_revision: current.configuration_revision, theme: current.theme, locale, timezone: current.timezone, display_name: current.display_name ?? null },
   });
   expect(put.ok(), `set owner locale ${locale}`).toBe(true);
@@ -82,7 +83,9 @@ export const test = base.extend<{ i18nMissingGuard: void }>({
       r = await page.request.get('/api/v1/auth/session');
     }
     expect(r.status(), 'owner storageState not applied').toBe(200);
-    if (E2E_LOCALE !== 'en-us') await ensureOwnerLocale(page, ((await r.json()) as { csrfToken: string }).csrfToken, E2E_LOCALE);
+    if (E2E_LOCALE !== 'en-us') {
+      await ensureOwnerLocale(page, ((await r.json()) as { csrfToken: string }).csrfToken, new URL(r.url()).origin, E2E_LOCALE);
+    }
     // Persist the now-current CSRF cookie so the next test's context replays it and takes the lock-free read path:
     // with many sources collecting, overlapping FOR SHARE admissions starve the rotation's NOWAIT owner lock.
     const state = testInfo.project.use.storageState;
