@@ -23,7 +23,10 @@ describe('entity detail model helpers', () => {
   });
 
   it('keeps a split preview only while revision, name, reason and selection match', () => {
-    const preview = { preview: {}, payload: { evidence_ids: ['a', 'b'], expected_revision: 3, new_entity: { type: 'person', name: 'N', reason: 'r' }, reason: 'r' } } as never;
+    const preview = {
+      preview: {},
+      payload: { evidence_ids: ['a', 'b'], expected_revision: 3, new_entity: { type: 'person', name: 'N', reason: 'r' }, reason: 'r' },
+    } as never;
     expect(matchingSplitPreview(preview, 3, ['b', 'a'], ' N ', 'r')).toBe(preview);
     expect(matchingSplitPreview(preview, 4, ['a', 'b'], 'N', 'r')).toBeNull();
     expect(matchingSplitPreview(preview, 3, ['a'], 'N', 'r')).toBeNull();
@@ -33,7 +36,9 @@ describe('entity detail model helpers', () => {
 
   it('formats only bounded 409 conflict details', () => {
     expect(conflictDetails(new Error('x'))).toEqual([]);
-    const error = new ApiError(409, 'conflict', { details: { conflicts: [{ code: 'merge', message: 'blocked', entity_ids: ['x', 'y'] }] } });
+    const error = new ApiError(409, 'conflict', {
+      details: { conflicts: [{ code: 'merge', message: 'blocked', entity_ids: ['x', 'y'] }] },
+    });
     expect(conflictDetails(error)).toEqual(['merge: blocked', 'entity_ids: x, y']);
   });
 });

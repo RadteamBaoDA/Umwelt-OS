@@ -5,4 +5,6 @@ import { InviteAccept } from './invite-accept';
 export const metadata: Metadata = { referrer: 'no-referrer', robots: { index: false, follow: false } };
 
 /** Renders the invitation acceptance page without the authenticated shell. */
-export default function InvitePage() { return <InviteAccept />; }
+export default function InvitePage() {
+  return <InviteAccept />;
+}

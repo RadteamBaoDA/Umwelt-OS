@@ -38,14 +38,11 @@ describe('apiRequest workspace scoping', () => {
     expect(sentHeaders().get('X-Workspace-ID')).toBe('ws-1');
   });
 
-  it.each(['/api/v1/workspaces', '/api/v1/exports?format=csv'])(
-    'omits X-Workspace-ID on the default-workspace path %s',
-    async (path) => {
-      await apiRequest(path);
+  it.each(['/api/v1/workspaces', '/api/v1/exports?format=csv'])('omits X-Workspace-ID on the default-workspace path %s', async (path) => {
+    await apiRequest(path);
 
-      expect(sentHeaders().has('X-Workspace-ID')).toBe(false);
-    },
-  );
+    expect(sentHeaders().has('X-Workspace-ID')).toBe(false);
+  });
 
   it('rejects with StaleWorkspaceError when the workspace generation changes mid-flight', async () => {
     fetchMock.mockImplementation(async () => {

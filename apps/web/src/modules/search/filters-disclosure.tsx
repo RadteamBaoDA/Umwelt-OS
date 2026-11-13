@@ -9,12 +9,28 @@ import { BareButton } from '@/components/bare-button';
  * @param label Localized toggle text. @param count Number of active filters, appended as "(n)" when positive.
  * @param forceOpen Keeps the body open while a field inside it shows a validation error, so the error is never hidden.
  */
-export function FiltersDisclosure({ label, count, forceOpen = false, children }: { label: string; count: number; forceOpen?: boolean; children: ReactNode }) {
+export function FiltersDisclosure({
+  label,
+  count,
+  forceOpen = false,
+  children,
+}: {
+  label: string;
+  count: number;
+  forceOpen?: boolean;
+  children: ReactNode;
+}) {
   const [userOpen, setOpen] = useState(false);
   const open = userOpen || forceOpen;
   const bodyId = useId();
-  return <div className="filters-disclosure" data-open={open}>
-    <BareButton type="button" className="filters-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>{count > 0 ? `${label} (${count})` : label}</BareButton>
-    <div id={bodyId} className="filters-body">{children}</div>
-  </div>;
+  return (
+    <div className="filters-disclosure" data-open={open}>
+      <BareButton type="button" className="filters-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
+        {count > 0 ? `${label} (${count})` : label}
+      </BareButton>
+      <div id={bodyId} className="filters-body">
+        {children}
+      </div>
+    </div>
+  );
 }

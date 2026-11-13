@@ -48,7 +48,9 @@ export function useSourceInfo(ids: readonly string[]) {
   return useQuery({
     queryKey: [...dashboardKeys.sources, 'chart-provider', ...ids],
     queryFn: ({ signal }) => findSourceInfo(ids, signal),
-    enabled: ids.length > 0, staleTime: 300_000, retry: false,
+    enabled: ids.length > 0,
+    staleTime: 300_000,
+    retry: false,
   });
 }
 
@@ -65,13 +67,25 @@ export function useSourceInfo(ids: readonly string[]) {
  *   default of a fast provider must not shrink a gadget that always read 30 days); a wider catalog default still wins.
  * @returns The effective window, whether it is final, the metric catalog query and the bound sources' info by id.
  */
-export function useEffectiveLookback(sourceId: string | readonly string[], stored: number | null | undefined, fallback: number, widenToFallback = false) {
+export function useEffectiveLookback(
+  sourceId: string | readonly string[],
+  stored: number | null | undefined,
+  fallback: number,
+  widenToFallback = false,
+) {
   const unset = stored === null || stored === undefined;
-  const catalog = useQuery({ queryKey: dashboardKeys.metricCatalog, queryFn: ({ signal }) => getMetricCatalog(signal), staleTime: 300_000, retry: false });
+  const catalog = useQuery({
+    queryKey: dashboardKeys.metricCatalog,
+    queryFn: ({ signal }) => getMetricCatalog(signal),
+    staleTime: 300_000,
+    retry: false,
+  });
   const ids = typeof sourceId === 'string' ? (sourceId ? [sourceId] : []) : sourceId;
   const info = useSourceInfo(ids);
   // Several sources: the slowest provider's default wins so every series has enough history.
-  const defaults = Object.values(info.data ?? {}).flatMap((item) => (item.provider ? [catalog.data?.[item.provider]?.default_lookback_days ?? null] : []));
+  const defaults = Object.values(info.data ?? {}).flatMap((item) =>
+    item.provider ? [catalog.data?.[item.provider]?.default_lookback_days ?? null] : [],
+  );
   const known = defaults.filter((value): value is number => value !== null);
   const catalogDefault = known.length > 0 ? Math.max(...known) : null;
   return {

@@ -1,12 +1,48 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryBucket, PgStats } from './api';
-import { connectionRatio, connectionTone, deadRatioTone, evictedTone, formatAgo, formatBytes, formatRatio, formatUptime, fragmentationTone, latestDbValue, longestTxTone, pgFinding, saveTone } from './database-model';
+import {
+  connectionRatio,
+  connectionTone,
+  deadRatioTone,
+  evictedTone,
+  formatAgo,
+  formatBytes,
+  formatRatio,
+  formatUptime,
+  fragmentationTone,
+  latestDbValue,
+  longestTxTone,
+  pgFinding,
+  saveTone,
+} from './database-model';
 
 const pg = (over: Partial<PgStats> = {}): PgStats => ({
-  status: 'healthy', version: '16', uptime_seconds: 10, database_size_bytes: 1, connections: { active: 1, idle: 1, idle_in_transaction: 0, waiting: 0, total: 8, max: 100 },
-  cache_hit_ratio: 0.99, index_hit_ratio: 0.99, transactions: null, deadlocks: 0, temp_bytes: 0, locks_waiting: 0, longest_transaction_seconds: 0, tables: [], ...over,
+  status: 'healthy',
+  version: '16',
+  uptime_seconds: 10,
+  database_size_bytes: 1,
+  connections: { active: 1, idle: 1, idle_in_transaction: 0, waiting: 0, total: 8, max: 100 },
+  cache_hit_ratio: 0.99,
+  index_hit_ratio: 0.99,
+  transactions: null,
+  deadlocks: 0,
+  temp_bytes: 0,
+  locks_waiting: 0,
+  longest_transaction_seconds: 0,
+  tables: [],
+  ...over,
 });
-const table = (name: string, dead_ratio: number | null, last_autovacuum: string | null = null) => ({ name, total_bytes: 1, live_rows: 1, dead_rows: 1, dead_ratio, seq_scans: 0, index_scans: 0, last_autovacuum, last_autoanalyze: null });
+const table = (name: string, dead_ratio: number | null, last_autovacuum: string | null = null) => ({
+  name,
+  total_bytes: 1,
+  live_rows: 1,
+  dead_rows: 1,
+  dead_ratio,
+  seq_scans: 0,
+  index_scans: 0,
+  last_autovacuum,
+  last_autoanalyze: null,
+});
 
 describe('database model', () => {
   it('formats bytes, ratios and uptime with null handling', () => {
@@ -41,12 +77,26 @@ describe('database model', () => {
     expect(pgFinding(pg(), 'en-US', now)).toBeNull();
     expect(pgFinding(null, 'en-US', now)).toBeNull();
     expect(pgFinding(pg({ cache_hit_ratio: 0.9 }), 'en-US', now)).toEqual({ kind: 'cacheHit', percent: 90 });
-    expect(pgFinding(pg({ cache_hit_ratio: 0.9, connections: { active: 0, idle: 0, idle_in_transaction: 0, waiting: 0, total: 85, max: 100 } }), 'en-US', now)).toEqual({ kind: 'connections', total: 85, max: 100 });
-    expect(pgFinding(pg({ tables: [table('a', 0.12), table('documents', 0.23, '2026-10-01T00:00:00Z')], cache_hit_ratio: 0.5 }), 'en-US', now))
-      .toEqual({ kind: 'deadRows', table: 'documents', percent: 23, ago: '3 days ago' });
+    expect(
+      pgFinding(
+        pg({ cache_hit_ratio: 0.9, connections: { active: 0, idle: 0, idle_in_transaction: 0, waiting: 0, total: 85, max: 100 } }),
+        'en-US',
+        now,
+      ),
+    ).toEqual({ kind: 'connections', total: 85, max: 100 });
+    expect(
+      pgFinding(pg({ tables: [table('a', 0.12), table('documents', 0.23, '2026-10-01T00:00:00Z')], cache_hit_ratio: 0.5 }), 'en-US', now),
+    ).toEqual({ kind: 'deadRows', table: 'documents', percent: 23, ago: '3 days ago' });
   });
   it('reads the latest non-null history value', () => {
-    const b = (tps: number | null | undefined): HistoryBucket => ({ start: 'x', samples: 1, overall_healthy: 1, queue_backlog_max: 0, components: {}, db: tps === undefined ? undefined : { pg_tps_avg: tps } as never });
+    const b = (tps: number | null | undefined): HistoryBucket => ({
+      start: 'x',
+      samples: 1,
+      overall_healthy: 1,
+      queue_backlog_max: 0,
+      components: {},
+      db: tps === undefined ? undefined : ({ pg_tps_avg: tps } as never),
+    });
     expect(latestDbValue([b(5), b(null), b(undefined)], 'pg_tps_avg')).toBe(5);
     expect(latestDbValue([], 'pg_tps_avg')).toBeNull();
   });

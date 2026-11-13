@@ -9,18 +9,60 @@ import { N8nSettingsWorkspace } from './n8n-settings';
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 
-const read = { enabled: true, callback_base_url: 'https://os.example/api', configuration_revision: 2, service_url: null, api_key_configured: false, webhook_token_configured: true, service_url_source: 'environment', api_key_source: 'none', webhook_token_source: 'database' };
-const row = { source_id: 's1', source_name: 'Feed A', source_type: 'rss', provider: null, workflow_id: 'w1', state: 'active', error_code: null, transition_phase: null, last_success_at: '2026-01-02T03:04:00Z', last_error_at: null, last_error_code: 'timeout', collected_at: null, next_due_at: null };
-const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+const read = {
+  enabled: true,
+  callback_base_url: 'https://os.example/api',
+  configuration_revision: 2,
+  service_url: null,
+  api_key_configured: false,
+  webhook_token_configured: true,
+  service_url_source: 'environment',
+  api_key_source: 'none',
+  webhook_token_source: 'database',
+};
+const row = {
+  source_id: 's1',
+  source_name: 'Feed A',
+  source_type: 'rss',
+  provider: null,
+  workflow_id: 'w1',
+  state: 'active',
+  error_code: null,
+  transition_phase: null,
+  last_success_at: '2026-01-02T03:04:00Z',
+  last_error_at: null,
+  last_error_code: 'timeout',
+  collected_at: null,
+  next_due_at: null,
+};
+const json = (body: unknown) =>
+  Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 
 /** Mounts the workspace with a fresh query client. */
-const mount = () => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><N8nSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+const mount = () =>
+  render(
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <N8nSettingsWorkspace />
+      </QueryClientProvider>
+    </NextIntlClientProvider>,
+  );
 
 describe('n8n settings', () => {
   const fetchMock = vi.fn();
   /** Routes mocked fetches: settings, workflows list (configurable) and everything else echoes settings. */
-  const route = (workflows: unknown = [row], settings: unknown = read) => fetchMock.mockImplementation((url: string) => String(url).includes('/connectors/n8n/workflows') ? (workflows instanceof Response ? Promise.resolve(workflows) : json(workflows)) : json(settings));
-  beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+  const route = (workflows: unknown = [row], settings: unknown = read) =>
+    fetchMock.mockImplementation((url: string) =>
+      String(url).includes('/connectors/n8n/workflows')
+        ? workflows instanceof Response
+          ? Promise.resolve(workflows)
+          : json(workflows)
+        : json(settings),
+    );
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
 
   it('toggling enabled dirties the form, warns and PUTs enabled', async () => {
     route([], { ...read, enabled: false });
@@ -63,7 +105,7 @@ describe('n8n settings', () => {
   it('disables row actions while n8n is disabled', async () => {
     route([row], { ...read, enabled: false });
     mount();
-    expect((await screen.findByRole('button', { name: 'Collect now' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(((await screen.findByRole('button', { name: 'Collect now' })) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('shows empty and error states for workflows', async () => {
@@ -80,7 +122,13 @@ describe('n8n settings', () => {
   it('shows source badges and saves url plus a replaced api key', async () => {
     route([]);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><N8nSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <N8nSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     expect(await screen.findByText('From environment')).toBeTruthy();
     expect(screen.getByText('Saved here')).toBeTruthy();
     expect(screen.getByText(/setting up your existing workflows again/)).toBeTruthy();
@@ -89,6 +137,14 @@ describe('n8n settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(true));
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')!;
-    expect(JSON.parse(put[1].body)).toEqual({ expected_revision: 2, service_url: 'https://n8n.example', api_key_action: 'replaced', api_key: 'k1', webhook_token_action: 'unchanged', webhook_token: null, enabled: true });
+    expect(JSON.parse(put[1].body)).toEqual({
+      expected_revision: 2,
+      service_url: 'https://n8n.example',
+      api_key_action: 'replaced',
+      api_key: 'k1',
+      webhook_token_action: 'unchanged',
+      webhook_token: null,
+      enabled: true,
+    });
   });
 });

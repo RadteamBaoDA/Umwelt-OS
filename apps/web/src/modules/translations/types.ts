@@ -11,7 +11,10 @@ export type TranslationPayload = { title?: string | null; excerpt?: string | nul
 export type TranslationItemStatus = { resource_type: ResourceType; resource_id: string; status: TranslationStatus };
 export type TranslationBatchAccepted = { batch_id: string | null; items: TranslationItemStatus[]; settings: TranslationSettings };
 export type TranslationItem = TranslationItemStatus & {
-  translation: TranslationPayload | null; target_language: TranslationLanguage; original_revision: string; error_code: string | null;
+  translation: TranslationPayload | null;
+  target_language: TranslationLanguage;
+  original_revision: string;
+  error_code: string | null;
 };
 export type TranslationBatch = { batch_id: string; target_language: TranslationLanguage; items: TranslationItem[] };
 

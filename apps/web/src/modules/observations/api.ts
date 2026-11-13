@@ -42,10 +42,24 @@ export type GeospatialObservationPage = WorldObservationPage & { omitted_source_
  * `history: true` also returns superseded revisions (de-duplicated per series point) so fixed-identity series chart as history.
  */
 export function listWorldObservations(
-  filters: { sourceIds: string[]; metrics?: string[]; symbols?: string[]; regions?: string[]; from: Date; to: Date; limit?: number; cursor?: string; history?: boolean },
+  filters: {
+    sourceIds: string[];
+    metrics?: string[];
+    symbols?: string[];
+    regions?: string[];
+    from: Date;
+    to: Date;
+    limit?: number;
+    cursor?: string;
+    history?: boolean;
+  },
   signal?: AbortSignal,
 ) {
-  const query = new URLSearchParams({ from_at: filters.from.toISOString(), to_at: filters.to.toISOString(), limit: String(filters.limit ?? 100) });
+  const query = new URLSearchParams({
+    from_at: filters.from.toISOString(),
+    to_at: filters.to.toISOString(),
+    limit: String(filters.limit ?? 100),
+  });
   if (filters.history) query.set('history', 'true');
   for (const sourceId of filters.sourceIds) query.append('source_ids', sourceId);
   for (const metric of filters.metrics ?? []) query.append('metrics', metric);
@@ -60,7 +74,11 @@ export function listGeospatialObservations(
   filters: { sourceIds: string[]; regions?: string[]; from: Date; to: Date; limit?: number; cursor?: string },
   signal?: AbortSignal,
 ) {
-  const query = new URLSearchParams({ from_at: filters.from.toISOString(), to_at: filters.to.toISOString(), limit: String(filters.limit ?? 100) });
+  const query = new URLSearchParams({
+    from_at: filters.from.toISOString(),
+    to_at: filters.to.toISOString(),
+    limit: String(filters.limit ?? 100),
+  });
   for (const sourceId of filters.sourceIds) query.append('source_ids', sourceId);
   for (const region of filters.regions ?? []) query.append('regions', region);
   if (filters.cursor) query.set('cursor', filters.cursor);

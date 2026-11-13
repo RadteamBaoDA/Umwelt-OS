@@ -6,7 +6,9 @@ import { messages } from '@/core/messages';
 import { ChatReasoning } from './chat-reasoning';
 
 const wrap = (node: React.ReactNode) => (
-  <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>{node}</NextIntlClientProvider>
+  <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+    {node}
+  </NextIntlClientProvider>
 );
 const block = () => screen.getByTestId('chat-reasoning') as HTMLDetailsElement;
 

@@ -3,5 +3,9 @@ import { TimelinePage } from '@/modules/timeline';
 
 /** Renders the Timeline feature in the shared workspace shell while URL state resolves. */
 export default function Page() {
-  return <Suspense fallback={<div className="rounded-lg border bg-card p-6 skeleton" />}><TimelinePage /></Suspense>;
+  return (
+    <Suspense fallback={<div className="rounded-lg border bg-card p-6 skeleton" />}>
+      <TimelinePage />
+    </Suspense>
+  );
 }

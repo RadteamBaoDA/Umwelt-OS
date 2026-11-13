@@ -107,19 +107,19 @@ export const UMWELT_LIGHT_TOKENS = {
   '--color-border-warning': '#a65b00',
   '--color-accent-primary': '#176a4a',
   '--color-on-accent': '#ffffff',
-  'raised': '#f7f9f7',
+  raised: '#f7f9f7',
   '--raised': '#f7f9f7',
-  'active': '#e8ece8',
+  active: '#e8ece8',
   '--active': '#e8ece8',
-  'rule': '#eef1ee',
+  rule: '#eef1ee',
   '--rule': '#eef1ee',
-  'control': '#cfd5d0',
+  control: '#cfd5d0',
   '--control': '#cfd5d0',
-  'primary': '#17211c',
+  primary: '#17211c',
   '--primary': '#17211c',
-  'positive': '#247b50',
+  positive: '#247b50',
   '--positive': '#247b50',
-  'negative': '#c4242a',
+  negative: '#c4242a',
   '--negative': '#c4242a',
   'pill-positive-bg': '#dcfae5',
   '--pill-positive-bg': '#dcfae5',
@@ -198,19 +198,19 @@ export const UMWELT_DARK_TOKENS = {
   '--color-border-warning': '#fbbf24',
   '--color-accent-primary': '#77c69c',
   '--color-on-accent': '#0e110f',
-  'raised': '#1d221e',
+  raised: '#1d221e',
   '--raised': '#1d221e',
-  'active': '#252b27',
+  active: '#252b27',
   '--active': '#252b27',
-  'rule': '#1d221e',
+  rule: '#1d221e',
   '--rule': '#1d221e',
-  'control': '#3a423c',
+  control: '#3a423c',
   '--control': '#3a423c',
-  'primary': '#edf3ee',
+  primary: '#edf3ee',
   '--primary': '#edf3ee',
-  'positive': '#3fc07a',
+  positive: '#3fc07a',
   '--positive': '#3fc07a',
-  'negative': '#e5566f',
+  negative: '#e5566f',
   '--negative': '#e5566f',
   'pill-positive-bg': '#12301f',
   '--pill-positive-bg': '#12301f',
@@ -600,9 +600,7 @@ export function buildImportMap(origin = ''): { imports: Record<string, string> }
  * @param origin - Host page origin; defaults to `window.location.origin` in the browser, else empty.
  * @returns Script tag string with the vendored import map.
  */
-export function buildImportMapScriptTag(
-  origin = typeof window !== 'undefined' ? window.location.origin : '',
-): string {
+export function buildImportMapScriptTag(origin = typeof window !== 'undefined' ? window.location.origin : ''): string {
   return `<script type="importmap">${JSON.stringify(buildImportMap(origin))}</script>`;
 }
 
@@ -651,10 +649,7 @@ export function buildSandboxStylesheet(theme: SandboxTheme = 'light'): string {
  * @param selector - Target selector (`':root'` or `'html.dark'`).
  * @returns Dictionary mapping `--token` (and bare `token`) to its normalized value.
  */
-export function extractCssVariables(
-  cssSource: string,
-  selector: ':root' | 'html.dark',
-): Record<string, string> {
+export function extractCssVariables(cssSource: string, selector: ':root' | 'html.dark'): Record<string, string> {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const blockRegex = new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`, 'm');
   const match = cssSource.match(blockRegex);
@@ -738,14 +733,10 @@ export function verifyTokensJsonParity(tokensJson: {
       const darkActual = (UMWELT_DARK_TOKENS as Record<string, string>)[entry.name]?.toLowerCase();
 
       if (lightActual !== lightExpected) {
-        mismatches.push(
-          `tokens.json light "${entry.name}": expected "${lightExpected}", got "${lightActual ?? 'undefined'}"`,
-        );
+        mismatches.push(`tokens.json light "${entry.name}": expected "${lightExpected}", got "${lightActual ?? 'undefined'}"`);
       }
       if (darkActual !== darkExpected) {
-        mismatches.push(
-          `tokens.json dark "${entry.name}": expected "${darkExpected}", got "${darkActual ?? 'undefined'}"`,
-        );
+        mismatches.push(`tokens.json dark "${entry.name}": expected "${darkExpected}", got "${darkActual ?? 'undefined'}"`);
       }
     }
   }

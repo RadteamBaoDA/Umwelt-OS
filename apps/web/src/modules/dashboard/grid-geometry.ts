@@ -58,8 +58,7 @@ export function getGridUnitMetrics(width: number, columns: number): { cellSize: 
   if (!Number.isFinite(width) || !Number.isInteger(columns) || columns < 1 || columns > 20) return null;
   const cellSize = (width - GRID_GAP_PX * (columns - 1)) / columns;
   const stride = cellSize + GRID_GAP_PX;
-  return Number.isFinite(cellSize) && cellSize > 0 && Number.isFinite(stride) && stride > 0
-    ? { cellSize, stride } : null;
+  return Number.isFinite(cellSize) && cellSize > 0 && Number.isFinite(stride) && stride > 0 ? { cellSize, stride } : null;
 }
 
 /** Tests whether two integer placements overlap on a half-open rectangle basis. */
@@ -83,20 +82,34 @@ export function resolveCollisions(
   getMinimumSize: (instanceId: string) => { minW: number; minH: number } = () => DEFAULT_MIN_SIZE,
 ): DashboardPlacement[] | null {
   const active = placements.find((placement) => placement.instance_id === activeId);
-  if (!active || new Set(placements.map((placement) => placement.instance_id)).size !== placements.length
-    || !Number.isInteger(columns) || columns < 1 || columns > 20
-    || placements.some((placement) => {
+  if (
+    !active ||
+    new Set(placements.map((placement) => placement.instance_id)).size !== placements.length ||
+    !Number.isInteger(columns) ||
+    columns < 1 ||
+    columns > 20 ||
+    placements.some((placement) => {
       const minimum = getMinimumSize(placement.instance_id);
-      return !Number.isInteger(placement.x) || !Number.isInteger(placement.y)
-        || !Number.isInteger(placement.w) || !Number.isInteger(placement.h)
-        || placement.x < 0 || placement.y < 0 || placement.w < minimum.minW || placement.h < minimum.minH
-        || placement.x + placement.w > columns || placement.y + placement.h > MAX_LAYOUT_ROWS;
-    })) return null;
+      return (
+        !Number.isInteger(placement.x) ||
+        !Number.isInteger(placement.y) ||
+        !Number.isInteger(placement.w) ||
+        !Number.isInteger(placement.h) ||
+        placement.x < 0 ||
+        placement.y < 0 ||
+        placement.w < minimum.minW ||
+        placement.h < minimum.minH ||
+        placement.x + placement.w > columns ||
+        placement.y + placement.h > MAX_LAYOUT_ROWS
+      );
+    })
+  )
+    return null;
 
   const placed: DashboardPlacement[] = [{ ...active }];
-  const remaining = placements.filter((placement) => placement.instance_id !== activeId).sort(
-    (a, b) => a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id),
-  );
+  const remaining = placements
+    .filter((placement) => placement.instance_id !== activeId)
+    .sort((a, b) => a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id));
   for (const source of remaining) {
     const candidate = { ...source };
     while (true) {
@@ -148,11 +161,13 @@ export interface GridLayoutContext {
  * another breakpoint, or the column count, breakpoint or visible group changed since pointer-down.
  */
 export function isGestureStale(gesture: ActiveGesture, context: GridLayoutContext): boolean {
-  return !context.interactionEnabled
-    || context.requestedBreakpoint !== gesture.breakpoint
-    || gesture.columnCount !== context.columnCount
-    || gesture.breakpoint !== context.breakpoint
-    || gesture.visibleGroupKey !== context.visibleGroupKey;
+  return (
+    !context.interactionEnabled ||
+    context.requestedBreakpoint !== gesture.breakpoint ||
+    gesture.columnCount !== context.columnCount ||
+    gesture.breakpoint !== context.breakpoint ||
+    gesture.visibleGroupKey !== context.visibleGroupKey
+  );
 }
 
 /**
@@ -165,7 +180,12 @@ export function isGestureStale(gesture: ActiveGesture, context: GridLayoutContex
  * @param columnCount Current column count.
  * @returns The changed coordinates (x/y for a move, w/h for a resize) to merge into the current placement.
  */
-export function placementForPointer(gesture: ActiveGesture, clientX: number, clientY: number, columnCount: number): Pick<DashboardPlacement, 'x' | 'y'> | Pick<DashboardPlacement, 'w' | 'h'> {
+export function placementForPointer(
+  gesture: ActiveGesture,
+  clientX: number,
+  clientY: number,
+  columnCount: number,
+): Pick<DashboardPlacement, 'x' | 'y'> | Pick<DashboardPlacement, 'w' | 'h'> {
   const dx = Math.round((clientX - gesture.startX) / gesture.cellStride);
   const dy = Math.round((clientY - gesture.startY) / gesture.cellStride);
   const { initialPlacement: initial } = gesture;

@@ -26,7 +26,8 @@ export type StoryDetailProps = {
   onClose?: () => void;
 };
 
-const badgeClass = 'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
+const badgeClass =
+  'inline-flex h-6 items-center rounded-full border border-border bg-background px-2 text-xs font-semibold text-muted-foreground';
 const signalKeys = ['topic', 'entity', 'goal', 'recency', 'importance', 'novelty'] as const;
 type SignalKey = (typeof signalKeys)[number];
 /** Literal `detail` catalog key per relevance signal (no runtime key building). */
@@ -48,7 +49,12 @@ function relevanceReasons(story: Story | undefined): SignalKey[] {
 /** Timeline = real evidence events (first collected per source document), oldest first, at most eight. */
 function buildTimeline(evidence: StoryEvidence[]) {
   return [...evidence]
-    .map((item) => ({ key: `${item.document_version_id}:${item.chunk_id}`, at: item.published_at ?? item.observed_at, source: item.source_name, title: item.title }))
+    .map((item) => ({
+      key: `${item.document_version_id}:${item.chunk_id}`,
+      at: item.published_at ?? item.observed_at,
+      source: item.source_name,
+      title: item.title,
+    }))
     .sort((a, b) => a.at.localeCompare(b.at))
     .slice(0, 8);
 }
@@ -68,17 +74,17 @@ export function StoryDetail(props: StoryDetailProps) {
   const vm: StoryDetailVm = s2;
   return (
     <section className="flex h-full min-h-0 flex-col gap-4 overflow-auto rounded-lg border border-border bg-background p-4 text-foreground">
-<StoryDetailStatus vm={vm} />
+      <StoryDetailStatus vm={vm} />
       <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]">
-      <div className="min-w-0 space-y-4">
-<StoryArticle vm={vm} />
-<StoryOmissionNotice vm={vm} />
-<StoryEvidenceList vm={vm} />
-<StoryLoadMore vm={vm} />
+        <div className="min-w-0 space-y-4">
+          <StoryArticle vm={vm} />
+          <StoryOmissionNotice vm={vm} />
+          <StoryEvidenceList vm={vm} />
+          <StoryLoadMore vm={vm} />
+        </div>
+        <StoryAside vm={vm} />
       </div>
-<StoryAside vm={vm} />
-      </div>
-<StoryFooter vm={vm} />
+      <StoryFooter vm={vm} />
     </section>
   );
 }
@@ -89,147 +95,204 @@ type StoryDetailVm = ReturnType<typeof useStoryDetailActions>;
 function StoryDetailStatus({ vm }: { vm: StoryDetailVm }) {
   const { t, detail, onBack, authorityChanged, restartSnapshot } = vm;
   return (
-<>
+    <>
       <Button variant="ghost" className="w-fit" onClick={onBack}>
-        <ArrowLeft aria-hidden="true" className="mr-2 size-4" />{t('back')}
+        <ArrowLeft aria-hidden="true" className="mr-2 size-4" />
+        {t('back')}
       </Button>
-      {detail.isPending ? <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p> : null}
+      {detail.isPending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t('loading')}
+        </p>
+      ) : null}
       {detail.isError || authorityChanged ? (
         <div role="alert" className="flex items-center justify-between gap-2 text-sm text-destructive">
           <span>{authorityChanged ? t('evidenceChanged') : t('detailUnavailable')}</span>
-          <Button variant="outline" size="sm" onClick={restartSnapshot}>{t('restartSnapshot')}</Button>
+          <Button variant="outline" size="sm" onClick={restartSnapshot}>
+            {t('restartSnapshot')}
+          </Button>
         </div>
       ) : null}
-</>
+    </>
   );
 }
 
 /** Story badges, title, citation tools, excerpt and partial-data notices. */
 function StoryArticle({ vm }: { vm: StoryDetailVm }) {
-  const { t, d, display, incompleteLabel, copied, story, translation, translated, firstUrl, showOriginal, setShowOriginal, copyCitation } = vm;
-  return (
-      story ? (
-        <article className="space-y-3" aria-labelledby="story-detail-title">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={badgeClass}>{d('evidenceCount', { count: story.evidence_count })}</span>
-            <span className={badgeClass}>{d('sourceCount', { count: story.source_count })}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <h2 id="story-detail-title" className="flex-1 text-xl font-semibold leading-snug">{translated?.title ?? story.title}</h2>
-            {firstUrl ? <a href={firstUrl} target="_blank" rel="noopener noreferrer" aria-label={d('open.original')} title={d('open.original')} className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"><ExternalLink aria-hidden="true" className="size-4" /></a> : null}
-            <Button variant="ghost" size="icon" aria-label={d('copyCitation')} title={d('copyCitation')} onClick={() => { void copyCitation(); }}><CopyIcon aria-hidden="true" className="size-4" /></Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {t('observed', { date: formatDateTime(story.observed_at, display.locale, display.timezone) })} · {display.timezone}
-          </p>
-          {translation.results.has(story.id) ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : <TranslationNote issue={translation.issues.get(story.id)} />}
-          <p role="status" className="text-xs text-muted-foreground">{copied === 'ok' ? d('copied') : copied === 'failed' ? d('copyFailed') : ''}</p>
-          <h3 className="text-sm font-semibold">{t('excerpt')}</h3>
-          <blockquote className="border-l-2 border-border pl-3 text-sm leading-relaxed">{translated?.excerpt ?? story.excerpt}</blockquote>
-          {story.incomplete_reasons.length ? (
-            <div role="status" className="space-y-1 text-xs text-muted-foreground">
-              <p>{t('partialData')}</p>
-              {story.incomplete_reasons.map((reason) => <p key={reason}>{incompleteLabel(reason)}</p>)}
-            </div>
-          ) : null}
-          {story.relevance_signals.project?.available === false ? <p className="text-xs text-muted-foreground">{t('unavailable')}</p> : null}
-        </article>
-      ) : null
-  );
+  const { t, d, display, incompleteLabel, copied, story, translation, translated, firstUrl, showOriginal, setShowOriginal, copyCitation } =
+    vm;
+  return story ? (
+    <article className="space-y-3" aria-labelledby="story-detail-title">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={badgeClass}>{d('evidenceCount', { count: story.evidence_count })}</span>
+        <span className={badgeClass}>{d('sourceCount', { count: story.source_count })}</span>
+      </div>
+      <div className="flex items-start gap-2">
+        <h2 id="story-detail-title" className="flex-1 text-xl font-semibold leading-snug">
+          {translated?.title ?? story.title}
+        </h2>
+        {firstUrl ? (
+          <a
+            href={firstUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={d('open.original')}
+            title={d('open.original')}
+            className="inline-flex size-11 items-center justify-center rounded-[9px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
+            <ExternalLink aria-hidden="true" className="size-4" />
+          </a>
+        ) : null}
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={d('copyCitation')}
+          title={d('copyCitation')}
+          onClick={() => {
+            void copyCitation();
+          }}
+        >
+          <CopyIcon aria-hidden="true" className="size-4" />
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t('observed', { date: formatDateTime(story.observed_at, display.locale, display.timezone) })} · {display.timezone}
+      </p>
+      {translation.results.has(story.id) ? (
+        <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} />
+      ) : (
+        <TranslationNote issue={translation.issues.get(story.id)} />
+      )}
+      <p role="status" className="text-xs text-muted-foreground">
+        {copied === 'ok' ? d('copied') : copied === 'failed' ? d('copyFailed') : ''}
+      </p>
+      <h3 className="text-sm font-semibold">{t('excerpt')}</h3>
+      <blockquote className="border-l-2 border-border pl-3 text-sm leading-relaxed">{translated?.excerpt ?? story.excerpt}</blockquote>
+      {story.incomplete_reasons.length ? (
+        <div role="status" className="space-y-1 text-xs text-muted-foreground">
+          <p>{t('partialData')}</p>
+          {story.incomplete_reasons.map((reason) => (
+            <p key={reason}>{incompleteLabel(reason)}</p>
+          ))}
+        </div>
+      ) : null}
+      {story.relevance_signals.project?.available === false ? <p className="text-xs text-muted-foreground">{t('unavailable')}</p> : null}
+    </article>
+  ) : null;
 }
 
 /** Partial-data notice for omitted evidence pages. */
 function StoryOmissionNotice({ vm }: { vm: StoryDetailVm }) {
   const { t, incompleteLabel, contentAvailable, omissionReasons } = vm;
-  return (
-      contentAvailable && omissionReasons.length ? (
-        <div role="status" className="space-y-1 text-xs text-muted-foreground">
-          <p>{t('partialData')}</p>
-          {omissionReasons.map((reason) => <p key={reason}>{incompleteLabel(reason)}</p>)}
-        </div>
-      ) : null
-  );
+  return contentAvailable && omissionReasons.length ? (
+    <div role="status" className="space-y-1 text-xs text-muted-foreground">
+      <p>{t('partialData')}</p>
+      {omissionReasons.map((reason) => (
+        <p key={reason}>{incompleteLabel(reason)}</p>
+      ))}
+    </div>
+  ) : null;
 }
 
 /** Evidence cards with open-source links. */
 function StoryEvidenceList({ vm }: { vm: StoryDetailVm }) {
   const { t, d, display, contentAvailable, story, evidence } = vm;
   return (
-      <section className="space-y-3" aria-label={t('evidence', { count: story?.evidence_count ?? 0 })}>
-        <h3 className="text-sm font-semibold">{d('sourcesAndEvidence')}</h3>
-        {evidence.map((item) => (
-          <article key={`${item.source_id}:${item.document_version_id}:${item.chunk_id}`} className="rounded-md border border-border p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="text-sm font-medium">{item.title}</h4>
-              {safeHttpUrl(item.url) ? (
-                <a href={safeHttpUrl(item.url)} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-xs text-primary underline-offset-4 hover:underline">
-                  {t('openSource')}<ExternalLink aria-hidden="true" className="size-3" />
-                </a>
-              ) : null}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">{item.source_name} · {formatDateTime(item.observed_at, display.locale, display.timezone)}</p>
-            <blockquote className="mt-2 border-l-2 border-border pl-3 text-sm">{item.excerpt}</blockquote>
-          </article>
-        ))}
-        {contentAvailable && story ? <p className="text-xs text-muted-foreground">{d('independenceUnknown')}</p> : null}
-      </section>
+    <section className="space-y-3" aria-label={t('evidence', { count: story?.evidence_count ?? 0 })}>
+      <h3 className="text-sm font-semibold">{d('sourcesAndEvidence')}</h3>
+      {evidence.map((item) => (
+        <article key={`${item.source_id}:${item.document_version_id}:${item.chunk_id}`} className="rounded-md border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-medium">{item.title}</h4>
+            {safeHttpUrl(item.url) ? (
+              <a
+                href={safeHttpUrl(item.url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-xs text-primary underline-offset-4 hover:underline"
+              >
+                {t('openSource')}
+                <ExternalLink aria-hidden="true" className="size-3" />
+              </a>
+            ) : null}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {item.source_name} · {formatDateTime(item.observed_at, display.locale, display.timezone)}
+          </p>
+          <blockquote className="mt-2 border-l-2 border-border pl-3 text-sm">{item.excerpt}</blockquote>
+        </article>
+      ))}
+      {contentAvailable && story ? <p className="text-xs text-muted-foreground">{d('independenceUnknown')}</p> : null}
+    </section>
   );
 }
 
 /** Load-more button for further evidence pages. */
 function StoryLoadMore({ vm }: { vm: StoryDetailVm }) {
   const { t, detail, contentAvailable } = vm;
-  return (
-      contentAvailable && detail.hasNextPage ? (
-        <Button variant="outline" onClick={() => { void detail.fetchNextPage(); }} disabled={detail.isFetchingNextPage}>
-          {detail.isFetchingNextPage ? t('loading') : t('loadMore')}
-        </Button>
-      ) : null
-  );
+  return contentAvailable && detail.hasNextPage ? (
+    <Button
+      variant="outline"
+      onClick={() => {
+        void detail.fetchNextPage();
+      }}
+      disabled={detail.isFetchingNextPage}
+    >
+      {detail.isFetchingNextPage ? t('loading') : t('loadMore')}
+    </Button>
+  ) : null;
 }
 
 /** Relevance signals and evidence timeline. */
 function StoryAside({ vm }: { vm: StoryDetailVm }) {
   const { d, display, story, reasons, timeline } = vm;
-  return (
-      story ? (
-        <aside className="min-w-0 space-y-5">
-          {reasons.length ? (
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold">{d('whySeeThis')}</h3>
-              <ul className="flex flex-wrap gap-2">{reasons.map((name) => <li key={name} className={badgeClass}>{d(SIGNAL_LABEL_KEYS[name])}</li>)}</ul>
-            </div>
-          ) : null}
-          {timeline.length ? (
-            <div className="space-y-2">
-              <h3 className="text-sm font-semibold">{d('timeline')}</h3>
-              <ol className="space-y-2 border-l border-border pl-3">
-                {timeline.map((entry) => (
-                  <li key={entry.key} className="text-sm">
-                    <span className="block text-xs text-muted-foreground">{formatDateTime(entry.at, display.locale, display.timezone)}</span>
-                    <span>{entry.source}</span>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          ) : null}
-        </aside>
-      ) : null
-  );
+  return story ? (
+    <aside className="min-w-0 space-y-5">
+      {reasons.length ? (
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold">{d('whySeeThis')}</h3>
+          <ul className="flex flex-wrap gap-2">
+            {reasons.map((name) => (
+              <li key={name} className={badgeClass}>
+                {d(SIGNAL_LABEL_KEYS[name])}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {timeline.length ? (
+        <div className="space-y-2">
+          <h3 className="text-sm font-semibold">{d('timeline')}</h3>
+          <ol className="space-y-2 border-l border-border pl-3">
+            {timeline.map((entry) => (
+              <li key={entry.key} className="text-sm">
+                <span className="block text-xs text-muted-foreground">{formatDateTime(entry.at, display.locale, display.timezone)}</span>
+                <span>{entry.source}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </aside>
+  ) : null;
 }
 
 /** Create-rule link and Ask AI action. */
 function StoryFooter({ vm }: { vm: StoryDetailVm }) {
   const { d, onClose, story, evidence, askAi } = vm;
-  return (
-      story ? (
-        <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
-          <Button asChild variant="outline"><Link href="/dashboard?manage=highlights" onClick={onClose}>{d('createRule')}</Link></Button>
-          <span className="flex-1" />
-          <Button type="button" disabled={!evidence.length} onClick={askAi}>{d('askAiAboutThis')}</Button>
-        </footer>
-      ) : null
-  );
+  return story ? (
+    <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
+      <Button asChild variant="outline">
+        <Link href="/dashboard?manage=highlights" onClick={onClose}>
+          {d('createRule')}
+        </Link>
+      </Button>
+      <span className="flex-1" />
+      <Button type="button" disabled={!evidence.length} onClick={askAi}>
+        {d('askAiAboutThis')}
+      </Button>
+    </footer>
+  ) : null;
 }
 
 /** Loads the fixed-as-of story snapshot page by page; reads are never refetched automatically. */
@@ -255,7 +318,23 @@ function useStoryDetailQuery(props: StoryDetailProps) {
     retry: false,
   });
 
-  return { t, d, display, incompleteLabel, queryClient, detail, snapshotGeneration, setSnapshotGeneration, copied, setCopied, storyId, sourceIds, onBack, onClose, openDrawer };
+  return {
+    t,
+    d,
+    display,
+    incompleteLabel,
+    queryClient,
+    detail,
+    snapshotGeneration,
+    setSnapshotGeneration,
+    copied,
+    setCopied,
+    storyId,
+    sourceIds,
+    onBack,
+    onClose,
+    openDrawer,
+  };
 }
 
 /** Restarts the snapshot on request and derives visible pages, story, translation, evidence, timeline and relevance reasons (all hidden once authority changed). */
@@ -278,7 +357,7 @@ function useStoryDetailView(p: ReturnType<typeof useStoryDetailQuery>) {
   const targets = story?.translation_revision ? [{ id: story.id, revision: story.translation_revision }] : [];
   const translation = useContentTranslation('news_story', targets);
   const [showOriginal, setShowOriginal] = useState(false);
-  const translated = showOriginal || !story ? undefined : translation.results.get(story.id)?.translation ?? undefined;
+  const translated = showOriginal || !story ? undefined : (translation.results.get(story.id)?.translation ?? undefined);
   const evidence = visiblePages.flatMap((page) => page.story?.evidence ?? []);
   const omissionReasons = [...new Set(visiblePages.flatMap((page) => page.incomplete_reasons))];
   const firstUrl = evidence.map((item) => safeHttpUrl(item.url)).find(Boolean) ?? null;
@@ -286,7 +365,25 @@ function useStoryDetailView(p: ReturnType<typeof useStoryDetailQuery>) {
 
   const timeline = buildTimeline(evidence);
 
-  return { ...p, pages, authorityChanged, contentAvailable, visiblePages, story, targets, translation, translated, evidence, omissionReasons, firstUrl, reasons, timeline, showOriginal, setShowOriginal, restartSnapshot };
+  return {
+    ...p,
+    pages,
+    authorityChanged,
+    contentAvailable,
+    visiblePages,
+    story,
+    targets,
+    translation,
+    translated,
+    evidence,
+    omissionReasons,
+    firstUrl,
+    reasons,
+    timeline,
+    showOriginal,
+    setShowOriginal,
+    restartSnapshot,
+  };
 }
 
 /** Ask-AI hand-off to the chat drawer and the clipboard citation copy. */
@@ -295,15 +392,29 @@ function useStoryDetailActions(p: ReturnType<typeof useStoryDetailView>) {
   /** Closes the dialog, then opens the quick-chat drawer grounded in this story's evidence chunks. */
   function askAi(): void {
     onClose?.();
-    openDrawer({ context: { kind: 'selection', items: evidence.slice(0, 8).map((item) => ({
-      sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id, chunkId: item.chunk_id, title: item.title,
-    })) } });
+    openDrawer({
+      context: {
+        kind: 'selection',
+        items: evidence.slice(0, 8).map((item) => ({
+          sourceId: item.source_id,
+          documentId: item.document_id,
+          documentVersionId: item.document_version_id,
+          chunkId: item.chunk_id,
+          title: item.title,
+        })),
+      },
+    });
   }
 
   /** Copies a plain-text citation (title, source, time, link) for the first evidence rows. */
   async function copyCitation(): Promise<void> {
     if (!story) return;
-    const lines = evidence.slice(0, 5).map((item) => `${item.title} — ${item.source_name}, ${formatDateTime(item.observed_at, display.locale, display.timezone)}${item.url ? ` ${item.url}` : ''}`);
+    const lines = evidence
+      .slice(0, 5)
+      .map(
+        (item) =>
+          `${item.title} — ${item.source_name}, ${formatDateTime(item.observed_at, display.locale, display.timezone)}${item.url ? ` ${item.url}` : ''}`,
+      );
     try {
       await navigator.clipboard.writeText([story.title, ...lines].join('\n'));
       setCopied('ok');

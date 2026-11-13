@@ -15,7 +15,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { ApiError } from '@/core/api';
 import { activateConnector, getConnectorConfiguration, updateSourceStatus } from './api';
-import { listMcpConnections, listMcpGrants, saveMcpCollection, type McpCollectionConfig, type McpConnection, type McpGrant } from './mcp-api';
+import {
+  listMcpConnections,
+  listMcpGrants,
+  saveMcpCollection,
+  type McpCollectionConfig,
+  type McpConnection,
+  type McpGrant,
+} from './mcp-api';
 
 const intervals = [15, 30, 60, 360, 1440] as const;
 
@@ -51,7 +58,12 @@ function useMcpCollectionDraft(sourceId: string) {
       const [saved, available] = await Promise.all([getConnectorConfiguration(sourceId, signal), listMcpConnections(signal)]);
       return { saved, available };
     },
-    gcTime: 0, staleTime: 0, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false, refetchOnMount: false,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   });
   // Form reset: copy the loaded server configuration into the editable draft once per fetched payload.
   useResetOnChange([configQuery.data], () => {
@@ -63,7 +75,7 @@ function useMcpCollectionDraft(sourceId: string) {
     setConnections(connectionsNow);
     setGeneration(saved.source_generation);
     setConnectionId(selectedConnection?.id ?? '');
-    const savedCalls = selectedConnection?.id === config.connection_id ? config.calls ?? [] : [];
+    const savedCalls = selectedConnection?.id === config.connection_id ? (config.calls ?? []) : [];
     setGrantIds(savedCalls.map((call) => call.grant_id));
     setArgumentsByGrant(Object.fromEntries(savedCalls.map((call) => [call.grant_id, JSON.stringify(call.arguments)])));
     setScheduleMinutes(config.schedule_interval_minutes ?? 60);
@@ -76,23 +88,48 @@ function useMcpCollectionDraft(sourceId: string) {
     queryKey: ['mcp-collection-grants', connectionId, sourceId, selectedConnection?.revision, selectedConnection?.deployment_profile_hash],
     queryFn: async ({ signal }) => {
       const result = await listMcpGrants(connectionId, signal);
-      return result.items.filter((grant) => grant.purpose === 'collection' && grant.revoked_at === null
-        && (!grant.expires_at || new Date(grant.expires_at).getTime() > Date.now())
-        && grant.source_ids.includes(sourceId) && selectedConnection !== undefined
-        && grant.reviewed_connection_revision === selectedConnection.revision
-        && grant.reviewed_profile_hash === selectedConnection.deployment_profile_hash);
+      return result.items.filter(
+        (grant) =>
+          grant.purpose === 'collection' &&
+          grant.revoked_at === null &&
+          (!grant.expires_at || new Date(grant.expires_at).getTime() > Date.now()) &&
+          grant.source_ids.includes(sourceId) &&
+          selectedConnection !== undefined &&
+          grant.reviewed_connection_revision === selectedConnection.revision &&
+          grant.reviewed_profile_hash === selectedConnection.deployment_profile_hash,
+      );
     },
     enabled: Boolean(connectionId) && selectedConnection !== undefined,
-    gcTime: 0, staleTime: 0, retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
-  const visibleGrants: McpGrant[] = connectionId ? grantsQuery.data ?? [] : [];
-  const loadFailed = (configQuery.isError && configQuery.errorUpdatedAt !== acknowledged?.config)
-    || (grantsQuery.isError && grantsQuery.errorUpdatedAt !== acknowledged?.grants);
+  const visibleGrants: McpGrant[] = connectionId ? (grantsQuery.data ?? []) : [];
+  const loadFailed =
+    (configQuery.isError && configQuery.errorUpdatedAt !== acknowledged?.config) ||
+    (grantsQuery.isError && grantsQuery.errorUpdatedAt !== acknowledged?.grants);
   /** Record the current load-error timestamps so only errors present now are treated as acknowledged. */
   const acknowledgeLoadErrors = () => setAcknowledged({ config: configQuery.errorUpdatedAt, grants: grantsQuery.errorUpdatedAt });
   return {
-    loading: configQuery.isPending, loadFailed, acknowledgeLoadErrors, connections, visibleGrants, generation, setGeneration,
-    connectionId, setConnectionId, grantIds, setGrantIds, argumentsByGrant, setArgumentsByGrant, scheduleMinutes, setScheduleMinutes, timezone, setTimezone,
+    loading: configQuery.isPending,
+    loadFailed,
+    acknowledgeLoadErrors,
+    connections,
+    visibleGrants,
+    generation,
+    setGeneration,
+    connectionId,
+    setConnectionId,
+    grantIds,
+    setGrantIds,
+    argumentsByGrant,
+    setArgumentsByGrant,
+    scheduleMinutes,
+    setScheduleMinutes,
+    timezone,
+    setTimezone,
   };
 }
 
@@ -111,25 +148,163 @@ type Draft = ReturnType<typeof useMcpCollectionDraft>;
 function GrantChecklist({ draft, busy, onDraftChange }: { draft: Draft; busy: boolean; onDraftChange: (dirty: boolean) => void }) {
   const t = useTranslations('sources');
   const { visibleGrants, grantIds, setGrantIds, argumentsByGrant, setArgumentsByGrant } = draft;
-  return <div role="group" aria-label={t('mcp.collectionGrants')} className="flex flex-col gap-2"><h4 className="m-0 text-sm font-semibold">{t('mcp.collectionGrants')}</h4>
-    {visibleGrants.length === 0 ? <p className="text-muted-foreground">{t('mcp.noGrants')}</p> : visibleGrants.map((grant) => <div key={grant.id} className="space-y-2"><CheckboxField><Checkbox id={`mcp-grant-${grant.id}`} disabled={busy || (!grantIds.includes(grant.id) && grantIds.length >= 10)} checked={grantIds.includes(grant.id)} onCheckedChange={(checked) => { setGrantIds((current) => checked ? [...new Set([...current, grant.id])] : current.filter((id) => id !== grant.id)); onDraftChange(true); }} /><Label htmlFor={`mcp-grant-${grant.id}`}>{grant.capability_id} · {grant.risk}</Label></CheckboxField>{grantIds.includes(grant.id) && <div className="field"><Label htmlFor={`mcp-args-${grant.id}`}>{t('mcp.arguments')}</Label><Input id={`mcp-args-${grant.id}`} value={argumentsByGrant[grant.id] ?? '{}'} onChange={(event) => { setArgumentsByGrant((current) => ({ ...current, [grant.id]: event.target.value })); onDraftChange(true); }} /></div>}</div>)}
-  </div>;
+  return (
+    <div role="group" aria-label={t('mcp.collectionGrants')} className="flex flex-col gap-2">
+      <h4 className="m-0 text-sm font-semibold">{t('mcp.collectionGrants')}</h4>
+      {visibleGrants.length === 0 ? (
+        <p className="text-muted-foreground">{t('mcp.noGrants')}</p>
+      ) : (
+        visibleGrants.map((grant) => (
+          <div key={grant.id} className="space-y-2">
+            <CheckboxField>
+              <Checkbox
+                id={`mcp-grant-${grant.id}`}
+                disabled={busy || (!grantIds.includes(grant.id) && grantIds.length >= 10)}
+                checked={grantIds.includes(grant.id)}
+                onCheckedChange={(checked) => {
+                  setGrantIds((current) => (checked ? [...new Set([...current, grant.id])] : current.filter((id) => id !== grant.id)));
+                  onDraftChange(true);
+                }}
+              />
+              <Label htmlFor={`mcp-grant-${grant.id}`}>
+                {grant.capability_id} · {grant.risk}
+              </Label>
+            </CheckboxField>
+            {grantIds.includes(grant.id) && (
+              <div className="field">
+                <Label htmlFor={`mcp-args-${grant.id}`}>{t('mcp.arguments')}</Label>
+                <Input
+                  id={`mcp-args-${grant.id}`}
+                  value={argumentsByGrant[grant.id] ?? '{}'}
+                  onChange={(event) => {
+                    setArgumentsByGrant((current) => ({ ...current, [grant.id]: event.target.value }));
+                    onDraftChange(true);
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
 }
 
 /** Schedule interval and timezone fields of the collection draft. */
 function ScheduleFields({ draft, busy, onDraftChange }: { draft: Draft; busy: boolean; onDraftChange: (dirty: boolean) => void }) {
   const t = useTranslations('sources');
   const { scheduleMinutes, setScheduleMinutes, timezone, setTimezone } = draft;
-  return <FieldGrid><div className="field"><Label htmlFor="mcp-collection-schedule">{t('schedule.label')}</Label><Select disabled={busy} value={String(scheduleMinutes)} onValueChange={(value) => { setScheduleMinutes(Number(value) as ScheduleMinutes); onDraftChange(true); }}><SelectTrigger id="mcp-collection-schedule"><SelectValue /></SelectTrigger><SelectContent>{intervals.map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('every.minutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
-    <div className="field"><Label htmlFor="mcp-collection-timezone">{t('timezone')}</Label><Input disabled={busy} id="mcp-collection-timezone" value={timezone} onChange={(event) => { setTimezone(event.target.value); onDraftChange(true); }} maxLength={64} /></div></FieldGrid>;
+  return (
+    <FieldGrid>
+      <div className="field">
+        <Label htmlFor="mcp-collection-schedule">{t('schedule.label')}</Label>
+        <Select
+          disabled={busy}
+          value={String(scheduleMinutes)}
+          onValueChange={(value) => {
+            setScheduleMinutes(Number(value) as ScheduleMinutes);
+            onDraftChange(true);
+          }}
+        >
+          <SelectTrigger id="mcp-collection-schedule">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {intervals.map((minutes) => (
+              <SelectItem key={minutes} value={String(minutes)}>
+                {t('every.minutes', { minutes })}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="field">
+        <Label htmlFor="mcp-collection-timezone">{t('timezone')}</Label>
+        <Input
+          disabled={busy}
+          id="mcp-collection-timezone"
+          value={timezone}
+          onChange={(event) => {
+            setTimezone(event.target.value);
+            onDraftChange(true);
+          }}
+          maxLength={64}
+        />
+      </div>
+    </FieldGrid>
+  );
+}
+
+/** Connection select; switching connection clears the selected grants (they belong to the previous connection) and marks the draft dirty. */
+function ConnectionSelect({ draft, busy, onDraftChange }: { draft: Draft; busy: boolean; onDraftChange: (dirty: boolean) => void }) {
+  const t = useTranslations('sources');
+  const { connections, connectionId, setConnectionId, setGrantIds } = draft;
+  return (
+    <div className="field">
+      <Label htmlFor="mcp-collection-connection">{t('mcp.connection')}</Label>
+      <Select
+        disabled={busy}
+        value={connectionId}
+        onValueChange={(value) => {
+          setConnectionId(value);
+          setGrantIds([]);
+          onDraftChange(true);
+        }}
+      >
+        <SelectTrigger id="mcp-collection-connection">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {connections.map((item) => (
+            <SelectItem key={item.id} value={item.id}>
+              {item.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** Alert shown after a 409: the draft is stale, and the only way forward is a full reload of the current source settings. */
+function StaleConflictNotice({ busy }: { busy: boolean }) {
+  const t = useTranslations('sources');
+  return (
+    <div role="alert">
+      <p className="error">{t('mcp.collectionStaleConflict')}</p>
+      <Button variant="outline" disabled={busy} onClick={() => window.location.reload()}>
+        {t('mcp.collectionReload')}
+      </Button>
+    </div>
+  );
+}
+
+/** Generic save error line (invalid arguments JSON or save failure); the stale-conflict state has its own notice. */
+function CollectionError({ error }: { error: Exclude<ActionError, '' | 'staleConflict'> }) {
+  const t = useTranslations('sources');
+  return (
+    <p className="error" role="alert">
+      {t(error === 'argumentsInvalid' ? 'mcp.argumentsInvalid' : 'mcp.collectionSaveFailed')}
+    </p>
+  );
 }
 
 /** Owner editor for selecting source-scoped reviewed MCP grants and activating their bounded schedule. */
-export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraftChange }: { sourceId: string; sourceStatus: string; onChanged: () => void; onDraftChange: (dirty: boolean) => void }) {
+export function McpCollectionEditor({
+  sourceId,
+  sourceStatus,
+  onChanged,
+  onDraftChange,
+}: {
+  sourceId: string;
+  sourceStatus: string;
+  onChanged: () => void;
+  onDraftChange: (dirty: boolean) => void;
+}) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const draft = useMcpCollectionDraft(sourceId);
-  const { connections, connectionId, setConnectionId, grantIds, setGrantIds, generation, setGeneration } = draft;
+  const { connections, connectionId, grantIds, generation, setGeneration } = draft;
   const [busy, setBusy] = useState(false);
   const [actionError, setError] = useState<ActionError>('');
   const error = actionError || (draft.loadFailed ? 'saveFailed' : '');
@@ -142,11 +317,22 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
   async function save(activate: boolean) {
     if (busy || !connectionId || !grantIds.length || sourceStatus !== 'active') return;
     let calls: McpCollectionConfig['calls'];
-    try { calls = parseCalls(grantIds, draft.argumentsByGrant); }
-    catch { setError('argumentsInvalid'); return; }
-    setBusy(true); setError(''); draft.acknowledgeLoadErrors();
     try {
-      const config = { connection_id: connectionId, calls, schedule_interval_minutes: draft.scheduleMinutes, timezone: draft.timezone } as const;
+      calls = parseCalls(grantIds, draft.argumentsByGrant);
+    } catch {
+      setError('argumentsInvalid');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    draft.acknowledgeLoadErrors();
+    try {
+      const config = {
+        connection_id: connectionId,
+        calls,
+        schedule_interval_minutes: draft.scheduleMinutes,
+        timezone: draft.timezone,
+      } as const;
       let saved: Awaited<ReturnType<typeof saveMcpCollection>>;
       try {
         saved = await saveMcpCollection(sourceId, generation, config, csrfToken);
@@ -160,31 +346,54 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
       onChanged();
     } catch {
       setError('saveFailed');
-    } finally { setBusy(false); }
-  }
-
-  /** Discard this stale draft and reload the current source settings before editing again. */
-  function reloadConflict() {
-    window.location.reload();
+    } finally {
+      setBusy(false);
+    }
   }
 
   /** Resumes a paused source (status -> active) and reports the change. */
   async function resume() {
-    setBusy(true); setError(''); draft.acknowledgeLoadErrors();
-    try { await updateSourceStatus(sourceId, 'active', csrfToken); onChanged(); }
-    catch { setError('saveFailed'); }
-    finally { setBusy(false); }
+    setBusy(true);
+    setError('');
+    draft.acknowledgeLoadErrors();
+    try {
+      await updateSourceStatus(sourceId, 'active', csrfToken);
+      onChanged();
+    } catch {
+      setError('saveFailed');
+    } finally {
+      setBusy(false);
+    }
   }
 
-  return <SettingsSection title={t('mcp.collectionTitle')} description={t('mcp.collectionHelp')}>
-    {draft.loading ? <p className="text-muted-foreground">{t('loading')}</p> : connections.length === 0 ? <p className="error">{t('mcp.noConnection')}</p> : <>
-      <div className="field"><Label htmlFor="mcp-collection-connection">{t('mcp.connection')}</Label><Select disabled={busy} value={connectionId} onValueChange={(value) => { setConnectionId(value); setGrantIds([]); onDraftChange(true); }}><SelectTrigger id="mcp-collection-connection"><SelectValue /></SelectTrigger><SelectContent>{connections.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
-      <GrantChecklist draft={draft} busy={busy} onDraftChange={onDraftChange} />
-      <ScheduleFields draft={draft} busy={busy} onDraftChange={onDraftChange} />
-      {sourceStatus === 'paused' && <Button variant="outline" disabled={busy} onClick={resume}>{t('resume')}</Button>}
-      {error === 'staleConflict' && <div role="alert"><p className="error">{t('mcp.collectionStaleConflict')}</p><Button variant="outline" disabled={busy} onClick={reloadConflict}>{t('mcp.collectionReload')}</Button></div>}
-      <SettingsActions><Button variant="outline" disabled={saveBlocked} onClick={() => void save(false)}>{busy ? t('saving') : t('save')}</Button><Button disabled={saveBlocked} onClick={() => void save(true)}>{busy ? t('enabling') : t('saveEnable')}</Button></SettingsActions>
-    </>}
-    {error && error !== 'staleConflict' && <p className="error" role="alert">{t(error === 'argumentsInvalid' ? 'mcp.argumentsInvalid' : 'mcp.collectionSaveFailed')}</p>}
-  </SettingsSection>;
+  return (
+    <SettingsSection title={t('mcp.collectionTitle')} description={t('mcp.collectionHelp')}>
+      {draft.loading ? (
+        <p className="text-muted-foreground">{t('loading')}</p>
+      ) : connections.length === 0 ? (
+        <p className="error">{t('mcp.noConnection')}</p>
+      ) : (
+        <>
+          <ConnectionSelect draft={draft} busy={busy} onDraftChange={onDraftChange} />
+          <GrantChecklist draft={draft} busy={busy} onDraftChange={onDraftChange} />
+          <ScheduleFields draft={draft} busy={busy} onDraftChange={onDraftChange} />
+          {sourceStatus === 'paused' && (
+            <Button variant="outline" disabled={busy} onClick={resume}>
+              {t('resume')}
+            </Button>
+          )}
+          {error === 'staleConflict' && <StaleConflictNotice busy={busy} />}
+          <SettingsActions>
+            <Button variant="outline" disabled={saveBlocked} onClick={() => void save(false)}>
+              {busy ? t('saving') : t('save')}
+            </Button>
+            <Button disabled={saveBlocked} onClick={() => void save(true)}>
+              {busy ? t('enabling') : t('saveEnable')}
+            </Button>
+          </SettingsActions>
+        </>
+      )}
+      {error && error !== 'staleConflict' && <CollectionError error={error} />}
+    </SettingsSection>
+  );
 }

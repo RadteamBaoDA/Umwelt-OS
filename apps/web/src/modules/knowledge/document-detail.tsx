@@ -4,7 +4,17 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,7 +26,18 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
 import { DocumentShareButton } from './document-sharing';
 import { getSource } from '@/modules/sources';
-import { deleteDocument, documentDeletionKeys, downloadRawDocument, documentKeys, getCitationTarget, getDocument, getVersion, listVersions, updateContent, updateDocument } from './api';
+import {
+  deleteDocument,
+  documentDeletionKeys,
+  downloadRawDocument,
+  documentKeys,
+  getCitationTarget,
+  getDocument,
+  getVersion,
+  listVersions,
+  updateContent,
+  updateDocument,
+} from './api';
 import { useTranslations } from 'next-intl';
 import { DocumentDeletionReceiptPanel } from './document-deletion-receipt';
 import { BareButton } from '@/components/bare-button';
@@ -24,7 +45,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { useResetOnChange } from '@/modules/shared';
 
 /** Props of the document detail screen: the document id, cited version/chunk and any retained deletion operation. */
-type DocumentDetailProps = { id: string; citedVersion: number | null; citationVersionId?: string | null; citationChunkId?: string | null; deletionOperationId?: string | null };
+type DocumentDetailProps = {
+  id: string;
+  citedVersion: number | null;
+  citationVersionId?: string | null;
+  citationChunkId?: string | null;
+  deletionOperationId?: string | null;
+};
 
 /**
  * Loads and edits a document or renders its independent deletion receipt. Citation IDs select
@@ -40,43 +67,129 @@ export function DocumentDetail(props: DocumentDetailProps) {
   // Render the retained receipt before deleted-document pending or 404 branches can replace this route.
   if (visibleDeletionOperationId) return <DocumentDeletionReceiptPanel operationId={visibleDeletionOperationId} />;
   if (document.isPending) return <div className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading.document')} />;
-  if (document.isError) return <section className="rounded-lg border bg-card p-6"><h1>{t('unavailable')}</h1><p className="error" role="alert">{t(apiFailureKey(document.error) ?? 'load.failed')}</p><Button variant="outline" onClick={() => document.refetch()}>{t('retry')}</Button></section>;
+  if (document.isError)
+    return (
+      <section className="rounded-lg border bg-card p-6">
+        <h1>{t('unavailable')}</h1>
+        <p className="error" role="alert">
+          {t(apiFailureKey(document.error) ?? 'load.failed')}
+        </p>
+        <Button variant="outline" onClick={() => document.refetch()}>
+          {t('retry')}
+        </Button>
+      </section>
+    );
 
   const doc = document.data;
   const vm: DocumentDetailVm = { ...s1, doc };
-  return <section className="rounded-lg border bg-card p-6"><Link href="/knowledge/documents">{t('back')}</Link>
-<DocumentHeader vm={vm} />
+  return (
+    <section className="rounded-lg border bg-card p-6">
+      <Link href="/knowledge/documents">{t('back')}</Link>
+      <DocumentHeader vm={vm} />
 
-    {remove.error && <p className="error" role="alert">{t(apiFailureKey(remove.error) ?? 'delete.failed')}</p>}
-    {citationTarget.isError && <p className="error" role="alert">{t('citedUnavailable')}</p>}
-    {citationTarget.data && <section className="sub-panel" id="cited-chunk"><h2>{t('citedChunk', { version: citationTarget.data.version_number })}</h2><pre>{citationTarget.data.excerpt}</pre></section>}
-    <div className="detail-grid"><div>
-      
-<DocumentContentPanel vm={vm} />
-      
-<DocumentDetailsPanel vm={vm} />
+      {remove.error && (
+        <p className="error" role="alert">
+          {t(apiFailureKey(remove.error) ?? 'delete.failed')}
+        </p>
+      )}
+      {citationTarget.isError && (
+        <p className="error" role="alert">
+          {t('citedUnavailable')}
+        </p>
+      )}
+      {citationTarget.data && (
+        <section className="sub-panel" id="cited-chunk">
+          <h2>{t('citedChunk', { version: citationTarget.data.version_number })}</h2>
+          <pre>{citationTarget.data.excerpt}</pre>
+        </section>
+      )}
+      <div className="detail-grid">
+        <div>
+          <DocumentContentPanel vm={vm} />
 
-    </div>
-<DocumentVersionHistory vm={vm} />
-</div>
-  </section>;
+          <DocumentDetailsPanel vm={vm} />
+        </div>
+        <DocumentVersionHistory vm={vm} />
+      </div>
+    </section>
+  );
 }
 
-type DocumentDetailVm = ReturnType<typeof useDocumentDetailMutations> & { doc: NonNullable<ReturnType<typeof useDocumentDetailMutations>['document']['data']> };
+type DocumentDetailVm = ReturnType<typeof useDocumentDetailMutations> & {
+  doc: NonNullable<ReturnType<typeof useDocumentDetailMutations>['document']['data']>;
+};
 
 /** Title, source line, notes, original-download link and owner share/delete actions. */
 function DocumentHeader({ vm }: { vm: DocumentDetailVm }) {
   const { t, tSharing, display, source, downloadFailed, setDownloadFailed, id, isOwner, remove, doc } = vm;
   return (
-<>
-<div className="section-heading"><div><h1>{doc.title}</h1><p className="text-muted-foreground">{t('sourceLine', { source: source.data?.name ?? doc.source_id ?? '', version: doc.current_version, updated: formatDateTime(doc.updated_at, display.locale, display.timezone) })}</p>{Array.isArray(doc.metadata?.warnings) && doc.metadata.warnings.includes('parsed_text_truncated') && <p className="text-muted-foreground rounded-md border border-border p-3 text-sm" role="note">{t('parsedTextTruncated')}</p>}{(doc.raw_uri || doc.has_raw) && <Button type="button" variant="link" className="h-auto p-0" onClick={() => { setDownloadFailed(false); downloadRawDocument(doc.id, doc.title).catch(() => setDownloadFailed(true)); }}>{t('inspectOriginal')}</Button>}{downloadFailed && <p className="error" role="alert">{tSharing('downloadFailed')}</p>}</div>{isOwner && <div className="flex gap-2"><DocumentShareButton documentId={doc.id} currentVersion={doc.current_version} /><AlertDialog>
-        <AlertDialogTrigger asChild><Button variant="outline" aria-disabled={remove.isPending} onClick={(event) => { if (remove.isPending) event.preventDefault(); }}>{t('delete.document')}</Button></AlertDialogTrigger>
-        <AlertDialogContent>
-          <AlertDialogHeader><AlertDialogTitle>{t('delete.title', { title: doc.title })}</AlertDialogTitle><AlertDialogDescription>{t('delete.body')}</AlertDialogDescription></AlertDialogHeader>
-          <AlertDialogFooter><AlertDialogCancel>{t('cancel')}</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => remove.mutate(id)}>{t('delete.document')}</AlertDialogAction></AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog></div>}</div>
-</>
+    <>
+      <div className="section-heading">
+        <div>
+          <h1>{doc.title}</h1>
+          <p className="text-muted-foreground">
+            {t('sourceLine', {
+              source: source.data?.name ?? doc.source_id ?? '',
+              version: doc.current_version,
+              updated: formatDateTime(doc.updated_at, display.locale, display.timezone),
+            })}
+          </p>
+          {Array.isArray(doc.metadata?.warnings) && doc.metadata.warnings.includes('parsed_text_truncated') && (
+            <p className="text-muted-foreground rounded-md border border-border p-3 text-sm" role="note">
+              {t('parsedTextTruncated')}
+            </p>
+          )}
+          {(doc.raw_uri || doc.has_raw) && (
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto p-0"
+              onClick={() => {
+                setDownloadFailed(false);
+                downloadRawDocument(doc.id, doc.title).catch(() => setDownloadFailed(true));
+              }}
+            >
+              {t('inspectOriginal')}
+            </Button>
+          )}
+          {downloadFailed && (
+            <p className="error" role="alert">
+              {tSharing('downloadFailed')}
+            </p>
+          )}
+        </div>
+        {isOwner && (
+          <div className="flex gap-2">
+            <DocumentShareButton documentId={doc.id} currentVersion={doc.current_version} />
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  aria-disabled={remove.isPending}
+                  onClick={(event) => {
+                    if (remove.isPending) event.preventDefault();
+                  }}
+                >
+                  {t('delete.document')}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{t('delete.title', { title: doc.title })}</AlertDialogTitle>
+                  <AlertDialogDescription>{t('delete.body')}</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+                  <AlertDialogAction variant="destructive" onClick={() => remove.mutate(id)}>
+                    {t('delete.document')}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -84,14 +197,65 @@ function DocumentHeader({ vm }: { vm: DocumentDetailVm }) {
 function DocumentContentPanel({ vm }: { vm: DocumentDetailVm }) {
   const { t, document, current, content, setContent, expectedVersion, setExpectedVersion, isOwner, saveContent } = vm;
   return (
-<section className="sub-panel"><h2>{t('content')}</h2>{current.isPending && <p className="text-muted-foreground">{t('loading.content')}</p>}{current.isError && <p className="error" role="alert">{t('contentLoadFailed')} <Button variant="outline" onClick={() => current.refetch()}>{t('retry')}</Button></p>}
-        {current.data && <div className="saved-content"><h3>{t('savedVersion', { version: current.data.version_number })}</h3><pre>{current.data.content}</pre></div>}
-        {isOwner && content !== null && expectedVersion !== null && <form className="form" onSubmit={(event) => { event.preventDefault(); saveContent.mutate(); }}><div className="field"><Label htmlFor="content">{t('content')}</Label><Textarea id="content" className="input text-area min-h-[220px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]" value={content} onChange={(event) => setContent(event.target.value)} /></div>
-          {saveContent.error && <p className="error" role="alert">{saveContent.error instanceof ApiError && saveContent.error.status === 409 ? t('newerVersion') : t(apiFailureKey(saveContent.error) ?? 'save.contentFailed')}</p>}
-          {saveContent.error instanceof ApiError && saveContent.error.status === 409 && <Button type="button" variant="outline" onClick={async () => { const latest = await document.refetch(); if (latest.data) setExpectedVersion(latest.data.current_version); }}>{t('useLatest')}</Button>}
-          <Button type="submit" disabled={saveContent.isPending}>{t('save.content')}</Button></form>}
-      </section>
-
+    <section className="sub-panel">
+      <h2>{t('content')}</h2>
+      {current.isPending && <p className="text-muted-foreground">{t('loading.content')}</p>}
+      {current.isError && (
+        <p className="error" role="alert">
+          {t('contentLoadFailed')}{' '}
+          <Button variant="outline" onClick={() => current.refetch()}>
+            {t('retry')}
+          </Button>
+        </p>
+      )}
+      {current.data && (
+        <div className="saved-content">
+          <h3>{t('savedVersion', { version: current.data.version_number })}</h3>
+          <pre>{current.data.content}</pre>
+        </div>
+      )}
+      {isOwner && content !== null && expectedVersion !== null && (
+        <form
+          className="form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveContent.mutate();
+          }}
+        >
+          <div className="field">
+            <Label htmlFor="content">{t('content')}</Label>
+            <Textarea
+              id="content"
+              className="input text-area min-h-[220px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]"
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+            />
+          </div>
+          {saveContent.error && (
+            <p className="error" role="alert">
+              {saveContent.error instanceof ApiError && saveContent.error.status === 409
+                ? t('newerVersion')
+                : t(apiFailureKey(saveContent.error) ?? 'save.contentFailed')}
+            </p>
+          )}
+          {saveContent.error instanceof ApiError && saveContent.error.status === 409 && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                const latest = await document.refetch();
+                if (latest.data) setExpectedVersion(latest.data.current_version);
+              }}
+            >
+              {t('useLatest')}
+            </Button>
+          )}
+          <Button type="submit" disabled={saveContent.isPending}>
+            {t('save.content')}
+          </Button>
+        </form>
+      )}
+    </section>
   );
 }
 
@@ -99,8 +263,39 @@ function DocumentContentPanel({ vm }: { vm: DocumentDetailVm }) {
 function DocumentDetailsPanel({ vm }: { vm: DocumentDetailVm }) {
   const { t, title, setTitle, metadata, setMetadata, metadataError, isOwner, saveMetadata, submitMetadata } = vm;
   return (
-isOwner && <section className="sub-panel"><h2>{t('details')}</h2><form className="form" onSubmit={submitMetadata}><div className="field"><Label htmlFor="title">{t('titleLabel')}</Label><Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} /></div><div className="field"><Label htmlFor="metadata">{t('metadataLabel')}</Label><Textarea id="metadata" className="input text-area compact min-h-[100px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]" value={metadata ?? ''} onChange={(event) => setMetadata(event.target.value)} /></div>
-        {metadataError && <p className="error" role="alert">{t(metadataError)}</p>}{saveMetadata.error && <p className="error" role="alert">{t(apiFailureKey(saveMetadata.error) ?? 'save.detailsFailed')}</p>}<Button type="submit" disabled={saveMetadata.isPending}>{t('save.details')}</Button></form></section>
+    isOwner && (
+      <section className="sub-panel">
+        <h2>{t('details')}</h2>
+        <form className="form" onSubmit={submitMetadata}>
+          <div className="field">
+            <Label htmlFor="title">{t('titleLabel')}</Label>
+            <Input id="title" maxLength={500} value={title ?? ''} onChange={(event) => setTitle(event.target.value)} />
+          </div>
+          <div className="field">
+            <Label htmlFor="metadata">{t('metadataLabel')}</Label>
+            <Textarea
+              id="metadata"
+              className="input text-area compact min-h-[100px] field-sizing-fixed resize-y rounded-[6px] border-[color:var(--control)] bg-surface px-3 py-[7px] text-[length:inherit] md:text-[length:inherit] dark:bg-surface focus-visible:border-[color:var(--control)] focus-visible:ring-0 focus-visible:outline-3 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-[color-mix(in_srgb,var(--accent)_40%,transparent)]"
+              value={metadata ?? ''}
+              onChange={(event) => setMetadata(event.target.value)}
+            />
+          </div>
+          {metadataError && (
+            <p className="error" role="alert">
+              {t(metadataError)}
+            </p>
+          )}
+          {saveMetadata.error && (
+            <p className="error" role="alert">
+              {t(apiFailureKey(saveMetadata.error) ?? 'save.detailsFailed')}
+            </p>
+          )}
+          <Button type="submit" disabled={saveMetadata.isPending}>
+            {t('save.details')}
+          </Button>
+        </form>
+      </section>
+    )
   );
 }
 
@@ -108,12 +303,98 @@ isOwner && <section className="sub-panel"><h2>{t('details')}</h2><form className
 function DocumentVersionHistory({ vm }: { vm: DocumentDetailVm }) {
   const { t, display, versions, selected, selectedVersion, setSelectedVersion } = vm;
   return (
-<aside className="sub-panel"><h2>{t('version.history')}</h2>{versions.isPending && <p className="text-muted-foreground">{t('loading.versions')}</p>}{versions.isError && <p className="error" role="alert">{t('versionsLoadFailed')} <Button variant="outline" onClick={() => versions.refetch()}>{t('retry')}</Button></p>}
-      {versions.data && <ul className="version-list">{versions.data.pages.flatMap((page) => page.items).map((version) => <li key={version.id}><BareButton type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>{t('version.label', { version: version.version_number })}</BareButton><span className="text-muted-foreground">{formatDateTime(version.created_at, display.locale, display.timezone)}</span></li>)}</ul>}
-      {versions.hasNextPage && <Button variant="outline" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>{t('load.moreVersions')}</Button>}
-      {selectedVersion !== null && <div className="version-preview" id="cited-revision"><h3>{t('version.label', { version: selectedVersion })}</h3>{selected.isPending && <p className="text-muted-foreground">{t('loading.version')}</p>}{selected.isError && <p className="error" role="alert">{t('version.loadFailed')}</p>}{selected.data && <pre>{selected.data.content}</pre>}</div>}
+    <aside className="sub-panel">
+      <h2>{t('version.history')}</h2>
+      {versions.isPending && <p className="text-muted-foreground">{t('loading.versions')}</p>}
+      {versions.isError && (
+        <p className="error" role="alert">
+          {t('versionsLoadFailed')}{' '}
+          <Button variant="outline" onClick={() => versions.refetch()}>
+            {t('retry')}
+          </Button>
+        </p>
+      )}
+      {versions.data && (
+        <ul className="version-list">
+          {versions.data.pages
+            .flatMap((page) => page.items)
+            .map((version) => (
+              <li key={version.id}>
+                <BareButton type="button" className="text-button" onClick={() => setSelectedVersion(version.version_number)}>
+                  {t('version.label', { version: version.version_number })}
+                </BareButton>
+                <span className="text-muted-foreground">{formatDateTime(version.created_at, display.locale, display.timezone)}</span>
+              </li>
+            ))}
+        </ul>
+      )}
+      {versions.hasNextPage && (
+        <Button variant="outline" disabled={versions.isFetchingNextPage} onClick={() => versions.fetchNextPage()}>
+          {t('load.moreVersions')}
+        </Button>
+      )}
+      {selectedVersion !== null && (
+        <div className="version-preview" id="cited-revision">
+          <h3>{t('version.label', { version: selectedVersion })}</h3>
+          {selected.isPending && <p className="text-muted-foreground">{t('loading.version')}</p>}
+          {selected.isError && (
+            <p className="error" role="alert">
+              {t('version.loadFailed')}
+            </p>
+          )}
+          {selected.data && <pre>{selected.data.content}</pre>}
+        </div>
+      )}
     </aside>
   );
+}
+
+/**
+ * Holds the editable drafts (title, metadata JSON, content, expected version) and seeds them once from the first
+ * server copy; `null` means "not yet seeded". Seeding is skipped while a deletion operation is visible.
+ *
+ * @param documentData Loaded document, if any.
+ * @param currentData Loaded current version, if any.
+ * @param visibleDeletionOperationId Deletion operation id that gates seeding, or null.
+ * @returns Draft values and their setters, plus the metadata validation error key.
+ */
+function useDocumentDrafts(
+  documentData: { title: string; metadata?: unknown } | undefined,
+  currentData: { content: string; version_number: number } | undefined,
+  visibleDeletionOperationId: string | null,
+) {
+  const [title, setTitle] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState<string | null>(null);
+  const [content, setContent] = useState<string | null>(null);
+  const [expectedVersion, setExpectedVersion] = useState<number | null>(null);
+  const [metadataError, setMetadataError] = useState<'metadataNotObject' | 'enterTitle' | 'invalidMetadata' | ''>('');
+
+  // Seed the editable drafts once the first server copy arrives (null means "not yet seeded").
+  useResetOnChange([documentData, title, visibleDeletionOperationId], () => {
+    if (!visibleDeletionOperationId && documentData && title === null) {
+      setTitle(documentData.title);
+      setMetadata(JSON.stringify(documentData.metadata ?? {}, null, 2));
+    }
+  });
+  useResetOnChange([currentData, expectedVersion, visibleDeletionOperationId], () => {
+    if (!visibleDeletionOperationId && currentData && expectedVersion === null) {
+      setContent(currentData.content);
+      setExpectedVersion(currentData.version_number);
+    }
+  });
+
+  return {
+    title,
+    setTitle,
+    metadata,
+    setMetadata,
+    content,
+    setContent,
+    expectedVersion,
+    setExpectedVersion,
+    metadataError,
+    setMetadataError,
+  };
 }
 
 /** Loads the document, source, current/selected versions and cited chunk, and seeds the editable drafts once. */
@@ -130,48 +411,129 @@ function useDocumentDetailQueries(props: DocumentDetailProps) {
   const [acceptedOperation, setAcceptedOperation] = useState<{ documentId: string; operationId: string } | null>(null);
   const visibleDeletionOperationId = deletionOperationId ?? (acceptedOperation?.documentId === id ? acceptedOperation.operationId : null);
   const document = useQuery({ queryKey: documentKeys.detail(id), queryFn: () => getDocument(id), enabled: !visibleDeletionOperationId });
-  const source = useQuery({ queryKey: ['sources', document.data?.source_id], queryFn: () => getSource(document.data!.source_id), enabled: isOwner && !visibleDeletionOperationId && !!document.data });
-  const current = useQuery({ queryKey: [...documentKeys.versions(id), document.data?.current_version], queryFn: () => getVersion(id, document.data!.current_version), enabled: !visibleDeletionOperationId && !!document.data });
-  const versions = useInfiniteQuery({ queryKey: documentKeys.versions(id), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listVersions(id, pageParam), getNextPageParam: (last) => last.next_cursor ?? undefined, enabled: !visibleDeletionOperationId && !!document.data });
+  const source = useQuery({
+    queryKey: ['sources', document.data?.source_id],
+    queryFn: () => getSource(document.data!.source_id),
+    enabled: isOwner && !visibleDeletionOperationId && !!document.data,
+  });
+  const current = useQuery({
+    queryKey: [...documentKeys.versions(id), document.data?.current_version],
+    queryFn: () => getVersion(id, document.data!.current_version),
+    enabled: !visibleDeletionOperationId && !!document.data,
+  });
+  const versions = useInfiniteQuery({
+    queryKey: documentKeys.versions(id),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listVersions(id, pageParam),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled: !visibleDeletionOperationId && !!document.data,
+  });
   const citationTarget = useQuery({
     queryKey: ['documents', id, 'citation', citationVersionId, citationChunkId],
     queryFn: () => getCitationTarget(id, citationVersionId!, citationChunkId!),
     enabled: !visibleDeletionOperationId && Boolean(citationVersionId && citationChunkId),
   });
   const [selectedVersion, setSelectedVersion] = useState<number | null>(citedVersion);
-  useResetOnChange([citedVersion], () => { setSelectedVersion(citedVersion); });
-  useResetOnChange([citationTarget.data], () => { if (citationTarget.data) setSelectedVersion(citationTarget.data.version_number); });
+  useResetOnChange([citedVersion], () => {
+    setSelectedVersion(citedVersion);
+  });
+  useResetOnChange([citationTarget.data], () => {
+    if (citationTarget.data) setSelectedVersion(citationTarget.data.version_number);
+  });
   useEffect(() => {
     if (citationTarget.data) window.document.getElementById('cited-chunk')?.scrollIntoView({ block: 'center' });
   }, [citationTarget.data]);
-  const selected = useQuery({ queryKey: [...documentKeys.versions(id), selectedVersion], queryFn: () => getVersion(id, selectedVersion!), enabled: !visibleDeletionOperationId && selectedVersion !== null });
-  const [title, setTitle] = useState<string | null>(null);
-  const [metadata, setMetadata] = useState<string | null>(null);
-  const [content, setContent] = useState<string | null>(null);
-  const [expectedVersion, setExpectedVersion] = useState<number | null>(null);
-  const [metadataError, setMetadataError] = useState<'metadataNotObject' | 'enterTitle' | 'invalidMetadata' | ''>('');
-
-  // Seed the editable drafts once the first server copy arrives (null means "not yet seeded").
-  useResetOnChange([document.data, title, visibleDeletionOperationId], () => {
-    if (!visibleDeletionOperationId && document.data && title === null) { setTitle(document.data.title); setMetadata(JSON.stringify(document.data.metadata ?? {}, null, 2)); }
+  const selected = useQuery({
+    queryKey: [...documentKeys.versions(id), selectedVersion],
+    queryFn: () => getVersion(id, selectedVersion!),
+    enabled: !visibleDeletionOperationId && selectedVersion !== null,
   });
-  useResetOnChange([current.data, expectedVersion, visibleDeletionOperationId], () => {
-    if (!visibleDeletionOperationId && current.data && expectedVersion === null) { setContent(current.data.content); setExpectedVersion(current.data.version_number); }
-  });
+  const {
+    title,
+    setTitle,
+    metadata,
+    setMetadata,
+    content,
+    setContent,
+    expectedVersion,
+    setExpectedVersion,
+    metadataError,
+    setMetadataError,
+  } = useDocumentDrafts(document.data, current.data, visibleDeletionOperationId);
 
-  return { t, tSharing, display, queryClient, router, visibleDeletionOperationId, document, source, current, versions, citationTarget, selected, downloadFailed, setDownloadFailed, acceptedOperation, setAcceptedOperation, selectedVersion, setSelectedVersion, title, setTitle, metadata, setMetadata, content, setContent, expectedVersion, setExpectedVersion, metadataError, setMetadataError, id, citedVersion, citationVersionId, citationChunkId, deletionOperationId, csrfToken, isOwner };
+  return {
+    t,
+    tSharing,
+    display,
+    queryClient,
+    router,
+    visibleDeletionOperationId,
+    document,
+    source,
+    current,
+    versions,
+    citationTarget,
+    selected,
+    downloadFailed,
+    setDownloadFailed,
+    acceptedOperation,
+    setAcceptedOperation,
+    selectedVersion,
+    setSelectedVersion,
+    title,
+    setTitle,
+    metadata,
+    setMetadata,
+    content,
+    setContent,
+    expectedVersion,
+    setExpectedVersion,
+    metadataError,
+    setMetadataError,
+    id,
+    citedVersion,
+    citationVersionId,
+    citationChunkId,
+    deletionOperationId,
+    csrfToken,
+    isOwner,
+  };
 }
 
 /** Declares metadata/content save and delete mutations (delete gates content queries before cancelling them) and the metadata submit handler. */
 function useDocumentDetailMutations(p: ReturnType<typeof useDocumentDetailQueries>) {
-  const { queryClient, router, setAcceptedOperation, setSelectedVersion, title, setTitle, metadata, setMetadata, content, setContent, expectedVersion, setExpectedVersion, setMetadataError, id, csrfToken } = p;
+  const {
+    queryClient,
+    router,
+    setAcceptedOperation,
+    setSelectedVersion,
+    title,
+    setTitle,
+    metadata,
+    setMetadata,
+    content,
+    setContent,
+    expectedVersion,
+    setExpectedVersion,
+    setMetadataError,
+    id,
+    csrfToken,
+  } = p;
   const saveMetadata = useMutation({
     mutationFn: (value: { title: string; metadata: Record<string, unknown> }) => updateDocument(id, value, csrfToken),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: documentKeys.all }); queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) }); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.all });
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) });
+    },
   });
   const saveContent = useMutation({
     mutationFn: () => updateContent(id, content ?? '', expectedVersion!, csrfToken),
-    onSuccess: (updated) => { setExpectedVersion(updated.current_version); queryClient.invalidateQueries({ queryKey: documentKeys.all }); queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) }); queryClient.invalidateQueries({ queryKey: documentKeys.versions(id) }); },
+    onSuccess: (updated) => {
+      setExpectedVersion(updated.current_version);
+      queryClient.invalidateQueries({ queryKey: documentKeys.all });
+      queryClient.invalidateQueries({ queryKey: documentKeys.detail(id) });
+      queryClient.invalidateQueries({ queryKey: documentKeys.versions(id) });
+    },
   });
   const remove = useMutation({
     mutationFn: (documentId: string) => deleteDocument(documentId, csrfToken),
@@ -200,7 +562,13 @@ function useDocumentDetailMutations(p: ReturnType<typeof useDocumentDetailQuerie
       if (!title?.trim()) throw new Error('enterTitle');
       setMetadataError('');
       saveMetadata.mutate({ title: title.trim(), metadata: value as Record<string, unknown> });
-    } catch (error) { setMetadataError(error instanceof Error && (error.message === 'metadataNotObject' || error.message === 'enterTitle') ? error.message : 'invalidMetadata'); }
+    } catch (error) {
+      setMetadataError(
+        error instanceof Error && (error.message === 'metadataNotObject' || error.message === 'enterTitle')
+          ? error.message
+          : 'invalidMetadata',
+      );
+    }
   }
 
   return { ...p, saveMetadata, saveContent, remove, submitMetadata };

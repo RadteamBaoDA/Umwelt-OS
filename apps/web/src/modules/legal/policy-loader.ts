@@ -15,8 +15,7 @@ const policyFiles = {
 
 /** Resolves the canonical policy directory for a web-workspace or standalone-root process. */
 export function policyRoot(cwd: string): string {
-  const root = path.basename(cwd) === 'web' && path.basename(path.dirname(cwd)) === 'apps'
-    ? path.resolve(cwd, '../..') : cwd;
+  const root = path.basename(cwd) === 'web' && path.basename(path.dirname(cwd)) === 'apps' ? path.resolve(cwd, '../..') : cwd;
   return path.resolve(root, 'docs/legal');
 }
 
@@ -28,8 +27,12 @@ function isKnownDocument(name: PolicyName | 'inventory', locale: LegalLocale): b
 
 /** Slugifies heading text into a unicode-preserving anchor base (NFC, lowercase, punctuation stripped, dashes). */
 function headingSlug(text: string): string {
-  return text.normalize('NFC').toLowerCase()
-    .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s+/g, '-');
+  return text
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .trim()
+    .replace(/\s+/g, '-');
 }
 
 /** Assigns unique, stable `id`s to every heading token; repeated slugs get `-1`, `-2`, ... suffixes. */

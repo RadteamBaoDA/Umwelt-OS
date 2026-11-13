@@ -1,6 +1,16 @@
 import type { DataShape } from '@/core/data-shapes';
 
-const SHAPES: readonly DataShape[] = ['news', 'measurement', 'event', 'located', 'messages', 'video', 'project_activity', 'weather', 'series'];
+const SHAPES: readonly DataShape[] = [
+  'news',
+  'measurement',
+  'event',
+  'located',
+  'messages',
+  'video',
+  'project_activity',
+  'weather',
+  'series',
+];
 
 /**
  * Reads the `?shapes=a,b&for=<renderer id>` filter that dashboard tiles link to (see `sourcesLinkFor`).

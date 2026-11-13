@@ -5,15 +5,113 @@ import { formatDateTime } from '@/core/i18n';
 import type { AppLocaleId } from '@/core/i18n';
 import type { TimelineEvent } from './api';
 
+/** Four distinct timestamps: occurred (precomputed by the caller), observed, recorded and the validity window with open ends. */
+function EventTimes({
+  event,
+  occurred,
+  locale,
+  timezone,
+}: {
+  event: TimelineEvent;
+  occurred: string;
+  locale: AppLocaleId;
+  timezone: string;
+}) {
+  const t = useTranslations('timeline');
+  return (
+    <dl className="timeline-times">
+      <div>
+        <dt>{t('occurred')}</dt>
+        <dd>{occurred}</dd>
+      </div>
+      <div>
+        <dt>{t('observed')}</dt>
+        <dd>{formatDateTime(event.observed_at, locale, timezone)}</dd>
+      </div>
+      <div>
+        <dt>{t('recorded')}</dt>
+        <dd>{formatDateTime(event.created_at, locale, timezone)}</dd>
+      </div>
+      <div>
+        <dt>{t('validity')}</dt>
+        <dd>
+          {event.valid_from ? formatDateTime(event.valid_from, locale, timezone) : t('openStart')} –{' '}
+          {event.valid_to ? formatDateTime(event.valid_to, locale, timezone) : t('openEnd')}
+        </dd>
+      </div>
+    </dl>
+  );
+}
+
+/** Participant list linking each entity (by display name when known) with its role. */
+function EventParticipants({ event, entityNames }: { event: TimelineEvent; entityNames: ReadonlyMap<string, string> }) {
+  const t = useTranslations('timeline');
+  return (
+    <section aria-label={t('participants')}>
+      <h3>{t('participants')}</h3>
+      <ul className="flex flex-col gap-3">
+        {event.participants.map((participant) => (
+          <li key={`${participant.entity_id}:${participant.role}`}>
+            <Link href={`/knowledge/entities/${participant.entity_id}`}>
+              {entityNames.get(participant.entity_id) ?? participant.entity_id}
+            </Link>{' '}
+            · {participant.role}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Evidence list with cited-revision links, optional GitHub link for github_* events, snapshot-vs-current note, observation time and excerpt. */
+function EventEvidence({ event, locale, timezone }: { event: TimelineEvent; locale: AppLocaleId; timezone: string }) {
+  const t = useTranslations('timeline');
+  const gh = useTranslations('github');
+  return (
+    <section aria-label={t('evidence')}>
+      <h3>{t('evidence')}</h3>
+      <ul className="flex flex-col gap-3">
+        {event.evidence.map((evidence) => (
+          <li key={`${evidence.document_version_id}:${evidence.chunk_id}`}>
+            <Link href={`/knowledge/documents/${evidence.document_id}?version=${evidence.version_number}#cited-revision`}>
+              {evidence.title}
+            </Link>
+            {event.type.startsWith('github_') && evidence.canonical_url?.startsWith('https://github.com/') && (
+              <>
+                {' '}
+                ·{' '}
+                <a href={evidence.canonical_url} target="_blank" rel="noopener noreferrer">
+                  {gh('openOnGithub')}
+                </a>
+              </>
+            )}
+            <small className="text-muted-foreground">
+              {evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}
+            </small>
+            <p className="text-muted-foreground">
+              {t('evidenceObserved')} {formatDateTime(evidence.observed_at, locale, timezone)} · {t('sourceId')} {evidence.source_id}
+            </p>
+            <blockquote>{evidence.excerpt}</blockquote>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Renders distinct occurrence, observation, and validity timestamps with linked provenance. */
-export function EventDetail({ event, locale, timezone, entityNames }: {
+export function EventDetail({
+  event,
+  locale,
+  timezone,
+  entityNames,
+}: {
   event: TimelineEvent;
   locale: AppLocaleId;
   timezone: string;
   entityNames: ReadonlyMap<string, string>;
 }) {
   const t = useTranslations('timeline');
-  const gh = useTranslations('github');
   /** Formats date-only values as calendar dates without converting their day through a local zone. */
   function formatCalendarDate(value: string) {
     const [year, month, day] = value.split('-').map(Number);
@@ -28,7 +126,9 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
     if (event.date_precision === 'date' && event.occurred_date) {
       const observedDate = new Intl.DateTimeFormat('en-CA', {
         timeZone: event.occurrence_timezone ?? timezone,
-        year: 'numeric', month: '2-digit', day: '2-digit',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
       }).format(new Date(event.observed_at));
       return observedDate > event.occurred_date;
     }
@@ -44,22 +144,24 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
     if (event.end_date) occurred += ` – ${formatCalendarDate(event.end_date)}`;
   }
 
-  return <article className="rounded-lg border bg-card p-4 text-card-foreground flex flex-col gap-3" aria-labelledby={`event-${event.id}-title`}>
-    <div><p className="text-muted-foreground">{event.type}{event.subtype ? ` · ${event.subtype}` : ''} · {event.origin === 'derived' ? t('derived') : t('manual')}</p>
-      <h2 id={`event-${event.id}-title`}>{event.title}</h2>{event.summary && <p>{event.summary}</p>}</div>
-    <dl className="timeline-times">
-      <div><dt>{t('occurred')}</dt><dd>{occurred}</dd></div>
-      <div><dt>{t('observed')}</dt><dd>{formatDateTime(event.observed_at, locale, timezone)}</dd></div>
-      <div><dt>{t('recorded')}</dt><dd>{formatDateTime(event.created_at, locale, timezone)}</dd></div>
-      <div><dt>{t('validity')}</dt><dd>{event.valid_from ? formatDateTime(event.valid_from, locale, timezone) : t('openStart')} – {event.valid_to ? formatDateTime(event.valid_to, locale, timezone) : t('openEnd')}</dd></div>
-    </dl>
-    {isLateArrival() && <p className="text-muted-foreground" role="status">{t('lateArrival')}</p>}
-    {!!event.participants.length && <section aria-label={t('participants')}><h3>{t('participants')}</h3><ul className="flex flex-col gap-3">{event.participants.map((participant) => <li key={`${participant.entity_id}:${participant.role}`}><Link href={`/knowledge/entities/${participant.entity_id}`}>{entityNames.get(participant.entity_id) ?? participant.entity_id}</Link> · {participant.role}</li>)}</ul></section>}
-    {!!event.evidence.length && <section aria-label={t('evidence')}><h3>{t('evidence')}</h3><ul className="flex flex-col gap-3">{event.evidence.map((evidence) => <li key={`${evidence.document_version_id}:${evidence.chunk_id}`}>
-      <Link href={`/knowledge/documents/${evidence.document_id}?version=${evidence.version_number}#cited-revision`}>{evidence.title}</Link>
-      {event.type.startsWith('github_') && evidence.canonical_url?.startsWith('https://github.com/') && <> · <a href={evidence.canonical_url} target="_blank" rel="noopener noreferrer">{gh('openOnGithub')}</a></>}
-      <small className="text-muted-foreground">{evidence.metadata_is_version_snapshot ? t('metadataVersionSnapshot') : t('metadataCurrentFallback')}</small>
-      <p className="text-muted-foreground">{t('evidenceObserved')} {formatDateTime(evidence.observed_at, locale, timezone)} · {t('sourceId')} {evidence.source_id}</p><blockquote>{evidence.excerpt}</blockquote>
-    </li>)}</ul></section>}
-  </article>;
+  return (
+    <article className="rounded-lg border bg-card p-4 text-card-foreground flex flex-col gap-3" aria-labelledby={`event-${event.id}-title`}>
+      <div>
+        <p className="text-muted-foreground">
+          {event.type}
+          {event.subtype ? ` · ${event.subtype}` : ''} · {event.origin === 'derived' ? t('derived') : t('manual')}
+        </p>
+        <h2 id={`event-${event.id}-title`}>{event.title}</h2>
+        {event.summary && <p>{event.summary}</p>}
+      </div>
+      <EventTimes event={event} occurred={occurred} locale={locale} timezone={timezone} />
+      {isLateArrival() && (
+        <p className="text-muted-foreground" role="status">
+          {t('lateArrival')}
+        </p>
+      )}
+      {!!event.participants.length && <EventParticipants event={event} entityNames={entityNames} />}
+      {!!event.evidence.length && <EventEvidence event={event} locale={locale} timezone={timezone} />}
+    </article>
+  );
 }

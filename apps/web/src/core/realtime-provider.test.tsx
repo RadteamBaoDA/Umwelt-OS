@@ -15,7 +15,9 @@ class FakeEventSource {
   static instances: FakeEventSource[] = [];
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
-  constructor(readonly url: string) { FakeEventSource.instances.push(this); }
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
   addEventListener() {}
   close = vi.fn();
 }
@@ -23,15 +25,19 @@ class FakeEventSource {
 beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal('EventSource', FakeEventSource);
-  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-    const body = path === '/api/v1/auth/session'
-      ? { authenticated: true, csrfToken: 'csrf' }
-      : path === '/api/v1/realtime/snapshot'
-        ? { cursor: CURSOR, floor_sequence: '0' }
-        : null;
-    if (!body) throw new Error(`unexpected fetch ${path}`);
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      const body =
+        path === '/api/v1/auth/session'
+          ? { authenticated: true, csrfToken: 'csrf' }
+          : path === '/api/v1/realtime/snapshot'
+            ? { cursor: CURSOR, floor_sequence: '0' }
+            : null;
+      if (!body) throw new Error(`unexpected fetch ${path}`);
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }),
+  );
   configureWorkspace({ selectedId: () => 'ws-1', generation: () => 0, signal: () => new AbortController().signal });
 });
 
@@ -51,9 +57,7 @@ describe('RealtimeProvider', () => {
     );
 
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    expect(FakeEventSource.instances[0].url).toBe(
-      `/api/v1/realtime/events?cursor=${encodeURIComponent(CURSOR)}&workspace_id=ws-1`,
-    );
+    expect(FakeEventSource.instances[0].url).toBe(`/api/v1/realtime/events?cursor=${encodeURIComponent(CURSOR)}&workspace_id=ws-1`);
   });
 
   describe('open watchdog', () => {
@@ -62,7 +66,9 @@ describe('RealtimeProvider', () => {
       const Status = () => <div data-testid="status">{useRealtime().status}</div>;
       render(
         <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          <RealtimeProvider><Status /></RealtimeProvider>
+          <RealtimeProvider>
+            <Status />
+          </RealtimeProvider>
         </QueryClientProvider>,
       );
     };
@@ -74,10 +80,14 @@ describe('RealtimeProvider', () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       renderStatus();
       await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
       expect(screen.getByTestId('status').textContent).toBe('unavailable');
       expect(FakeEventSource.instances[0].close).toHaveBeenCalled();
-      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
       await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
       expect(snapshotFetches()).toBe(2);
     });
@@ -87,7 +97,9 @@ describe('RealtimeProvider', () => {
       renderStatus();
       await vi.waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
       act(() => FakeEventSource.instances[0].onopen?.());
-      await act(async () => { await vi.advanceTimersByTimeAsync(25_000); });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(25_000);
+      });
       expect(screen.getByTestId('status').textContent).toBe('connected');
       expect(FakeEventSource.instances).toHaveLength(1);
     });

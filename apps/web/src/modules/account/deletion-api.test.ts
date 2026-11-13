@@ -6,8 +6,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('account deletion acceptance', () => {
   it('recovers a committed deletion through the preissued receipt after a lost POST response', async () => {
     const state = { status: 'running', phase: 'external', error_code: null };
-    const fetcher = vi.fn().mockRejectedValueOnce(new TypeError('connection lost'))
-      .mockResolvedValueOnce(Response.json(state));
+    const fetcher = vi.fn().mockRejectedValueOnce(new TypeError('connection lost')).mockResolvedValueOnce(Response.json(state));
     vi.stubGlobal('fetch', fetcher);
     await expect(acceptAccountDeletion('password', 'csrf')).resolves.toEqual(state);
     expect(fetcher.mock.calls[1][0]).toBe('/api/v1/auth/account/deletion-status');
@@ -23,7 +22,9 @@ describe('account deletion acceptance', () => {
 
   it('recovers acceptance when headers arrive but the response body is lost', async () => {
     const state = { status: 'queued', phase: 'queued', error_code: null };
-    const fetcher = vi.fn().mockResolvedValueOnce({ ok: true, status: 202, json: () => Promise.reject(new TypeError('body lost')) })
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 202, json: () => Promise.reject(new TypeError('body lost')) })
       .mockResolvedValueOnce(Response.json(state));
     vi.stubGlobal('fetch', fetcher);
     await expect(acceptAccountDeletion('password', 'csrf')).resolves.toEqual(state);
@@ -34,7 +35,13 @@ describe('account deletion acceptance', () => {
     const unauthorized = vi.fn();
     window.addEventListener('umwelt:unauthorized', unauthorized);
     const state = { status: 'queued', phase: 'external', error_code: null };
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({}, { status: 401 })).mockResolvedValueOnce(Response.json(state)));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({}, { status: 401 }))
+        .mockResolvedValueOnce(Response.json(state)),
+    );
     await expect(acceptAccountDeletion('password', 'csrf')).resolves.toEqual(state);
     expect(unauthorized).not.toHaveBeenCalled();
     window.removeEventListener('umwelt:unauthorized', unauthorized);

@@ -3,23 +3,40 @@ import type { QueryClient } from '@tanstack/react-query';
 /** Wire envelope every replayable realtime event carries; unknown versions are rejected. */
 export type ReplayEnvelope = { schema_version: 1 };
 export type SourceEvent = ReplayEnvelope & {
-  source_id: string; generation: number; status: 'active' | 'paused' | 'archived';
-  connector_state?: string | null; operation_id?: string | null;
+  source_id: string;
+  generation: number;
+  status: 'active' | 'paused' | 'archived';
+  connector_state?: string | null;
+  operation_id?: string | null;
 };
 export type IngestionEvent = ReplayEnvelope & {
-  source_id: string; run_id: string; status: 'queued' | 'running' | 'retrying' | 'succeeded' | 'failed' | 'cancelled' | 'needs_ocr';
-  stage_key?: string | null; stage_status?: string | null;
+  source_id: string;
+  run_id: string;
+  status: 'queued' | 'running' | 'retrying' | 'succeeded' | 'failed' | 'cancelled' | 'needs_ocr';
+  stage_key?: string | null;
+  stage_status?: string | null;
 };
 export type KnowledgeEvent = ReplayEnvelope & {
-  scope?: 'source' | 'index' | 'graph' | 'timeline' | 'timeline_collection'; source_id?: string | null; document_id?: string | null; version?: number | null;
-  deleted: boolean; index_generation_id?: string | null;
-  entity_id?: string | null; relationship_id?: string | null;
-  event_id?: string | null; event_revision?: number | null;
+  scope?: 'source' | 'index' | 'graph' | 'timeline' | 'timeline_collection';
+  source_id?: string | null;
+  document_id?: string | null;
+  version?: number | null;
+  deleted: boolean;
+  index_generation_id?: string | null;
+  entity_id?: string | null;
+  relationship_id?: string | null;
+  event_id?: string | null;
+  event_revision?: number | null;
   index_status?: 'queued' | 'running' | 'active' | 'failed' | 'retired' | null;
-  indexed_items?: number | null; failed_items?: number | null;
+  indexed_items?: number | null;
+  failed_items?: number | null;
 };
 export type DashboardEvent = ReplayEnvelope & {
-  type: 'dashboard.changed'; scope: 'dashboard' | 'definition' | 'brief'; id: string; revision: number; deleted: boolean;
+  type: 'dashboard.changed';
+  scope: 'dashboard' | 'definition' | 'brief';
+  id: string;
+  revision: number;
+  deleted: boolean;
 };
 
 export const CURSOR_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(0|[1-9][0-9]{0,18})$/;
@@ -75,76 +92,124 @@ function uuidOrAbsent(value: string | null | undefined): boolean {
 
 const INDEX_FIELDS: Array<keyof KnowledgeEvent> = ['source_id', 'document_id', 'version', 'entity_id', 'relationship_id'];
 const GRAPH_FIELDS: Array<keyof KnowledgeEvent> = [
-  'source_id', 'document_id', 'version', 'index_generation_id', 'index_status', 'indexed_items', 'failed_items',
+  'source_id',
+  'document_id',
+  'version',
+  'index_generation_id',
+  'index_status',
+  'indexed_items',
+  'failed_items',
 ];
 const TIMELINE_FIELDS: Array<keyof KnowledgeEvent> = [
-  'source_id', 'document_id', 'version', 'entity_id', 'relationship_id',
-  'index_generation_id', 'index_status', 'indexed_items', 'failed_items',
+  'source_id',
+  'document_id',
+  'version',
+  'entity_id',
+  'relationship_id',
+  'index_generation_id',
+  'index_status',
+  'indexed_items',
+  'failed_items',
 ];
 const COLLECTION_FIELDS: Array<keyof KnowledgeEvent> = [
-  'document_id', 'version', 'relationship_id', 'event_id', 'event_revision',
-  'index_generation_id', 'index_status', 'indexed_items', 'failed_items',
+  'document_id',
+  'version',
+  'relationship_id',
+  'event_id',
+  'event_revision',
+  'index_generation_id',
+  'index_status',
+  'indexed_items',
+  'failed_items',
 ];
 const SOURCE_FIELDS: Array<keyof KnowledgeEvent> = [
-  'index_generation_id', 'index_status', 'indexed_items', 'failed_items',
-  'entity_id', 'relationship_id', 'event_id', 'event_revision',
+  'index_generation_id',
+  'index_status',
+  'indexed_items',
+  'failed_items',
+  'entity_id',
+  'relationship_id',
+  'event_id',
+  'event_revision',
 ];
 
 /** Strict shape check for `scope: "index"` events (search index generation progress). */
 export function validIndexEvent(value: KnowledgeEvent): boolean {
-  return Boolean(value.index_generation_id) && UUID_RE.test(value.index_generation_id as string)
-    && INDEX_STATUSES.includes(value.index_status ?? '')
-    && isCount(value.indexed_items) && isCount(value.failed_items)
-    && allUnset(value, INDEX_FIELDS) && value.deleted === false;
+  return (
+    Boolean(value.index_generation_id) &&
+    UUID_RE.test(value.index_generation_id as string) &&
+    INDEX_STATUSES.includes(value.index_status ?? '') &&
+    isCount(value.indexed_items) &&
+    isCount(value.failed_items) &&
+    allUnset(value, INDEX_FIELDS) &&
+    value.deleted === false
+  );
 }
 
 /** Strict shape check for `scope: "graph"` events: exactly one of entity/relationship id, no other scope fields. */
 export function validGraphEvent(value: KnowledgeEvent): boolean {
-  return (value.entity_id == null) !== (value.relationship_id == null)
-    && uuidOrAbsent(value.entity_id) && uuidOrAbsent(value.relationship_id)
-    && typeof value.deleted === 'boolean'
-    && allUnset(value, GRAPH_FIELDS);
+  return (
+    (value.entity_id == null) !== (value.relationship_id == null) &&
+    uuidOrAbsent(value.entity_id) &&
+    uuidOrAbsent(value.relationship_id) &&
+    typeof value.deleted === 'boolean' &&
+    allUnset(value, GRAPH_FIELDS)
+  );
 }
 
 /** Strict shape check for `scope: "timeline"` events (one event id with a positive revision). */
 export function validTimelineEvent(value: KnowledgeEvent): boolean {
-  return Boolean(value.event_id) && UUID_RE.test(value.event_id as string)
-    && Number.isSafeInteger(value.event_revision) && (value.event_revision ?? 0) >= 1
-    && allUnset(value, TIMELINE_FIELDS)
-    && typeof value.deleted === 'boolean';
+  return (
+    Boolean(value.event_id) &&
+    UUID_RE.test(value.event_id as string) &&
+    Number.isSafeInteger(value.event_revision) &&
+    (value.event_revision ?? 0) >= 1 &&
+    allUnset(value, TIMELINE_FIELDS) &&
+    typeof value.deleted === 'boolean'
+  );
 }
 
 /** Strict shape check for `scope: "timeline_collection"` events: exactly one of source/entity id, never deleted. */
 export function validTimelineCollectionEvent(value: KnowledgeEvent): boolean {
-  return (value.source_id == null) !== (value.entity_id == null)
-    && uuidOrAbsent(value.source_id) && uuidOrAbsent(value.entity_id)
-    && !value.deleted
-    && allUnset(value, COLLECTION_FIELDS);
+  return (
+    (value.source_id == null) !== (value.entity_id == null) &&
+    uuidOrAbsent(value.source_id) &&
+    uuidOrAbsent(value.entity_id) &&
+    !value.deleted &&
+    allUnset(value, COLLECTION_FIELDS)
+  );
 }
 
 /** Strict shape check for source-scoped (default) events carrying a source id and optional document id. */
 export function validSourceKnowledgeEvent(value: KnowledgeEvent): boolean {
-  return (value.scope === undefined || value.scope === 'source')
-    && Boolean(value.source_id) && UUID_RE.test(value.source_id as string)
-    && (!value.document_id || UUID_RE.test(value.document_id))
-    && allUnset(value, SOURCE_FIELDS)
-    && typeof value.deleted === 'boolean';
+  return (
+    (value.scope === undefined || value.scope === 'source') &&
+    Boolean(value.source_id) &&
+    UUID_RE.test(value.source_id as string) &&
+    (!value.document_id || UUID_RE.test(value.document_id)) &&
+    allUnset(value, SOURCE_FIELDS) &&
+    typeof value.deleted === 'boolean'
+  );
 }
 
 /** Strict shape check for the identifier-only dashboard change event; unknown keys are rejected. */
 export function validDashboardEvent(value: DashboardEvent | null): value is DashboardEvent {
-  return Boolean(value) && (value as DashboardEvent).type === 'dashboard.changed'
-    && Object.keys(value as DashboardEvent).every((key) => DASHBOARD_EVENT_KEYS.includes(key))
-    && ['dashboard', 'definition', 'brief'].includes((value as DashboardEvent).scope)
-    && typeof (value as DashboardEvent).id === 'string' && UUID_RE.test((value as DashboardEvent).id)
-    && Number.isSafeInteger((value as DashboardEvent).revision) && (value as DashboardEvent).revision >= 1
-    && typeof (value as DashboardEvent).deleted === 'boolean';
+  return (
+    Boolean(value) &&
+    (value as DashboardEvent).type === 'dashboard.changed' &&
+    Object.keys(value as DashboardEvent).every((key) => DASHBOARD_EVENT_KEYS.includes(key)) &&
+    ['dashboard', 'definition', 'brief'].includes((value as DashboardEvent).scope) &&
+    typeof (value as DashboardEvent).id === 'string' &&
+    UUID_RE.test((value as DashboardEvent).id) &&
+    Number.isSafeInteger((value as DashboardEvent).revision) &&
+    (value as DashboardEvent).revision >= 1 &&
+    typeof (value as DashboardEvent).deleted === 'boolean'
+  );
 }
 
 /** Validates the source change envelope's identifying fields. */
 export function validSourceEvent(value: SourceEvent | null): value is SourceEvent {
-  return Boolean(value) && UUID_RE.test((value as SourceEvent).source_id)
-    && Number.isSafeInteger((value as SourceEvent).generation);
+  return Boolean(value) && UUID_RE.test((value as SourceEvent).source_id) && Number.isSafeInteger((value as SourceEvent).generation);
 }
 
 /** Validates the ingestion run change envelope's identifying fields. */
@@ -234,9 +299,7 @@ function invalidateTimelineQueries(client: QueryClient): void {
 }
 
 /** Applies a validated source/document-scoped knowledge event; queues the document for the bounded refresh banner. */
-function applySourceKnowledgeChange(
-  client: QueryClient, value: KnowledgeEvent, queueDocumentUpdate: (id: string | null) => void,
-): void {
+function applySourceKnowledgeChange(client: QueryClient, value: KnowledgeEvent, queueDocumentUpdate: (id: string | null) => void): void {
   if (value.deleted) {
     // Deletion revokes the evidence behind cached measurements; reset clears it and refetches mounted consumers.
     void client.resetQueries({ queryKey: ['world-observations'] });
@@ -248,10 +311,7 @@ function applySourceKnowledgeChange(
   void client.resetQueries({ queryKey: ['intelligence-correlations'] });
   // Projection updates use source invalidations even before an entity exists.
   // Refetch canonical-backed status instead of treating the event as proof.
-  void Promise.all([
-    client.invalidateQueries({ queryKey: ['graph-status'] }),
-    client.invalidateQueries({ queryKey: ['entities'] }),
-  ]);
+  void Promise.all([client.invalidateQueries({ queryKey: ['graph-status'] }), client.invalidateQueries({ queryKey: ['entities'] })]);
   if (value.deleted) invalidateGraphQueries(client);
   queueDocumentUpdate(value.document_id ? value.document_id : null);
 }
@@ -261,7 +321,9 @@ function applySourceKnowledgeChange(
  * @returns false when the event violates its scope's strict shape, so the caller must resync from a snapshot.
  */
 export function applyKnowledgeChange(
-  client: QueryClient, value: KnowledgeEvent, queueDocumentUpdate: (id: string | null) => void,
+  client: QueryClient,
+  value: KnowledgeEvent,
+  queueDocumentUpdate: (id: string | null) => void,
 ): boolean {
   switch (value.scope) {
     case 'index':
@@ -289,20 +351,15 @@ export function applyKnowledgeChange(
 
 /** Invalidates the resource named by a validated dashboard event and its dependent query families. */
 export function applyDashboardChange(client: QueryClient, value: DashboardEvent): void {
-  const invalidations = value.scope === 'brief'
-    ? [
-      client.invalidateQueries({ queryKey: ['daily-context'] }),
-      client.invalidateQueries({ queryKey: ['notifications'] }),
-    ]
-    : value.scope === 'dashboard'
-    ? [
-      client.invalidateQueries({ queryKey: ['dashboards'] }),
-      client.invalidateQueries({ queryKey: ['dashboard', value.id] }),
-    ]
-    : [
-      client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
-      client.invalidateQueries({ queryKey: ['gadget-definition', value.id] }),
-      client.invalidateQueries({ queryKey: ['dashboard'] }),
-    ];
+  const invalidations =
+    value.scope === 'brief'
+      ? [client.invalidateQueries({ queryKey: ['daily-context'] }), client.invalidateQueries({ queryKey: ['notifications'] })]
+      : value.scope === 'dashboard'
+        ? [client.invalidateQueries({ queryKey: ['dashboards'] }), client.invalidateQueries({ queryKey: ['dashboard', value.id] })]
+        : [
+            client.invalidateQueries({ queryKey: ['gadget-definitions'] }),
+            client.invalidateQueries({ queryKey: ['gadget-definition', value.id] }),
+            client.invalidateQueries({ queryKey: ['dashboard'] }),
+          ];
   void Promise.all(invalidations);
 }

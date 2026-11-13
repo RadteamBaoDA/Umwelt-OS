@@ -13,7 +13,10 @@ describe('packPlacements', () => {
   });
   it('preserves input order and sizes, stays in columns', () => {
     expect(out.map((q) => q.instance_id)).toEqual(['b', 'a', 'c']);
-    out.forEach((q, i) => { expect([q.w, q.h]).toEqual([input[i].w, input[i].h]); expect(q.x + q.w).toBeLessThanOrEqual(20); });
+    out.forEach((q, i) => {
+      expect([q.w, q.h]).toEqual([input[i].w, input[i].h]);
+      expect(q.x + q.w).toBeLessThanOrEqual(20);
+    });
   });
   it('is idempotent', () => expect(packPlacements(out, 20)).toEqual(out));
 });

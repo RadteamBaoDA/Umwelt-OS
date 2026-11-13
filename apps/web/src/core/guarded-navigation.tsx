@@ -151,51 +151,60 @@ export function GuardedNavigationProvider({ children }: { children: ReactNode })
   }, [pathname]);
 
   /** Performs the accepted route transition, preserving full-page source-route behavior. */
-  const performNavigation = useCallback((href: string, mode: NavigationMode, acceptGuard: boolean) => {
-    const destination = new URL(href, window.location.href);
-    const leavesPage = destination.origin !== window.location.origin || destination.pathname !== pathname;
-    const guard = guardRef.current;
-    if (acceptGuard && leavesPage && !confirmLeaving(guard, destination, mode)) return false;
-    if (!acceptGuard) guard?.acceptLeave();
-    if (destination.origin !== window.location.origin) {
-      guard?.acceptLeave();
-      loadDocument(destination.href, mode);
-      return true;
-    }
+  const performNavigation = useCallback(
+    (href: string, mode: NavigationMode, acceptGuard: boolean) => {
+      const destination = new URL(href, window.location.href);
+      const leavesPage = destination.origin !== window.location.origin || destination.pathname !== pathname;
+      const guard = guardRef.current;
+      if (acceptGuard && leavesPage && !confirmLeaving(guard, destination, mode)) return false;
+      if (!acceptGuard) guard?.acceptLeave();
+      if (destination.origin !== window.location.origin) {
+        guard?.acceptLeave();
+        loadDocument(destination.href, mode);
+        return true;
+      }
 
-    const leavesSources = isSourcesPath(pathname) && destination.pathname !== pathname;
-    if (leavesSources) {
-      // Source editor state is route-owned, so a document navigation tears it down after guard acceptance.
-      guard?.acceptLeave();
-      window.location.assign(destination.href);
-      return true;
-    }
+      const leavesSources = isSourcesPath(pathname) && destination.pathname !== pathname;
+      if (leavesSources) {
+        // Source editor state is route-owned, so a document navigation tears it down after guard acceptance.
+        guard?.acceptLeave();
+        window.location.assign(destination.href);
+        return true;
+      }
 
-    if (isSourcesPath(destination.pathname)) {
-      loadDocument(destination.href, mode);
-      return true;
-    }
+      if (isSourcesPath(destination.pathname)) {
+        loadDocument(destination.href, mode);
+        return true;
+      }
 
-    const appHref = `${destination.pathname}${destination.search}${destination.hash}`;
-    if (mode === 'replace') router.replace(appHref);
-    else router.push(appHref);
-    return true;
-  }, [pathname, router]);
+      const appHref = `${destination.pathname}${destination.search}${destination.hash}`;
+      if (mode === 'replace') router.replace(appHref);
+      else router.push(appHref);
+      return true;
+    },
+    [pathname, router],
+  );
 
   /** Navigates through the normal leave confirmation flow. */
-  const navigate = useCallback((href: string, mode: NavigationMode = 'push') =>
-    performNavigation(href, mode, true), [performNavigation]);
+  const navigate = useCallback((href: string, mode: NavigationMode = 'push') => performNavigation(href, mode, true), [performNavigation]);
 
   /** Continues an exact intent after an owner has resolved its custom asynchronous leave prompt. */
-  const continueNavigation = useCallback((intent: GuardedNavigationIntent) => {
-    performNavigation(intent.href, intent.mode, false);
-  }, [performNavigation]);
+  const continueNavigation = useCallback(
+    (intent: GuardedNavigationIntent) => {
+      performNavigation(intent.href, intent.mode, false);
+    },
+    [performNavigation],
+  );
 
   useLinkInterception(guardRef, navigate);
 
-  return <GuardedNavigationContext.Provider value={{ registerLeaveGuard, navigate, continueNavigation, ensureSourcesDocument, ensureEntityDocument }}>
-    {children}
-  </GuardedNavigationContext.Provider>;
+  return (
+    <GuardedNavigationContext.Provider
+      value={{ registerLeaveGuard, navigate, continueNavigation, ensureSourcesDocument, ensureEntityDocument }}
+    >
+      {children}
+    </GuardedNavigationContext.Provider>
+  );
 }
 
 /** Returns the guarded-navigation context or throws when called outside its provider. */

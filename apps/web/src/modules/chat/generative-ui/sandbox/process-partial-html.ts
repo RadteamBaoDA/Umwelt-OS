@@ -113,10 +113,7 @@ export interface ProcessPartialHtmlOptions {
  * @param options - Optional configuration (e.g. `balanceTags`).
  * @returns Clean, morphable HTML string safe for sandboxed preview injection.
  */
-export function processPartialHtml(
-  rawHtml: string,
-  options: ProcessPartialHtmlOptions = {},
-): string {
+export function processPartialHtml(rawHtml: string, options: ProcessPartialHtmlOptions = {}): string {
   if (!rawHtml) return '';
 
   const { balanceTags = true } = options;
@@ -131,22 +128,13 @@ export function processPartialHtml(
   result = result.replace(/<link\b[^>]*>/gi, '');
 
   // 3. Strip complete disallowed/head blocks (<style>, <script>, <head>, <iframe>, <object>, <embed>).
-  result = result.replace(
-    /<(style|script|head|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1>/gi,
-    '',
-  );
+  result = result.replace(/<(style|script|head|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
 
   // 4. Strip unterminated disallowed/head blocks to the end of the input so partial source never leaks.
-  result = result.replace(
-    /<(style|script|head|iframe|object|embed)\b[^>]*>[\s\S]*$/gi,
-    '',
-  );
+  result = result.replace(/<(style|script|head|iframe|object|embed)\b[^>]*>[\s\S]*$/gi, '');
 
   // 5. Neutralize javascript: pseudo-protocol in href or src attributes.
-  result = result.replace(
-    /\b(href|src)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi,
-    '$1="#"',
-  );
+  result = result.replace(/\b(href|src)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*')/gi, '$1="#"');
 
   // 6. Strip incomplete trailing HTML entities (e.g. "&amp" or "&#12" without semicolon).
   result = result.replace(/&[a-zA-Z0-9#]*$/, '');

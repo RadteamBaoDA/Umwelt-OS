@@ -32,7 +32,12 @@ function Harness({ n }: { n: number }) {
   const p = usePagination(rows(n), 10);
   return <TablePagination {...p} />;
 }
-const mount = (n: number) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Harness n={n} /></NextIntlClientProvider>);
+const mount = (n: number) =>
+  render(
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <Harness n={n} />
+    </NextIntlClientProvider>,
+  );
 
 describe('TablePagination', () => {
   it('is hidden when total fits the smallest page size', () => {

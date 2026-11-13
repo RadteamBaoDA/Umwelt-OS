@@ -46,14 +46,18 @@ const FALLBACK_MINIMUM = { minW: 4, minH: 3 };
  * @param columns Total columns count.
  * @returns Valid free coordinates, or null when bounded space is exhausted or invalid.
  */
-export function findFreeCoordinates(
-  existing: DashboardPlacement[],
-  w: number,
-  h: number,
-  columns = 20,
-): { x: number; y: number } | null {
-  if (!Number.isInteger(columns) || columns < 1 || columns > 20
-    || !Number.isInteger(w) || !Number.isInteger(h) || w < 1 || w > columns || h < 1) return null;
+export function findFreeCoordinates(existing: DashboardPlacement[], w: number, h: number, columns = 20): { x: number; y: number } | null {
+  if (
+    !Number.isInteger(columns) ||
+    columns < 1 ||
+    columns > 20 ||
+    !Number.isInteger(w) ||
+    !Number.isInteger(h) ||
+    w < 1 ||
+    w > columns ||
+    h < 1
+  )
+    return null;
   let y = 0;
   while (y + h <= MAX_LAYOUT_ROWS) {
     for (let x = 0; x <= columns - w; x++) {
@@ -87,7 +91,12 @@ const FRAME_ZONE_WIDTHS: Record<LayoutFrame, readonly number[]> = {
 };
 
 /** A gadget slot chosen inside a frame zone. */
-export interface FrameSpot { x: number; y: number; w: number; h: number }
+export interface FrameSpot {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 /**
  * Picks the slot for a new gadget in a layout frame: the zone with the lowest current bottom (shortest column,
@@ -115,8 +124,8 @@ export function findFrameCoordinates(
   };
   if (frame === 'free' || columns !== 20) return fallback();
   const height = frame === 'board' ? BOARD_ROW_HEIGHT : h;
-  const fits = (spot: FrameSpot) => spot.y + spot.h <= MAX_LAYOUT_ROWS
-    && !existing.some((p) => doPlacementsOverlap({ instance_id: '', ...spot }, p));
+  const fits = (spot: FrameSpot) =>
+    spot.y + spot.h <= MAX_LAYOUT_ROWS && !existing.some((p) => doPlacementsOverlap({ instance_id: '', ...spot }, p));
   if (frame === 'hero_grid' && existing.length === 0) {
     const hero = { x: 0, y: 0, w: columns, h: height };
     return fits(hero) ? hero : fallback();
@@ -126,7 +135,10 @@ export function findFrameCoordinates(
   let bestBottom = Infinity;
   for (const w of FRAME_ZONE_WIDTHS[frame]) {
     const bottom = existing.reduce((max, p) => (p.x < x + w && p.x + p.w > x ? Math.max(max, p.y + p.h) : max), 0);
-    if (w >= minW && bottom < bestBottom) { best = { x, y: bottom, w, h: height }; bestBottom = bottom; }
+    if (w >= minW && bottom < bestBottom) {
+      best = { x, y: bottom, w, h: height };
+      bestBottom = bottom;
+    }
     x += w;
   }
   return best && fits(best) ? best : fallback();
@@ -155,11 +167,15 @@ export function packPlacements(placements: DashboardPlacement[], columns: number
 export function sameLayout(a: DashboardPlacement[], b: DashboardPlacement[]): boolean {
   if (a.length !== b.length) return false;
   const left = new Map(a.map((placement) => [placement.instance_id, placement]));
-  return left.size === b.length && b.every((placement) => {
-    const saved = left.get(placement.instance_id);
-    return saved !== undefined && saved.x === placement.x && saved.y === placement.y
-      && saved.w === placement.w && saved.h === placement.h;
-  });
+  return (
+    left.size === b.length &&
+    b.every((placement) => {
+      const saved = left.get(placement.instance_id);
+      return (
+        saved !== undefined && saved.x === placement.x && saved.y === placement.y && saved.w === placement.w && saved.h === placement.h
+      );
+    })
+  );
 }
 
 /** True when `columns` is a usable grid width (integer within 1..20). */
@@ -178,23 +194,20 @@ function ownsEveryInstance(placements: DashboardPlacement[], instances: GadgetIn
 }
 
 /** True when a rectangle has integer coordinates inside the bounded canvas and meets the renderer minimum. */
-function rectWithinBounds(
-  placement: DashboardPlacement,
-  minimum: { minW: number; minH: number },
-  columns: number,
-): boolean {
-  return [placement.x, placement.y, placement.w, placement.h].every(Number.isInteger)
-    && placement.x >= 0 && placement.y >= 0 && placement.w >= minimum.minW
-    && placement.h >= minimum.minH && placement.x + placement.w <= columns
-    && placement.y + placement.h <= MAX_LAYOUT_ROWS;
+function rectWithinBounds(placement: DashboardPlacement, minimum: { minW: number; minH: number }, columns: number): boolean {
+  return (
+    [placement.x, placement.y, placement.w, placement.h].every(Number.isInteger) &&
+    placement.x >= 0 &&
+    placement.y >= 0 &&
+    placement.w >= minimum.minW &&
+    placement.h >= minimum.minH &&
+    placement.x + placement.w <= columns &&
+    placement.y + placement.h <= MAX_LAYOUT_ROWS
+  );
 }
 
 /** Validates a complete owner snapshot before it enters history or reaches the Save mutation. */
-export function isValidLayoutSnapshot(
-  placements: DashboardPlacement[],
-  instances: GadgetInstance[],
-  columns: number,
-): boolean {
+export function isValidLayoutSnapshot(placements: DashboardPlacement[], instances: GadgetInstance[], columns: number): boolean {
   if (!validColumns(columns) || placements.length !== instances.length) return false;
   const instancesById = new Map(instances.map((instance) => [instance.id, instance]));
   if (instancesById.size !== instances.length || !ownsEveryInstance(placements, instances)) return false;
@@ -202,9 +215,12 @@ export function isValidLayoutSnapshot(
     const instance = instancesById.get(placement.instance_id);
     if (!instance) return false;
     const minimum = RENDERER_MIN_SIZES[instance.definition.renderer] ?? FALLBACK_MINIMUM;
-    return rectWithinBounds(placement, minimum, columns)
-      && !placements.slice(index + 1).some((other) =>
-        instancesById.get(other.instance_id)?.group_id === instance.group_id && doPlacementsOverlap(placement, other));
+    return (
+      rectWithinBounds(placement, minimum, columns) &&
+      !placements
+        .slice(index + 1)
+        .some((other) => instancesById.get(other.instance_id)?.group_id === instance.group_id && doPlacementsOverlap(placement, other))
+    );
   });
 }
 
@@ -216,22 +232,15 @@ function compareCoordinate(left: number, right: number): number {
 }
 
 /** Clamps one malformed mobile rectangle to the nearest valid x/w/h/y without resolving overlaps. */
-function repairRect(
-  source: DashboardPlacement,
-  minimum: { minW: number; minH: number },
-  columns: number,
-): DashboardPlacement {
+function repairRect(source: DashboardPlacement, minimum: { minW: number; minH: number }, columns: number): DashboardPlacement {
   const xValid = Number.isInteger(source.x) && source.x >= 0;
-  const wValid = Number.isInteger(source.w) && source.w >= minimum.minW
-    && source.w <= 20 && xValid && source.x + source.w <= columns;
+  const wValid = Number.isInteger(source.w) && source.w >= minimum.minW && source.w <= 20 && xValid && source.x + source.w <= columns;
   return {
     ...source,
     x: wValid ? source.x : 0,
     w: wValid ? source.w : minimum.minW,
-    h: Number.isInteger(source.h) && source.h >= minimum.minH && source.h <= MAX_LAYOUT_ROWS
-      ? source.h : minimum.minH,
-    y: Number.isInteger(source.y) && source.y >= 0 && source.y <= MAX_LAYOUT_ROWS
-      ? source.y : 0,
+    h: Number.isInteger(source.h) && source.h >= minimum.minH && source.h <= MAX_LAYOUT_ROWS ? source.h : minimum.minH,
+    y: Number.isInteger(source.y) && source.y >= 0 && source.y <= MAX_LAYOUT_ROWS ? source.y : 0,
   };
 }
 
@@ -256,8 +265,9 @@ function repairAll(
   minimumSizes: Map<string, { minW: number; minH: number }>,
   columns: number,
 ): DashboardPlacement[] | null {
-  const ordered = [...placements].sort((a, b) => compareCoordinate(a.y, b.y)
-    || compareCoordinate(a.x, b.x) || a.instance_id.localeCompare(b.instance_id));
+  const ordered = [...placements].sort(
+    (a, b) => compareCoordinate(a.y, b.y) || compareCoordinate(a.x, b.x) || a.instance_id.localeCompare(b.instance_id),
+  );
   const repaired: DashboardPlacement[] = [];
   for (const source of ordered) {
     const minimum = minimumSizes.get(source.instance_id);
@@ -280,23 +290,16 @@ function repairAll(
  * @param columns Stored mobile column count.
  * @returns Valid recovered placements, unchanged valid placements, or an unavailable result.
  */
-export function projectMobilePlacements(
-  placements: DashboardPlacement[],
-  instances: GadgetInstance[],
-  columns: number,
-): MobileProjection {
-  const minimumSizes = new Map(instances.map((instance) => [
-    instance.id,
-    RENDERER_MIN_SIZES[instance.definition.renderer] ?? FALLBACK_MINIMUM,
-  ]));
+export function projectMobilePlacements(placements: DashboardPlacement[], instances: GadgetInstance[], columns: number): MobileProjection {
+  const minimumSizes = new Map(
+    instances.map((instance) => [instance.id, RENDERER_MIN_SIZES[instance.definition.renderer] ?? FALLBACK_MINIMUM]),
+  );
   /** Marks mobile projection as unavailable when ownership or bounded geometry is invalid. */
   const unavailable = (): MobileProjection => ({ placements: [], unavailable: true });
   if (!validColumns(columns) || [...minimumSizes.values()].some(({ minW }) => minW > columns)) return unavailable();
   if (!ownsEveryInstance(placements, instances)) return unavailable();
 
-  const minimumRows = placements.reduce(
-    (total, placement) => total + (minimumSizes.get(placement.instance_id)?.minH ?? 3), 0,
-  );
+  const minimumRows = placements.reduce((total, placement) => total + (minimumSizes.get(placement.instance_id)?.minH ?? 3), 0);
   if (minimumRows > MAX_LAYOUT_ROWS) return unavailable();
   const validGeometry = (placement: DashboardPlacement) => {
     const minimum = minimumSizes.get(placement.instance_id);
@@ -304,14 +307,23 @@ export function projectMobilePlacements(
   };
   const groupsById = new Map(instances.map((instance) => [instance.id, instance.group_id]));
   const noOverlap = placements.every((placement, index) =>
-    placements.slice(index + 1).every((other) => groupsById.get(other.instance_id) !== groupsById.get(placement.instance_id)
-      || !doPlacementsOverlap(placement, other)),
+    placements
+      .slice(index + 1)
+      .every(
+        (other) => groupsById.get(other.instance_id) !== groupsById.get(placement.instance_id) || !doPlacementsOverlap(placement, other),
+      ),
   );
   if (placements.every(validGeometry) && noOverlap) return { placements, unavailable: false };
 
   // Each panel owns its own coordinate plane; repair only collisions inside that panel.
-  const repaired = [...new Set(instances.map((instance) => instance.group_id))].flatMap((groupId) =>
-    repairAll(placements.filter((placement) => groupsById.get(placement.instance_id) === groupId), minimumSizes, columns) ?? []);
+  const repaired = [...new Set(instances.map((instance) => instance.group_id))].flatMap(
+    (groupId) =>
+      repairAll(
+        placements.filter((placement) => groupsById.get(placement.instance_id) === groupId),
+        minimumSizes,
+        columns,
+      ) ?? [],
+  );
   if (repaired.length !== placements.length) return unavailable();
   return {
     placements: placements.map((placement) => repaired.find((item) => item.instance_id === placement.instance_id)!),

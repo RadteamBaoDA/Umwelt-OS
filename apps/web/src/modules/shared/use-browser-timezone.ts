@@ -8,5 +8,9 @@ import { useSyncExternalStore } from 'react';
  * @returns The browser time zone on the client, otherwise `fallback`. The value never changes during a session.
  */
 export function useBrowserTimezone(fallback: string): string {
-  return useSyncExternalStore(() => () => {}, () => Intl.DateTimeFormat().resolvedOptions().timeZone || fallback, () => fallback);
+  return useSyncExternalStore(
+    () => () => {},
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone || fallback,
+    () => fallback,
+  );
 }

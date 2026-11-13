@@ -13,7 +13,9 @@ function renderLoader() {
   void client.prefetchQuery({ queryKey: ['gadget'], queryFn: () => new Promise(() => {}) });
   return render(
     <QueryClientProvider client={client}>
-      <NextIntlClientProvider locale="en" messages={{ shell: { loadingWorkspace: 'Loading' } }}><RouteLoader /></NextIntlClientProvider>
+      <NextIntlClientProvider locale="en" messages={{ shell: { loadingWorkspace: 'Loading' } }}>
+        <RouteLoader />
+      </NextIntlClientProvider>
     </QueryClientProvider>,
   );
 }
@@ -26,7 +28,9 @@ describe('RouteLoader on dashboard routes', () => {
     const marker = document.createElement('div');
     marker.setAttribute('data-dashboard-ready', 'true');
     document.body.appendChild(marker);
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
     expect(screen.queryByRole('status')).toBeNull();
     marker.remove();
     vi.useRealTimers();
@@ -39,9 +43,13 @@ describe('RouteLoader on non-dashboard routes', () => {
     route.path = '/news';
     renderLoader();
     expect(screen.getByRole('status')).toBeTruthy();
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
     expect(screen.getByRole('status')).toBeTruthy();
-    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
     expect(screen.queryByRole('status')).toBeNull();
     route.path = '/dashboard';
     vi.useRealTimers();

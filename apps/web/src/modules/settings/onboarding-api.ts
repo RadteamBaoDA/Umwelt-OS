@@ -17,7 +17,12 @@ export function getOnboardingState(signal?: AbortSignal) {
 }
 
 /** Saves one current step using revision fencing and the caller's session CSRF token. */
-export function saveOnboardingStep(step: OnboardingStep, revision: number, csrfToken: string, dataChoice?: 'sample' | 'personal_import' | null) {
+export function saveOnboardingStep(
+  step: OnboardingStep,
+  revision: number,
+  csrfToken: string,
+  dataChoice?: 'sample' | 'personal_import' | null,
+) {
   return apiRequest<OnboardingState>('/api/v1/settings/onboarding', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },

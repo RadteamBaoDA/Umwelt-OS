@@ -4,13 +4,7 @@
  */
 
 /** Canonical 5-color semantic chart palette mapped from globals.css. */
-export const CHART_PALETTE = [
-  'var(--chart-1)',
-  'var(--chart-2)',
-  'var(--chart-3)',
-  'var(--chart-4)',
-  'var(--chart-5)',
-] as const;
+export const CHART_PALETTE = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'] as const;
 
 /** Type representing one of the semantic chart palette CSS variable strings. */
 export type SemanticChartColor = (typeof CHART_PALETTE)[number];
@@ -41,4 +35,3 @@ export function resolveSeriesColor(index: number, customColor?: string): string 
   const safeIndex = Math.abs(Math.trunc(index)) % CHART_PALETTE.length;
   return CHART_PALETTE[safeIndex];
 }
-

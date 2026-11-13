@@ -31,14 +31,16 @@ export function TimelinePage() {
   const s2 = useTimelineActions(s1);
 
   const vm: TimelinePageVm = s2;
-  return <section className="rounded-lg border bg-card p-6">
-<TimelineHeading vm={vm} />
-<TimelineFilterForm vm={vm} />
-<TimelineSearchNotice vm={vm} />
-<PinnedEventPanel vm={vm} />
-<TimelineLoadState vm={vm} />
-<TimelineResults vm={vm} />
-  </section>;
+  return (
+    <section className="rounded-lg border bg-card p-6">
+      <TimelineHeading vm={vm} />
+      <TimelineFilterForm vm={vm} />
+      <TimelineSearchNotice vm={vm} />
+      <PinnedEventPanel vm={vm} />
+      <TimelineLoadState vm={vm} />
+      <TimelineResults vm={vm} />
+    </section>
+  );
 }
 
 type TimelinePageVm = ReturnType<typeof useTimelineActions>;
@@ -47,30 +49,193 @@ type TimelinePageVm = ReturnType<typeof useTimelineActions>;
 function TimelineHeading({ vm }: { vm: TimelinePageVm }) {
   const { t, zoneLabel } = vm;
   return (
-<>
-    <h1 className="mb-1">{t('title')}</h1><p className="mb-6 text-muted-foreground">{t('intro', { timezone: zoneLabel })}</p>
-</>
+    <>
+      <h1 className="mb-1">{t('title')}</h1>
+      <p className="mb-6 text-muted-foreground">{t('intro', { timezone: zoneLabel })}</p>
+    </>
+  );
+}
+
+/** Source filter select (keeps an unlisted selected id selectable) with load-more paging and a load-failure message. */
+function TimelineSourceField({ vm }: { vm: TimelinePageVm }) {
+  const { t, draftSourceId, setDraftSourceId, sources, sourceOptions } = vm;
+  return (
+    <div className="field">
+      <Label htmlFor="timeline-source">{t('source')}</Label>
+      <Select value={draftSourceId || 'all'} onValueChange={(value) => setDraftSourceId(value === 'all' ? '' : value)}>
+        <SelectTrigger id="timeline-source">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t('all.sources')}</SelectItem>
+          {draftSourceId && !sourceOptions.some((source) => source.id === draftSourceId) && (
+            <SelectItem value={draftSourceId}>{draftSourceId}</SelectItem>
+          )}
+          {sourceOptions.map((source) => (
+            <SelectItem key={source.id} value={source.id}>
+              {source.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {sources.hasNextPage && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="justify-self-start px-0"
+          disabled={sources.isFetchingNextPage}
+          onClick={() => sources.fetchNextPage()}
+        >
+          {t('load.sources')}
+        </Button>
+      )}
+      {sources.isError && (
+        <p className="error" role="alert">
+          {t('sourcesUnavailable')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Entity filter select (keeps an unlisted selected id selectable) with load-more paging and a load-failure message. */
+function TimelineEntityField({ vm }: { vm: TimelinePageVm }) {
+  const { t, draftEntityId, setDraftEntityId, entities, entityOptions } = vm;
+  return (
+    <div className="field">
+      <Label htmlFor="timeline-entity">{t('entity')}</Label>
+      <Select value={draftEntityId || 'all'} onValueChange={(value) => setDraftEntityId(value === 'all' ? '' : value)}>
+        <SelectTrigger id="timeline-entity">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t('all.entities')}</SelectItem>
+          {draftEntityId && !entityOptions.some((entity) => entity.id === draftEntityId) && (
+            <SelectItem value={draftEntityId}>{draftEntityId}</SelectItem>
+          )}
+          {entityOptions.map((entity) => (
+            <SelectItem key={entity.id} value={entity.id}>
+              {entity.name ?? t('unnamedEntity')}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {entities.hasNextPage && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="justify-self-start px-0"
+          disabled={entities.isFetchingNextPage}
+          onClick={() => entities.fetchNextPage()}
+        >
+          {t('load.entities')}
+        </Button>
+      )}
+      {entities.isError && (
+        <p className="error" role="alert">
+          {t('entitiesUnavailable')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Event type text filter with a too-long error or help text. */
+function TimelineTypeField({ vm }: { vm: TimelinePageVm }) {
+  const { t, draftEventType, setDraftEventType, typeTooLong } = vm;
+  return (
+    <div className="field">
+      <Label htmlFor="timeline-type">{t('type')}</Label>
+      <Input
+        id="timeline-type"
+        value={draftEventType}
+        aria-invalid={typeTooLong}
+        aria-describedby={typeTooLong ? 'timeline-type-error' : undefined}
+        onChange={(event) => setDraftEventType(event.target.value)}
+      />
+      {typeTooLong ? (
+        <p id="timeline-type-error" className="error" role="alert">
+          {t('typeTooLong')}
+        </p>
+      ) : (
+        <small className="text-muted-foreground">{t('typeHelp')}</small>
+      )}
+    </div>
   );
 }
 
 /** Filter form: date range, source, entity, precision and type. */
 function TimelineFilterForm({ vm }: { vm: TimelinePageVm }) {
-  const { t, params, typeTooLong, draftDateFrom, setDraftDateFrom, draftDateTo, setDraftDateTo, draftSourceId, setDraftSourceId, draftEntityId, setDraftEntityId, draftPrecision, setDraftPrecision, draftEventType, setDraftEventType, dateError, sources, entities, sourceOptions, entityOptions, submitFilters } = vm;
+  const {
+    t,
+    params,
+    typeTooLong,
+    draftDateFrom,
+    setDraftDateFrom,
+    draftDateTo,
+    setDraftDateTo,
+    draftPrecision,
+    setDraftPrecision,
+    dateError,
+    submitFilters,
+  } = vm;
   return (
     <form className="form mt-6" onSubmit={submitFilters}>
       <FiltersDisclosure label={t('filtersToggle')} forceOpen={typeTooLong} count={[...params.keys()].filter((key) => key !== 'q').length}>
-      <div className="search-filters">
-        <div className="field"><Label htmlFor="timeline-from">{t('date.from')}</Label><Input id="timeline-from" className="h-9" type="date" value={draftDateFrom} disabled={draftPrecision === 'unknown'} onChange={(event) => setDraftDateFrom(event.target.value)} /></div>
-        <div className="field"><Label htmlFor="timeline-to">{t('date.toExclusive')}</Label><Input id="timeline-to" className="h-9" type="date" min={draftDateFrom || undefined} value={draftDateTo} disabled={draftPrecision === 'unknown'} onChange={(event) => setDraftDateTo(event.target.value)} /></div>
-        <div className="field"><Label htmlFor="timeline-source">{t('source')}</Label><Select value={draftSourceId || 'all'} onValueChange={(value) => setDraftSourceId(value === 'all' ? '' : value)}><SelectTrigger id="timeline-source"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('all.sources')}</SelectItem>{draftSourceId && !sourceOptions.some((source) => source.id === draftSourceId) && <SelectItem value={draftSourceId}>{draftSourceId}</SelectItem>}{sourceOptions.map((source) => <SelectItem key={source.id} value={source.id}>{source.name}</SelectItem>)}</SelectContent></Select>{sources.hasNextPage && <Button type="button" variant="link" size="sm" className="justify-self-start px-0" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>{t('load.sources')}</Button>}{sources.isError && <p className="error" role="alert">{t('sourcesUnavailable')}</p>}</div>
-        <div className="field"><Label htmlFor="timeline-entity">{t('entity')}</Label><Select value={draftEntityId || 'all'} onValueChange={(value) => setDraftEntityId(value === 'all' ? '' : value)}><SelectTrigger id="timeline-entity"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('all.entities')}</SelectItem>{draftEntityId && !entityOptions.some((entity) => entity.id === draftEntityId) && <SelectItem value={draftEntityId}>{draftEntityId}</SelectItem>}{entityOptions.map((entity) => <SelectItem key={entity.id} value={entity.id}>{entity.name ?? t('unnamedEntity')}</SelectItem>)}</SelectContent></Select>{entities.hasNextPage && <Button type="button" variant="link" size="sm" className="justify-self-start px-0" disabled={entities.isFetchingNextPage} onClick={() => entities.fetchNextPage()}>{t('load.entities')}</Button>}{entities.isError && <p className="error" role="alert">{t('entitiesUnavailable')}</p>}</div>
-        <div className="field"><Label htmlFor="timeline-precision">{t('precision')}</Label><Select value={draftPrecision} onValueChange={(value) => setDraftPrecision(value as Precision)}><SelectTrigger id="timeline-precision"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('all.precision')}</SelectItem><SelectItem value="timed">{t('timed')}</SelectItem><SelectItem value="date">{t('date.only')}</SelectItem><SelectItem value="unknown">{t('unknownTime')}</SelectItem></SelectContent></Select></div>
-        <div className="field"><Label htmlFor="timeline-type">{t('type')}</Label><Input id="timeline-type" value={draftEventType} aria-invalid={typeTooLong} aria-describedby={typeTooLong ? 'timeline-type-error' : undefined} onChange={(event) => setDraftEventType(event.target.value)} />{typeTooLong ? <p id="timeline-type-error" className="error" role="alert">{t('typeTooLong')}</p> : <small className="text-muted-foreground">{t('typeHelp')}</small>}</div>
-      </div>
-      <p className="text-muted-foreground">{t('rangeHelp')}</p>
+        <div className="search-filters">
+          <div className="field">
+            <Label htmlFor="timeline-from">{t('date.from')}</Label>
+            <Input
+              id="timeline-from"
+              className="h-9"
+              type="date"
+              value={draftDateFrom}
+              disabled={draftPrecision === 'unknown'}
+              onChange={(event) => setDraftDateFrom(event.target.value)}
+            />
+          </div>
+          <div className="field">
+            <Label htmlFor="timeline-to">{t('date.toExclusive')}</Label>
+            <Input
+              id="timeline-to"
+              className="h-9"
+              type="date"
+              min={draftDateFrom || undefined}
+              value={draftDateTo}
+              disabled={draftPrecision === 'unknown'}
+              onChange={(event) => setDraftDateTo(event.target.value)}
+            />
+          </div>
+          <TimelineSourceField vm={vm} />
+          <TimelineEntityField vm={vm} />
+          <div className="field">
+            <Label htmlFor="timeline-precision">{t('precision')}</Label>
+            <Select value={draftPrecision} onValueChange={(value) => setDraftPrecision(value as Precision)}>
+              <SelectTrigger id="timeline-precision">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t('all.precision')}</SelectItem>
+                <SelectItem value="timed">{t('timed')}</SelectItem>
+                <SelectItem value="date">{t('date.only')}</SelectItem>
+                <SelectItem value="unknown">{t('unknownTime')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <TimelineTypeField vm={vm} />
+        </div>
+        <p className="text-muted-foreground">{t('rangeHelp')}</p>
       </FiltersDisclosure>
-      {dateError && <p className="error" role="alert">{t('invalidRange')}</p>}
-      <Button type="submit" className="w-auto justify-self-end">{t('applyFilters')}</Button>
+      {dateError && (
+        <p className="error" role="alert">
+          {t('invalidRange')}
+        </p>
+      )}
+      <Button type="submit" className="w-auto justify-self-end">
+        {t('applyFilters')}
+      </Button>
     </form>
   );
 }
@@ -79,7 +244,22 @@ function TimelineFilterForm({ vm }: { vm: TimelinePageVm }) {
 function TimelineSearchNotice({ vm }: { vm: TimelinePageVm }) {
   const { t, router, applied, searchText } = vm;
   return (
-    searchText && <p className="mt-4 text-muted-foreground" role="status">{t('searchActive', { query: searchText })} <Button type="button" variant="outline" onClick={() => { const next = new URLSearchParams(applied); next.delete('q'); router.push(`/timeline${next.size ? `?${next}` : ''}`); }}>{t('clearSearch')}</Button></p>
+    searchText && (
+      <p className="mt-4 text-muted-foreground" role="status">
+        {t('searchActive', { query: searchText })}{' '}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            const next = new URLSearchParams(applied);
+            next.delete('q');
+            router.push(`/timeline${next.size ? `?${next}` : ''}`);
+          }}
+        >
+          {t('clearSearch')}
+        </Button>
+      </p>
+    )
   );
 }
 
@@ -87,11 +267,23 @@ function TimelineSearchNotice({ vm }: { vm: TimelinePageVm }) {
 function PinnedEventPanel({ vm }: { vm: TimelinePageVm }) {
   const { t, display, pinned, entityNames } = vm;
   return (
-<>
-    {pinned.isLoading && <p className="text-muted-foreground" role="status">{t('pinnedLoading')}</p>}
-    {pinned.data && <div className="flex flex-col gap-3"><EventDetail event={pinned.data} locale={display.locale} timezone={display.timezone} entityNames={entityNames} /></div>}
-    {pinned.isError && <p className="error" role="alert">{t('load.failed')}</p>}
-</>
+    <>
+      {pinned.isLoading && (
+        <p className="text-muted-foreground" role="status">
+          {t('pinnedLoading')}
+        </p>
+      )}
+      {pinned.data && (
+        <div className="flex flex-col gap-3">
+          <EventDetail event={pinned.data} locale={display.locale} timezone={display.timezone} entityNames={entityNames} />
+        </div>
+      )}
+      {pinned.isError && (
+        <p className="error" role="alert">
+          {t('load.failed')}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -99,27 +291,96 @@ function PinnedEventPanel({ vm }: { vm: TimelinePageVm }) {
 function TimelineLoadState({ vm }: { vm: TimelinePageVm }) {
   const { t, appliedTypeTooLong, timeline } = vm;
   return (
-<>
-    {timeline.isPending && !appliedTypeTooLong && <div className="skeleton mt-4" aria-label={t('loading')} />}
-    {timeline.isError && <p className="error" role="alert">{t(apiFailureKey(timeline.error) ?? 'load.failed')} <Button type="button" variant="outline" onClick={() => timeline.refetch()}>{t('retry')}</Button></p>}
-</>
+    <>
+      {timeline.isPending && !appliedTypeTooLong && <div className="skeleton mt-4" aria-label={t('loading')} />}
+      {timeline.isError && (
+        <p className="error" role="alert">
+          {t(apiFailureKey(timeline.error) ?? 'load.failed')}{' '}
+          <Button type="button" variant="outline" onClick={() => timeline.refetch()}>
+            {t('retry')}
+          </Button>
+        </p>
+      )}
+    </>
   );
 }
 
 /** Loaded count, graph status details, events and pagination. */
 // eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 function TimelineResults({ vm }: { vm: TimelinePageVm }) {
-  const { t, router, display, applied, timeline, events, allDocumentVersionIds, graphStatuses, sourceOptions, entityNames, graphErrorLabel } = vm;
+  const {
+    t,
+    router,
+    display,
+    applied,
+    timeline,
+    events,
+    allDocumentVersionIds,
+    graphStatuses,
+    sourceOptions,
+    entityNames,
+    graphErrorLabel,
+  } = vm;
   return (
-    timeline.data && <>
-      {events.length > 0 && <p className="mt-4 text-muted-foreground" role="status">{t('loadedCount', { count: events.length })}{graphStatuses.isError ? ` · ${t('graph.statusUnavailable')}` : ''}</p>}
-      {allDocumentVersionIds.length > 100 && <p className="text-muted-foreground">{t('graph.statusBound', { count: allDocumentVersionIds.length - 100 })}</p>}
-      {!!graphStatuses.data?.length && <ul className="flex flex-col gap-3" aria-label={t('graph.statusDetails')}>{graphStatuses.data.slice(0, 20).map((status) => <li className={status.error_code ? 'error' : 'muted'} key={status.mapping_id}>{status.status} · {status.graph_enabled ? t('graph.enabled') : t('graph.disabled')}{status.error_code ? ` · ${graphErrorLabel(status.error_code)}` : ''}</li>)}</ul>}
-      {(graphStatuses.data?.length ?? 0) > 20 && <p className="text-muted-foreground">{t('graph.statusRowsBound', { count: (graphStatuses.data?.length ?? 0) - 20 })}</p>}
-      {events.length ? <div className="mt-4 flex flex-col gap-3">{events.map((event) => <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={entityNames} />)}</div> : <div className="empty-state mt-4"><p>{applied ? t('noEvents') : t('noEventsYet')}</p>{applied ? <Button type="button" variant="outline" onClick={() => router.push('/timeline')}>{t('clearFilters')}</Button> : <Button asChild variant="outline"><Link href="/settings/sources">{sourceOptions.length ? t('checkSources') : t('connectSource')}</Link></Button>}</div>}
-      {timeline.hasNextPage && <Button type="button" variant="outline" disabled={timeline.isFetchingNextPage} onClick={() => timeline.fetchNextPage()}>{timeline.isFetchingNextPage ? t('loading') : t('load.more')}</Button>}
-      {timeline.isFetchNextPageError && <p className="error" role="alert">{t('nextPageFailed')} <Button type="button" variant="outline" onClick={() => timeline.fetchNextPage()}>{t('retry')}</Button></p>}
-    </>
+    timeline.data && (
+      <>
+        {events.length > 0 && (
+          <p className="mt-4 text-muted-foreground" role="status">
+            {t('loadedCount', { count: events.length })}
+            {graphStatuses.isError ? ` · ${t('graph.statusUnavailable')}` : ''}
+          </p>
+        )}
+        {allDocumentVersionIds.length > 100 && (
+          <p className="text-muted-foreground">{t('graph.statusBound', { count: allDocumentVersionIds.length - 100 })}</p>
+        )}
+        {!!graphStatuses.data?.length && (
+          <ul className="flex flex-col gap-3" aria-label={t('graph.statusDetails')}>
+            {graphStatuses.data.slice(0, 20).map((status) => (
+              <li className={status.error_code ? 'error' : 'muted'} key={status.mapping_id}>
+                {status.status} · {status.graph_enabled ? t('graph.enabled') : t('graph.disabled')}
+                {status.error_code ? ` · ${graphErrorLabel(status.error_code)}` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+        {(graphStatuses.data?.length ?? 0) > 20 && (
+          <p className="text-muted-foreground">{t('graph.statusRowsBound', { count: (graphStatuses.data?.length ?? 0) - 20 })}</p>
+        )}
+        {events.length ? (
+          <div className="mt-4 flex flex-col gap-3">
+            {events.map((event) => (
+              <EventDetail key={event.id} event={event} locale={display.locale} timezone={display.timezone} entityNames={entityNames} />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state mt-4">
+            <p>{applied ? t('noEvents') : t('noEventsYet')}</p>
+            {applied ? (
+              <Button type="button" variant="outline" onClick={() => router.push('/timeline')}>
+                {t('clearFilters')}
+              </Button>
+            ) : (
+              <Button asChild variant="outline">
+                <Link href="/settings/sources">{sourceOptions.length ? t('checkSources') : t('connectSource')}</Link>
+              </Button>
+            )}
+          </div>
+        )}
+        {timeline.hasNextPage && (
+          <Button type="button" variant="outline" disabled={timeline.isFetchingNextPage} onClick={() => timeline.fetchNextPage()}>
+            {timeline.isFetchingNextPage ? t('loading') : t('load.more')}
+          </Button>
+        )}
+        {timeline.isFetchNextPageError && (
+          <p className="error" role="alert">
+            {t('nextPageFailed')}{' '}
+            <Button type="button" variant="outline" onClick={() => timeline.fetchNextPage()}>
+              {t('retry')}
+            </Button>
+          </p>
+        )}
+      </>
+    )
   );
 }
 
@@ -137,7 +398,9 @@ function useTimelineFilterState() {
   const dateTo = params.get('date_to') ?? '';
   const sourceId = params.get('source_id') ?? '';
   const entityId = params.get('entity_id') ?? '';
-  const precision = (['all', 'timed', 'date', 'unknown'].includes(params.get('precision') ?? '') ? params.get('precision') : 'all') as Precision;
+  const precision = (
+    ['all', 'timed', 'date', 'unknown'].includes(params.get('precision') ?? '') ? params.get('precision') : 'all'
+  ) as Precision;
   const eventType = (params.get('type') ?? '').trim();
   const pinnedEventId = (params.get('event_id') ?? '').trim().slice(0, 64);
   const searchText = (params.get('q') ?? '').trim().slice(0, 200);
@@ -153,19 +416,62 @@ function useTimelineFilterState() {
 
   // Drafts follow the applied (URL) filters whenever those change.
   useResetOnChange([dateFrom, dateTo, sourceId, entityId, precision, eventType], () => {
-    setDraftDateFrom(dateFrom); setDraftDateTo(dateTo); setDraftSourceId(sourceId);
-    setDraftEntityId(entityId); setDraftPrecision(precision); setDraftEventType(eventType);
+    setDraftDateFrom(dateFrom);
+    setDraftDateTo(dateTo);
+    setDraftSourceId(sourceId);
+    setDraftEntityId(entityId);
+    setDraftPrecision(precision);
+    setDraftEventType(eventType);
   });
 
-  return { t, errorLabel, router, searchParams, display, zoneLabel, applied, params, dateFrom, dateTo, sourceId, entityId, precision, eventType, pinnedEventId, searchText, typeTooLong, appliedTypeTooLong, draftDateFrom, setDraftDateFrom, draftDateTo, setDraftDateTo, draftSourceId, setDraftSourceId, draftEntityId, setDraftEntityId, draftPrecision, setDraftPrecision, draftEventType, setDraftEventType, dateError, setDateError };
+  return {
+    t,
+    errorLabel,
+    router,
+    searchParams,
+    display,
+    zoneLabel,
+    applied,
+    params,
+    dateFrom,
+    dateTo,
+    sourceId,
+    entityId,
+    precision,
+    eventType,
+    pinnedEventId,
+    searchText,
+    typeTooLong,
+    appliedTypeTooLong,
+    draftDateFrom,
+    setDraftDateFrom,
+    draftDateTo,
+    setDraftDateTo,
+    draftSourceId,
+    setDraftSourceId,
+    draftEntityId,
+    setDraftEntityId,
+    draftPrecision,
+    setDraftPrecision,
+    draftEventType,
+    setDraftEventType,
+    dateError,
+    setDateError,
+  };
 }
 
 /** Loads the filtered timeline pages, the pinned event, source/entity options and graph statuses (at most 100 version IDs). */
 function useTimelineQueries(p: ReturnType<typeof useTimelineFilterState>) {
   const { t, display, dateFrom, dateTo, sourceId, entityId, precision, eventType, pinnedEventId, searchText, appliedTypeTooLong } = p;
   const query: TimelineQuery = {
-    date_from: dateFrom, date_to: dateTo, timezone: display.timezone,
-    source_id: sourceId, entity_id: entityId, precision, type: eventType, q: searchText,
+    date_from: dateFrom,
+    date_to: dateTo,
+    timezone: display.timezone,
+    source_id: sourceId,
+    entity_id: entityId,
+    precision,
+    type: eventType,
+    q: searchText,
   };
   const timeline = useInfiniteQuery({
     // A normalized server filter in the key starts a fresh cursor chain whenever the filter changes.
@@ -175,24 +481,72 @@ function useTimelineQueries(p: ReturnType<typeof useTimelineFilterState>) {
     getNextPageParam: (page) => page.next_cursor ?? undefined,
     enabled: !appliedTypeTooLong,
   });
-  const pinned = useQuery({ queryKey: ['timeline-event', pinnedEventId], queryFn: () => getEvent(pinnedEventId), enabled: !!pinnedEventId });
-  const sources = useInfiniteQuery({ queryKey: sourceKeys.list, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listSources(pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
-  const entities = useInfiniteQuery({ queryKey: entityKeys.list(), initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listEntities(pageParam), getNextPageParam: (page) => page.next_cursor ?? undefined });
+  const pinned = useQuery({
+    queryKey: ['timeline-event', pinnedEventId],
+    queryFn: () => getEvent(pinnedEventId),
+    enabled: !!pinnedEventId,
+  });
+  const sources = useInfiniteQuery({
+    queryKey: sourceKeys.list,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listSources(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+  });
+  const entities = useInfiniteQuery({
+    queryKey: entityKeys.list(),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listEntities(pageParam),
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+  });
   const events = timeline.data?.pages.flatMap((page) => page.items) ?? [];
   const allDocumentVersionIds = [...new Set(events.flatMap((event) => event.evidence.map((item) => item.document_version_id)))];
   // The owner status endpoint accepts at most 100 version IDs per request; disclose the omitted remainder below.
   const documentVersionIds = allDocumentVersionIds.slice(0, 100);
-  const graphStatuses = useQuery({ queryKey: ['graph-status', documentVersionIds], queryFn: () => getGraphStatuses(documentVersionIds), enabled: !!timeline.data && documentVersionIds.length > 0 });
+  const graphStatuses = useQuery({
+    queryKey: ['graph-status', documentVersionIds],
+    queryFn: () => getGraphStatuses(documentVersionIds),
+    enabled: !!timeline.data && documentVersionIds.length > 0,
+  });
   const sourceOptions = sources.data?.pages.flatMap((page) => page.items) ?? [];
   const entityOptions = entities.data?.pages.flatMap((page) => page.items) ?? [];
-  const entityNames = useMemo(() => new Map((entities.data?.pages.flatMap((page) => page.items) ?? []).map((entity) => [entity.id, entity.name ?? t('unnamedEntity')])), [entities.data, t]);
+  const entityNames = useMemo(
+    () =>
+      new Map((entities.data?.pages.flatMap((page) => page.items) ?? []).map((entity) => [entity.id, entity.name ?? t('unnamedEntity')])),
+    [entities.data, t],
+  );
 
-  return { ...p, query, timeline, pinned, sources, entities, events, allDocumentVersionIds, documentVersionIds, graphStatuses, sourceOptions, entityOptions, entityNames };
+  return {
+    ...p,
+    query,
+    timeline,
+    pinned,
+    sources,
+    entities,
+    events,
+    allDocumentVersionIds,
+    documentVersionIds,
+    graphStatuses,
+    sourceOptions,
+    entityOptions,
+    entityNames,
+  };
 }
 
 /** Graph error labels and validated filter submission to the URL. */
 function useTimelineActions(p: ReturnType<typeof useTimelineQueries>) {
-  const { t, errorLabel, router, typeTooLong, draftDateFrom, draftDateTo, draftSourceId, draftEntityId, draftPrecision, draftEventType, setDateError } = p;
+  const {
+    t,
+    errorLabel,
+    router,
+    typeTooLong,
+    draftDateFrom,
+    draftDateTo,
+    draftSourceId,
+    draftEntityId,
+    draftPrecision,
+    draftEventType,
+    setDateError,
+  } = p;
   /** Maps a machine error code to plain copy; unknown codes are humanized by the shared error-code catalog ("rate_limited" -> "Rate limited"). */
   function graphErrorLabel(code: string): string {
     const known = ['unauthorized', 'forbidden', 'conflict', 'serviceUnavailable', 'requestFailed'] as const;
@@ -205,13 +559,19 @@ function useTimelineActions(p: ReturnType<typeof useTimelineQueries>) {
   function submitFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (typeTooLong) return;
-    if (draftPrecision !== 'unknown' && (!!draftDateFrom !== !!draftDateTo || (draftDateFrom && draftDateTo && draftDateTo <= draftDateFrom))) {
+    if (
+      draftPrecision !== 'unknown' &&
+      (!!draftDateFrom !== !!draftDateTo || (draftDateFrom && draftDateTo && draftDateTo <= draftDateFrom))
+    ) {
       setDateError(true);
       return;
     }
     setDateError(false);
     const next = new URLSearchParams();
-    if (draftPrecision !== 'unknown' && draftDateFrom && draftDateTo) { next.set('date_from', draftDateFrom); next.set('date_to', draftDateTo); }
+    if (draftPrecision !== 'unknown' && draftDateFrom && draftDateTo) {
+      next.set('date_from', draftDateFrom);
+      next.set('date_to', draftDateTo);
+    }
     if (draftSourceId) next.set('source_id', draftSourceId);
     if (draftEntityId) next.set('entity_id', draftEntityId);
     if (draftPrecision !== 'all') next.set('precision', draftPrecision);

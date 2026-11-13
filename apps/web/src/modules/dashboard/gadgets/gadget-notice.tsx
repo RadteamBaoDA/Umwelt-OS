@@ -34,7 +34,8 @@ export interface GadgetNoticeProps {
  */
 export function GadgetNotice({ kind, message, action, className }: GadgetNoticeProps) {
   const isError = kind === 'error';
-  const actionClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  const actionClass =
+    'inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <div
       role={isError ? 'alert' : 'status'}
@@ -42,9 +43,15 @@ export function GadgetNotice({ kind, message, action, className }: GadgetNoticeP
       className={cn('flex flex-col items-start gap-1 p-3 text-sm', isError ? 'text-destructive' : 'text-muted-foreground', className)}
     >
       <p className="break-words">{message}</p>
-      {action?.href ? <Link href={action.href} className={actionClass}>{action.label}</Link>
-        : action?.onClick ? <Button type="button" variant="link" className="h-auto p-0" onClick={action.onClick}>{action.label}</Button>
-          : null}
+      {action?.href ? (
+        <Link href={action.href} className={actionClass}>
+          {action.label}
+        </Link>
+      ) : action?.onClick ? (
+        <Button type="button" variant="link" className="h-auto p-0" onClick={action.onClick}>
+          {action.label}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -70,17 +77,28 @@ export function GadgetSkeleton({ variant, label, className }: GadgetSkeletonProp
     <div role="status" className={cn('p-3', className)}>
       <span className="sr-only">{label}</span>
       <div aria-hidden="true" className="space-y-2">
-        {variant === 'metric' ? <>
-          <div className={cn(block, 'h-8 w-1/3')} />
-          <div className={cn(block, 'h-3 w-2/3')} />
-        </> : variant === 'chart' ? <div className={cn(block, 'h-32 w-full')} />
-          : variant === 'table' ? <>
+        {variant === 'metric' ? (
+          <>
+            <div className={cn(block, 'h-8 w-1/3')} />
+            <div className={cn(block, 'h-3 w-2/3')} />
+          </>
+        ) : variant === 'chart' ? (
+          <div className={cn(block, 'h-32 w-full')} />
+        ) : variant === 'table' ? (
+          <>
             <div className={cn(block, 'h-3 w-full')} />
-            {[0, 1, 2, 3].map((row) => <div key={row} className={cn(block, 'h-5 w-full opacity-70')} />)}
-          </> : [0, 1, 2].map((row) => <div key={row} className="space-y-1">
-            <div className={cn(block, 'h-4 w-3/4')} />
-            <div className={cn(block, 'h-3 w-1/2 opacity-70')} />
-          </div>)}
+            {[0, 1, 2, 3].map((row) => (
+              <div key={row} className={cn(block, 'h-5 w-full opacity-70')} />
+            ))}
+          </>
+        ) : (
+          [0, 1, 2].map((row) => (
+            <div key={row} className="space-y-1">
+              <div className={cn(block, 'h-4 w-3/4')} />
+              <div className={cn(block, 'h-3 w-1/2 opacity-70')} />
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

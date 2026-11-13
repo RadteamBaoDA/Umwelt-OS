@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { addTemplateHref, compatibleTemplates, type GadgetTemplate } from './compatible-templates';
 
-const tpl = (id: string, renderer: string, accepted: GadgetTemplate['accepted_shapes'], mode: GadgetTemplate['source_mode'] = 'multi') => ({ id, renderer, source_mode: mode, accepted_shapes: accepted }) as GadgetTemplate;
+const tpl = (id: string, renderer: string, accepted: GadgetTemplate['accepted_shapes'], mode: GadgetTemplate['source_mode'] = 'multi') =>
+  ({ id, renderer, source_mode: mode, accepted_shapes: accepted }) as GadgetTemplate;
 
 describe('compatibleTemplates', () => {
-  const templates = [tpl('news', 'news_feed', ['news']), tpl('chart', 'finance_chart', ['series']), tpl('any', 'text_panel', null), tpl('none', 'map', null, 'none'), tpl('news2', 'news_feed', ['news'])];
+  const templates = [
+    tpl('news', 'news_feed', ['news']),
+    tpl('chart', 'finance_chart', ['series']),
+    tpl('any', 'text_panel', null),
+    tpl('none', 'map', null, 'none'),
+    tpl('news2', 'news_feed', ['news']),
+  ];
 
   it('keeps templates whose accepted shapes intersect, shape-agnostic ones, and one per renderer', () => {
     expect(compatibleTemplates({ data_shapes: ['news'] }, templates).map((t) => t.id)).toEqual(['news', 'any']);

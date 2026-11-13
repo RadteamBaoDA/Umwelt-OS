@@ -48,4 +48,3 @@ describe('Chat Generative UI Security & Legacy Rail Guards', () => {
     }
   });
 });
-

@@ -30,12 +30,15 @@ function renderProvider(client: QueryClient) {
 
 beforeEach(() => {
   window.sessionStorage.clear();
-  vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-    if (path === '/api/v1/workspaces') {
-      return new Response(JSON.stringify({ items }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    }
-    throw new Error(`unexpected fetch ${path}`);
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      if (path === '/api/v1/workspaces') {
+        return new Response(JSON.stringify({ items }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch ${path}`);
+    }),
+  );
 });
 
 describe('WorkspaceProvider', () => {

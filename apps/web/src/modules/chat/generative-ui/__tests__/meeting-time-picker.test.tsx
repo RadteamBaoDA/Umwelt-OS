@@ -50,9 +50,7 @@ describe('MeetingTimePicker', () => {
 
     // Confirm selection
     await user.click(confirmButton);
-    expect(screen.getByTestId('meeting-confirmed-banner')).toHaveTextContent(
-      'Confirmed for Tuesday, Oct 20 at 09:30 AM - 10:00 AM.',
-    );
+    expect(screen.getByTestId('meeting-confirmed-banner')).toHaveTextContent('Confirmed for Tuesday, Oct 20 at 09:30 AM - 10:00 AM.');
     expect(onSendPrompt).toHaveBeenCalledTimes(1);
     expect(onSendPrompt.mock.calls[0][0]).toContain('Tuesday, Oct 20');
     expect(onSendPrompt.mock.calls[0][0]).toContain('09:30 AM - 10:00 AM');
@@ -62,14 +60,7 @@ describe('MeetingTimePicker', () => {
     const user = userEvent.setup();
     const onSendPrompt = vi.fn();
 
-    render(
-      <MeetingTimePicker
-        title="Họp Kiến trúc"
-        slots={SAMPLE_SLOTS}
-        locale="vi-vi"
-        onSendPrompt={onSendPrompt}
-      />,
-    );
+    render(<MeetingTimePicker title="Họp Kiến trúc" slots={SAMPLE_SLOTS} locale="vi-vi" onSendPrompt={onSendPrompt} />);
 
     expect(screen.getByTestId('meeting-confirm-button')).toHaveTextContent('Xác nhận khung giờ');
 
@@ -115,4 +106,3 @@ describe('MeetingTimePicker', () => {
     expect(onSendPrompt.mock.calls[0][0]).toContain('09:30 - 10:15');
   });
 });
-

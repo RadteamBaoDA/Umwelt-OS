@@ -36,20 +36,23 @@ function workspaceQuery(): string {
 
 /** Extracts `error.message` from an unknown error body, or a generic message. */
 function errorMessageOf(body: unknown): string {
-  return body && typeof body === 'object'
-    && 'error' in body && typeof body.error === 'object' && body.error
-    && 'message' in body.error && typeof body.error.message === 'string'
-    ? body.error.message : 'Request failed';
+  return body &&
+    typeof body === 'object' &&
+    'error' in body &&
+    typeof body.error === 'object' &&
+    body.error &&
+    'message' in body.error &&
+    typeof body.error.message === 'string'
+    ? body.error.message
+    : 'Request failed';
 }
 
 /** Reads protected JSON data and rejects stale attempts, unauthorized responses, and unsuccessful HTTP results. */
-export async function protectedJsonRead<T>(
-  path: ProtectedReadPath,
-  signal: AbortSignal,
-  isCurrentAttempt: () => boolean,
-): Promise<T> {
+export async function protectedJsonRead<T>(path: ProtectedReadPath, signal: AbortSignal, isCurrentAttempt: () => boolean): Promise<T> {
   const response = await fetch(path, {
-    cache: 'no-store', credentials: 'same-origin', signal,
+    cache: 'no-store',
+    credentials: 'same-origin',
+    signal,
     headers: path === '/api/v1/realtime/snapshot' ? workspaceHeaders('selected') : undefined,
   });
   if (!isCurrentAttempt()) throw new SupersededSnapshotAttempt();
@@ -190,8 +193,8 @@ export class RealtimeConnection {
   private async openSnapshot(reconnect: boolean, attempt: SnapshotAttempt, possibleDocumentChanges: boolean): Promise<void> {
     if (!this.ownsAttempt(attempt)) return;
     try {
-      const snapshot = await protectedJsonRead<Snapshot>(
-        '/api/v1/realtime/snapshot', attempt.controller.signal, () => this.ownsAttempt(attempt),
+      const snapshot = await protectedJsonRead<Snapshot>('/api/v1/realtime/snapshot', attempt.controller.signal, () =>
+        this.ownsAttempt(attempt),
       );
       if (!this.ownsAttempt(attempt)) return;
       if (!validCursor(snapshot.cursor) || !validFloorSequence(snapshot.floor_sequence)) {
@@ -318,12 +321,18 @@ export class RealtimeConnection {
     const { client } = this.deps;
     this.register(ctx, 'source.changed', (event) => {
       const value = parseEnvelope<SourceEvent>(event.data);
-      if (!validSourceEvent(value)) { this.resync(true); return; }
+      if (!validSourceEvent(value)) {
+        this.resync(true);
+        return;
+      }
       applySourceChange(client, value);
     });
     this.register(ctx, 'ingestion.changed', (event) => {
       const value = parseEnvelope<IngestionEvent>(event.data);
-      if (!validIngestionEvent(value)) { this.resync(true); return; }
+      if (!validIngestionEvent(value)) {
+        this.resync(true);
+        return;
+      }
       applyIngestionChange(client, value);
     });
     this.register(ctx, 'knowledge.changed', (event) => {
@@ -332,7 +341,10 @@ export class RealtimeConnection {
     });
     this.register(ctx, 'dashboard.changed', (event) => {
       const value = parseEnvelope<DashboardEvent>(event.data);
-      if (!validDashboardEvent(value)) { this.resync(true); return; }
+      if (!validDashboardEvent(value)) {
+        this.resync(true);
+        return;
+      }
       applyDashboardChange(client, value);
     });
   }
@@ -340,14 +352,19 @@ export class RealtimeConnection {
   /** Registers server control events (resync_required, auth_expired, connection_unavailable). */
   private registerControlListeners(ctx: StreamContext): void {
     const { stream } = ctx;
-    stream.addEventListener('resync_required', () => { if (this.ownsStream(ctx)) this.resync(true); });
+    stream.addEventListener('resync_required', () => {
+      if (this.ownsStream(ctx)) this.resync(true);
+    });
     stream.addEventListener('auth_expired', () => {
       if (!this.ownsStream(ctx)) return;
       // Password rotation also ends this stream's old session; the snapshot probe dispatches umwelt:unauthorized only on a real 401.
       // Repeated auth_expired within 5s is delayed so a misbehaving server cannot drive a tight resync loop.
       const wait = Date.now() - this.lastAuthExpiredAt < 5000 ? 5000 : 0;
       this.lastAuthExpiredAt = Date.now();
-      if (wait) window.setTimeout(() => { if (this.ownsStream(ctx)) this.resync(true); }, wait);
+      if (wait)
+        window.setTimeout(() => {
+          if (this.ownsStream(ctx)) this.resync(true);
+        }, wait);
       else this.resync(true);
     });
     stream.addEventListener('connection_unavailable', () => {

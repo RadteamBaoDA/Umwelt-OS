@@ -23,7 +23,7 @@ describe('getPublicOrigin', () => {
     expect(getPublicOrigin(h({ 'x-forwarded-proto': 'https', host: 'a.example.com' }), {})).toBe('https://a.example.com');
   });
   it('rejects CSP-injecting hosts and missing data', () => {
-    expect(getPublicOrigin(h({ 'x-forwarded-proto': 'https', host: "a.com; script-src *" }), {})).toBeNull();
+    expect(getPublicOrigin(h({ 'x-forwarded-proto': 'https', host: 'a.com; script-src *' }), {})).toBeNull();
     expect(getPublicOrigin(h({ host: 'a.com' }), {})).toBeNull();
     expect(getPublicOrigin(undefined, {})).toBeNull();
   });

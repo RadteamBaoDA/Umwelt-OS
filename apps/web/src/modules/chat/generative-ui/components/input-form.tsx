@@ -58,11 +58,7 @@ function textLimit(field: InputFormField): number {
  * @param copy - Localized messages.
  * @returns Error message per invalid field id (empty when valid).
  */
-export function validateFormValues(
-  fields: InputFormField[],
-  values: FormValues,
-  copy: FormCopy,
-): Record<string, string> {
+export function validateFormValues(fields: InputFormField[], values: FormValues, copy: FormCopy): Record<string, string> {
   const errors: Record<string, string> = {};
   for (const f of fields) {
     const message = validateField(f, values[f.id], copy);
@@ -109,12 +105,7 @@ function validateNumberField(f: InputFormField, text: string, copy: FormCopy): s
  * @param copy - Localized messages.
  * @returns Localized "Form submitted: title" header then one `- label: value` line per field.
  */
-export function composeFormPrompt(
-  title: string,
-  fields: InputFormField[],
-  values: FormValues,
-  copy: FormCopy,
-): string {
+export function composeFormPrompt(title: string, fields: InputFormField[], values: FormValues, copy: FormCopy): string {
   const lines = fields.map((f) => {
     const v = values[f.id];
     const shown = f.type === 'checkbox' ? (v === true ? copy.yes : copy.no) : String(v ?? '').trim() || copy.empty;
@@ -135,7 +126,14 @@ interface FormFieldControlProps {
 }
 
 /** The input control for one non-checkbox field (textarea, select or text/number/etc. input). */
-function FieldControl({ field: f, common, value, locked, copy, onValueChange }: {
+function FieldControl({
+  field: f,
+  common,
+  value,
+  locked,
+  copy,
+  onValueChange,
+}: {
   field: InputFormField;
   common: Record<string, unknown>;
   value: string | boolean | undefined;
@@ -144,13 +142,29 @@ function FieldControl({ field: f, common, value, locked, copy, onValueChange }: 
   onValueChange: (id: string, value: string | boolean) => void;
 }) {
   if (f.type === 'textarea') {
-    return <Textarea {...common} value={String(value)} placeholder={f.placeholder} maxLength={textLimit(f)} onChange={(e) => onValueChange(f.id, e.target.value)} />;
+    return (
+      <Textarea
+        {...common}
+        value={String(value)}
+        placeholder={f.placeholder}
+        maxLength={textLimit(f)}
+        onChange={(e) => onValueChange(f.id, e.target.value)}
+      />
+    );
   }
   if (f.type === 'select') {
     return (
       <Select value={String(value)} onValueChange={(v) => onValueChange(f.id, v)} disabled={locked}>
-        <SelectTrigger {...common}><SelectValue placeholder={f.placeholder || copy.selectPlaceholder} /></SelectTrigger>
-        <SelectContent>{f.options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
+        <SelectTrigger {...common}>
+          <SelectValue placeholder={f.placeholder || copy.selectPlaceholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {f.options.map((o) => (
+            <SelectItem key={o} value={o}>
+              {o}
+            </SelectItem>
+          ))}
+        </SelectContent>
       </Select>
     );
   }
@@ -190,7 +204,11 @@ function FormFieldControl({ field: f, uid, value, error: err, locked, copy, onVa
       {f.required ? null : <span className="ml-1 text-xs font-normal text-muted-foreground">({copy.optional})</span>}
     </Label>
   );
-  const error = err ? <p id={errId} role="alert" className="text-xs text-destructive">{err}</p> : null;
+  const error = err ? (
+    <p id={errId} role="alert" className="text-xs text-destructive">
+      {err}
+    </p>
+  ) : null;
   if (f.type === 'checkbox') {
     return (
       <div className="space-y-1">
@@ -217,7 +235,13 @@ function FormFieldControl({ field: f, uid, value, error: err, locked, copy, onVa
  * `handleSubmit` validates, sends the composed prompt and awaits the bridge; a rejection unlocks the form with a
  * retryable error, success locks it in the submitted state.
  */
-function useFormSubmission({ title, fields, disabled, copy, onSendPrompt }: Pick<InputFormProps, 'title' | 'fields' | 'disabled' | 'onSendPrompt'> & { copy: FormCopy }) {
+function useFormSubmission({
+  title,
+  fields,
+  disabled,
+  copy,
+  onSendPrompt,
+}: Pick<InputFormProps, 'title' | 'fields' | 'disabled' | 'onSendPrompt'> & { copy: FormCopy }) {
   const [values, setValues] = React.useState<FormValues>(() =>
     Object.fromEntries(fields.map((f) => [f.id, f.type === 'checkbox' ? false : ''])),
   );
@@ -285,15 +309,32 @@ export function InputForm({ title, description, fields, submitLabel, disabled, l
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
           {fields.map((f) => (
-            <FormFieldControl key={f.id} field={f} uid={uid} value={values[f.id]} error={errors[f.id]} locked={locked} copy={copy} onValueChange={setValue} />
+            <FormFieldControl
+              key={f.id}
+              field={f}
+              uid={uid}
+              value={values[f.id]}
+              error={errors[f.id]}
+              locked={locked}
+              copy={copy}
+              onValueChange={setValue}
+            />
           ))}
           {phase === 'sent' ? (
-            <p role="status" data-testid="form-submitted-banner" className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary">
+            <p
+              role="status"
+              data-testid="form-submitted-banner"
+              className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
+            >
               <CheckCircle2Icon className="size-4 shrink-0" aria-hidden="true" />
               {copy.submitted}
             </p>
           ) : null}
-          {sendError ? <p role="alert" data-testid="form-send-error" className="text-xs text-destructive">{sendError}</p> : null}
+          {sendError ? (
+            <p role="alert" data-testid="form-send-error" className="text-xs text-destructive">
+              {sendError}
+            </p>
+          ) : null}
         </CardContent>
         <CardFooter className="justify-end border-t border-border pt-4">
           <Button type="submit" size="sm" disabled={locked} data-testid="form-submit-button">

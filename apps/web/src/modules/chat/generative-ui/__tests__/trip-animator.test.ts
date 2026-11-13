@@ -104,11 +104,7 @@ describe('TripAnimator & createTripAnimator', () => {
   });
 
   it('validates stopCount and durationMs bounds', () => {
-    expect(() =>
-      createTripAnimator({ stopCount: 1, onFrame: () => undefined }),
-    ).toThrow(/2-30 stops/);
-    expect(() =>
-      createTripAnimator({ stopCount: 3, durationMs: 200, onFrame: () => undefined }),
-    ).toThrow(/between 1 and 120 seconds/);
+    expect(() => createTripAnimator({ stopCount: 1, onFrame: () => undefined })).toThrow(/2-30 stops/);
+    expect(() => createTripAnimator({ stopCount: 3, durationMs: 200, onFrame: () => undefined })).toThrow(/between 1 and 120 seconds/);
   });
 });

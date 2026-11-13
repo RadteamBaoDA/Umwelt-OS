@@ -4,8 +4,13 @@ import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { DashboardPlacement } from './api';
 import {
-  getGridUnitMetrics, isGestureStale, nudgePlacement, placementForPointer, resolveCollisions,
-  type ActiveGesture, type GridLayoutContext,
+  getGridUnitMetrics,
+  isGestureStale,
+  nudgePlacement,
+  placementForPointer,
+  resolveCollisions,
+  type ActiveGesture,
+  type GridLayoutContext,
 } from './grid-geometry';
 
 /** Inputs shared by the gesture hooks. */
@@ -33,9 +38,20 @@ export interface GridGestureInputs {
  * Keeps the latest layout facts in a ref so window-level pointer handlers (registered once per gesture) judge
  * staleness against the current render, not the render that started the gesture.
  */
-function useGridLayoutContext(inputs: Pick<GridGestureInputs, 'breakpoint' | 'requestedBreakpoint' | 'columnCount' | 'visibleGroupKey' | 'isEditMode' | 'interactionPending'>) {
+function useGridLayoutContext(
+  inputs: Pick<
+    GridGestureInputs,
+    'breakpoint' | 'requestedBreakpoint' | 'columnCount' | 'visibleGroupKey' | 'isEditMode' | 'interactionPending'
+  >,
+) {
   const { breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, isEditMode, interactionPending } = inputs;
-  const ref = useRef<GridLayoutContext>({ breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending });
+  const ref = useRef<GridLayoutContext>({
+    breakpoint,
+    requestedBreakpoint,
+    columnCount,
+    visibleGroupKey,
+    interactionEnabled: isEditMode && !interactionPending,
+  });
   useLayoutEffect(() => {
     ref.current = { breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, interactionEnabled: isEditMode && !interactionPending };
   });
@@ -46,7 +62,12 @@ function useGridLayoutContext(inputs: Pick<GridGestureInputs, 'breakpoint' | 're
  * Owns the active gesture state and cancels it when its owner changes (editing disabled, pending operation, pending
  * viewport choice, other breakpoint / column count / visible group).
  */
-function useGestureState(inputs: Pick<GridGestureInputs, 'breakpoint' | 'requestedBreakpoint' | 'columnCount' | 'visibleGroupKey' | 'isEditMode' | 'interactionPending'>) {
+function useGestureState(
+  inputs: Pick<
+    GridGestureInputs,
+    'breakpoint' | 'requestedBreakpoint' | 'columnCount' | 'visibleGroupKey' | 'isEditMode' | 'interactionPending'
+  >,
+) {
   const { breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, isEditMode, interactionPending } = inputs;
   const [gesture, setGesture] = useState<ActiveGesture | null>(null);
   /** Cancels transient gestures on owner changes, pending viewport choice, or disabled editing. */
@@ -56,9 +77,11 @@ function useGestureState(inputs: Pick<GridGestureInputs, 'breakpoint' | 'request
       setGesture(null);
       return;
     }
-    setGesture((current) => current?.columnCount === columnCount
-      && current.breakpoint === breakpoint
-      && current.visibleGroupKey === visibleGroupKey ? current : null);
+    setGesture((current) =>
+      current?.columnCount === columnCount && current.breakpoint === breakpoint && current.visibleGroupKey === visibleGroupKey
+        ? current
+        : null,
+    );
   }, [breakpoint, columnCount, interactionPending, isEditMode, requestedBreakpoint, visibleGroupKey]);
   /* eslint-enable react-hooks/set-state-in-effect */
   return [gesture, setGesture] as const;
@@ -70,46 +93,76 @@ function useGestureState(inputs: Pick<GridGestureInputs, 'breakpoint' | 'request
  */
 function useGestureStarters(inputs: GridGestureInputs, setGesture: (gesture: ActiveGesture) => void) {
   const t = useTranslations('dashboard');
-  const { gridRef, isEditMode, breakpoint, columnCount, visibleGroupKey, placements, getMinSize, hasCompleteCoverage, setInteractionNotice, setSelectedInstanceId } = inputs;
+  const {
+    gridRef,
+    isEditMode,
+    breakpoint,
+    columnCount,
+    visibleGroupKey,
+    placements,
+    getMinSize,
+    hasCompleteCoverage,
+    setInteractionNotice,
+    setSelectedInstanceId,
+  } = inputs;
 
   /** Starts a gesture of `type` on pointer down; stops propagation only when a gesture actually began. */
-  const begin = useCallback((type: 'move' | 'resize', direction: 'e' | 's' | 'se' | undefined, instanceId: string, event: React.PointerEvent) => {
-    if (!isEditMode || event.button !== 0) return;
-    if (!hasCompleteCoverage) {
-      setInteractionNotice(t('layoutActionUnavailable'));
-      return;
-    }
-    const initial = placements.find((p) => p.instance_id === instanceId);
-    if (!initial) return;
-    const width = gridRef.current?.getBoundingClientRect().width ?? 0;
-    const metrics = getGridUnitMetrics(width, columnCount);
-    if (!metrics) return;
+  const begin = useCallback(
+    (type: 'move' | 'resize', direction: 'e' | 's' | 'se' | undefined, instanceId: string, event: React.PointerEvent) => {
+      if (!isEditMode || event.button !== 0) return;
+      if (!hasCompleteCoverage) {
+        setInteractionNotice(t('layoutActionUnavailable'));
+        return;
+      }
+      const initial = placements.find((p) => p.instance_id === instanceId);
+      if (!initial) return;
+      const width = gridRef.current?.getBoundingClientRect().width ?? 0;
+      const metrics = getGridUnitMetrics(width, columnCount);
+      if (!metrics) return;
 
-    const minSize = getMinSize(instanceId);
-    setSelectedInstanceId(instanceId);
-    setGesture({
-      type,
-      ...(direction ? { direction } : {}),
-      instanceId,
+      const minSize = getMinSize(instanceId);
+      setSelectedInstanceId(instanceId);
+      setGesture({
+        type,
+        ...(direction ? { direction } : {}),
+        instanceId,
+        breakpoint,
+        columnCount,
+        visibleGroupKey,
+        startX: event.clientX,
+        startY: event.clientY,
+        cellStride: metrics.stride,
+        initialPlacement: { ...initial },
+        currentPlacement: { ...initial },
+        backupPlacements: placements.map((p) => ({ ...p })),
+        minW: minSize.minW,
+        minH: minSize.minH,
+      });
+
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [
       breakpoint,
       columnCount,
+      getMinSize,
+      gridRef,
+      hasCompleteCoverage,
+      isEditMode,
+      placements,
+      setGesture,
+      setInteractionNotice,
+      setSelectedInstanceId,
+      t,
       visibleGroupKey,
-      startX: event.clientX,
-      startY: event.clientY,
-      cellStride: metrics.stride,
-      initialPlacement: { ...initial },
-      currentPlacement: { ...initial },
-      backupPlacements: placements.map((p) => ({ ...p })),
-      minW: minSize.minW,
-      minH: minSize.minH,
-    });
-
-    event.preventDefault();
-    event.stopPropagation();
-  }, [breakpoint, columnCount, getMinSize, gridRef, hasCompleteCoverage, isEditMode, placements, setGesture, setInteractionNotice, setSelectedInstanceId, t, visibleGroupKey]);
+    ],
+  );
 
   /** Initiates drag to move gesture on header pointer down. */
-  const handleDragStart = useCallback((instanceId: string, event: React.PointerEvent) => begin('move', undefined, instanceId, event), [begin]);
+  const handleDragStart = useCallback(
+    (instanceId: string, event: React.PointerEvent) => begin('move', undefined, instanceId, event),
+    [begin],
+  );
   /** Initiates resize gesture on handle pointer down. */
   const handleResizeStart = useCallback(
     (instanceId: string, direction: 'e' | 's' | 'se', event: React.PointerEvent) => begin('resize', direction, instanceId, event),
@@ -152,9 +205,7 @@ function useGestureListeners(
         setGesture(null);
         return;
       }
-      const updated = placements.map((p) =>
-        p.instance_id === gesture.instanceId ? gesture.currentPlacement : p,
-      );
+      const updated = placements.map((p) => (p.instance_id === gesture.instanceId ? gesture.currentPlacement : p));
       const resolved = resolveCollisions(updated, gesture.instanceId, columnCount, getMinSize);
       setGesture(null);
       if (resolved) onLayoutChange?.(resolved);
@@ -178,7 +229,19 @@ function useGestureListeners(
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [breakpoint, columnCount, getMinSize, gesture, gridRef, layoutContextRef, onLayoutChange, placements, setGesture, setInteractionNotice, t]);
+  }, [
+    breakpoint,
+    columnCount,
+    getMinSize,
+    gesture,
+    gridRef,
+    layoutContextRef,
+    onLayoutChange,
+    placements,
+    setGesture,
+    setInteractionNotice,
+    t,
+  ]);
 }
 
 /**
@@ -187,28 +250,51 @@ function useGestureListeners(
  */
 function useKeyboardNudge(inputs: GridGestureInputs, setAnnouncement: (text: string) => void) {
   const t = useTranslations('dashboard');
-  const { isEditMode, hasCompleteCoverage, placements, getMinSize, columnCount, onLayoutChange, setInteractionNotice, setSelectedInstanceId } = inputs;
-  return useCallback((e: React.KeyboardEvent<HTMLDivElement>, instanceId: string) => {
-    if (!isEditMode) return;
-    if (!hasCompleteCoverage) {
-      setInteractionNotice(t('layoutActionUnavailable'));
-      return;
-    }
-    const current = placements.find((p) => p.instance_id === instanceId);
-    if (!current) return;
-    const next = nudgePlacement(current, e.key, e.shiftKey, columnCount, getMinSize(instanceId));
-    if (next) {
-      e.preventDefault();
-      const updated = placements.map((p) => (p.instance_id === instanceId ? next : p));
-      const resolved = resolveCollisions(updated, instanceId, columnCount, getMinSize);
-      if (resolved) {
-        onLayoutChange?.(resolved);
-        setAnnouncement(t('positionLabel', { x: next.x + 1, y: next.y + 1, w: next.w, h: next.h }));
-      } else setInteractionNotice(t('layoutActionUnavailable'));
-    } else if (e.key === 'Escape') {
-      setSelectedInstanceId(null);
-    }
-  }, [columnCount, getMinSize, hasCompleteCoverage, isEditMode, onLayoutChange, placements, setAnnouncement, setInteractionNotice, setSelectedInstanceId, t]);
+  const {
+    isEditMode,
+    hasCompleteCoverage,
+    placements,
+    getMinSize,
+    columnCount,
+    onLayoutChange,
+    setInteractionNotice,
+    setSelectedInstanceId,
+  } = inputs;
+  return useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>, instanceId: string) => {
+      if (!isEditMode) return;
+      if (!hasCompleteCoverage) {
+        setInteractionNotice(t('layoutActionUnavailable'));
+        return;
+      }
+      const current = placements.find((p) => p.instance_id === instanceId);
+      if (!current) return;
+      const next = nudgePlacement(current, e.key, e.shiftKey, columnCount, getMinSize(instanceId));
+      if (next) {
+        e.preventDefault();
+        const updated = placements.map((p) => (p.instance_id === instanceId ? next : p));
+        const resolved = resolveCollisions(updated, instanceId, columnCount, getMinSize);
+        if (resolved) {
+          onLayoutChange?.(resolved);
+          setAnnouncement(t('positionLabel', { x: next.x + 1, y: next.y + 1, w: next.w, h: next.h }));
+        } else setInteractionNotice(t('layoutActionUnavailable'));
+      } else if (e.key === 'Escape') {
+        setSelectedInstanceId(null);
+      }
+    },
+    [
+      columnCount,
+      getMinSize,
+      hasCompleteCoverage,
+      isEditMode,
+      onLayoutChange,
+      placements,
+      setAnnouncement,
+      setInteractionNotice,
+      setSelectedInstanceId,
+      t,
+    ],
+  );
 }
 
 /**

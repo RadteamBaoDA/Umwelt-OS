@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { DashboardPlacement, GadgetInstance } from './api';
 import { projectTabletPlacements } from './widget-registry';
 
-const inst = (id: string): GadgetInstance => ({ id, definition: { renderer: 'text_panel' } } as unknown as GadgetInstance);
-const pl = (id: string, x: number, y: number, w: number, h: number): DashboardPlacement =>
-  ({ instance_id: id, x, y, w, h });
+const inst = (id: string): GadgetInstance => ({ id, definition: { renderer: 'text_panel' } }) as unknown as GadgetInstance;
+const pl = (id: string, x: number, y: number, w: number, h: number): DashboardPlacement => ({ instance_id: id, x, y, w, h });
 
 describe('projectTabletPlacements', () => {
   const instances = ['a', 'b', 'c', 'd'].map(inst);
   const out = projectTabletPlacements(
     [pl('d', 0, 30, 20, 10), pl('b', 10, 0, 6, 10), pl('a', 0, 0, 6, 10), pl('c', 0, 12, 14, 10)],
-    instances, 30, 90, 56,
+    instances,
+    30,
+    90,
+    56,
   )!;
   const get = (id: string) => out.find((p) => p.instance_id === id)!;
 

@@ -14,7 +14,12 @@ const confirmed = { theme: 'light', locale: 'en-us', timezone: 'UTC', configurat
 
 vi.mock('@/core/query-provider', () => ({
   useDisplayPreferences: () => ({
-    confirmedPreferences: confirmed, confirmPreferences, setPreview, authGeneration: 3, locale: 'en-us', timezone: 'UTC',
+    confirmedPreferences: confirmed,
+    confirmPreferences,
+    setPreview,
+    authGeneration: 3,
+    locale: 'en-us',
+    timezone: 'UTC',
   }),
 }));
 

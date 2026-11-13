@@ -1,14 +1,5 @@
 import { apiRequest, ApiError, csrfHeaders } from '@/core/api';
-import type {
-  Goal,
-  GoalCreate,
-  GoalFilter,
-  GoalPage,
-  GoalLookupResult,
-  GoalUpdate,
-  PlanAcceptanceResult,
-  PlanProposal,
-} from './types';
+import type { Goal, GoalCreate, GoalFilter, GoalPage, GoalLookupResult, GoalUpdate, PlanAcceptanceResult, PlanProposal } from './types';
 
 /** Fetches a paginated page of goals with optional status filtering. */
 export function fetchGoals(filter?: GoalFilter): Promise<GoalPage> {
@@ -33,13 +24,16 @@ export async function fetchGoalsByIds(ids: string[]): Promise<GoalLookupResult[]
   const results: GoalLookupResult[] = [];
   for (let offset = 0; offset < bounded.length; offset += 4) {
     const batch = bounded.slice(offset, offset + 4);
-    const settled = await Promise.all(batch.map(async (id): Promise<GoalLookupResult> => {
-      try { return { id, goal: await getGoal(id), missing: false }; }
-      catch (error) {
-        if (error instanceof ApiError && error.status === 404) return { id, goal: null, missing: true };
-        throw error;
-      }
-    }));
+    const settled = await Promise.all(
+      batch.map(async (id): Promise<GoalLookupResult> => {
+        try {
+          return { id, goal: await getGoal(id), missing: false };
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 404) return { id, goal: null, missing: true };
+          throw error;
+        }
+      }),
+    );
     results.push(...settled);
   }
   return results;
@@ -81,11 +75,7 @@ export function deleteGoal(id: string, expectedRevision: number, csrfToken: stri
 }
 
 /** Atomically accepts a proposed plan and materializes tasks for a goal. */
-export function acceptPlan(
-  id: string,
-  payload: PlanProposal,
-  csrfToken: string,
-): Promise<PlanAcceptanceResult> {
+export function acceptPlan(id: string, payload: PlanProposal, csrfToken: string): Promise<PlanAcceptanceResult> {
   return apiRequest<PlanAcceptanceResult>(`/api/v1/goals/${id}/accept-plan`, {
     method: 'POST',
     headers: {

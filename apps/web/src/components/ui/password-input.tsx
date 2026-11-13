@@ -23,7 +23,21 @@ export function PasswordInput({ style, ...props }: Omit<InputHTMLAttributes<HTML
         aria-pressed={visible}
         title={label}
         onClick={() => setVisible((v) => !v)}
-        style={{ position: 'absolute', top: 0, bottom: 0, right: 0, width: '2.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 0, cursor: 'pointer', color: 'inherit', opacity: 0.7 }}
+        style={{
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: '2.5rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'none',
+          border: 0,
+          cursor: 'pointer',
+          color: 'inherit',
+          opacity: 0.7,
+        }}
       >
         {visible ? <EyeOffIcon size={16} aria-hidden /> : <EyeIcon size={16} aria-hidden />}
       </button>

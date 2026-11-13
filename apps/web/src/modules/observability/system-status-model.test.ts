@@ -1,16 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryBucket, ObservedRun, SystemHealth } from './api';
-import { activityFinding, bucketRunsByHour, queueTotal, barTone, fillBuckets, isStaleRevision, statusTone, summarizeHealth, uptimePercent } from './system-status-model';
+import {
+  activityFinding,
+  bucketRunsByHour,
+  queueTotal,
+  barTone,
+  fillBuckets,
+  isStaleRevision,
+  statusTone,
+  summarizeHealth,
+  uptimePercent,
+} from './system-status-model';
 
-const bucket = (start: string, healthy: number, samples: number, components: HistoryBucket['components'] = {}): HistoryBucket => ({ start, samples, overall_healthy: healthy, queue_backlog_max: 0, components });
-const run = (kind: ObservedRun['kind'], status: string): ObservedRun => ({ kind, id: kind + status, status, error_code: null, created_at: '2026-10-01T10:00:00Z', updated_at: '', finished_at: null, duration_ms: null, usage: null, trace: { request_id: null, ingestion_run_id: null, agent_run_id: null, tool_call_id: null } });
+const bucket = (start: string, healthy: number, samples: number, components: HistoryBucket['components'] = {}): HistoryBucket => ({
+  start,
+  samples,
+  overall_healthy: healthy,
+  queue_backlog_max: 0,
+  components,
+});
+const run = (kind: ObservedRun['kind'], status: string): ObservedRun => ({
+  kind,
+  id: kind + status,
+  status,
+  error_code: null,
+  created_at: '2026-10-01T10:00:00Z',
+  updated_at: '',
+  finished_at: null,
+  duration_ms: null,
+  usage: null,
+  trace: { request_id: null, ingestion_run_id: null, agent_run_id: null, tool_call_id: null },
+});
 
 describe('system status model', () => {
   it('summarizes core health and unconfigured integrations', () => {
-    const health: SystemHealth = { overall: 'degraded', components: {
-      postgres: { status: 'healthy' }, redis: { status: 'healthy' }, worker: { status: 'healthy' }, chat_worker: { status: 'healthy' }, model_worker: { status: 'unavailable' },
-      graph: { status: 'not_installed' }, n8n: { status: 'not_configured' }, browser: { status: 'configured' }, model_gateway: { status: 'configured', connectivity: 'not_tested' },
-    } };
+    const health: SystemHealth = {
+      overall: 'degraded',
+      components: {
+        postgres: { status: 'healthy' },
+        redis: { status: 'healthy' },
+        worker: { status: 'healthy' },
+        chat_worker: { status: 'healthy' },
+        model_worker: { status: 'unavailable' },
+        graph: { status: 'not_installed' },
+        n8n: { status: 'not_configured' },
+        browser: { status: 'configured' },
+        model_gateway: { status: 'configured', connectivity: 'not_tested' },
+      },
+    };
     expect(summarizeHealth(health)).toEqual({ healthy: 4, total: 5, unconfigured: 2, coreOk: false });
   });
   it('colours uptime bars including not-applicable buckets', () => {
@@ -39,14 +76,26 @@ describe('system status model', () => {
   it('finds where failures concentrate', () => {
     expect(activityFinding([])).toEqual({ kind: 'none' });
     expect(activityFinding([run('chat', 'succeeded')])).toEqual({ kind: 'clean', total: 1 });
-    expect(activityFinding([run('agent', 'failed'), run('agent', 'error'), run('chat', 'failed'), run('chat', 'succeeded')])).toEqual({ kind: 'failures', failed: 3, total: 4, topKind: 'agent', topCount: 2 });
+    expect(activityFinding([run('agent', 'failed'), run('agent', 'error'), run('chat', 'failed'), run('chat', 'succeeded')])).toEqual({
+      kind: 'failures',
+      failed: 3,
+      total: 4,
+      topKind: 'agent',
+      topCount: 2,
+    });
   });
   it('detects 409 conflicts', () => {
     expect(isStaleRevision({ status: 409 })).toBe(true);
     expect(isStaleRevision({ status: 500 })).toBe(false);
   });
   it('sums only active queue statuses', () => {
-    expect(queueTotal({ ingestion_stages: { pending: 2, running: 1, succeeded: 50 }, event_delivery: { queued: 3, retrying: 1, failed: 9 }, connector_provisioning: {} })).toBe(7);
+    expect(
+      queueTotal({
+        ingestion_stages: { pending: 2, running: 1, succeeded: 50 },
+        event_delivery: { queued: 3, retrying: 1, failed: 9 },
+        connector_provisioning: {},
+      }),
+    ).toBe(7);
   });
   it('buckets runs by the local hour of the given zone', () => {
     const at = (iso: string): ObservedRun => ({ ...run('chat', 'succeeded'), created_at: iso });

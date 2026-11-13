@@ -16,31 +16,65 @@ export function pagesOf<P, T>(data: { pages: P[] } | undefined, pick: (page: P) 
 /** Returns the merge preview only while it still matches the entity revision, chosen target and trimmed reason. */
 export function matchingMergePreview(preview: MergePreviewData | undefined, value: Entity, target: Entity | null, reason: string) {
   if (!preview) return null;
-  const current = preview.sourceRevision === value.revision && preview.intoId === target?.id
-    && preview.reason === reason.trim() && preview.intoRevision === target?.revision;
+  const current =
+    preview.sourceRevision === value.revision &&
+    preview.intoId === target?.id &&
+    preview.reason === reason.trim() &&
+    preview.intoRevision === target?.revision;
   return current ? preview : null;
 }
 
 /** Returns the split preview only while its revision, name, reason and evidence selection are unchanged. */
-export function matchingSplitPreview(preview: SplitPreviewData | undefined, selectionRevision: number | null, selected: string[], splitName: string, reason: string) {
+export function matchingSplitPreview(
+  preview: SplitPreviewData | undefined,
+  selectionRevision: number | null,
+  selected: string[],
+  splitName: string,
+  reason: string,
+) {
   if (!preview) return null;
   const { payload } = preview;
   const sameSelection = payload.evidence_ids.length === selected.length && payload.evidence_ids.every((id) => selected.includes(id));
-  const current = payload.expected_revision === selectionRevision && payload.new_entity.name === splitName.trim()
-    && payload.reason === reason.trim() && sameSelection;
+  const current =
+    payload.expected_revision === selectionRevision &&
+    payload.new_entity.name === splitName.trim() &&
+    payload.reason === reason.trim() &&
+    sameSelection;
   return current ? preview : null;
 }
 
 /** Display state derived from a loaded entity; pure (no hooks) so it can be computed after the loading guards. */
 function deriveEntityState(c: EntityDetailController, value: Entity) {
-  const { selected, selectionRevision, selectedMergeTarget, baselineRef, identity, correction, evidence, history, historyEvidence, entityTimeline, neighbors, relationshipEvidence, splitName, reason, update, mergePreview, merge, suppress, splitPreview, split } = c;
+  const {
+    selected,
+    selectionRevision,
+    selectedMergeTarget,
+    baselineRef,
+    identity,
+    correction,
+    evidence,
+    history,
+    historyEvidence,
+    entityTimeline,
+    neighbors,
+    relationshipEvidence,
+    splitName,
+    reason,
+    update,
+    mergePreview,
+    merge,
+    suppress,
+    splitPreview,
+    split,
+  } = c;
   const evidenceItems = pagesOf(evidence.data, (page) => page.items);
   const neighborsItems = pagesOf(neighbors.data, (page) => page.items);
   const currentMergePreview = matchingMergePreview(mergePreview.data, value, selectedMergeTarget, reason);
   const currentSplitPreview = matchingSplitPreview(splitPreview.data, selectionRevision, selected, splitName, reason);
   const correctionErrors = [merge.error, mergePreview.error, split.error, splitPreview.error, suppress.error].filter(Boolean);
   /** Maps a document or entity API error to the feature’s displayable error state. */
-  const formatError = (error: Error) => (error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ''}` : error.message).slice(0, 500);
+  const formatError = (error: Error) =>
+    (error instanceof ApiError ? `${error.message}${error.code ? ` (${error.code})` : ''}` : error.message).slice(0, 500);
   const baselineSnapshot = baselineRef.current;
   const staleIdentity = !!baselineSnapshot && (baselineSnapshot.revision !== value.revision || baselineSnapshot.id !== value.id);
   const staleSelection = selected.length > 0 && selectionRevision !== value.revision;
@@ -50,24 +84,60 @@ function deriveEntityState(c: EntityDetailController, value: Entity) {
   const entityEvents = pagesOf(entityTimeline.data, (page) => page.timeline.items);
   const entityGraphStatuses = pagesOf(entityTimeline.data, (page) => page.graph_statuses);
   /** Clears pending identity edits without committing them. */
-  const clearIdentityDraft = () => { baselineRef.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' }; identity.reset({ name: value.name ?? '', description: value.description ?? '', reason: 'owner_review' }); update.reset(); };
+  const clearIdentityDraft = () => {
+    baselineRef.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' };
+    identity.reset({ name: value.name ?? '', description: value.description ?? '', reason: 'owner_review' });
+    update.reset();
+  };
   /** Keeps the current draft but rebases it on the latest loaded revision. */
-  const keepIdentityDraft = () => { baselineRef.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' }; };
+  const keepIdentityDraft = () => {
+    baselineRef.current = { id: value.id, revision: value.revision, name: value.name ?? '', description: value.description ?? '' };
+  };
   /** Stores the latest correction preview or submission issue for display. */
-  const setCorrectionIssue = (field: 'targetId' | 'splitName' | 'reason', message: string) => correction.setError(field, { type: 'manual', message });
-  return { evidenceItems, neighborsItems, currentMergePreview, currentSplitPreview, correctionErrors, formatError, baselineSnapshot, keepIdentityDraft, staleIdentity, staleSelection, relationshipRows, historyRows, historyEvidenceRows, entityEvents, entityGraphStatuses, clearIdentityDraft, setCorrectionIssue };
+  const setCorrectionIssue = (field: 'targetId' | 'splitName' | 'reason', message: string) =>
+    correction.setError(field, { type: 'manual', message });
+  return {
+    evidenceItems,
+    neighborsItems,
+    currentMergePreview,
+    currentSplitPreview,
+    correctionErrors,
+    formatError,
+    baselineSnapshot,
+    keepIdentityDraft,
+    staleIdentity,
+    staleSelection,
+    relationshipRows,
+    historyRows,
+    historyEvidenceRows,
+    entityEvents,
+    entityGraphStatuses,
+    clearIdentityDraft,
+    setCorrectionIssue,
+  };
 }
 
 type DerivedEntityState = ReturnType<typeof deriveEntityState>;
 
-/** Builds the form submit handlers and UI actions for a loaded entity; handlers read the latest snapshots at call time. */
-function buildEntityActions(c: EntityDetailController, d: DerivedEntityState, value: Entity) {
-  const { t, setTab, setCopied, chat, selected, setSelected, selectionRevision, setSelectionRevision, selectedMergeTarget, suppressConfirmed, suppressSnapshot, aliasRemovalSnapshot, setAliasRemovalSnapshot, correction, removeAlias, mergePreview, merge, suppress, splitPreview, split } = c;
+/**
+ * Builds the merge and split preview/confirm submit handlers for a loaded entity.
+ *
+ * @param c Entity detail controller (form, selection, mutations).
+ * @param d Derived entity state (current previews, stale flags, issue setter).
+ * @param value The loaded entity (type guards merge targets).
+ * @returns Four react-hook-form submit handlers. Previews validate the form then call the preview mutation;
+ * confirms only fire the merge/split mutation while the preview is still current and the form still matches it.
+ */
+function buildMergeSplitHandlers(c: EntityDetailController, d: DerivedEntityState, value: Entity) {
+  const { selected, selectedMergeTarget, correction, mergePreview, merge, splitPreview, split } = c;
   const { currentMergePreview, currentSplitPreview, staleSelection, setCorrectionIssue } = d;
   /** Validates the merge target and requests a preview for the current entity revisions. */
   const previewMergeForm = correction.handleSubmit((values) => {
     const parsed = mergeConfirmationSchema.safeParse(values);
-    if (!parsed.success) { setCorrectionIssue('targetId', 'mergeTargetRequired'); return; }
+    if (!parsed.success) {
+      setCorrectionIssue('targetId', 'mergeTargetRequired');
+      return;
+    }
     if (!selectedMergeTarget || selectedMergeTarget.id !== parsed.data.targetId || selectedMergeTarget.type !== value.type) {
       setCorrectionIssue('targetId', 'mergeTargetRequired');
       return;
@@ -86,17 +156,52 @@ function buildEntityActions(c: EntityDetailController, d: DerivedEntityState, va
   /** Validates the split form and previews the selected evidence against its captured revision. */
   const previewSplitForm = correction.handleSubmit((values) => {
     const parsed = splitConfirmationSchema.safeParse(values);
-    if (!parsed.success) { setCorrectionIssue('splitName', 'splitNameRequired'); return; }
+    if (!parsed.success) {
+      setCorrectionIssue('splitName', 'splitNameRequired');
+      return;
+    }
     if (!selected.length || staleSelection) return;
     splitPreview.mutate({ ...values, ...parsed.data });
   });
   /** Confirms a split preview only while its name and reason still match the validated form. */
   const confirmSplitForm = correction.handleSubmit((values) => {
     const parsed = splitConfirmationSchema.safeParse(values);
-    if (!parsed.success) { setCorrectionIssue('splitName', 'splitNameRequired'); return; }
-    if (!currentSplitPreview || parsed.data.reason !== currentSplitPreview.payload.reason || parsed.data.splitName !== currentSplitPreview.payload.new_entity.name) return;
+    if (!parsed.success) {
+      setCorrectionIssue('splitName', 'splitNameRequired');
+      return;
+    }
+    if (
+      !currentSplitPreview ||
+      parsed.data.reason !== currentSplitPreview.payload.reason ||
+      parsed.data.splitName !== currentSplitPreview.payload.new_entity.name
+    )
+      return;
     split.mutate();
   });
+  return { previewMergeForm, confirmMergeForm, previewSplitForm, confirmSplitForm };
+}
+
+/** Builds the form submit handlers and UI actions for a loaded entity; handlers read the latest snapshots at call time. */
+function buildEntityActions(c: EntityDetailController, d: DerivedEntityState, value: Entity) {
+  const {
+    t,
+    setTab,
+    setCopied,
+    chat,
+    selected,
+    setSelected,
+    selectionRevision,
+    setSelectionRevision,
+    suppressConfirmed,
+    suppressSnapshot,
+    aliasRemovalSnapshot,
+    setAliasRemovalSnapshot,
+    correction,
+    removeAlias,
+    suppress,
+  } = c;
+  const { staleSelection } = d;
+  const { previewMergeForm, confirmMergeForm, previewSplitForm, confirmSplitForm } = buildMergeSplitHandlers(c, d, value);
   /** Opens the confirmation state for removing the selected alias. */
   const openAliasRemoval = (aliasId: string, aliasName: string) => {
     void correction.handleSubmit((values) => {
@@ -112,14 +217,21 @@ function buildEntityActions(c: EntityDetailController, d: DerivedEntityState, va
   /** Submits evidence suppression only when the confirmed snapshot still matches the current selection. */
   const suppressForm = correction.handleSubmit((values) => {
     const snapshot = suppressSnapshot;
-    if (!snapshot || !suppressConfirmed || staleSelection || snapshot.revision !== selectionRevision
-      || snapshot.evidenceIds.length !== selected.length || !snapshot.evidenceIds.every((id) => selected.includes(id))
-      || snapshot.reason !== values.reason.trim()) return;
+    if (
+      !snapshot ||
+      !suppressConfirmed ||
+      staleSelection ||
+      snapshot.revision !== selectionRevision ||
+      snapshot.evidenceIds.length !== selected.length ||
+      !snapshot.evidenceIds.every((id) => selected.includes(id)) ||
+      snapshot.reason !== values.reason.trim()
+    )
+      return;
     suppress.mutate({ evidence_ids: snapshot.evidenceIds, expected_revision: snapshot.revision, reason: snapshot.reason });
   });
   /** Adds the selected evidence IDs to the current correction draft. */
   const addSelectedEvidence = (id: string, checked: boolean) => {
-    setSelected((current) => checked ? [...new Set([...current, id])] : current.filter((item) => item !== id));
+    setSelected((current) => (checked ? [...new Set([...current, id])] : current.filter((item) => item !== id)));
     if (checked && selectionRevision === null) setSelectionRevision(value.revision);
     if (!checked && selected.length <= 1) setSelectionRevision(null);
   };
@@ -128,15 +240,39 @@ function buildEntityActions(c: EntityDetailController, d: DerivedEntityState, va
   /** Copies a plain-text citation (name, type and page address) for this entity to the clipboard. */
   const copyCitation = () => {
     const citation = `${value.name ?? t('unnamedEntity')} (${entityTypeLabel(t, value.type)}, ${t('revision')} ${value.revision}) ${window.location.href}`;
-    void navigator.clipboard?.writeText(citation).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 2000); }).catch(() => undefined);
+    void navigator.clipboard
+      ?.writeText(citation)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => undefined);
   };
   /** Opens the Chat drawer scoped to this entity. */
   const askAi = () => chat.openDrawer({ context: { kind: 'entity', resource_id: value.id } });
   /** Returns to Overview and moves focus to the identity name field. */
-  const correctIdentity = () => { setTab('overview'); window.setTimeout(() => document.getElementById('entity-name')?.focus(), 0); };
+  const correctIdentity = () => {
+    setTab('overview');
+    window.setTimeout(() => document.getElementById('entity-name')?.focus(), 0);
+  };
   /** Shared underline-style class for the tab strip triggers. */
-  const tabClass = 'min-h-10 rounded-none border-b-2 border-transparent bg-transparent px-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none';
-  return { previewMergeForm, confirmMergeForm, previewSplitForm, confirmSplitForm, openAliasRemoval, confirmAliasRemoval, suppressForm, addSelectedEvidence, unconfirmedAliases, copyCitation, askAi, correctIdentity, tabClass };
+  const tabClass =
+    'min-h-10 rounded-none border-b-2 border-transparent bg-transparent px-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none';
+  return {
+    previewMergeForm,
+    confirmMergeForm,
+    previewSplitForm,
+    confirmSplitForm,
+    openAliasRemoval,
+    confirmAliasRemoval,
+    suppressForm,
+    addSelectedEvidence,
+    unconfirmedAliases,
+    copyCitation,
+    askAi,
+    correctIdentity,
+    tabClass,
+  };
 }
 
 /** Combines controller state, derived display state and actions into the view model rendered once the entity is loaded. */

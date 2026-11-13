@@ -9,16 +9,35 @@ import { WebSearchSettingsWorkspace } from './web-search-settings';
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 
 const read = { configuration_revision: 3, providers: [], allow_remote_web_search: false };
-const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+const json = (body: unknown) =>
+  Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 
 describe('web search settings', () => {
   const fetchMock = vi.fn();
-  beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
 
   it('saves a keyless SearXNG provider with the expected revision', async () => {
-    fetchMock.mockImplementation((_url: string, init?: RequestInit) => json(init?.method === 'PUT' ? { ...read, providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_configured: false, destination_id: 's' }] } : read));
+    fetchMock.mockImplementation((_url: string, init?: RequestInit) =>
+      json(
+        init?.method === 'PUT'
+          ? {
+              ...read,
+              providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_configured: false, destination_id: 's' }],
+            }
+          : read,
+      ),
+    );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <WebSearchSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     await userEvent.click(await screen.findByRole('button', { name: 'Add provider' }));
     await userEvent.click(screen.getByRole('combobox', { name: 'Provider 1' }));
     await userEvent.click(await screen.findByRole('option', { name: 'SearXNG' }));
@@ -27,13 +46,23 @@ describe('web search settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(true));
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')!;
-    expect(JSON.parse(put[1].body)).toEqual({ expected_revision: 3, providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_action: 'unchanged', api_key: null }], allow_remote_web_search: false });
+    expect(JSON.parse(put[1].body)).toEqual({
+      expected_revision: 3,
+      providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_action: 'unchanged', api_key: null }],
+      allow_remote_web_search: false,
+    });
   });
 
   it('keeps new keys with their providers when reordered', async () => {
     fetchMock.mockImplementation(() => json(read));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <WebSearchSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     await userEvent.click(await screen.findByRole('button', { name: 'Add provider' }));
     await userEvent.type(screen.getByLabelText('Endpoint URL'), 'https://first.example/');
     await userEvent.type(screen.getByLabelText('API key'), 'first-key');
@@ -53,12 +82,23 @@ describe('web search settings', () => {
   });
 
   it('labels default and fallback priority and flags image-capable providers', async () => {
-    fetchMock.mockImplementation(() => json({ ...read, providers: [
-      { provider: 'brave', endpoint: 'https://a.example/', credential_configured: true, destination_id: 'a' },
-      { provider: 'searxng', endpoint: 'https://b.example/', credential_configured: false, destination_id: 'b' },
-    ] }));
+    fetchMock.mockImplementation(() =>
+      json({
+        ...read,
+        providers: [
+          { provider: 'brave', endpoint: 'https://a.example/', credential_configured: true, destination_id: 'a' },
+          { provider: 'searxng', endpoint: 'https://b.example/', credential_configured: false, destination_id: 'b' },
+        ],
+      }),
+    );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <WebSearchSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     expect(await screen.findByText('Default')).toBeTruthy();
     expect(screen.getByText('Fallback 1')).toBeTruthy();
     expect(screen.getAllByText('Images')).toHaveLength(1);
@@ -66,26 +106,53 @@ describe('web search settings', () => {
 
   it('uses the stored key for a test and discards a pending result after reorder', async () => {
     let finishTest!: (value: Response) => void;
-    const configured = { ...read, providers: [
-      { provider: 'brave', endpoint: 'https://first.example/', credential_configured: true, destination_id: 'first' },
-      { provider: 'searxng', endpoint: 'https://second.example/', credential_configured: false, destination_id: 'second' },
-    ] };
-    fetchMock.mockImplementation((url: string) => url.endsWith('/test')
-      ? new Promise<Response>((resolve) => { finishTest = resolve; }) : json(configured));
+    const configured = {
+      ...read,
+      providers: [
+        { provider: 'brave', endpoint: 'https://first.example/', credential_configured: true, destination_id: 'first' },
+        { provider: 'searxng', endpoint: 'https://second.example/', credential_configured: false, destination_id: 'second' },
+      ],
+    };
+    fetchMock.mockImplementation((url: string) =>
+      url.endsWith('/test')
+        ? new Promise<Response>((resolve) => {
+            finishTest = resolve;
+          })
+        : json(configured),
+    );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <WebSearchSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     await userEvent.click((await screen.findAllByRole('button', { name: 'Test connection' }))[0]);
     const request = fetchMock.mock.calls.find(([url]) => url.endsWith('/test'))!;
     expect(JSON.parse(request[1].body).api_key).toBe('');
     await userEvent.click(screen.getByRole('button', { name: 'Move provider 2 up' }));
-    await act(async () => { finishTest(new Response(JSON.stringify({ ok: true, error: null, detail: 5 }), { status: 200, headers: { 'Content-Type': 'application/json' } })); });
+    await act(async () => {
+      finishTest(
+        new Response(JSON.stringify({ ok: true, error: null, detail: 5 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    });
     expect(screen.queryByText('Connection works (5 results).')).toBeNull();
   });
 
   it('saves with the revision at the start of editing after a background refresh', async () => {
     fetchMock.mockImplementation(() => json(read));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <WebSearchSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     await userEvent.click(await screen.findByRole('button', { name: 'Add provider' }));
     await userEvent.click(screen.getByRole('combobox', { name: 'Provider 1' }));
     await userEvent.click(await screen.findByRole('option', { name: 'SearXNG' }));
@@ -98,10 +165,21 @@ describe('web search settings', () => {
   });
 
   it('shows a localized detail line for a failed test reason', async () => {
-    const configured = { ...read, providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_configured: false, destination_id: 's' }] };
-    fetchMock.mockImplementation((url: string) => url.endsWith('/test') ? json({ ok: false, error: 'provider_error', detail: null, reason: 'too_large' }) : json(configured));
+    const configured = {
+      ...read,
+      providers: [{ provider: 'searxng', endpoint: 'https://s.example/', credential_configured: false, destination_id: 's' }],
+    };
+    fetchMock.mockImplementation((url: string) =>
+      url.endsWith('/test') ? json({ ok: false, error: 'provider_error', detail: null, reason: 'too_large' }) : json(configured),
+    );
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={client}>
+          <WebSearchSettingsWorkspace />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
     await userEvent.click(await screen.findByRole('button', { name: 'Test connection' }));
     expect(await screen.findByText('The provider rejected the request.')).toBeTruthy();
     expect(await screen.findByText('Response too large')).toBeTruthy();

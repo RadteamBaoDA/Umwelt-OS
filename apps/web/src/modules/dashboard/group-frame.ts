@@ -10,7 +10,9 @@ export function getGroupFrame(groupId: string): LayoutFrame {
   try {
     const stored = typeof window === 'undefined' ? null : window.localStorage.getItem(KEY_PREFIX + groupId);
     return (LAYOUT_FRAMES as readonly string[]).includes(stored ?? '') ? (stored as LayoutFrame) : 'free';
-  } catch { return 'free'; }
+  } catch {
+    return 'free';
+  }
 }
 
 /**
@@ -18,5 +20,9 @@ export function getGroupFrame(groupId: string): LayoutFrame {
  * ponytail: frame stored per browser; add a dashboard_groups.frame column if cross-device sync is needed
  */
 export function setGroupFrame(groupId: string, frame: LayoutFrame): void {
-  try { window.localStorage.setItem(KEY_PREFIX + groupId, frame); } catch { /* storage unavailable: frame lasts nowhere */ }
+  try {
+    window.localStorage.setItem(KEY_PREFIX + groupId, frame);
+  } catch {
+    /* storage unavailable: frame lasts nowhere */
+  }
 }

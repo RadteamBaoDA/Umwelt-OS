@@ -30,10 +30,7 @@ export function parsePublicOrigin(value: string | null | undefined): string | nu
  * @param env - Environment source (injectable for tests).
  * @returns Normalized origin or `null`.
  */
-export function getPublicOrigin(
-  headers?: Pick<Headers, 'get'>,
-  env: Record<string, string | undefined> = process.env,
-): string | null {
+export function getPublicOrigin(headers?: Pick<Headers, 'get'>, env: Record<string, string | undefined> = process.env): string | null {
   const configured = parsePublicOrigin(env.PUBLIC_ORIGIN);
   if (configured || !headers) return configured;
   // Take the first hop when a proxy chain appends values.

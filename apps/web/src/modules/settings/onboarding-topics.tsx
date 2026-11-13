@@ -34,25 +34,66 @@ export function OnboardingTopics() {
       const matches = topics.data?.filter((topic) => ownsPreset(topic, preset.id)) ?? [];
       const active = matches.filter((topic) => topic.is_active);
       // Deselect clears exactly what `pressed` reflects; select reactivates before it creates.
-      if (active.length) return Promise.all(active.map((topic) => updateTopic(topic.id, { expected_revision: topic.revision, is_active: false }, csrfToken)));
+      if (active.length)
+        return Promise.all(
+          active.map((topic) => updateTopic(topic.id, { expected_revision: topic.revision, is_active: false }, csrfToken)),
+        );
       if (matches[0]) return updateTopic(matches[0].id, { expected_revision: matches[0].revision, is_active: true }, csrfToken);
       return createTopic({ name: preset.id, keywords: [preset.id.toLowerCase(), preset.vi] }, csrfToken);
     },
     // Refetch on success or conflict so chips always show server state.
-    onSettled: () => Promise.all([client.invalidateQueries({ queryKey: ['topics'] }), client.invalidateQueries({ queryKey: ['news-stories'] })]),
+    onSettled: () =>
+      Promise.all([client.invalidateQueries({ queryKey: ['topics'] }), client.invalidateQueries({ queryKey: ['news-stories'] })]),
   });
-  return <div className="space-y-2">
-    <h3 className="text-sm font-semibold">{t('topics.title')}</h3>
-    <p className="text-muted-foreground text-sm">{t('topics.text')}</p>
-    {topics.isPending ? <p role="status" className="text-muted-foreground text-sm">{t('topics.loading')}</p> : null}
-    {topics.isError ? <p role="alert" className="error">{t('topics.loadFailed')} <Button type="button" variant="outline" size="sm" onClick={() => { void topics.refetch(); }}>{t('retry')}</Button></p> : null}
-    {topics.data ? <div className="flex flex-wrap gap-2" role="group" aria-label={t('topics.title')}>
-      {PRESETS.map((preset) => {
-        const pressed = topics.data.some((topic) => ownsPreset(topic, preset.id) && topic.is_active);
-        return <Button key={preset.id} type="button" size="sm" variant={pressed ? 'default' : 'outline'} aria-pressed={pressed}
-          disabled={toggle.isPending} onClick={() => toggle.mutate(preset)}>{t(preset.label)}</Button>;
-      })}
-    </div> : null}
-    {toggle.isError ? <p role="alert" className="error">{t('topics.saveFailed')}</p> : null}
-  </div>;
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-semibold">{t('topics.title')}</h3>
+      <p className="text-muted-foreground text-sm">{t('topics.text')}</p>
+      {topics.isPending ? (
+        <p role="status" className="text-muted-foreground text-sm">
+          {t('topics.loading')}
+        </p>
+      ) : null}
+      {topics.isError ? (
+        <p role="alert" className="error">
+          {t('topics.loadFailed')}{' '}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void topics.refetch();
+            }}
+          >
+            {t('retry')}
+          </Button>
+        </p>
+      ) : null}
+      {topics.data ? (
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('topics.title')}>
+          {PRESETS.map((preset) => {
+            const pressed = topics.data.some((topic) => ownsPreset(topic, preset.id) && topic.is_active);
+            return (
+              <Button
+                key={preset.id}
+                type="button"
+                size="sm"
+                variant={pressed ? 'default' : 'outline'}
+                aria-pressed={pressed}
+                disabled={toggle.isPending}
+                onClick={() => toggle.mutate(preset)}
+              >
+                {t(preset.label)}
+              </Button>
+            );
+          })}
+        </div>
+      ) : null}
+      {toggle.isError ? (
+        <p role="alert" className="error">
+          {t('topics.saveFailed')}
+        </p>
+      ) : null}
+    </div>
+  );
 }

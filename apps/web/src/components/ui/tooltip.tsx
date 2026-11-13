@@ -31,14 +31,19 @@ export function TooltipTrigger({ ...props }: React.ComponentProps<typeof Tooltip
 }
 
 /** Portals a theme-aware tooltip above its trigger while preserving Radix dismissal and focus behavior. */
-export function TooltipContent({ className, side = 'top', sideOffset = 8, ...props }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+export function TooltipContent({
+  className,
+  side = 'top',
+  sideOffset = 8,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         side={side}
         sideOffset={sideOffset}
-        className={cn("ui-tooltip", className)}
+        className={cn('ui-tooltip', className)}
         {...props}
       />
     </TooltipPrimitive.Portal>

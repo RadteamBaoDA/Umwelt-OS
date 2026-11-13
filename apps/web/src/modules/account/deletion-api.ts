@@ -29,24 +29,46 @@ export async function acceptAccountDeletion(currentPassword: string, csrfToken: 
   try {
     // The shared raw path refreshes a rejected CSRF token once; auth events stay off because a 401 here is recovered
     // through the preissued receipt instead of ending the session.
-    response = await apiRequestRaw('/api/v1/auth/account/deletion', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-      body: JSON.stringify({ current_password: currentPassword, confirmation: 'DELETE' }),
-    }, { emitAuthEvents: false });
+    response = await apiRequestRaw(
+      '/api/v1/auth/account/deletion',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+        body: JSON.stringify({ current_password: currentPassword, confirmation: 'DELETE' }),
+      },
+      { emitAuthEvents: false },
+    );
   } catch (error) {
-    try { return await readAccountDeletionStatus(); } catch { throw error; }
+    try {
+      return await readAccountDeletionStatus();
+    } catch {
+      throw error;
+    }
   }
   if (response.ok) {
-    try { return await response.json() as DeletionStatus; }
-    catch (error) {
-      try { return await readAccountDeletionStatus(); } catch { throw error; }
+    try {
+      return (await response.json()) as DeletionStatus;
+    } catch (error) {
+      try {
+        return await readAccountDeletionStatus();
+      } catch {
+        throw error;
+      }
     }
   }
   if (response.status >= 500 || response.status === 401) {
-    try { return await readAccountDeletionStatus(); } catch { /* No accepted receipt: preserve the original rejection. */ }
+    try {
+      return await readAccountDeletionStatus();
+    } catch {
+      /* No accepted receipt: preserve the original rejection. */
+    }
   }
   let detail: { code?: string; message?: string } = {};
-  try { const body = await response.json(); detail = body.error ?? (typeof body.detail === 'object' ? body.detail : {}); } catch { /* Proxy failures need no body to be reported. */ }
+  try {
+    const body = await response.json();
+    detail = body.error ?? (typeof body.detail === 'object' ? body.detail : {});
+  } catch {
+    /* Proxy failures need no body to be reported. */
+  }
   throw new ApiError(response.status, detail.message ?? 'Account deletion failed', detail);
 }

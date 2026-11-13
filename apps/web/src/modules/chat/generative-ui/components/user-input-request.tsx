@@ -50,13 +50,7 @@ function stateBanner(state: InputRequestState, copy: (typeof INPUT_COPY)[keyof t
  * @param props - Request payload, lifecycle state and the submit callback.
  * @returns The request card.
  */
-export function UserInputRequest({
-  request,
-  state,
-  answeredLabel,
-  locale,
-  onSubmitInput,
-}: UserInputRequestProps) {
+export function UserInputRequest({ request, state, answeredLabel, locale, onSubmitInput }: UserInputRequestProps) {
   const copy = INPUT_COPY[resolveWidgetLocale(locale)];
   const [sending, setSending] = React.useState(false);
   const [failed, setFailed] = React.useState(false);

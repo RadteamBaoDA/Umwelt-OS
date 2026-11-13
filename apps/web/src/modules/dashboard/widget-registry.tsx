@@ -35,9 +35,7 @@ type LazyGadget = React.ComponentType<{ instance: GadgetInstance; isEditMode?: b
 function adaptGadget(Lazy: LazyGadget, forwardEditMode = false, forwardUnread = false): React.ComponentType<GadgetRendererProps> {
   return function LazyGadgetRenderer(props: GadgetRendererProps) {
     if (forwardUnread) return <Lazy instance={props.instance} onUnreadCountChange={props.onUnreadCountChange} />;
-    return forwardEditMode
-      ? <Lazy instance={props.instance} isEditMode={props.isEditMode} />
-      : <Lazy instance={props.instance} />;
+    return forwardEditMode ? <Lazy instance={props.instance} isEditMode={props.isEditMode} /> : <Lazy instance={props.instance} />;
   };
 }
 
@@ -52,23 +50,50 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   goals: adaptGadget(dynamic(() => import('./gadgets/goals-gadget').then((m) => m.GoalsGadget), { loading: GadgetChunkSkeleton })),
   timeline: adaptGadget(dynamic(() => import('./gadgets/timeline-gadget').then((m) => m.TimelineGadget), { loading: GadgetChunkSkeleton })),
   entity: adaptGadget(dynamic(() => import('./gadgets/entity-gadget').then((m) => m.EntityGadget), { loading: GadgetChunkSkeleton })),
-  personal_context: adaptGadget(dynamic(() => import('./gadgets/personal-context').then((m) => m.PersonalContext), { loading: GadgetChunkSkeleton })),
+  personal_context: adaptGadget(
+    dynamic(() => import('./gadgets/personal-context').then((m) => m.PersonalContext), { loading: GadgetChunkSkeleton }),
+  ),
   news_feed: adaptGadget(dynamic(() => import('./gadgets/news-feed').then((m) => m.NewsFeed), { loading: GadgetChunkSkeleton })),
-  telegram_feed: adaptGadget(dynamic(() => import('./gadgets/telegram-feed').then((m) => m.TelegramFeed), { loading: GadgetChunkSkeleton })),
-  feed: adaptGadget(dynamic(() => import('./gadgets/feed-gadget').then((m) => m.FeedGadget), { loading: GadgetChunkSkeleton }), false, true),
+  telegram_feed: adaptGadget(
+    dynamic(() => import('./gadgets/telegram-feed').then((m) => m.TelegramFeed), { loading: GadgetChunkSkeleton }),
+  ),
+  feed: adaptGadget(
+    dynamic(() => import('./gadgets/feed-gadget').then((m) => m.FeedGadget), { loading: GadgetChunkSkeleton }),
+    false,
+    true,
+  ),
   text_panel: adaptGadget(dynamic(() => import('./gadgets/text-panel').then((m) => m.TextPanel), { loading: GadgetChunkSkeleton })),
   table_panel: adaptGadget(dynamic(() => import('./gadgets/table-panel').then((m) => m.TablePanel), { loading: GadgetChunkSkeleton })),
   job_list: adaptGadget(dynamic(() => import('./gadgets/job-list').then((m) => m.JobListGadget), { loading: GadgetChunkSkeleton })),
   video_panel: adaptGadget(dynamic(() => import('./gadgets/video-panel').then((m) => m.VideoPanel), { loading: GadgetChunkSkeleton })),
-  watch_rules: adaptGadget(dynamic(() => import('./gadgets/watchlist-gadget').then((m) => m.WatchlistGadget), { loading: GadgetChunkSkeleton })),
-  highlights: adaptGadget(dynamic(() => import('./gadgets/watchlist-gadget').then((m) => m.WatchlistGadget), { loading: GadgetChunkSkeleton })),
-  finance_chart: adaptGadget(dynamic(() => import('./gadgets/finance-chart').then((m) => m.FinanceChart), { loading: GadgetChunkSkeleton })),
-  metrics_chart: adaptGadget(dynamic(() => import('./gadgets/metrics-chart').then((m) => m.MetricsChart), { loading: GadgetChunkSkeleton })),
-  github_project: adaptGadget(dynamic(() => import('./gadgets/github-project-gadget').then((m) => m.GithubProjectGadget), { loading: GadgetChunkSkeleton })),
+  watch_rules: adaptGadget(
+    dynamic(() => import('./gadgets/watchlist-gadget').then((m) => m.WatchlistGadget), { loading: GadgetChunkSkeleton }),
+  ),
+  highlights: adaptGadget(
+    dynamic(() => import('./gadgets/watchlist-gadget').then((m) => m.WatchlistGadget), { loading: GadgetChunkSkeleton }),
+  ),
+  finance_chart: adaptGadget(
+    dynamic(() => import('./gadgets/finance-chart').then((m) => m.FinanceChart), { loading: GadgetChunkSkeleton }),
+  ),
+  metrics_chart: adaptGadget(
+    dynamic(() => import('./gadgets/metrics-chart').then((m) => m.MetricsChart), { loading: GadgetChunkSkeleton }),
+  ),
+  github_project: adaptGadget(
+    dynamic(() => import('./gadgets/github-project-gadget').then((m) => m.GithubProjectGadget), { loading: GadgetChunkSkeleton }),
+  ),
   weather: adaptGadget(dynamic(() => import('./gadgets/weather-panel').then((m) => m.WeatherPanel), { loading: GadgetChunkSkeleton })),
-  provider_observation: adaptGadget(dynamic(() => import('./gadgets/provider-observation-gadget').then((m) => m.ProviderObservationGadget), { loading: GadgetChunkSkeleton })),
-  map: adaptGadget(dynamic(() => import('./gadgets/map-gadget').then((m) => m.MapGadget), { loading: GadgetChunkSkeleton }), true),
-  intelligence_panel: adaptGadget(dynamic(() => import('./gadgets/intelligence-panel').then((m) => m.IntelligencePanel), { loading: GadgetChunkSkeleton })),
+  provider_observation: adaptGadget(
+    dynamic(() => import('./gadgets/provider-observation-gadget').then((m) => m.ProviderObservationGadget), {
+      loading: GadgetChunkSkeleton,
+    }),
+  ),
+  map: adaptGadget(
+    dynamic(() => import('./gadgets/map-gadget').then((m) => m.MapGadget), { loading: GadgetChunkSkeleton }),
+    true,
+  ),
+  intelligence_panel: adaptGadget(
+    dynamic(() => import('./gadgets/intelligence-panel').then((m) => m.IntelligencePanel), { loading: GadgetChunkSkeleton }),
+  ),
 };
 
 /**
@@ -77,29 +102,41 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
  */
 export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
   // The common floor matches the legacy `.skeleton { min-height: 180px }` surface in app/globals.css; DailyBrief adds its date row and two-action row.
-  daily_brief: 240, tasks: 180, goals: 180,
+  daily_brief: 240,
+  tasks: 180,
+  goals: 180,
   // TimelineGadget: 180px readable content baseline plus root p-3, two gaps, and fixed header.
   timeline: 264,
   // Entity/PersonalContext: 180px content baseline plus root padding, search header, and spacing.
-  entity: 272, personal_context: 272,
+  entity: 272,
+  personal_context: 272,
   // FeedGadget: three h-16 skeletons plus loading gaps/padding, root p-3 and fixed action-bar chrome.
-  news_feed: 280, telegram_feed: 280, feed: 280,
+  news_feed: 280,
+  telegram_feed: 280,
+  feed: 280,
   // Fixed renderer roots reserve the common baseline plus bounded controls and outer padding.
-  text_panel: 180, table_panel: 204, job_list: 204, video_panel: 180, watch_rules: 204,
+  text_panel: 180,
+  table_panel: 204,
+  job_list: 204,
+  video_panel: 180,
+  watch_rules: 204,
   highlights: 204,
   // MetricsChart: h-[140px] plot + p-3, two space-y-3 gaps, fixed chart header and range controls.
-  finance_chart: 276, metrics_chart: 276,
+  finance_chart: 276,
+  metrics_chart: 276,
   github_project: 204,
   // MapGadget reserves 12rem for its plot plus 8rem for its range header, notices, list and footer; extra notices scroll.
-  weather: 204, provider_observation: 240, map: 352, intelligence_panel: 180,
+  weather: 204,
+  provider_observation: 240,
+  map: 352,
+  intelligence_panel: 180,
 };
 
 /** Resolves source-backed floors, scaling MapGadget's bounded controls and plot with root text size. */
 export function getGadgetReadingBodyFloor(rendererId: string): number {
   if (rendererId === 'map') {
-    const rootFontSize = typeof document === 'undefined'
-      ? 16
-      : Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const rootFontSize =
+      typeof document === 'undefined' ? 16 : Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
     return 20 * rootFontSize + 32;
   }
   return GADGET_READING_BODY_FLOORS[rendererId] ?? 180;
@@ -107,17 +144,33 @@ export function getGadgetReadingBodyFloor(rendererId: string): number {
 
 /** True when the column count and measured sizes are usable (finite, positive, columns within 1..20). */
 function measurementsValid(columns: number, cellSize: number, stride: number, frameHeaderHeight: number): boolean {
-  return Number.isInteger(columns) && columns >= 1 && columns <= 20
-    && Number.isFinite(cellSize) && cellSize > 0 && Number.isFinite(stride) && stride > 0
-    && Number.isFinite(frameHeaderHeight) && frameHeaderHeight > 0;
+  return (
+    Number.isInteger(columns) &&
+    columns >= 1 &&
+    columns <= 20 &&
+    Number.isFinite(cellSize) &&
+    cellSize > 0 &&
+    Number.isFinite(stride) &&
+    stride > 0 &&
+    Number.isFinite(frameHeaderHeight) &&
+    frameHeaderHeight > 0
+  );
 }
 
 /** True when one placement is an in-bounds integer rectangle (x/w within the columns, y/h within the row bound). */
 function placementInBounds(placement: DashboardPlacement, columns: number): boolean {
-  return Number.isInteger(placement.x) && Number.isInteger(placement.y)
-    && Number.isInteger(placement.w) && Number.isInteger(placement.h)
-    && placement.x >= 0 && placement.y >= 0 && placement.w >= 1 && placement.h >= 1
-    && placement.x + placement.w <= columns && placement.y + placement.h <= 100_000;
+  return (
+    Number.isInteger(placement.x) &&
+    Number.isInteger(placement.y) &&
+    Number.isInteger(placement.w) &&
+    Number.isInteger(placement.h) &&
+    placement.x >= 0 &&
+    placement.y >= 0 &&
+    placement.w >= 1 &&
+    placement.h >= 1 &&
+    placement.x + placement.w <= columns &&
+    placement.y + placement.h <= 100_000
+  );
 }
 
 /** True when placements and instances correspond one-to-one and every placement is an in-bounds integer rectangle. */
@@ -127,9 +180,12 @@ function placementsMatchInstances(
   byId: Map<string, GadgetInstance>,
   columns: number,
 ): boolean {
-  return placements.length === instances.length && byId.size === instances.length
-    && new Set(placements.map((placement) => placement.instance_id)).size === placements.length
-    && placements.every((placement) => byId.has(placement.instance_id) && placementInBounds(placement, columns));
+  return (
+    placements.length === instances.length &&
+    byId.size === instances.length &&
+    new Set(placements.map((placement) => placement.instance_id)).size === placements.length &&
+    placements.every((placement) => byId.has(placement.instance_id) && placementInBounds(placement, columns))
+  );
 }
 
 /** Orders finite coordinates first; ties fall through y, then x, then instance id (deterministic reading order). */
@@ -208,8 +264,7 @@ export function projectTabletPlacements(
 ): DashboardPlacement[] | null {
   if (!(desktopCellSize > 0) || !(tabletCellSize > 0)) return null;
   const half = TABLET_GRID_COLUMNS / 2;
-  const ordered = [...placements].sort((a, b) =>
-    a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id));
+  const ordered = [...placements].sort((a, b) => a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id));
   const colHeights = [0, 0];
   const flowed = ordered.map((source): DashboardPlacement => {
     const px = source.h * (desktopCellSize + 12) - 12;
@@ -224,8 +279,7 @@ export function projectTabletPlacements(
     colHeights[col] += h;
     return { ...source, x: col * half, y, w: half, h };
   });
-  const projected = projectReadableMobilePlacements(
-    flowed, instances, TABLET_GRID_COLUMNS, tabletCellSize, frameHeaderHeight);
+  const projected = projectReadableMobilePlacements(flowed, instances, TABLET_GRID_COLUMNS, tabletCellSize, frameHeaderHeight);
   if (!projected) return null;
   const byId = new Map(projected.map((p) => [p.instance_id, p]));
   return placements.map((p) => byId.get(p.instance_id)!);
@@ -237,9 +291,7 @@ export function projectTabletPlacements(
  * @param rendererId Canonical identifier of the renderer (e.g. 'daily_brief', 'finance_chart').
  * @returns Component constructor if registered, or null for fallback planned rendering.
  */
-export function resolveGadgetRenderer(
-  rendererId: string,
-): React.ComponentType<GadgetRendererProps> | null {
+export function resolveGadgetRenderer(rendererId: string): React.ComponentType<GadgetRendererProps> | null {
   return GADGET_REGISTRY[rendererId] ?? null;
 }
 
@@ -262,7 +314,12 @@ export function isGadgetRendererRegistered(rendererId: string): boolean {
  * @param instance The gadget instance to render.
  * @param isEditMode Whether the parent grid is in layout edit mode.
  */
-export function RegisteredGadget({ rendererId, instance, isEditMode, onUnreadCountChange }: GadgetRendererProps & { rendererId: string }): React.ReactElement | null {
+export function RegisteredGadget({
+  rendererId,
+  instance,
+  isEditMode,
+  onUnreadCountChange,
+}: GadgetRendererProps & { rendererId: string }): React.ReactElement | null {
   const Component = GADGET_REGISTRY[rendererId];
   return Component ? <Component instance={instance} isEditMode={isEditMode} onUnreadCountChange={onUnreadCountChange} /> : null;
 }

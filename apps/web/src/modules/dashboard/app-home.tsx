@@ -9,6 +9,11 @@ import { DashboardPage } from './dashboard-page';
  */
 export function AppHome({ dashboardId }: { dashboardId?: string }) {
   const { selection } = useWorkspace();
-  if (selection?.role === 'member') return <section className="min-h-[24rem] bg-card rounded-lg border border-border"><DailyBrief /></section>;
+  if (selection?.role === 'member')
+    return (
+      <section className="min-h-[24rem] bg-card rounded-lg border border-border">
+        <DailyBrief />
+      </section>
+    );
   return <DashboardPage dashboardId={dashboardId} />;
 }

@@ -147,9 +147,7 @@ export function chartToStandaloneHtml(input: ChartExportInput): string {
   const head = input.series.map((s) => `<th scope="col">${escapeHtml(s.name)}</th>`).join('');
   const body = input.rows
     .map((r) => {
-      const cells = input.series
-        .map((_, i) => `<td>${escapeHtml(input.format(r.values[i] ?? 0))}</td>`)
-        .join('');
+      const cells = input.series.map((_, i) => `<td>${escapeHtml(input.format(r.values[i] ?? 0))}</td>`).join('');
       return `<tr><th scope="row">${escapeHtml(r.label)}</th>${cells}</tr>`;
     })
     .join('');

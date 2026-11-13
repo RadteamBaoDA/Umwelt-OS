@@ -1,20 +1,15 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { DashboardPlacement, GadgetInstance } from './api';
 import { GridCell } from './grid-cell';
-import {
-  DEFAULT_MIN_SIZE, doPlacementsOverlap, GRID_GAP_PX, RENDERER_MIN_SIZES,
-  type ActiveGesture,
-} from './grid-geometry';
+import { DEFAULT_MIN_SIZE, doPlacementsOverlap, GRID_GAP_PX, RENDERER_MIN_SIZES, type ActiveGesture } from './grid-geometry';
 import { GridBackdrop, GridNotices } from './grid-overlays';
 import { useGridGestures } from './use-grid-gestures';
 import { useGridProjection } from './use-grid-projection';
 
-export {
-  doPlacementsOverlap, getGridUnitMetrics, RENDERER_DEFAULT_SIZES, RENDERER_MIN_SIZES, resolveCollisions,
-} from './grid-geometry';
+export { doPlacementsOverlap, getGridUnitMetrics, RENDERER_DEFAULT_SIZES, RENDERER_MIN_SIZES, resolveCollisions } from './grid-geometry';
 
 /** Props for the DashboardGrid renderer. */
 export interface DashboardGridProps {
@@ -65,7 +60,7 @@ function useGridWidth(gridRef: React.RefObject<HTMLDivElement | null>): number {
 
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
-      setGridWidth((current) => current === entry.contentRect.width ? current : entry.contentRect.width);
+      setGridWidth((current) => (current === entry.contentRect.width ? current : entry.contentRect.width));
     });
     observer.observe(node);
     return () => observer.disconnect();
@@ -100,6 +95,115 @@ function computeMaxRow(displayPlacements: DashboardPlacement[], isEditMode: bool
 }
 
 /**
+ * Memoized lookups for the grid: instances by id, the visible-id set, and whether placements
+ * cover every instance exactly once. Pure derivation; hook order is three useMemo calls.
+ *
+ * @param instances Dashboard gadget instances.
+ * @param placements Draft/committed placements.
+ * @param visibleInstanceIds Ids whose cards should render.
+ * @returns Lookup map, visible set, and the complete-coverage flag.
+ */
+function useGridLookups(
+  instances: DashboardGridProps['instances'],
+  placements: DashboardPlacement[],
+  visibleInstanceIds: DashboardGridProps['visibleInstanceIds'],
+) {
+  // Map instances by id for quick lookup
+  const instancesById = useMemo(() => new Map(instances.map((inst) => [inst.id, inst])), [instances]);
+  const visibleIds = useMemo(() => new Set(visibleInstanceIds), [visibleInstanceIds]);
+  const hasCompleteCoverage = useMemo(() => {
+    const placementIds = new Set(placements.map((placement) => placement.instance_id));
+    return (
+      placementIds.size === instances.length &&
+      placements.length === instances.length &&
+      instances.every((instance) => placementIds.has(instance.id))
+    );
+  }, [instances, placements]);
+  return { instancesById, visibleIds, hasCompleteCoverage };
+}
+
+/**
+ * Inline CSS for the grid container: square cells, fixed gap, and a minimum height.
+ *
+ * @param renderColumns Column count to render.
+ * @param renderCell Square cell edge in pixels.
+ * @param minHeight Minimum container height in pixels.
+ * @returns Style object; pure.
+ */
+function gridContainerStyle(renderColumns: number, renderCell: number, minHeight: number): CSSProperties {
+  return {
+    display: 'grid',
+    gridTemplateColumns: `repeat(${renderColumns}, ${renderCell}px)`,
+    gridAutoRows: `${renderCell}px`,
+    gap: `${GRID_GAP_PX}px`,
+    minHeight: `${minHeight}px`,
+  };
+}
+
+/** Bundle of stable handlers GridCells wires into each cell. */
+interface GridCellHandlers {
+  handleKeyDown: ReturnType<typeof useGridGestures>['handleKeyDown'];
+  handleDragStart: ReturnType<typeof useGridGestures>['handleDragStart'];
+  handleResizeStart: ReturnType<typeof useGridGestures>['handleResizeStart'];
+  recordHeaderHeight: (height: number) => void;
+  setSelectedInstanceId: (id: string) => void;
+}
+
+/**
+ * Renders one GridCell per visible placement whose instance exists; others render nothing.
+ *
+ * @param p Display placements, lookup maps, gesture state, and handler bundle from DashboardGrid.
+ * @returns Fragment of cells keyed by instance id; no side effects.
+ */
+function GridCells(p: {
+  displayPlacements: DashboardPlacement[];
+  instancesById: Map<string, DashboardGridProps['instances'][number]>;
+  visibleIds: Set<string>;
+  isEditMode: boolean;
+  selectedInstanceId: string | null;
+  gesture: ReturnType<typeof useGridGestures>['gesture'];
+  overlapCount: number;
+  gestureNotice: string;
+  projectionPending: boolean;
+  readingQueues: Record<string, number>;
+  handlers: GridCellHandlers;
+  props: DashboardGridProps;
+}) {
+  const { handlers, props, gesture } = p;
+  return (
+    <>
+      {p.displayPlacements.map((placement) => {
+        const instance = p.instancesById.get(placement.instance_id);
+        if (!p.visibleIds.has(placement.instance_id) || !instance) return null;
+        const id = placement.instance_id;
+        return (
+          <GridCell
+            key={id}
+            placement={placement}
+            instance={instance}
+            isEditMode={p.isEditMode}
+            isSelected={p.selectedInstanceId === id}
+            gesture={gesture?.instanceId === id ? gesture : null}
+            overlapCount={p.overlapCount}
+            gestureNotice={p.gestureNotice}
+            projectionPending={p.projectionPending}
+            readingQueueCount={p.readingQueues[id] ?? 0}
+            onKeyDown={(e) => handlers.handleKeyDown(e, id)}
+            onSelect={() => handlers.setSelectedInstanceId(id)}
+            onDragStart={(e) => handlers.handleDragStart(id, e)}
+            onResizeStart={(direction, e) => handlers.handleResizeStart(id, direction, e)}
+            onHeaderMeasured={handlers.recordHeaderHeight}
+            onConfigure={() => props.onConfigureInstance?.(instance)}
+            onRemove={() => props.onRemoveInstance?.(id)}
+            onApplyReadingQueue={() => props.onApplyReadingQueue?.(id)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * Grid renderer for Umwelt-OS dashboards.
  * Operates on square integer units with at most 20 columns without moving during streaming. All
  * draft rectangles remain collision participants while visible IDs filter rendered cards only.
@@ -110,8 +214,17 @@ function computeMaxRow(displayPlacements: DashboardPlacement[], isEditMode: bool
  */
 export function DashboardGrid(props: DashboardGridProps) {
   const {
-    instances, placements, visibleInstanceIds, isMobileView = false, isTabletView = false, columns = 20, breakpoint,
-    requestedBreakpoint = breakpoint, interactionPending = false, isEditMode, readingQueues = {},
+    instances,
+    placements,
+    visibleInstanceIds,
+    isMobileView = false,
+    isTabletView = false,
+    columns = 20,
+    breakpoint,
+    requestedBreakpoint = breakpoint,
+    interactionPending = false,
+    isEditMode,
+    readingQueues = {},
   } = props;
   const t = useTranslations('dashboard');
   const gridRef = useRef<HTMLDivElement>(null);
@@ -122,34 +235,51 @@ export function DashboardGrid(props: DashboardGridProps) {
   const [interactionNotice, setInteractionNotice] = useState<string | null>(null);
   const [frameHeaderHeight, setFrameHeaderHeight] = useState(0);
 
-  // Map instances by id for quick lookup
-  const instancesById = useMemo(() => new Map(instances.map((inst) => [inst.id, inst])), [instances]);
-  const visibleIds = useMemo(() => new Set(visibleInstanceIds), [visibleInstanceIds]);
-  const hasCompleteCoverage = useMemo(() => {
-    const placementIds = new Set(placements.map((placement) => placement.instance_id));
-    return placementIds.size === instances.length && placements.length === instances.length
-      && instances.every((instance) => placementIds.has(instance.id));
-  }, [instances, placements]);
+  const { instancesById, visibleIds, hasCompleteCoverage } = useGridLookups(instances, placements, visibleInstanceIds);
 
   /** Resolves renderer-specific integer width and height bounds. */
-  const getMinSize = useCallback((instanceId: string) => {
-    const renderer = instancesById.get(instanceId)?.definition?.renderer ?? '';
-    return RENDERER_MIN_SIZES[renderer] ?? DEFAULT_MIN_SIZE;
-  }, [instancesById]);
+  const getMinSize = useCallback(
+    (instanceId: string) => {
+      const renderer = instancesById.get(instanceId)?.definition?.renderer ?? '';
+      return RENDERER_MIN_SIZES[renderer] ?? DEFAULT_MIN_SIZE;
+    },
+    [instancesById],
+  );
   /** Keeps one measured fixed frame-header height for the current fixed two-row chrome. */
   const recordHeaderHeight = useCallback((height: number) => {
     if (Number.isFinite(height) && height > 0) {
-      setFrameHeaderHeight((current) => current === height ? current : height);
+      setFrameHeaderHeight((current) => (current === height ? current : height));
     }
   }, []);
 
   const { gesture, announcement, handleKeyDown, handleDragStart, handleResizeStart } = useGridGestures({
-    gridRef, isEditMode, interactionPending, breakpoint, requestedBreakpoint, columnCount, visibleGroupKey, placements,
-    getMinSize, hasCompleteCoverage, onLayoutChange: props.onLayoutChange, setInteractionNotice, setSelectedInstanceId,
+    gridRef,
+    isEditMode,
+    interactionPending,
+    breakpoint,
+    requestedBreakpoint,
+    columnCount,
+    visibleGroupKey,
+    placements,
+    getMinSize,
+    hasCompleteCoverage,
+    onLayoutChange: props.onLayoutChange,
+    setInteractionNotice,
+    setSelectedInstanceId,
   });
   const projection = useGridProjection({
-    gridWidth, columnCount, isMobileView, isTabletView, isEditMode, breakpoint, placements, instances, frameHeaderHeight,
-    gesture, onReadableProjectionChange: props.onReadableProjectionChange, onGridMetricsChange: props.onGridMetricsChange,
+    gridWidth,
+    columnCount,
+    isMobileView,
+    isTabletView,
+    isEditMode,
+    breakpoint,
+    placements,
+    instances,
+    frameHeaderHeight,
+    gesture,
+    onReadableProjectionChange: props.onReadableProjectionChange,
+    onGridMetricsChange: props.onGridMetricsChange,
   });
   const { renderColumns, renderCell, displayPlacements, projectionPending, projectionUnavailable, cellSize } = projection;
   const maxRow = useMemo(() => computeMaxRow(displayPlacements, isEditMode), [displayPlacements, isEditMode]);
@@ -160,48 +290,31 @@ export function DashboardGrid(props: DashboardGridProps) {
     <div
       ref={gridRef}
       className={`relative w-full ${isEditMode ? 'select-none' : ''}`}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${renderColumns}, ${renderCell}px)`,
-        gridAutoRows: `${renderCell}px`,
-        gap: `${GRID_GAP_PX}px`,
-        minHeight: `${gridMinHeight}px`,
-      }}
+      style={gridContainerStyle(renderColumns, renderCell, gridMinHeight)}
     >
       <GridNotices
-        isEditMode={isEditMode} liveText={liveText} interactionNotice={interactionNotice}
-        projectionPending={projectionPending} projectionUnavailable={projectionUnavailable}
+        isEditMode={isEditMode}
+        liveText={liveText}
+        interactionNotice={interactionNotice}
+        projectionPending={projectionPending}
+        projectionUnavailable={projectionUnavailable}
       />
       {isEditMode && <GridBackdrop columnCount={columnCount} cellSize={cellSize} maxRow={maxRow} />}
 
-      {/* Render each gadget placement */}
-      {displayPlacements.map((placement) => {
-        const instance = instancesById.get(placement.instance_id);
-        if (!visibleIds.has(placement.instance_id) || !instance) return null;
-        const id = placement.instance_id;
-        return (
-          <GridCell
-            key={id}
-            placement={placement}
-            instance={instance}
-            isEditMode={isEditMode}
-            isSelected={selectedInstanceId === id}
-            gesture={gesture?.instanceId === id ? gesture : null}
-            overlapCount={overlapCount}
-            gestureNotice={gestureNotice}
-            projectionPending={projectionPending}
-            readingQueueCount={readingQueues[id] ?? 0}
-            onKeyDown={(e) => handleKeyDown(e, id)}
-            onSelect={() => setSelectedInstanceId(id)}
-            onDragStart={(e) => handleDragStart(id, e)}
-            onResizeStart={(direction, e) => handleResizeStart(id, direction, e)}
-            onHeaderMeasured={recordHeaderHeight}
-            onConfigure={() => props.onConfigureInstance?.(instance)}
-            onRemove={() => props.onRemoveInstance?.(id)}
-            onApplyReadingQueue={() => props.onApplyReadingQueue?.(id)}
-          />
-        );
-      })}
+      <GridCells
+        displayPlacements={displayPlacements}
+        instancesById={instancesById}
+        visibleIds={visibleIds}
+        isEditMode={isEditMode}
+        selectedInstanceId={selectedInstanceId}
+        gesture={gesture}
+        overlapCount={overlapCount}
+        gestureNotice={gestureNotice}
+        projectionPending={projectionPending}
+        readingQueues={readingQueues}
+        handlers={{ handleKeyDown, handleDragStart, handleResizeStart, recordHeaderHeight, setSelectedInstanceId }}
+        props={props}
+      />
     </div>
   );
 }

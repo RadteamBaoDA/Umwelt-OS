@@ -24,7 +24,14 @@ export type ContentTranslation = {
 };
 
 /** Cache key of one translated resource revision: [workspace, generation, type, id, revision, settings revision]. */
-export function translationKey(workspaceId: string | null, generation: number, type: ResourceType, id: string, revision: string, settingsRevision: number) {
+export function translationKey(
+  workspaceId: string | null,
+  generation: number,
+  type: ResourceType,
+  id: string,
+  revision: string,
+  settingsRevision: number,
+) {
   return workspaceKeys.translation(workspaceId, generation, type, id, revision, settingsRevision);
 }
 
@@ -35,7 +42,13 @@ export function chunk<T>(values: T[], size = CHUNK_SIZE): T[][] {
   return out;
 }
 
-type Seen = { resource_id: string; status: TranslationResult['status']; translation?: TranslationResult['translation']; original_revision?: string; error_code?: string | null };
+type Seen = {
+  resource_id: string;
+  status: TranslationResult['status'];
+  translation?: TranslationResult['translation'];
+  original_revision?: string;
+  error_code?: string | null;
+};
 
 /**
  * Translates only the given (currently loaded) resources. Results live in the shared react-query
@@ -50,21 +63,27 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
   const queryClient = useQueryClient();
   const workspaceId = selection?.id ?? null;
   const settings = useQuery({
-    queryKey: ['translation-settings', workspaceId], queryFn: ({ signal }) => fetchTranslationSettings(signal), staleTime: 30_000,
+    queryKey: ['translation-settings', workspaceId],
+    queryFn: ({ signal }) => fetchTranslationSettings(signal),
+    staleTime: 30_000,
   });
   const enabled = settings.data?.enabled === true;
   const settingsRevision = settings.data?.configuration_revision ?? 0;
   const targetLanguage = settings.data?.target_language ?? 'vi';
   const signature = targets.map((t) => `${t.id}@${t.revision}`).join('|');
   const scopeKey = `${workspaceId}|${type}|${settingsRevision}|${targetLanguage}|${signature}`;
-  const keyOf = (t: TranslationTarget, generation: number) => translationKey(workspaceId, generation, type, t.id, t.revision, settingsRevision);
+  const keyOf = (t: TranslationTarget, generation: number) =>
+    translationKey(workspaceId, generation, type, t.id, t.revision, settingsRevision);
 
   // Observers only: the effect below fills the cache in batches of 25, never one request per query.
   const generationNow = workspaceGeneration();
   const entries = useQueries({
     queries: targets.map((t) => ({
-      queryKey: keyOf(t, generationNow), queryFn: () => Promise.reject(new Error('filled by useContentTranslation')),
-      enabled: false, staleTime: Infinity, retry: false,
+      queryKey: keyOf(t, generationNow),
+      queryFn: () => Promise.reject(new Error('filled by useContentTranslation')),
+      enabled: false,
+      staleTime: Infinity,
+      retry: false,
     })),
   });
 
@@ -82,7 +101,9 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
         if (revision === undefined) continue;
         if (item.original_revision !== undefined && item.original_revision !== revision) continue;
         const result: TranslationResult = {
-          status: item.status, translation: item.status === 'ready' ? item.translation ?? null : null, errorCode: item.error_code ?? null,
+          status: item.status,
+          translation: item.status === 'ready' ? (item.translation ?? null) : null,
+          errorCode: item.error_code ?? null,
         };
         queryClient.setQueryData(keyOf({ id: item.resource_id, revision }, generation), result);
       }
@@ -94,7 +115,11 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
     });
 
     const run = async (group: TranslationTarget[]) => {
-      const requests: TranslationItemRequest[] = group.map((t) => ({ resource_type: type, resource_id: t.id, resource_revision: t.revision }));
+      const requests: TranslationItemRequest[] = group.map((t) => ({
+        resource_type: type,
+        resource_id: t.id,
+        resource_revision: t.revision,
+      }));
       const accepted = await submitTranslationBatch(requests, csrfToken, controller.signal);
       if (!valid()) return;
       take(accepted.items);

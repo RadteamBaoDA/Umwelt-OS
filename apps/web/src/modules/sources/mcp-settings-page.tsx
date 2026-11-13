@@ -8,8 +8,10 @@ import { McpSettings } from './mcp-editor';
 export function McpSettingsPage() {
   const t = useTranslations('shell');
   const tMcp = useTranslations('mcp');
-  return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('settings')} title={tMcp('title')} description={tMcp('description')} />
-    <McpSettings />
-  </div>;
+  return (
+    <div className="flex flex-col gap-5">
+      <SettingsPageHeader eyebrow={t('settings')} title={tMcp('title')} description={tMcp('description')} />
+      <McpSettings />
+    </div>
+  );
 }

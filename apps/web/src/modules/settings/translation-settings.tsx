@@ -29,10 +29,19 @@ export function TranslationSettings() {
   const setEnabled = (value: boolean) => setDraft((d) => ({ ...d, enabled: value }));
   const setLanguage = (value: TranslationLanguage) => setDraft((d) => ({ ...d, language: value }));
   const save = useMutation({
-    mutationFn: () => saveTranslationSettings(
-      { enabled, target_language: language, expected_revision: query.data?.configuration_revision ?? 1 }, csrfToken),
-    onSuccess: (value) => { client.setQueryData(key, value); setDraft({}); },
-    onError: () => { setDraft({}); void query.refetch(); },
+    mutationFn: () =>
+      saveTranslationSettings(
+        { enabled, target_language: language, expected_revision: query.data?.configuration_revision ?? 1 },
+        csrfToken,
+      ),
+    onSuccess: (value) => {
+      client.setQueryData(key, value);
+      setDraft({});
+    },
+    onError: () => {
+      setDraft({});
+      void query.refetch();
+    },
   });
   const dirty = Boolean(query.data && (query.data.enabled !== enabled || query.data.target_language !== language));
   const readOnly = !isOwner;
@@ -41,16 +50,31 @@ export function TranslationSettings() {
     <div className="flex flex-col gap-5">
       <SettingsPageHeader eyebrow={tShell('settings')} title={t('settingsTitle')} description={t('settingsHelp')} />
       <section className="flex min-w-0 flex-col gap-4 border-t border-border pt-6">
-        {query.isError ? <p role="alert" className="error m-0">{t('loadFailed')}</p> : null}
+        {query.isError ? (
+          <p role="alert" className="error m-0">
+            {t('loadFailed')}
+          </p>
+        ) : null}
         <CheckboxField>
-          <Checkbox id="translation-enable" checked={enabled} disabled={readOnly || !query.data} onCheckedChange={(checked) => setEnabled(checked === true)} />
+          <Checkbox
+            id="translation-enable"
+            checked={enabled}
+            disabled={readOnly || !query.data}
+            onCheckedChange={(checked) => setEnabled(checked === true)}
+          />
           <label htmlFor="translation-enable">{t('enable')}</label>
         </CheckboxField>
         <FieldGrid>
           <label className="field">
             <span className="label">{t('targetLanguage')}</span>
-            <Select value={language} disabled={readOnly || !query.data} onValueChange={(value) => setLanguage(value as TranslationLanguage)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+            <Select
+              value={language}
+              disabled={readOnly || !query.data}
+              onValueChange={(value) => setLanguage(value as TranslationLanguage)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="vi">{t('languageVi')}</SelectItem>
                 <SelectItem value="en">{t('languageEn')}</SelectItem>
@@ -58,11 +82,23 @@ export function TranslationSettings() {
             </Select>
           </label>
         </FieldGrid>
-        {failure ? <p role="alert" className="error m-0">{failure}</p> : null}
-        {readOnly ? <p className="text-muted-foreground m-0 text-xs">{t('ownerOnly')}</p> : (
+        {failure ? (
+          <p role="alert" className="error m-0">
+            {failure}
+          </p>
+        ) : null}
+        {readOnly ? (
+          <p className="text-muted-foreground m-0 text-xs">{t('ownerOnly')}</p>
+        ) : (
           <SettingsActions>
-            {save.isSuccess && !dirty ? <p role="status" className="text-muted-foreground me-auto self-center text-xs">{t('saved')}</p> : null}
-            <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{t('save')}</Button>
+            {save.isSuccess && !dirty ? (
+              <p role="status" className="text-muted-foreground me-auto self-center text-xs">
+                {t('saved')}
+              </p>
+            ) : null}
+            <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+              {t('save')}
+            </Button>
           </SettingsActions>
         )}
       </section>

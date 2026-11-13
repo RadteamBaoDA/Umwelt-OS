@@ -8,17 +8,28 @@ import { announceAccountErasure } from '@/core/account-erasure';
 import { AccountDeletionSection } from './account-deletion';
 
 vi.mock('@/core/account-erasure', () => ({ announceAccountErasure: vi.fn() }));
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ accountDeletion: getCatalog('en-us', 'accountDeletion') }}><AccountDeletionSection csrfToken="csrf" /></NextIntlClientProvider></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <NextIntlClientProvider locale="en-US" messages={{ accountDeletion: getCatalog('en-us', 'accountDeletion') }}>
+        <AccountDeletionSection csrfToken="csrf" />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe('AccountDeletionSection', () => {
   it('opens by keyboard with Cancel focused, traps focus and returns it on Escape without submitting', async () => {
     const user = userEvent.setup();
-    const fetcher = vi.fn().mockResolvedValue(Response.json({ can_delete: true, blockers: [], workspace_count: 1, instance_operator: false }));
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(Response.json({ can_delete: true, blockers: [], workspace_count: 1, instance_operator: false }));
     vi.stubGlobal('fetch', fetcher);
     mount();
     const trigger = screen.getByRole('button', { name: 'Delete my account' });
@@ -40,7 +51,9 @@ describe('AccountDeletionSection', () => {
 
   it('cancels by keyboard and drops transient confirmation before reopening', async () => {
     const user = userEvent.setup();
-    const fetcher = vi.fn().mockResolvedValue(Response.json({ can_delete: true, blockers: [], workspace_count: 1, instance_operator: false }));
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(Response.json({ can_delete: true, blockers: [], workspace_count: 1, instance_operator: false }));
     vi.stubGlobal('fetch', fetcher);
     mount();
     const trigger = screen.getByRole('button', { name: 'Delete my account' });
@@ -62,7 +75,11 @@ describe('AccountDeletionSection', () => {
   });
 
   it('shows workspace blockers and refuses submission even with a password and DELETE', async () => {
-    const fetcher = vi.fn().mockResolvedValue(Response.json({ can_delete: false, blockers: ['workspace_has_members'], workspace_count: 1, instance_operator: true }));
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ can_delete: false, blockers: ['workspace_has_members'], workspace_count: 1, instance_operator: true }),
+      );
     vi.stubGlobal('fetch', fetcher);
     mount();
     await userEvent.click(screen.getByRole('button', { name: 'Delete my account' }));
@@ -75,9 +92,17 @@ describe('AccountDeletionSection', () => {
   });
 
   it('requires exact typed confirmation and announces privacy cleanup only after acceptance', async () => {
-    const fetcher = vi.fn().mockImplementation((path: string) => Promise.resolve(Response.json(path.endsWith('deletion-preview')
-      ? { can_delete: true, blockers: [], workspace_count: 1, instance_operator: true }
-      : { status: 'queued', phase: 'queued', error_code: null })));
+    const fetcher = vi
+      .fn()
+      .mockImplementation((path: string) =>
+        Promise.resolve(
+          Response.json(
+            path.endsWith('deletion-preview')
+              ? { can_delete: true, blockers: [], workspace_count: 1, instance_operator: true }
+              : { status: 'queued', phase: 'queued', error_code: null },
+          ),
+        ),
+      );
     vi.stubGlobal('fetch', fetcher);
     mount();
     await userEvent.click(screen.getByRole('button', { name: 'Delete my account' }));

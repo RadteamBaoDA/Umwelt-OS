@@ -4,8 +4,13 @@ import { SEND_PROMPT_ACK_TYPE, SEND_PROMPT_ERROR_TYPE } from '../bridge/bridge-c
 import { useFrameRegistry, useHostPromptDispatch, useSandboxPromptDraft } from '../bridge/prompt-bridge-hooks';
 
 describe('prompt bridge hooks', () => {
-  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_000); });
-  afterEach(() => { vi.useRealTimers(); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('shares one cooldown between host and sandbox prompts', () => {
     const onSend = vi.fn();
@@ -25,7 +30,16 @@ describe('prompt bridge hooks', () => {
     // A sandbox prompt right after a host prompt is inside the shared cooldown window.
     result.current.sandbox('second', frame, 'id-2');
     expect(onDraft).not.toHaveBeenCalled();
-    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: SEND_PROMPT_ERROR_TYPE, id: 'id-2', retryable: true, message: 'Prompt rate limited', nonce: 'nonce-1' }), '*');
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: SEND_PROMPT_ERROR_TYPE,
+        id: 'id-2',
+        retryable: true,
+        message: 'Prompt rate limited',
+        nonce: 'nonce-1',
+      }),
+      '*',
+    );
 
     vi.setSystemTime(1_000_000 + 1001);
     result.current.sandbox('third', frame, 'id-3');

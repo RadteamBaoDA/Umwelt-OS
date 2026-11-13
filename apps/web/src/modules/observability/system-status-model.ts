@@ -40,9 +40,16 @@ export function uptimePercent(buckets: HistoryBucket[], key?: string): number | 
   let up = 0;
   let total = 0;
   for (const bucket of buckets) {
-    if (key === undefined) { up += bucket.overall_healthy; total += bucket.samples; continue; }
+    if (key === undefined) {
+      up += bucket.overall_healthy;
+      total += bucket.samples;
+      continue;
+    }
     const component = bucket.components[key];
-    if (component && component.total > 0) { up += component.up; total += component.total; }
+    if (component && component.total > 0) {
+      up += component.up;
+      total += component.total;
+    }
   }
   return total > 0 ? (up / total) * 100 : null;
 }
@@ -56,13 +63,16 @@ export function fillBuckets(buckets: HistoryBucket[], bucketSeconds: number): (H
   const last = new Date(buckets[buckets.length - 1].start).getTime();
   const out: (HistoryBucket | { start: string; missing: true })[] = [];
   // Bounded: the server caps buckets per range, and we never emit more than 2000 slots.
-  for (let t = first, n = 0; t <= last && n < 2000; t += step, n += 1) out.push(byTime.get(t) ?? { start: new Date(t).toISOString(), missing: true });
+  for (let t = first, n = 0; t <= last && n < 2000; t += step, n += 1)
+    out.push(byTime.get(t) ?? { start: new Date(t).toISOString(), missing: true });
   return out;
 }
 
 const FAILED = ['failed', 'error', 'blocked'];
 /** True when a run ended in a failing state. */
-export function isFailedRun(run: ObservedRun): boolean { return FAILED.includes(run.status); }
+export function isFailedRun(run: ObservedRun): boolean {
+  return FAILED.includes(run.status);
+}
 
 /**
  * Buckets runs by the hour of `created_at` in `timeZone` (browser zone when omitted), ascending, counting succeeded
@@ -77,15 +87,20 @@ export function bucketRunsByHour(runs: ObservedRun[], timeZone?: string): { time
     const part = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
     const hour = at - part('minute') * 60_000 - part('second') * 1000;
     const slot = map.get(hour) ?? { ok: 0, failed: 0 };
-    if (isFailedRun(run)) slot.failed += 1; else slot.ok += 1;
+    if (isFailedRun(run)) slot.failed += 1;
+    else slot.ok += 1;
     map.set(hour, slot);
   }
   return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([time, slot]) => ({ timestamp: new Date(time).toISOString(), ...slot }));
 }
 
 /** Finding about the runs window: no runs, no failures, or the kind that holds most failures. */
-export function activityFinding(runs: ObservedRun[]):
-  | { kind: 'none' } | { kind: 'clean'; total: number } | { kind: 'failures'; failed: number; total: number; topKind: string; topCount: number } {
+export function activityFinding(
+  runs: ObservedRun[],
+):
+  | { kind: 'none' }
+  | { kind: 'clean'; total: number }
+  | { kind: 'failures'; failed: number; total: number; topKind: string; topCount: number } {
   if (runs.length === 0) return { kind: 'none' };
   const failedRuns = runs.filter(isFailedRun);
   if (failedRuns.length === 0) return { kind: 'clean', total: runs.length };
@@ -99,9 +114,15 @@ export function activityFinding(runs: ObservedRun[]):
 export const ACTIVE_QUEUE_STATUSES = ['pending', 'queued', 'running', 'retrying'] as const;
 
 /** Sums only the active-status counts across the durable queue summary maps. */
-export function queueTotal(queue: { ingestion_stages: Record<string, number>; event_delivery: Record<string, number>; connector_provisioning: Record<string, number> }): number {
-  return [queue.ingestion_stages, queue.event_delivery, queue.connector_provisioning]
-    .reduce((sum, map) => sum + ACTIVE_QUEUE_STATUSES.reduce((a, key) => a + (map[key] ?? 0), 0), 0);
+export function queueTotal(queue: {
+  ingestion_stages: Record<string, number>;
+  event_delivery: Record<string, number>;
+  connector_provisioning: Record<string, number>;
+}): number {
+  return [queue.ingestion_stages, queue.event_delivery, queue.connector_provisioning].reduce(
+    (sum, map) => sum + ACTIVE_QUEUE_STATUSES.reduce((a, key) => a + (map[key] ?? 0), 0),
+    0,
+  );
 }
 
 /** Maps a 409 ApiError-like failure to true; other failures are not stale-revision conflicts. */

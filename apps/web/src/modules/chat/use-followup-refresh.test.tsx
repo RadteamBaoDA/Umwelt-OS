@@ -8,13 +8,25 @@ const NOW = new Date('2026-11-10T10:00:00Z');
 /** Assistant message created `ageMs` before NOW. */
 function answer(over: Partial<ChatMessage> = {}, ageMs = 1000): ChatMessage {
   return {
-    id: 'a1', conversation_id: 'c1', role: 'assistant', content: 'x', client_request_id: null, model_identity: null, citations: [],
-    response_id: 'r', revision_of_message_id: null, created_at: new Date(NOW.getTime() - ageMs).toISOString(), ...over,
+    id: 'a1',
+    conversation_id: 'c1',
+    role: 'assistant',
+    content: 'x',
+    client_request_id: null,
+    model_identity: null,
+    citations: [],
+    response_id: 'r',
+    revision_of_message_id: null,
+    created_at: new Date(NOW.getTime() - ageMs).toISOString(),
+    ...over,
   };
 }
 
 describe('useFollowupRefresh', () => {
-  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
   afterEach(() => vi.useRealTimers());
 
   it('refreshes at ~4s and ~10s while the fresh answer has no suggestions', () => {
@@ -44,7 +56,8 @@ describe('useFollowupRefresh', () => {
   it('cancels pending timers on conversation switch and unmount', () => {
     const refresh = vi.fn();
     const { rerender, unmount } = renderHook(
-      (p: { id: string; messages: ChatMessage[] }) => useFollowupRefresh({ conversationId: p.id, messages: p.messages, busy: false, refresh }),
+      (p: { id: string; messages: ChatMessage[] }) =>
+        useFollowupRefresh({ conversationId: p.id, messages: p.messages, busy: false, refresh }),
       { initialProps: { id: 'c1', messages: [answer()] } },
     );
     vi.advanceTimersByTime(2000);

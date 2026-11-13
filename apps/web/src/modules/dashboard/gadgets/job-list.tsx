@@ -30,12 +30,68 @@ export interface JobListGadgetProps {
 function buildPostings(items: JobPostingInput[]): JobPosting[] {
   const time = (p: JobPosting) => (p.postedAt ? Date.parse(p.postedAt) || 0 : 0);
   const seen = new Set<string>();
-  return items.map(parseJobPosting).sort((a, b) => time(b) - time(a)).filter((p) => {
-    const key = p.url ?? `${p.title}|${p.company ?? ''}`.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return items
+    .map(parseJobPosting)
+    .sort((a, b) => time(b) - time(a))
+    .filter((p) => {
+      const key = p.url ?? `${p.title}|${p.company ?? ''}`.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+/**
+ * Scrollable job table for the current page with a show-more control.
+ *
+ * @param p.more Show-more state over the current page's postings (first rows plus expansion).
+ * @returns Table of postings; links open in a new tab with `noopener noreferrer`; missing fields show an en dash.
+ */
+function JobTable({ more }: { more: ReturnType<typeof useShowMore<JobPosting>> }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const dash = '–';
+  return (
+    <div className="min-h-0 flex-1 overflow-auto">
+      <Table aria-label={t('jobs.tableLabel')} containerClassName="max-h-none">
+        <TableHeader className="sticky top-0 bg-card">
+          <TableRow>
+            <TableHead>{t('jobs.colPosition')}</TableHead>
+            <TableHead>{t('jobs.colCompany')}</TableHead>
+            <TableHead>{t('jobs.colLocation')}</TableHead>
+            <TableHead>{t('jobs.colSalary')}</TableHead>
+            <TableHead>{t('jobs.colPosted')}</TableHead>
+            <TableHead>{t('jobs.colSource')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {more.visible.map((p, index) => (
+            <TableRow key={`${p.url ?? p.title}-${index}`}>
+              <TableCell className="max-w-64 whitespace-normal font-medium">
+                {p.url ? (
+                  <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent underline-offset-2 hover:underline">
+                    {p.title}
+                  </a>
+                ) : (
+                  p.title
+                )}
+              </TableCell>
+              <TableCell>{p.company ?? dash}</TableCell>
+              <TableCell>{p.location ?? dash}</TableCell>
+              <TableCell>{p.salary ?? dash}</TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums">
+                {p.postedAt ? <time dateTime={p.postedAt}>{formatDateTime(p.postedAt, display.locale, display.timezone)}</time> : dash}
+              </TableCell>
+              <TableCell>{p.sourceLabel ?? dash}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+      <div className="flex justify-center py-1">
+        <ShowMoreButton state={more} />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -45,7 +101,6 @@ function buildPostings(items: JobPostingInput[]): JobPosting[] {
  */
 export function JobListGadget({ instance }: JobListGadgetProps) {
   const t = useTranslations('dashboard');
-  const display = useDisplayPreferences();
   const sourceIds = [...new Set(instance.definition.source_ids)].slice(0, 32);
   const [filter, setFilter] = useState('');
   const query = useQuery({
@@ -57,9 +112,7 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
   const postings = useMemo(() => buildPostings(items), [items]);
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    return needle
-      ? postings.filter((p) => [p.title, p.company, p.location].some((v) => v?.toLowerCase().includes(needle)))
-      : postings;
+    return needle ? postings.filter((p) => [p.title, p.company, p.location].some((v) => v?.toLowerCase().includes(needle))) : postings;
   }, [postings, filter]);
   const pager = usePagination(visible, 20);
   // First 5 rows of the current page; expanding happens inside the scroll area, and filter/page changes collapse it.
@@ -70,60 +123,40 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
     postings.length > 0 ? t('gadget.itemCount', { count: postings.length }) : null,
   );
 
-  const dash = '–';
   return (
     <section className="flex h-full flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadget.dataEmpty')} action={{ href: '/settings/sources', label: t('gadget.configureAction') }} />
-        : query.isPending ? <GadgetSkeleton variant="table" className="p-0" label={t('gadget.dataLoading')} />
-          : query.isError ? <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />
-            : postings.length === 0 ? <GadgetNotice kind="empty" className="p-0" message={t('gadget.dataEmpty')} />
-              : (
-                <>
-                  <Input
-                    type="search"
-                    aria-label={t('jobs.filterLabel')}
-                    placeholder={t('jobs.filterPlaceholder')}
-                    value={filter}
-                    onChange={(event) => setFilter(event.target.value)}
-                  />
-                  {visible.length === 0 ? <p role="status" className="text-sm text-muted-foreground">{t('jobs.noMatches')}</p> : (
-                    <div className="min-h-0 flex-1 overflow-auto">
-                      <Table aria-label={t('jobs.tableLabel')} containerClassName="max-h-none">
-                        <TableHeader className="sticky top-0 bg-card">
-                          <TableRow>
-                            <TableHead>{t('jobs.colPosition')}</TableHead>
-                            <TableHead>{t('jobs.colCompany')}</TableHead>
-                            <TableHead>{t('jobs.colLocation')}</TableHead>
-                            <TableHead>{t('jobs.colSalary')}</TableHead>
-                            <TableHead>{t('jobs.colPosted')}</TableHead>
-                            <TableHead>{t('jobs.colSource')}</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {more.visible.map((p, index) => (
-                            <TableRow key={`${p.url ?? p.title}-${index}`}>
-                              <TableCell className="max-w-64 whitespace-normal font-medium">
-                                {p.url
-                                  ? <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent underline-offset-2 hover:underline">{p.title}</a>
-                                  : p.title}
-                              </TableCell>
-                              <TableCell>{p.company ?? dash}</TableCell>
-                              <TableCell>{p.location ?? dash}</TableCell>
-                              <TableCell>{p.salary ?? dash}</TableCell>
-                              <TableCell className="whitespace-nowrap tabular-nums">
-                                {p.postedAt ? <time dateTime={p.postedAt}>{formatDateTime(p.postedAt, display.locale, display.timezone)}</time> : dash}
-                              </TableCell>
-                              <TableCell>{p.sourceLabel ?? dash}</TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                      <div className="flex justify-center py-1"><ShowMoreButton state={more} /></div>
-                    </div>
-                  )}
-                  <TablePagination {...pager} />
-                </>
-              )}
+      {sourceIds.length === 0 ? (
+        <GadgetNotice
+          kind="setup"
+          className="p-0"
+          message={t('gadget.dataEmpty')}
+          action={{ href: '/settings/sources', label: t('gadget.configureAction') }}
+        />
+      ) : query.isPending ? (
+        <GadgetSkeleton variant="table" className="p-0" label={t('gadget.dataLoading')} />
+      ) : query.isError ? (
+        <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />
+      ) : postings.length === 0 ? (
+        <GadgetNotice kind="empty" className="p-0" message={t('gadget.dataEmpty')} />
+      ) : (
+        <>
+          <Input
+            type="search"
+            aria-label={t('jobs.filterLabel')}
+            placeholder={t('jobs.filterPlaceholder')}
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          />
+          {visible.length === 0 ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t('jobs.noMatches')}
+            </p>
+          ) : (
+            <JobTable more={more} />
+          )}
+          <TablePagination {...pager} />
+        </>
+      )}
     </section>
   );
 }

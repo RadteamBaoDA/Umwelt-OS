@@ -2,7 +2,9 @@ import { apiRequest, csrfHeaders } from '@/core/api';
 import type { Topic, TopicCreate, TopicEntityOption, TopicPage, TopicUpdate } from './types';
 
 /** Fetches one bounded owner page, preserving the active filter in cursor scope. */
-export function fetchTopics(options: { isActive?: boolean; limit?: number; cursor?: string; signal?: AbortSignal } = {}): Promise<TopicPage> {
+export function fetchTopics(
+  options: { isActive?: boolean; limit?: number; cursor?: string; signal?: AbortSignal } = {},
+): Promise<TopicPage> {
   const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
   if (options.isActive !== undefined) params.set('is_active', String(options.isActive));
   if (options.cursor) params.set('cursor', options.cursor);
@@ -30,7 +32,8 @@ export function getTopic(id: string): Promise<Topic> {
 /** Creates a topic with mandatory trusted CSRF credentials on this write. */
 export function createTopic(payload: TopicCreate, csrfToken: string): Promise<Topic> {
   return apiRequest<Topic>('/api/v1/topics', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
     body: JSON.stringify(payload),
   });
 }
@@ -38,7 +41,8 @@ export function createTopic(payload: TopicCreate, csrfToken: string): Promise<To
 /** Applies a revision-fenced topic update with mandatory trusted CSRF credentials. */
 export function updateTopic(id: string, payload: TopicUpdate, csrfToken: string): Promise<Topic> {
   return apiRequest<Topic>(`/api/v1/topics/${id}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
     body: JSON.stringify(payload),
   });
 }
@@ -46,7 +50,8 @@ export function updateTopic(id: string, payload: TopicUpdate, csrfToken: string)
 /** Tombstones the profile only at its last observed revision. */
 export function deleteTopic(id: string, expectedRevision: number, csrfToken: string): Promise<void> {
   return apiRequest<void>(`/api/v1/topics/${id}?expected_revision=${expectedRevision}`, {
-    method: 'DELETE', headers: csrfHeaders(csrfToken),
+    method: 'DELETE',
+    headers: csrfHeaders(csrfToken),
   });
 }
 

@@ -18,7 +18,18 @@ const ACCENT = '#176a4a';
  */
 export function ShareCard() {
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: 96, background: BG, color: TEXT }}>
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        padding: 96,
+        background: BG,
+        color: TEXT,
+      }}
+    >
       <svg width="120" height="120" viewBox="0 0 24 24" fill="none">
         <g transform="rotate(-45 12 12)" stroke={ACCENT} strokeWidth="2.8" strokeLinecap="round">
           <path d="M3.54 8.92A9 9 0 0 1 20.46 8.92" />

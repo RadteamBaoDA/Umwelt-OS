@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, Plus, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { BareButton } from '@/components/bare-button';
 import { Badge } from '@/components/ui/badge';
@@ -84,6 +85,226 @@ export function useSourceRows(enabled = true) {
 const noopGuard = () => {};
 
 /**
+ * Builds the secondary-line formatter for datasource rows (provider label plus last collection time).
+ *
+ * @returns Function mapping a source row to "provider · updated ..." text; reads translations and display preferences.
+ */
+function useSourceMeta() {
+  const t = useTranslations('gadgetSettings');
+  const ts = useTranslations('sources');
+  const display = useDisplayPreferences();
+  /** Provider label from the sources catalog (literal `provider.*` table), else the raw provider id. */
+  const providerLabel = (provider: string | null) => {
+    if (!provider) return '';
+    const key = providerLabelKey(provider);
+    return key ? ts(key) : provider;
+  };
+  /** Secondary line: provider label and last successful collection time (or "never updated"). */
+  return (option: { provider: string | null; last_success_at: string | null }) =>
+    [
+      providerLabel(option.provider),
+      option.last_success_at
+        ? t('datasource.updated', { when: formatDateTime(option.last_success_at, display.locale, display.timezone) })
+        : t('datasource.neverUpdated'),
+    ]
+      .filter(Boolean)
+      .join(' · ');
+}
+
+type PickerSourceRow = ReturnType<typeof useSourceRows>['rows'][number];
+type PickerOption = PickerSourceRow & { placeholder?: boolean };
+
+/**
+ * Derives the selectable options: active sources compatible with the renderer, plus any saved ids not in them.
+ *
+ * @param loaded Source rows loaded so far.
+ * @param acceptedShapes Accepted data shapes; null means any.
+ * @param value Currently selected ids (kept visible so owners can remove them).
+ * @returns The `allowed` predicate and the memoized option list.
+ */
+function useCompatibleOptions(loaded: PickerSourceRow[], acceptedShapes: readonly DataShape[] | null, value: string[]) {
+  /** True when the source's data shapes intersect the renderer's accepted shapes (any shape when unconstrained). */
+  const allowed = useCallback(
+    (item: { data_shapes?: readonly DataShape[] }) =>
+      acceptedShapes === null || (item.data_shapes ?? []).some((shape) => acceptedShapes.includes(shape)),
+    [acceptedShapes],
+  );
+  const options = useMemo(() => {
+    const rows: PickerOption[] = loaded.filter((item) => item.status === 'active' && allowed(item));
+    const selected = new Set(rows.map((item) => item.id));
+    for (const id of value) {
+      if (!selected.has(id)) {
+        const saved = loaded.find((item) => item.id === id);
+        // `placeholder` marks an id no loaded page contains yet; it is neither inactive nor incompatible until proven missing.
+        rows.push(
+          saved ?? {
+            id,
+            name: id,
+            type: 'unknown',
+            status: 'archived',
+            provider: null,
+            generation: 0,
+            local_only: false,
+            last_success_at: null,
+            data_shapes: [],
+            placeholder: true,
+          },
+        );
+      }
+    }
+    return rows;
+  }, [allowed, loaded, value]);
+  return { allowed, options };
+}
+
+/**
+ * Keeps fetching source pages (bounded by the page count) while no option is loaded or a selected id is still
+ * missing, so the owner never sees "none, add in Sources" or a false Inactive badge for a source on a later page.
+ *
+ * @param sources The shared paged sources query.
+ * @param optionCount Number of selectable options currently shown.
+ * @param value Selected ids.
+ * @param loaded Rows loaded so far.
+ * @returns Nothing; triggers fetchNextPage as a side effect and stops on error or when no page remains.
+ */
+function useEagerSourcePaging(
+  sources: ReturnType<typeof useSourceRows>['query'],
+  optionCount: number,
+  value: string[],
+  loaded: PickerSourceRow[],
+) {
+  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = sources;
+  const selectedMissing = value.some((id) => !loaded.some((item) => item.id === id));
+  useEffect(() => {
+    if ((optionCount === 0 || selectedMissing) && hasNextPage && !isFetchingNextPage && !isFetchNextPageError)
+      void fetchNextPage({ cancelRefetch: false });
+  }, [optionCount, selectedMissing, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+}
+
+/**
+ * Action row under the datasource list: opens the inline source wizard and links to Settings > Sources.
+ *
+ * @param p.sourcesHref Target of the "Open Sources" link.
+ * @param p.onAdd Called when the add-source button is pressed.
+ */
+function DatasourceActions({ sourcesHref, onAdd }: { sourcesHref: string; onAdd: () => void }) {
+  const t = useTranslations('gadgetSettings');
+  const td = useTranslations('dashboard');
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button type="button" size="sm" variant="outline" onClick={onAdd}>
+        <Plus className="size-3.5" aria-hidden />
+        {td('addSourceInline')}
+      </Button>
+      <Link href={sourcesHref} className="text-xs underline">
+        {t('openSources')}
+      </Link>
+    </div>
+  );
+}
+
+/**
+ * Loading and failure notices above the datasource list.
+ *
+ * @param p.isPending True while the first page loads (status role).
+ * @param p.isError True when a read failed (alert role).
+ */
+function DatasourceStatusMessages({ isPending, isError }: { isPending: boolean; isError: boolean }) {
+  const t = useTranslations('gadgetSettings');
+  return (
+    <>
+      {isPending && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('datasource.loading')}
+        </p>
+      )}
+      {isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('datasource.loadFailed')}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Radio list (single mode) or checkbox group (multi mode) of datasource options.
+ *
+ * @param p.mode Selection cardinality.
+ * @param p.value Selected ids.
+ * @param p.onChange Receives the next selection.
+ * @param p.max Multi-mode ceiling; unchecked boxes disable at the ceiling.
+ * @param p.options Options to render.
+ * @param p.meta Secondary-line formatter.
+ * @param p.statusBadge Per-option badge renderer.
+ * @param p.legendId Id of the labelling element.
+ * @param p.describedBy Optional aria-describedby target.
+ * @param p.invalid Optional aria-invalid flag (single mode).
+ */
+function DatasourceOptionList(p: {
+  mode: 'single' | 'multi';
+  value: string[];
+  onChange: (sourceIds: string[]) => void;
+  max: number;
+  options: PickerOption[];
+  meta: ReturnType<typeof useSourceMeta>;
+  statusBadge: (option: PickerOption) => ReactNode;
+  legendId: string;
+  describedBy?: string;
+  invalid?: boolean;
+}) {
+  const { mode, value, onChange, max, options, meta, statusBadge, legendId, describedBy, invalid } = p;
+  if (mode === 'single') {
+    return (
+      <RadioGroup
+        value={value[0] ?? ''}
+        aria-labelledby={legendId}
+        aria-describedby={describedBy}
+        aria-invalid={invalid}
+        className="space-y-1"
+        onValueChange={(next) => onChange([next])}
+      >
+        {options.map((option) => (
+          <label key={option.id} className="flex min-h-9 items-center gap-2 text-sm">
+            <RadioGroupItem value={option.id} />
+            <span className="flex flex-wrap items-center gap-2">
+              <span>
+                {option.name}
+                <span className="block text-xs text-muted-foreground">{meta(option)}</span>
+              </span>
+              {statusBadge(option)}
+            </span>
+          </label>
+        ))}
+      </RadioGroup>
+    );
+  }
+  return (
+    <div role="group" aria-labelledby={legendId} aria-describedby={describedBy} className="space-y-1">
+      {options.map((option) => {
+        const checked = value.includes(option.id);
+        return (
+          <label key={option.id} className="flex min-h-9 items-center gap-2 text-sm">
+            <Checkbox
+              checked={checked}
+              disabled={!checked && value.length >= max}
+              onCheckedChange={(next) => onChange(next === true ? [...value, option.id] : value.filter((item) => item !== option.id))}
+            />
+            <span className="flex flex-wrap items-center gap-2">
+              <span>
+                {option.name}
+                <span className="block text-xs text-muted-foreground">{meta(option)}</span>
+              </span>
+              {statusBadge(option)}
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Selects only active, workspace-configured sources accepted by this renderer. Previously saved inactive or
  * incompatible IDs remain visible so owners can remove them; adding a gadget never creates or activates a source.
  *
@@ -93,7 +314,16 @@ const noopGuard = () => {};
  * @param onChange Receives the next selection.
  * @param max Multi-mode selection ceiling.
  */
-export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invalid, describedBy, sourcesHref = '/settings/sources', max = MAX_SOURCES }: {
+export function DatasourcePicker({
+  acceptedShapes,
+  mode,
+  value,
+  onChange,
+  invalid,
+  describedBy,
+  sourcesHref = '/settings/sources',
+  max = MAX_SOURCES,
+}: {
   acceptedShapes: readonly DataShape[] | null;
   mode: 'single' | 'multi';
   value: string[];
@@ -106,75 +336,27 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
   max?: number;
 }) {
   const t = useTranslations('gadgetSettings');
-  const td = useTranslations('dashboard');
   const queryClient = useQueryClient();
   const [wizardOpen, setWizardOpen] = useState(false);
   const legendId = useId();
-  const ts = useTranslations('sources');
-  const display = useDisplayPreferences();
   // Follows next_cursor page by page so owners with more than 100 sources can still reach every compatible one.
   const { query: sources, rows: loaded } = useSourceRows();
-  /** Provider label from the sources catalog (literal `provider.*` table), else the raw provider id. */
-  const providerLabel = (provider: string | null) => {
-    if (!provider) return '';
-    const key = providerLabelKey(provider);
-    return key ? ts(key) : provider;
-  };
-  /** Secondary line: provider label and last successful collection time (or "never updated"). */
-  const meta = (option: { provider: string | null; last_success_at: string | null }) => [
-    providerLabel(option.provider),
-    option.last_success_at ? t('datasource.updated', { when: formatDateTime(option.last_success_at, display.locale, display.timezone) }) : t('datasource.neverUpdated'),
-  ].filter(Boolean).join(' · ');
-  /** True when the source's data shapes intersect the renderer's accepted shapes (any shape when unconstrained). */
-  const allowed = useCallback(
-    (item: { data_shapes?: readonly DataShape[] }) => acceptedShapes === null || (item.data_shapes ?? []).some((shape) => acceptedShapes.includes(shape)),
-    [acceptedShapes],
-  );
-  const options = useMemo(() => {
-    const rows: ((typeof loaded)[number] & { placeholder?: boolean })[] = loaded.filter((item) => item.status === 'active' && allowed(item));
-    const selected = new Set(rows.map((item) => item.id));
-    for (const id of value) {
-      if (!selected.has(id)) {
-        const saved = loaded.find((item) => item.id === id);
-        // `placeholder` marks an id no loaded page contains yet; it is neither inactive nor incompatible until proven missing.
-        rows.push(saved ?? { id, name: id, type: 'unknown', status: 'archived', provider: null, generation: 0, local_only: false, last_success_at: null, data_shapes: [], placeholder: true });
-      }
-    }
-    return rows;
-  }, [allowed, loaded, value]);
+  const meta = useSourceMeta();
+  const { allowed, options } = useCompatibleOptions(loaded, acceptedShapes, value);
 
-  // Keep paging (bounded by the page count) while no row is loaded or a selected id is still missing, so the owner
-  // never sees "none, add in Sources" or a false Inactive badge for a source that only sits on a later page.
-  const { hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } = sources;
-  const selectedMissing = value.some((id) => !loaded.some((item) => item.id === id));
-  useEffect(() => {
-    if ((options.length === 0 || selectedMissing) && hasNextPage && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage({ cancelRefetch: false });
-  }, [options.length, selectedMissing, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+  const { hasNextPage, isFetchNextPageError } = sources;
+  useEagerSourcePaging(sources, options.length, value, loaded);
   /** Status badge: a not-yet-loaded saved id shows a neutral loading hint until every page is read, then Inactive. */
   const statusBadge = (option: (typeof options)[number]) => {
     // Neutral until every page loaded successfully: pending, paging or failed reads cannot prove the id is missing.
-    if (option.placeholder && (sources.isPending || hasNextPage || sources.isError || isFetchNextPageError)) return <span className="text-xs text-muted-foreground">{t('datasource.loading')}</span>;
-    return option.status !== 'active' ? <Badge variant="destructive">{t('datasource.inactive')}</Badge> : !allowed(option) && <Badge variant="destructive">{t('datasource.incompatible')}</Badge>;
+    if (option.placeholder && (sources.isPending || hasNextPage || sources.isError || isFetchNextPageError))
+      return <span className="text-xs text-muted-foreground">{t('datasource.loading')}</span>;
+    return option.status !== 'active' ? (
+      <Badge variant="destructive">{t('datasource.inactive')}</Badge>
+    ) : (
+      !allowed(option) && <Badge variant="destructive">{t('datasource.incompatible')}</Badge>
+    );
   };
-
-  const body = mode === 'single'
-    ? <RadioGroup value={value[0] ?? ''} aria-labelledby={legendId} aria-describedby={describedBy} aria-invalid={invalid} className="space-y-1"
-      onValueChange={(next) => onChange([next])}>
-      {options.map((option) => <label key={option.id} className="flex min-h-9 items-center gap-2 text-sm">
-        <RadioGroupItem value={option.id} />
-        <span className="flex flex-wrap items-center gap-2"><span>{option.name}<span className="block text-xs text-muted-foreground">{meta(option)}</span></span>{statusBadge(option)}</span>
-      </label>)}
-    </RadioGroup>
-    : <div role="group" aria-labelledby={legendId} aria-describedby={describedBy} className="space-y-1">
-      {options.map((option) => {
-        const checked = value.includes(option.id);
-        return <label key={option.id} className="flex min-h-9 items-center gap-2 text-sm">
-          <Checkbox checked={checked} disabled={!checked && value.length >= max}
-            onCheckedChange={(next) => onChange(next === true ? [...value, option.id] : value.filter((item) => item !== option.id))} />
-          <span className="flex flex-wrap items-center gap-2"><span>{option.name}<span className="block text-xs text-muted-foreground">{meta(option)}</span></span>{statusBadge(option)}</span>
-        </label>;
-      })}
-    </div>;
 
   /** Refreshes the shared editor source pages, then selects the just-created source (single replaces, multi adds up to the ceiling). */
   const handleCreated = (sourceId: string) => {
@@ -183,27 +365,58 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
     else if (!value.includes(sourceId) && value.length < max) onChange([...value, sourceId]);
   };
 
-  return <div className="space-y-2">
-    <div id={legendId} className="text-sm font-semibold">{t('pickDatasource')}</div>
-    {mode === 'multi' && <p className="text-xs text-muted-foreground">{t('datasource.limit')}</p>}
-    {sources.isPending && <p role="status" className="text-xs text-muted-foreground">{t('datasource.loading')}</p>}
-    {sources.isError && <p role="alert" className="text-xs text-destructive">{t('datasource.loadFailed')}</p>}
-    <div className="max-h-56 overflow-y-auto rounded-md border border-border p-2">
-      {body}
-      {sources.hasNextPage && <Button type="button" size="sm" variant="outline" disabled={sources.isFetchingNextPage} onClick={() => void sources.fetchNextPage()}>{t('datasource.loadMore')}</Button>}
-      {sources.isSuccess && options.length === 0 && !sources.hasNextPage && <p className="text-xs text-muted-foreground">{t('datasource.noneAddInSources')}</p>}
+  return (
+    <div className="space-y-2">
+      <div id={legendId} className="text-sm font-semibold">
+        {t('pickDatasource')}
+      </div>
+      {mode === 'multi' && <p className="text-xs text-muted-foreground">{t('datasource.limit')}</p>}
+      <DatasourceStatusMessages isPending={sources.isPending} isError={sources.isError} />
+      <div className="max-h-56 overflow-y-auto rounded-md border border-border p-2">
+        <DatasourceOptionList
+          mode={mode}
+          value={value}
+          onChange={onChange}
+          max={max}
+          options={options}
+          meta={meta}
+          statusBadge={statusBadge}
+          legendId={legendId}
+          describedBy={describedBy}
+          invalid={invalid}
+        />
+
+        {sources.hasNextPage && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={sources.isFetchingNextPage}
+            onClick={() => void sources.fetchNextPage()}
+          >
+            {t('datasource.loadMore')}
+          </Button>
+        )}
+        {sources.isSuccess && options.length === 0 && !sources.hasNextPage && (
+          <p className="text-xs text-muted-foreground">{t('datasource.noneAddInSources')}</p>
+        )}
+      </div>
+      <DatasourceActions sourcesHref={sourcesHref} onAdd={() => setWizardOpen(true)} />
+      {wizardOpen && (
+        // Stacked Radix dialog: it traps focus above the editor dialog and restores it here on close.
+        <SourceWizard
+          request={{ kind: 'connector' }}
+          shapeFilter={acceptedShapes ? [...acceptedShapes] : undefined}
+          registerTransitionGuard={noopGuard}
+          onChanged={() => {
+            void queryClient.invalidateQueries({ queryKey: [...dashboardKeys.sources, 'editor-paged'] });
+          }}
+          onClose={() => setWizardOpen(false)}
+          onCreated={handleCreated}
+        />
+      )}
     </div>
-    <div className="flex flex-wrap items-center gap-3">
-      <Button type="button" size="sm" variant="outline" onClick={() => setWizardOpen(true)}><Plus className="size-3.5" aria-hidden />{td('addSourceInline')}</Button>
-      <Link href={sourcesHref} className="text-xs underline">{t('openSources')}</Link>
-    </div>
-    {wizardOpen && (
-      // Stacked Radix dialog: it traps focus above the editor dialog and restores it here on close.
-      <SourceWizard request={{ kind: 'connector' }} shapeFilter={acceptedShapes ? [...acceptedShapes] : undefined}
-        registerTransitionGuard={noopGuard} onChanged={() => { void queryClient.invalidateQueries({ queryKey: [...dashboardKeys.sources, 'editor-paged'] }); }}
-        onClose={() => setWizardOpen(false)} onCreated={handleCreated} />
-    )}
-  </div>;
+  );
 }
 
 /**
@@ -217,7 +430,21 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
  * @param id DOM id of the single Select trigger (target of the field label).
  * @param labelId DOM id of the visible field label; the multi-select group is named by it.
  */
-export function MetricPicker({ catalog, single, value, onChange, id, labelId }: { catalog: ProviderMetrics; single: boolean; value: string[]; onChange: (next: string[]) => void; id: string; labelId: string }) {
+export function MetricPicker({
+  catalog,
+  single,
+  value,
+  onChange,
+  id,
+  labelId,
+}: {
+  catalog: ProviderMetrics;
+  single: boolean;
+  value: string[];
+  onChange: (next: string[]) => void;
+  id: string;
+  labelId: string;
+}) {
   const t = useTranslations('gadgetSettings');
   /** Localized metric name (see {@link METRIC_NAME_KEY}) falling back to the raw id, with the unit appended when known. */
   const label = (metric: string) => {
@@ -228,55 +455,140 @@ export function MetricPicker({ catalog, single, value, onChange, id, labelId }: 
   const ids = catalog.metrics.map((item) => item.id);
   // Saved or typed ids outside the listed catalog stay selectable so they can be unchecked.
   const all = [...ids, ...value.filter((item) => !ids.includes(item))];
-  const typed = catalog.metrics_open && <SearchableSelect value="" options={ids} allowCustom aria-label={t('metric.search')} placeholder={t('metric.search')}
-    searchLabel={t('metric.search')} emptyLabel={t('metric.empty')}
-    onValueChange={(next) => onChange(single ? [next] : [...new Set([...value, next])])} />;
+  const typed = catalog.metrics_open && (
+    <SearchableSelect
+      value=""
+      options={ids}
+      allowCustom
+      aria-label={t('metric.search')}
+      placeholder={t('metric.search')}
+      searchLabel={t('metric.search')}
+      emptyLabel={t('metric.empty')}
+      onValueChange={(next) => onChange(single ? [next] : [...new Set([...value, next])])}
+    />
+  );
   if (single) {
-    return <>
-      <Select value={value[0] ?? ''} onValueChange={(next) => onChange([next])}>
-        <SelectTrigger id={id} aria-label={t('metric.label')} className="h-9"><SelectValue placeholder={t('metric.placeholder')} /></SelectTrigger>
-        <SelectContent>{all.map((metric) => <SelectItem key={metric} value={metric}>{label(metric)}</SelectItem>)}</SelectContent>
-      </Select>
-      {typed}
-    </>;
+    return (
+      <>
+        <Select value={value[0] ?? ''} onValueChange={(next) => onChange([next])}>
+          <SelectTrigger id={id} aria-label={t('metric.label')} className="h-9">
+            <SelectValue placeholder={t('metric.placeholder')} />
+          </SelectTrigger>
+          <SelectContent>
+            {all.map((metric) => (
+              <SelectItem key={metric} value={metric}>
+                {label(metric)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {typed}
+      </>
+    );
   }
-  return <div role="group" aria-labelledby={labelId} className="space-y-1">
-    {all.map((metric) => <label key={metric} className="flex min-h-8 items-center gap-2 text-xs">
-      <Checkbox checked={value.includes(metric)} onCheckedChange={(checked) => onChange(checked === true ? [...value, metric] : value.filter((item) => item !== metric))} />
-      <span>{label(metric)}</span>
-    </label>)}
-    {typed}
-  </div>;
+  return (
+    <div role="group" aria-labelledby={labelId} className="space-y-1">
+      {all.map((metric) => (
+        <label key={metric} className="flex min-h-8 items-center gap-2 text-xs">
+          <Checkbox
+            checked={value.includes(metric)}
+            onCheckedChange={(checked) => onChange(checked === true ? [...value, metric] : value.filter((item) => item !== metric))}
+          />
+          <span>{label(metric)}</span>
+        </label>
+      ))}
+      {typed}
+    </div>
+  );
 }
 
 /**
  * Symbol chips plus a searchable field over the provider's suggested symbols that also accepts typed text,
  * stored uppercase and de-duplicated.
  */
-export function SymbolPicker({ suggested, value, onChange, labelId }: { suggested: string[]; value: string[]; onChange: (next: string[]) => void; labelId: string }) {
+export function SymbolPicker({
+  suggested,
+  value,
+  onChange,
+  labelId,
+}: {
+  suggested: string[];
+  value: string[];
+  onChange: (next: string[]) => void;
+  labelId: string;
+}) {
   const t = useTranslations('gadgetSettings');
-  return <div className="space-y-2">
-    {value.length > 0 && <ul className="flex flex-wrap gap-1.5">{value.map((symbol) => <li key={symbol}>
-      <Badge variant="outline" className="gap-1 font-mono">{symbol}
-        <BareButton type="button" aria-label={`${t('remove')} ${symbol}`} onClick={() => onChange(value.filter((item) => item !== symbol))}><Trash2 className="size-3" aria-hidden="true" /></BareButton>
-      </Badge></li>)}</ul>}
-    <SearchableSelect value="" options={suggested.filter((item) => !value.includes(item))} allowCustom aria-labelledby={labelId} placeholder={t('symbol.placeholder')}
-      searchLabel={t('symbol.search')} emptyLabel={t('symbol.empty')}
-      onValueChange={(next) => { const symbol = next.trim().toUpperCase(); if (symbol && !value.includes(symbol)) onChange([...value, symbol]); }} />
-  </div>;
+  return (
+    <div className="space-y-2">
+      {value.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5">
+          {value.map((symbol) => (
+            <li key={symbol}>
+              <Badge variant="outline" className="gap-1 font-mono">
+                {symbol}
+                <BareButton
+                  type="button"
+                  aria-label={`${t('remove')} ${symbol}`}
+                  onClick={() => onChange(value.filter((item) => item !== symbol))}
+                >
+                  <Trash2 className="size-3" aria-hidden="true" />
+                </BareButton>
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+      <SearchableSelect
+        value=""
+        options={suggested.filter((item) => !value.includes(item))}
+        allowCustom
+        aria-labelledby={labelId}
+        placeholder={t('symbol.placeholder')}
+        searchLabel={t('symbol.search')}
+        emptyLabel={t('symbol.empty')}
+        onValueChange={(next) => {
+          const symbol = next.trim().toUpperCase();
+          if (symbol && !value.includes(symbol)) onChange([...value, symbol]);
+        }}
+      />
+    </div>
+  );
 }
 
 /** Picks the stable CoinGecko ID represented by each collected series and labels duplicate tickers explicitly. */
-export function CoinGeckoSymbolPicker({ assets, value, onChange, labelId }: { assets: CoinGeckoCoin[]; value: string[]; onChange: (next: string[]) => void; labelId: string }) {
-  return <ul className="grid max-h-48 gap-1 overflow-y-auto" aria-labelledby={labelId}>
-    {assets.map((coin) => {
-      const symbol = coin.series_symbol ?? coin.id.toUpperCase();
-      const selected = value.includes(symbol);
-      return <li key={coin.id}><Button type="button" variant={selected ? 'secondary' : 'outline'} className="h-auto min-h-9 w-full justify-start whitespace-normal text-left pointer-coarse:min-h-11" aria-pressed={selected} onClick={() => onChange(selected ? value.filter((item) => item !== symbol) : [...value, symbol])}>
-        {coin.name} ({coin.symbol}) · {coin.id}{selected ? ' ✓' : ''}
-      </Button></li>;
-    })}
-  </ul>;
+export function CoinGeckoSymbolPicker({
+  assets,
+  value,
+  onChange,
+  labelId,
+}: {
+  assets: CoinGeckoCoin[];
+  value: string[];
+  onChange: (next: string[]) => void;
+  labelId: string;
+}) {
+  return (
+    <ul className="grid max-h-48 gap-1 overflow-y-auto" aria-labelledby={labelId}>
+      {assets.map((coin) => {
+        const symbol = coin.series_symbol ?? coin.id.toUpperCase();
+        const selected = value.includes(symbol);
+        return (
+          <li key={coin.id}>
+            <Button
+              type="button"
+              variant={selected ? 'secondary' : 'outline'}
+              className="h-auto min-h-9 w-full justify-start whitespace-normal text-left pointer-coarse:min-h-11"
+              aria-pressed={selected}
+              onClick={() => onChange(selected ? value.filter((item) => item !== symbol) : [...value, symbol])}
+            >
+              {coin.name} ({coin.symbol}) · {coin.id}
+              {selected ? ' ✓' : ''}
+            </Button>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 /**
@@ -296,38 +608,68 @@ export function HighlightRulesField({ rules, onChange }: { rules: HighlightRule[
     onChange([...rules, { id: uuid7(), keywords: parsed, severity, notify }]);
     setKeywords('');
   };
-  return <div className="space-y-2.5 border-t border-border pt-3">
-    <div className="flex items-center justify-between">
-      <span className="text-xs font-semibold">{ts('gs.rules', { count: rules.length })}</span>
-      <span className="font-mono text-[11px] text-muted-foreground">{ts('gs.rulesHint')}</span>
-    </div>
-    {rules.length > 0 && <ul className="space-y-1.5">{rules.map((rule) => <li key={rule.id} className="flex items-center justify-between rounded-lg border border-border p-2 text-xs">
-      <span className="flex min-w-0 items-center gap-2">
-        <Badge variant={rule.severity === 'critical' ? 'destructive' : 'outline'}>{ts(rule.severity === 'critical' ? 'gs.critical' : rule.severity === 'warning' ? 'gs.warning' : 'gs.info')}</Badge>
-        <span className="truncate font-medium">{rule.keywords.join(', ')}</span>
-        {rule.notify && <Bell className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
-      </span>
-      <Button type="button" size="icon" variant="ghost" aria-label={ts('gs.removeRule')} onClick={() => onChange(rules.filter((item) => item.id !== rule.id))}><Trash2 className="size-3.5" aria-hidden="true" /></Button>
-    </li>)}</ul>}
-    <div className="space-y-2 rounded-lg border border-border p-2.5">
-      <span className="text-[11px] font-semibold text-muted-foreground">{ts('gs.addRule')}</span>
-      <div className="flex items-center gap-2">
-        <Input value={keywords} onChange={(event) => setKeywords(event.target.value)} aria-label={ts('gs.ruleKeywords')} placeholder={ts('gs.ruleKeywords')} className="h-8 flex-1 text-xs" />
-        <Select value={severity} onValueChange={(next) => setSeverity(next as HighlightRule['severity'])}>
-          <SelectTrigger className="h-8 w-28 text-xs" aria-label={ts('gs.warning')}><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="info">{ts('gs.info')}</SelectItem>
-            <SelectItem value="warning">{ts('gs.warning')}</SelectItem>
-            <SelectItem value="critical">{ts('gs.critical')}</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button type="button" size="sm" disabled={!keywords.trim()} onClick={add}><Plus className="size-3" aria-hidden="true" />{ts('gs.add')}</Button>
+  return (
+    <div className="space-y-2.5 border-t border-border pt-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold">{ts('gs.rules', { count: rules.length })}</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{ts('gs.rulesHint')}</span>
       </div>
-      <div className="flex items-center gap-2">
-        <Checkbox id={notifyId} checked={notify} onCheckedChange={(next) => setNotify(next === true)} />
-        <Label htmlFor={notifyId} className="cursor-pointer text-[11px] font-normal">{ts('gs.notify')}</Label>
+      {rules.length > 0 && (
+        <ul className="space-y-1.5">
+          {rules.map((rule) => (
+            <li key={rule.id} className="flex items-center justify-between rounded-lg border border-border p-2 text-xs">
+              <span className="flex min-w-0 items-center gap-2">
+                <Badge variant={rule.severity === 'critical' ? 'destructive' : 'outline'}>
+                  {ts(rule.severity === 'critical' ? 'gs.critical' : rule.severity === 'warning' ? 'gs.warning' : 'gs.info')}
+                </Badge>
+                <span className="truncate font-medium">{rule.keywords.join(', ')}</span>
+                {rule.notify && <Bell className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              </span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                aria-label={ts('gs.removeRule')}
+                onClick={() => onChange(rules.filter((item) => item.id !== rule.id))}
+              >
+                <Trash2 className="size-3.5" aria-hidden="true" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="space-y-2 rounded-lg border border-border p-2.5">
+        <span className="text-[11px] font-semibold text-muted-foreground">{ts('gs.addRule')}</span>
+        <div className="flex items-center gap-2">
+          <Input
+            value={keywords}
+            onChange={(event) => setKeywords(event.target.value)}
+            aria-label={ts('gs.ruleKeywords')}
+            placeholder={ts('gs.ruleKeywords')}
+            className="h-8 flex-1 text-xs"
+          />
+          <Select value={severity} onValueChange={(next) => setSeverity(next as HighlightRule['severity'])}>
+            <SelectTrigger className="h-8 w-28 text-xs" aria-label={ts('gs.warning')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="info">{ts('gs.info')}</SelectItem>
+              <SelectItem value="warning">{ts('gs.warning')}</SelectItem>
+              <SelectItem value="critical">{ts('gs.critical')}</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button type="button" size="sm" disabled={!keywords.trim()} onClick={add}>
+            <Plus className="size-3" aria-hidden="true" />
+            {ts('gs.add')}
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Checkbox id={notifyId} checked={notify} onCheckedChange={(next) => setNotify(next === true)} />
+          <Label htmlFor={notifyId} className="cursor-pointer text-[11px] font-normal">
+            {ts('gs.notify')}
+          </Label>
+        </div>
       </div>
     </div>
-  </div>;
+  );
 }
-

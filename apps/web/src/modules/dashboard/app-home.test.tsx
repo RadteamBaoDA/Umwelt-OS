@@ -9,7 +9,9 @@ vi.mock('./dashboard-page', () => ({ DashboardPage: () => <p>dashboard</p> }));
 import { AppHome } from './app-home';
 
 describe('AppHome', () => {
-  beforeEach(() => { ws.value = { selection: { id: 'w', role: 'member' }, isOwner: false }; });
+  beforeEach(() => {
+    ws.value = { selection: { id: 'w', role: 'member' }, isOwner: false };
+  });
   it('shows the shared Daily Brief to members instead of the dashboard', () => {
     render(<AppHome />);
     expect(screen.getByText('brief')).toBeTruthy();

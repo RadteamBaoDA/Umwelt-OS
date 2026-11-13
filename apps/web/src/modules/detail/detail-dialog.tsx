@@ -53,12 +53,19 @@ export function DetailDialog({ target, onClose, onCloseAutoFocus }: DetailDialog
   const current = stack.length ? stack[stack.length - 1] : target;
   const supported = isSupportedTarget(current);
   const unsupported = target !== null && !supported;
-  useEffect(() => { if (unsupported) onClose(); }, [unsupported, onClose]);
+  useEffect(() => {
+    if (unsupported) onClose();
+  }, [unsupported, onClose]);
   const openEntity = useCallback((id: string) => setPushed({ owner: target, stack: [...stack, { kind: 'entity', id }] }), [target, stack]);
   const goBack = useCallback(() => setPushed({ owner: target, stack: stack.slice(0, -1) }), [target, stack]);
   const kind = current?.kind ?? 'story';
   return (
-    <Dialog open={supported} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <Dialog
+      open={supported}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
       <DialogContent
         closeLabel={t('close')}
         onCloseAutoFocus={onCloseAutoFocus}
@@ -69,8 +76,25 @@ export function DetailDialog({ target, onClose, onCloseAutoFocus }: DetailDialog
           <DialogDescription>{t(DIALOG_DESCRIPTION_KEYS[kind])}</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-hidden">
-          {current?.kind === 'story' && supported && <div className="h-full p-3 sm:p-4"><StoryDetail storyId={current.id} sourceIds={current.sourceIds ?? []} onBack={stack.length ? goBack : onClose} onClose={onClose} /></div>}
-          {current?.kind === 'entity' && <EntityDialogBody key={current.id} entityId={current.id} canGoBack={stack.length > 0} onBack={goBack} onOpenEntity={openEntity} />}
+          {current?.kind === 'story' && supported && (
+            <div className="h-full p-3 sm:p-4">
+              <StoryDetail
+                storyId={current.id}
+                sourceIds={current.sourceIds ?? []}
+                onBack={stack.length ? goBack : onClose}
+                onClose={onClose}
+              />
+            </div>
+          )}
+          {current?.kind === 'entity' && (
+            <EntityDialogBody
+              key={current.id}
+              entityId={current.id}
+              canGoBack={stack.length > 0}
+              onBack={goBack}
+              onOpenEntity={openEntity}
+            />
+          )}
           {current?.kind === 'document' && <DocumentDialogBody key={current.id} documentId={current.id} />}
         </div>
       </DialogContent>

@@ -14,22 +14,21 @@ import * as React from 'react';
  * @param enabled - True only for settled (non-streaming) messages.
  * @param content - Message content; re-runs when the rendered markdown changes.
  */
-export function useRevealBlocks(
-  ref: React.RefObject<HTMLElement | null>,
-  enabled: boolean,
-  content: string,
-): void {
+export function useRevealBlocks(ref: React.RefObject<HTMLElement | null>, enabled: boolean, content: string): void {
   React.useEffect(() => {
     const root = ref.current?.firstElementChild;
     if (!enabled || !root || typeof IntersectionObserver === 'undefined') return;
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        entry.target.classList.remove('reveal-pending');
-        observer.unobserve(entry.target);
-      });
-    }, { threshold: 0.05 });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.remove('reveal-pending');
+          observer.unobserve(entry.target);
+        });
+      },
+      { threshold: 0.05 },
+    );
     // ChatMarkdown sanitizes asynchronously, so blocks may not exist yet: re-scan on mutation.
     const scan = () => {
       Array.from(root.children).forEach((block) => {

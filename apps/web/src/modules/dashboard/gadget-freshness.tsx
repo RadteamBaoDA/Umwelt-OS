@@ -11,7 +11,13 @@ const GadgetFreshnessContext = createContext<((collectedAt: string | null, attri
  * @param props Reporter callback and the renderer subtree.
  * @returns The children wrapped in the freshness context.
  */
-export function GadgetFreshnessProvider({ report, children }: { report: (collectedAt: string | null, attribution?: string | null) => void; children: ReactNode }) {
+export function GadgetFreshnessProvider({
+  report,
+  children,
+}: {
+  report: (collectedAt: string | null, attribution?: string | null) => void;
+  children: ReactNode;
+}) {
   return <GadgetFreshnessContext.Provider value={report}>{children}</GadgetFreshnessContext.Provider>;
 }
 

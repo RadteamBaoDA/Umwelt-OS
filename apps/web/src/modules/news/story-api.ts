@@ -3,7 +3,8 @@ import type { StoryDetail, StoryPage, TrendPage } from './story-types';
 
 /** Fetch a bounded current story page for selected owner sources. */
 export function fetchStories(
-  sourceIds: string[], options: { limit?: number; cursor?: string; topicId?: string; entityId?: string; q?: string } = {},
+  sourceIds: string[],
+  options: { limit?: number; cursor?: string; topicId?: string; entityId?: string; q?: string } = {},
 ): Promise<StoryPage> {
   const params = new URLSearchParams({ limit: String(options.limit ?? 25) });
   sourceIds.forEach((id) => params.append('source_ids', id));

@@ -23,25 +23,32 @@ import { GoalSearchResults, SearchResults, TaskSearchResults } from './search-re
 const DOCUMENT_QUERY_LIMIT = 1000;
 const ENTITY_QUERY_LIMIT = 300;
 const searchFailureKeys = {
-  unauthorized: 'search.failureUnauthenticated', forbidden: 'search.failureForbidden',
-  conflict: 'search.failureConflict', serviceUnavailable: 'search.failureUnavailable',
+  unauthorized: 'search.failureUnauthenticated',
+  forbidden: 'search.failureForbidden',
+  conflict: 'search.failureConflict',
+  serviceUnavailable: 'search.failureUnavailable',
   requestFailed: 'search.failureRequest',
 } as const satisfies Record<ApiFailureKey, string>;
 const indexStatusKeys: Record<string, string> = {
-  queued: 'indexQueued', running: 'indexRunning', active: 'indexActive', failed: 'indexFailed',
+  queued: 'indexQueued',
+  running: 'indexRunning',
+  active: 'indexActive',
+  failed: 'indexFailed',
   unavailable: 'indexUnavailableStatus',
 };
 /** Checks whether the query satisfies the minimum search length. */
 const queryLength = (value: string) => [...value].length;
-const schema = z.object({
-  query: z.string().refine((value) => queryLength(value) <= DOCUMENT_QUERY_LIMIT, 'queryTooLong'),
-  sourceId: z.string(),
-  dateFrom: z.string(),
-  dateTo: z.string(),
-  contentType: z.string(),
-  mode: z.enum(['lexical', 'hybrid']),
-  entityScope: z.enum(['all', 'documents']),
-}).refine((value) => !value.dateFrom || !value.dateTo || value.dateFrom <= value.dateTo, { path: ['dateTo'], message: 'invalidDateRange' });
+const schema = z
+  .object({
+    query: z.string().refine((value) => queryLength(value) <= DOCUMENT_QUERY_LIMIT, 'queryTooLong'),
+    sourceId: z.string(),
+    dateFrom: z.string(),
+    dateTo: z.string(),
+    contentType: z.string(),
+    mode: z.enum(['lexical', 'hybrid']),
+    entityScope: z.enum(['all', 'documents']),
+  })
+  .refine((value) => !value.dateFrom || !value.dateTo || value.dateFrom <= value.dateTo, { path: ['dateTo'], message: 'invalidDateRange' });
 type SearchForm = z.infer<typeof schema>;
 
 /** Flattens the loaded pages of an infinite query with the given per-page selector; empty before the first page. */
@@ -62,9 +69,13 @@ function indexSummary(index: IndexStatus, t: (key: never, values?: never) => str
       translate('semanticIndex') + ': ' + translate(indexStatusKeys[index.status] ?? 'indexUnknownStatus'),
       index.indexed_items > 0 && translate('indexedItems', { count: index.indexed_items }),
       index.failed_items > 0 && translate('failedItems', { count: index.failed_items }),
-    ].filter(Boolean).join(' · ');
+    ]
+      .filter(Boolean)
+      .join(' · ');
   }
-  return index.failed_items > 0 ? `${translate('indexPreparing')} · ${translate('failedItems', { count: index.failed_items })}` : translate('indexPreparing');
+  return index.failed_items > 0
+    ? `${translate('indexPreparing')} · ${translate('failedItems', { count: index.failed_items })}`
+    : translate('indexPreparing');
 }
 
 /** Coordinates search query, filters, mode, and pagination for the search route. */
@@ -77,31 +88,178 @@ export function SearchPage() {
   const s2 = useSearchSubmit(s1);
 
   const vm: SearchPageVm = s2;
-  return <section className="rounded-lg border bg-card p-6"><h1 className="mb-1">{t('search.title')}</h1><p className="mb-6 text-muted-foreground">{t('search.intro')}</p>
-<SearchFormPanel vm={vm} />
-<SearchIndexStatus vm={vm} />
-<DocumentResultsPanel vm={vm} />
-<InternalSearchPanels vm={vm} />
-  </section>;
+  return (
+    <section className="rounded-lg border bg-card p-6">
+      <h1 className="mb-1">{t('search.title')}</h1>
+      <p className="mb-6 text-muted-foreground">{t('search.intro')}</p>
+      <SearchFormPanel vm={vm} />
+      <SearchIndexStatus vm={vm} />
+      <DocumentResultsPanel vm={vm} />
+      <InternalSearchPanels vm={vm} />
+    </section>
+  );
 }
 
 type SearchPageVm = ReturnType<typeof useSearchSubmit>;
 
+/** Source filter select bound to `sourceId`, with load-more paging and a retry message when sources fail to load. */
+function SearchSourceField({ vm }: { vm: SearchPageVm }) {
+  const { t, control, sources } = vm;
+  return (
+    <div className="field">
+      <Label htmlFor="search-source">{t('search.source')}</Label>
+      <Controller
+        control={control}
+        name="sourceId"
+        render={({ field }) => (
+          <Select value={field.value || 'all'} onValueChange={(value) => field.onChange(value === 'all' ? '' : value)}>
+            <SelectTrigger id="search-source">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('allSources')}</SelectItem>
+              {sources.data?.pages
+                .flatMap((page) => page.items)
+                .map((source) => (
+                  <SelectItem key={source.id} value={source.id}>
+                    {source.name}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        )}
+      />
+      {sources.hasNextPage && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="justify-self-start px-0"
+          disabled={sources.isFetchingNextPage}
+          onClick={() => sources.fetchNextPage()}
+        >
+          {t('load.sources')}
+        </Button>
+      )}
+      {sources.isError && (
+        <p className="error" role="alert">
+          {t('sourcesUnavailable')}{' '}
+          <Button type="button" variant="link" size="sm" className="px-0" onClick={() => sources.refetch()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Search mode select (hybrid or lexical) bound to `mode`. */
+function SearchModeField({ vm }: { vm: SearchPageVm }) {
+  const { t, control } = vm;
+  return (
+    <div className="field sm:col-span-2">
+      <Label htmlFor="search-mode">{t('search.mode')}</Label>
+      <Controller
+        control={control}
+        name="mode"
+        render={({ field }) => (
+          <Select value={field.value} onValueChange={field.onChange}>
+            <SelectTrigger id="search-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="hybrid">{t('hybridMode')}</SelectItem>
+              <SelectItem value="lexical">{t('lexicalMode')}</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
+      />
+    </div>
+  );
+}
+
 /** Query and filter form. */
 function SearchFormPanel({ vm }: { vm: SearchPageVm }) {
-  const { t, sourceId, dateFrom, dateTo, contentType, mode, entityScope, draftFrom, sources, submit, handleSubmit, register, errors, control, isSubmitting } = vm;
+  const {
+    t,
+    sourceId,
+    dateFrom,
+    dateTo,
+    contentType,
+    mode,
+    entityScope,
+    draftFrom,
+    submit,
+    handleSubmit,
+    register,
+    errors,
+    control,
+    isSubmitting,
+  } = vm;
   return (
-    <form className="form mt-6" onSubmit={handleSubmit(submit)}><div className="field"><Label htmlFor="search-query">{t('search.terms')}</Label><Input id="search-query" data-search-query type="search" {...register('query')} aria-invalid={!!errors.query} />{errors.query && <p className="error" role="alert">{t('documentQueryBound', { limit: DOCUMENT_QUERY_LIMIT })}</p>}</div>
-      <FiltersDisclosure label={t('filtersToggle')} forceOpen={Boolean(errors.dateTo)} count={[sourceId, dateFrom, dateTo, contentType, mode === 'lexical' ? mode : '', entityScope === 'documents' ? entityScope : ''].filter(Boolean).length}>
-      <div className="search-filters"><div className="field"><Label htmlFor="search-source">{t('search.source')}</Label><Controller control={control} name="sourceId" render={({ field }) => <Select value={field.value || 'all'} onValueChange={(value) => field.onChange(value === 'all' ? '' : value)}><SelectTrigger id="search-source"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('allSources')}</SelectItem>{sources.data?.pages.flatMap((page) => page.items).map((source) => <SelectItem key={source.id} value={source.id}>{source.name}</SelectItem>)}</SelectContent></Select>} />{sources.hasNextPage && <Button type="button" variant="link" size="sm" className="justify-self-start px-0" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>{t('load.sources')}</Button>}{sources.isError && <p className="error" role="alert">{t('sourcesUnavailable')} <Button type="button" variant="link" size="sm" className="px-0" onClick={() => sources.refetch()}>{t('retrySearch')}</Button></p>}</div>
-        <div className="field"><Label htmlFor="search-from">{t('search.from')}</Label><Input id="search-from" className="h-9" type="date" {...register('dateFrom')} /></div>
-        <div className="field"><Label htmlFor="search-to">{t('search.to')}</Label><Input id="search-to" className="h-9" type="date" min={draftFrom || undefined} {...register('dateTo')} />{errors.dateTo && <p className="error" role="alert">{t('invalidDateRange')}</p>}</div>
-        <div className="field"><Label htmlFor="search-type">{t('search.contentType')}</Label><Input id="search-type" placeholder={t('search.typePlaceholder')} {...register('contentType')} /></div>
-        <div className="field sm:col-span-2"><Label htmlFor="search-mode">{t('search.mode')}</Label><Controller control={control} name="mode" render={({ field }) => <Select value={field.value} onValueChange={field.onChange}><SelectTrigger id="search-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="hybrid">{t('hybridMode')}</SelectItem><SelectItem value="lexical">{t('lexicalMode')}</SelectItem></SelectContent></Select>} /></div></div>
-      <div className="field"><Label htmlFor="search-scope">{t('search.scope')}</Label><Controller control={control} name="entityScope" render={({ field }) => <Select value={field.value} onValueChange={field.onChange}><SelectTrigger id="search-scope"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{t('search.both')}</SelectItem><SelectItem value="documents">{t('search.documentsOnly')}</SelectItem></SelectContent></Select>} /></div>
-      <p className="text-muted-foreground">{t('entity.filtersNotApplied')}</p>
+    <form className="form mt-6" onSubmit={handleSubmit(submit)}>
+      <div className="field">
+        <Label htmlFor="search-query">{t('search.terms')}</Label>
+        <Input id="search-query" data-search-query type="search" {...register('query')} aria-invalid={!!errors.query} />
+        {errors.query && (
+          <p className="error" role="alert">
+            {t('documentQueryBound', { limit: DOCUMENT_QUERY_LIMIT })}
+          </p>
+        )}
+      </div>
+      <FiltersDisclosure
+        label={t('filtersToggle')}
+        forceOpen={Boolean(errors.dateTo)}
+        count={
+          [sourceId, dateFrom, dateTo, contentType, mode === 'lexical' ? mode : '', entityScope === 'documents' ? entityScope : ''].filter(
+            Boolean,
+          ).length
+        }
+      >
+        <div className="search-filters">
+          <SearchSourceField vm={vm} />
+          <div className="field">
+            <Label htmlFor="search-from">{t('search.from')}</Label>
+            <Input id="search-from" className="h-9" type="date" {...register('dateFrom')} />
+          </div>
+          <div className="field">
+            <Label htmlFor="search-to">{t('search.to')}</Label>
+            <Input id="search-to" className="h-9" type="date" min={draftFrom || undefined} {...register('dateTo')} />
+            {errors.dateTo && (
+              <p className="error" role="alert">
+                {t('invalidDateRange')}
+              </p>
+            )}
+          </div>
+          <div className="field">
+            <Label htmlFor="search-type">{t('search.contentType')}</Label>
+            <Input id="search-type" placeholder={t('search.typePlaceholder')} {...register('contentType')} />
+          </div>
+          <SearchModeField vm={vm} />
+        </div>
+        <div className="field">
+          <Label htmlFor="search-scope">{t('search.scope')}</Label>
+          <Controller
+            control={control}
+            name="entityScope"
+            render={({ field }) => (
+              <Select value={field.value} onValueChange={field.onChange}>
+                <SelectTrigger id="search-scope">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{t('search.both')}</SelectItem>
+                  <SelectItem value="documents">{t('search.documentsOnly')}</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </div>
+        <p className="text-muted-foreground">{t('entity.filtersNotApplied')}</p>
       </FiltersDisclosure>
-      <Button type="submit" className="w-auto justify-self-end" disabled={isSubmitting}>{t('search.label')}</Button>
+      <Button type="submit" className="w-auto justify-self-end" disabled={isSubmitting}>
+        {t('search.label')}
+      </Button>
     </form>
   );
 }
@@ -110,11 +268,22 @@ function SearchFormPanel({ vm }: { vm: SearchPageVm }) {
 function SearchIndexStatus({ vm }: { vm: SearchPageVm }) {
   const { t, index } = vm;
   return (
-<>
-    {index.data && <p className="mt-4 mb-3 text-muted-foreground" role="status">{indexSummary(index.data, t)}</p>}
-    {index.isError && <p className="error" role="alert">{t('index.unavailable')} <Button variant="outline" onClick={() => index.refetch()}>{t('retrySearch')}</Button></p>}
+    <>
+      {index.data && (
+        <p className="mt-4 mb-3 text-muted-foreground" role="status">
+          {indexSummary(index.data, t)}
+        </p>
+      )}
+      {index.isError && (
+        <p className="error" role="alert">
+          {t('index.unavailable')}{' '}
+          <Button variant="outline" onClick={() => index.refetch()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
       <DocumentQueryNotices vm={vm} />
-</>
+    </>
   );
 }
 
@@ -122,7 +291,32 @@ function SearchIndexStatus({ vm }: { vm: SearchPageVm }) {
 function DocumentResultsPanel({ vm }: { vm: SearchPageVm }) {
   const { t, results, items, warnings, effectiveMode } = vm;
   return (
-    results.data && <><p className="mt-4 text-muted-foreground" role="status">{t('resultsLoaded', { count: items.length })} · {effectiveMode === 'lexical' ? t('lexicalSearch') : t('hybridSearch')}</p>{warnings.map((warning) => <p className="error" role="alert" key={warning}>{t(warning === 'Semantic search unavailable' ? 'semanticSearchUnavailable' : 'search.warningGeneric')}</p>)}{items.length ? <SearchResults items={items} /> : <p className="empty-state">{t('no.documentResults')}</p>}{results.hasNextPage && <Button variant="outline" disabled={results.isFetchingNextPage} onClick={() => results.fetchNextPage()}>{results.isFetchingNextPage ? t('loading.results') : t('load.results')}</Button>}{results.isFetchNextPageError && <p className="error" role="alert">{t('load.resultsFailed')} <Button variant="outline" disabled={results.isFetchingNextPage} onClick={() => results.fetchNextPage()}>{t('retrySearch')}</Button></p>}</>
+    results.data && (
+      <>
+        <p className="mt-4 text-muted-foreground" role="status">
+          {t('resultsLoaded', { count: items.length })} · {effectiveMode === 'lexical' ? t('lexicalSearch') : t('hybridSearch')}
+        </p>
+        {warnings.map((warning) => (
+          <p className="error" role="alert" key={warning}>
+            {t(warning === 'Semantic search unavailable' ? 'semanticSearchUnavailable' : 'search.warningGeneric')}
+          </p>
+        ))}
+        {items.length ? <SearchResults items={items} /> : <p className="empty-state">{t('no.documentResults')}</p>}
+        {results.hasNextPage && (
+          <Button variant="outline" disabled={results.isFetchingNextPage} onClick={() => results.fetchNextPage()}>
+            {results.isFetchingNextPage ? t('loading.results') : t('load.results')}
+          </Button>
+        )}
+        {results.isFetchNextPageError && (
+          <p className="error" role="alert">
+            {t('load.resultsFailed')}{' '}
+            <Button variant="outline" disabled={results.isFetchingNextPage} onClick={() => results.fetchNextPage()}>
+              {t('retrySearch')}
+            </Button>
+          </p>
+        )}
+      </>
+    )
   );
 }
 
@@ -130,11 +324,11 @@ function DocumentResultsPanel({ vm }: { vm: SearchPageVm }) {
 function InternalSearchPanels({ vm }: { vm: SearchPageVm }) {
   const { query, entityScope } = vm;
   return (
-<>
-    {query && entityScope === 'all' && <EntitySearchSection vm={vm} />}
-    {query && entityScope === 'all' && <TaskSearchSection vm={vm} />}
-    {query && entityScope === 'all' && <GoalSearchSection vm={vm} />}
-</>
+    <>
+      {query && entityScope === 'all' && <EntitySearchSection vm={vm} />}
+      {query && entityScope === 'all' && <TaskSearchSection vm={vm} />}
+      {query && entityScope === 'all' && <GoalSearchSection vm={vm} />}
+    </>
   );
 }
 
@@ -156,17 +350,50 @@ function useSearchParamsForm() {
     resolver: zodResolver(schema),
     defaultValues: { query, sourceId, dateFrom, dateTo, contentType, mode, entityScope },
   });
-  const { register, control, handleSubmit, reset, formState: { isSubmitting, errors } } = form;
+  const {
+    register,
+    control,
+    handleSubmit,
+    reset,
+    formState: { isSubmitting, errors },
+  } = form;
   const draftFrom = useWatch({ control, name: 'dateFrom' });
-  useEffect(() => { reset({ query, sourceId, dateFrom, dateTo, contentType, mode, entityScope }); }, [query, sourceId, dateFrom, dateTo, contentType, mode, entityScope, reset]);
+  useEffect(() => {
+    reset({ query, sourceId, dateFrom, dateTo, contentType, mode, entityScope });
+  }, [query, sourceId, dateFrom, dateTo, contentType, mode, entityScope, reset]);
 
-  return { t, router, searchParams, applied, params, query, sourceId, dateFrom, dateTo, contentType, mode, entityScope, form, draftFrom, register, control, handleSubmit, isSubmitting, errors };
+  return {
+    t,
+    router,
+    searchParams,
+    applied,
+    params,
+    query,
+    sourceId,
+    dateFrom,
+    dateTo,
+    contentType,
+    mode,
+    entityScope,
+    form,
+    draftFrom,
+    register,
+    control,
+    handleSubmit,
+    isSubmitting,
+    errors,
+  };
 }
 
 /** Loads sources, index status and the paged document, entity, task and goal results for the applied query. */
 function useSearchQueries(p: ReturnType<typeof useSearchParamsForm>) {
   const { query, sourceId, dateFrom, dateTo, contentType, mode, entityScope } = p;
-  const sources = useInfiniteQuery({ queryKey: sourceKeys.list, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listSources(pageParam), getNextPageParam: (last) => last.next_cursor ?? undefined });
+  const sources = useInfiniteQuery({
+    queryKey: sourceKeys.list,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listSources(pageParam),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
   const index = useQuery({ queryKey: ['search-index'], queryFn: getSearchIndexStatus, refetchInterval: 10000 });
   const filters = {
     source_ids: sourceId ? [sourceId] : [],
@@ -211,7 +438,24 @@ function useSearchQueries(p: ReturnType<typeof useSearchParamsForm>) {
   const goals = flattenPages(goalResults.data, (page) => page.items);
   const effectiveMode = results.data?.pages.at(-1)?.effective_mode;
 
-  return { ...p, sources, index, filters, documentQueryValid, entityQueryValid, internalSearchEnabled, results, entityResults, taskResults, goalResults, items, warnings, tasks, goals, effectiveMode };
+  return {
+    ...p,
+    sources,
+    index,
+    filters,
+    documentQueryValid,
+    entityQueryValid,
+    internalSearchEnabled,
+    results,
+    entityResults,
+    taskResults,
+    goalResults,
+    items,
+    warnings,
+    tasks,
+    goals,
+    effectiveMode,
+  };
 }
 
 /** Pushes the validated form values to the search route as URL parameters. */
@@ -237,7 +481,55 @@ function useSearchSubmit(p: ReturnType<typeof useSearchQueries>) {
 function GoalSearchSection({ vm }: { vm: SearchPageVm }) {
   const { t, entityQueryValid, goalResults, goals } = vm;
   return (
-    <section aria-labelledby="goal-search-heading"><h2 id="goal-search-heading">{t('search.goals')}</h2>{!entityQueryValid && <p className="text-muted-foreground" role="status">{t('recordQueryBound', { limit: ENTITY_QUERY_LIMIT })}</p>}{entityQueryValid && goalResults.isPending && <><p className="text-muted-foreground" role="status">{t('searching.goals')}</p><div className="skeleton" aria-hidden="true" /></>}{entityQueryValid && goalResults.isError && !goalResults.isFetchNextPageError && <p className="error" role="alert">{t('goal.searchFailed')} <Button variant="outline" onClick={() => goalResults.refetch()}>{t('retrySearch')}</Button></p>}{entityQueryValid && goalResults.data && (goals.length ? <><p className="text-muted-foreground" role="status">{t('resultsLoaded', { count: goals.length })}</p><GoalSearchResults items={goals} /></> : <p className="empty-state">{t('no.goalResults')}</p>)}{entityQueryValid && goalResults.hasNextPage && <Button variant="outline" disabled={goalResults.isFetchingNextPage} onClick={() => goalResults.fetchNextPage()}>{goalResults.isFetchingNextPage ? t('loading.results') : t('load.goals')}</Button>}{goalResults.isFetchNextPageError && <p className="error" role="alert">{t('load.goalsFailed')} <Button variant="outline" disabled={goalResults.isFetchingNextPage} onClick={() => goalResults.fetchNextPage()}>{t('retrySearch')}</Button></p>}</section>
+    <section aria-labelledby="goal-search-heading">
+      <h2 id="goal-search-heading">{t('search.goals')}</h2>
+      {!entityQueryValid && (
+        <p className="text-muted-foreground" role="status">
+          {t('recordQueryBound', { limit: ENTITY_QUERY_LIMIT })}
+        </p>
+      )}
+      {entityQueryValid && goalResults.isPending && (
+        <>
+          <p className="text-muted-foreground" role="status">
+            {t('searching.goals')}
+          </p>
+          <div className="skeleton" aria-hidden="true" />
+        </>
+      )}
+      {entityQueryValid && goalResults.isError && !goalResults.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {t('goal.searchFailed')}{' '}
+          <Button variant="outline" onClick={() => goalResults.refetch()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+      {entityQueryValid &&
+        goalResults.data &&
+        (goals.length ? (
+          <>
+            <p className="text-muted-foreground" role="status">
+              {t('resultsLoaded', { count: goals.length })}
+            </p>
+            <GoalSearchResults items={goals} />
+          </>
+        ) : (
+          <p className="empty-state">{t('no.goalResults')}</p>
+        ))}
+      {entityQueryValid && goalResults.hasNextPage && (
+        <Button variant="outline" disabled={goalResults.isFetchingNextPage} onClick={() => goalResults.fetchNextPage()}>
+          {goalResults.isFetchingNextPage ? t('loading.results') : t('load.goals')}
+        </Button>
+      )}
+      {goalResults.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {t('load.goalsFailed')}{' '}
+          <Button variant="outline" disabled={goalResults.isFetchingNextPage} onClick={() => goalResults.fetchNextPage()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -245,7 +537,55 @@ function GoalSearchSection({ vm }: { vm: SearchPageVm }) {
 function TaskSearchSection({ vm }: { vm: SearchPageVm }) {
   const { t, entityQueryValid, taskResults, tasks } = vm;
   return (
-    <section aria-labelledby="task-search-heading"><h2 id="task-search-heading">{t('search.tasks')}</h2>{!entityQueryValid && <p className="text-muted-foreground" role="status">{t('recordQueryBound', { limit: ENTITY_QUERY_LIMIT })}</p>}{entityQueryValid && taskResults.isPending && <><p className="text-muted-foreground" role="status">{t('searching.tasks')}</p><div className="skeleton" aria-hidden="true" /></>}{entityQueryValid && taskResults.isError && !taskResults.isFetchNextPageError && <p className="error" role="alert">{t('task.searchFailed')} <Button variant="outline" onClick={() => taskResults.refetch()}>{t('retrySearch')}</Button></p>}{entityQueryValid && taskResults.data && (tasks.length ? <><p className="text-muted-foreground" role="status">{t('resultsLoaded', { count: tasks.length })}</p><TaskSearchResults items={tasks} /></> : <p className="empty-state">{t('no.taskResults')}</p>)}{entityQueryValid && taskResults.hasNextPage && <Button variant="outline" disabled={taskResults.isFetchingNextPage} onClick={() => taskResults.fetchNextPage()}>{taskResults.isFetchingNextPage ? t('loading.results') : t('load.tasks')}</Button>}{taskResults.isFetchNextPageError && <p className="error" role="alert">{t('load.tasksFailed')} <Button variant="outline" disabled={taskResults.isFetchingNextPage} onClick={() => taskResults.fetchNextPage()}>{t('retrySearch')}</Button></p>}</section>
+    <section aria-labelledby="task-search-heading">
+      <h2 id="task-search-heading">{t('search.tasks')}</h2>
+      {!entityQueryValid && (
+        <p className="text-muted-foreground" role="status">
+          {t('recordQueryBound', { limit: ENTITY_QUERY_LIMIT })}
+        </p>
+      )}
+      {entityQueryValid && taskResults.isPending && (
+        <>
+          <p className="text-muted-foreground" role="status">
+            {t('searching.tasks')}
+          </p>
+          <div className="skeleton" aria-hidden="true" />
+        </>
+      )}
+      {entityQueryValid && taskResults.isError && !taskResults.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {t('task.searchFailed')}{' '}
+          <Button variant="outline" onClick={() => taskResults.refetch()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+      {entityQueryValid &&
+        taskResults.data &&
+        (tasks.length ? (
+          <>
+            <p className="text-muted-foreground" role="status">
+              {t('resultsLoaded', { count: tasks.length })}
+            </p>
+            <TaskSearchResults items={tasks} />
+          </>
+        ) : (
+          <p className="empty-state">{t('no.taskResults')}</p>
+        ))}
+      {entityQueryValid && taskResults.hasNextPage && (
+        <Button variant="outline" disabled={taskResults.isFetchingNextPage} onClick={() => taskResults.fetchNextPage()}>
+          {taskResults.isFetchingNextPage ? t('loading.results') : t('load.tasks')}
+        </Button>
+      )}
+      {taskResults.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {t('load.tasksFailed')}{' '}
+          <Button variant="outline" disabled={taskResults.isFetchingNextPage} onClick={() => taskResults.fetchNextPage()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -253,7 +593,56 @@ function TaskSearchSection({ vm }: { vm: SearchPageVm }) {
 function EntitySearchSection({ vm }: { vm: SearchPageVm }) {
   const { t, entityQueryValid, entityResults } = vm;
   return (
-    <section aria-labelledby="entity-search-heading"><h2 id="entity-search-heading">{t('entity.search')}</h2>{!entityQueryValid && <p className="text-muted-foreground" role="status">{t('entity.queryBound', { limit: ENTITY_QUERY_LIMIT })}</p>}{entityQueryValid && entityResults.isPending && <div className="skeleton" aria-label={t('searching.entities')} />}{entityQueryValid && entityResults.isError && !entityResults.isFetchNextPageError && <p className="error" role="alert">{t('entity.searchFailed')} <Button variant="outline" onClick={() => entityResults.refetch()}>{t('retrySearch')}</Button></p>}{entityQueryValid && entityResults.data && (entityResults.data.pages.flatMap((page) => page.items).length ? <ul className="record-list">{entityResults.data.pages.flatMap((page) => page.items).map((item) => <li className="record-row" key={item.id}><Link href={`/knowledge/entities/${item.id}`}><strong>{item.name ?? t('unnamedEntity')}</strong></Link><p className="text-muted-foreground">{entityTypeLabel(t, item.type)} · {t('revision')} {item.revision} · {item.aliases.length} {t('aliasesCount')}</p></li>)}</ul> : <p className="empty-state">{t('no.entityResults')}</p>)}{entityQueryValid && entityResults.hasNextPage && <Button variant="outline" disabled={entityResults.isFetchingNextPage} onClick={() => entityResults.fetchNextPage()}>{entityResults.isFetchingNextPage ? t('loading.results') : t('load.entities')}</Button>}{entityResults.isFetchNextPageError && <p className="error" role="alert">{t('load.entitiesFailed')} <Button variant="outline" disabled={entityResults.isFetchingNextPage} onClick={() => entityResults.fetchNextPage()}>{t('retrySearch')}</Button></p>}</section>
+    <section aria-labelledby="entity-search-heading">
+      <h2 id="entity-search-heading">{t('entity.search')}</h2>
+      {!entityQueryValid && (
+        <p className="text-muted-foreground" role="status">
+          {t('entity.queryBound', { limit: ENTITY_QUERY_LIMIT })}
+        </p>
+      )}
+      {entityQueryValid && entityResults.isPending && <div className="skeleton" aria-label={t('searching.entities')} />}
+      {entityQueryValid && entityResults.isError && !entityResults.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {t('entity.searchFailed')}{' '}
+          <Button variant="outline" onClick={() => entityResults.refetch()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+      {entityQueryValid &&
+        entityResults.data &&
+        (entityResults.data.pages.flatMap((page) => page.items).length ? (
+          <ul className="record-list">
+            {entityResults.data.pages
+              .flatMap((page) => page.items)
+              .map((item) => (
+                <li className="record-row" key={item.id}>
+                  <Link href={`/knowledge/entities/${item.id}`}>
+                    <strong>{item.name ?? t('unnamedEntity')}</strong>
+                  </Link>
+                  <p className="text-muted-foreground">
+                    {entityTypeLabel(t, item.type)} · {t('revision')} {item.revision} · {item.aliases.length} {t('aliasesCount')}
+                  </p>
+                </li>
+              ))}
+          </ul>
+        ) : (
+          <p className="empty-state">{t('no.entityResults')}</p>
+        ))}
+      {entityQueryValid && entityResults.hasNextPage && (
+        <Button variant="outline" disabled={entityResults.isFetchingNextPage} onClick={() => entityResults.fetchNextPage()}>
+          {entityResults.isFetchingNextPage ? t('loading.results') : t('load.entities')}
+        </Button>
+      )}
+      {entityResults.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {t('load.entitiesFailed')}{' '}
+          <Button variant="outline" disabled={entityResults.isFetchingNextPage} onClick={() => entityResults.fetchNextPage()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -261,11 +650,24 @@ function EntitySearchSection({ vm }: { vm: SearchPageVm }) {
 function DocumentQueryNotices({ vm }: { vm: SearchPageVm }) {
   const { t, query, documentQueryValid, results } = vm;
   return (
-<>
-    {!query && <p className="empty-state">{t('enterTerms')}</p>}
-    {query && !documentQueryValid && <p className="error" role="alert">{t('documentQueryBound', { limit: DOCUMENT_QUERY_LIMIT })}</p>}
-    {query && documentQueryValid && results.isPending && <div className="skeleton" aria-label={t('searching.documents')} />}
-    {query && documentQueryValid && results.isError && !results.isFetchNextPageError && <p className="error" role="alert">{results.error instanceof ApiError && results.error.status === 422 ? t('invalidSearchRequest') : t(searchFailureKeys[apiFailureKey(results.error) ?? 'requestFailed'])} <Button variant="outline" onClick={() => results.refetch()}>{t('retrySearch')}</Button></p>}
-</>
+    <>
+      {!query && <p className="empty-state">{t('enterTerms')}</p>}
+      {query && !documentQueryValid && (
+        <p className="error" role="alert">
+          {t('documentQueryBound', { limit: DOCUMENT_QUERY_LIMIT })}
+        </p>
+      )}
+      {query && documentQueryValid && results.isPending && <div className="skeleton" aria-label={t('searching.documents')} />}
+      {query && documentQueryValid && results.isError && !results.isFetchNextPageError && (
+        <p className="error" role="alert">
+          {results.error instanceof ApiError && results.error.status === 422
+            ? t('invalidSearchRequest')
+            : t(searchFailureKeys[apiFailureKey(results.error) ?? 'requestFailed'])}{' '}
+          <Button variant="outline" onClick={() => results.refetch()}>
+            {t('retrySearch')}
+          </Button>
+        </p>
+      )}
+    </>
   );
 }

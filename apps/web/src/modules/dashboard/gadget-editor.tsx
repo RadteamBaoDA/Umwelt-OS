@@ -14,17 +14,29 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { templateName } from '@/core/renderer-labels';
 import { getConnectorConfiguration } from '@/modules/sources';
 import {
-  createGadgetDefinition, dashboardKeys, getMetricCatalog, listCompatibleSourceCounts, listGadgetRenderers, listGadgetTemplates, patchGadgetDefinition,
-  type GadgetDefinition, type GadgetRenderer,
+  createGadgetDefinition,
+  dashboardKeys,
+  getMetricCatalog,
+  listCompatibleSourceCounts,
+  listGadgetRenderers,
+  listGadgetTemplates,
+  patchGadgetDefinition,
+  type GadgetDefinition,
+  type GadgetRenderer,
 } from './api';
 import {
-  buildDefinitionPayload, draftPatchForTemplate, fieldsFor, initialDraft, mergeCatalogEntries, namesLookbackField, planSourceChange, splitList,
+  buildDefinitionPayload,
+  draftPatchForTemplate,
+  fieldsFor,
+  initialDraft,
+  mergeCatalogEntries,
+  namesLookbackField,
+  planSourceChange,
+  splitList,
   type GadgetDraft,
 } from './gadget-editor-model';
 import { DatasourcePicker, useSourceRows } from './gadget-editor-pickers';
-import {
-  AdvancedSection, MetricsField, RegionField, SymbolFields, TemplateChooser, type SectionFacts,
-} from './gadget-editor-sections';
+import { AdvancedSection, MetricsField, RegionField, SymbolFields, TemplateChooser, type SectionFacts } from './gadget-editor-sections';
 import { sourcesLinkFor } from './sources-link';
 
 export { defaultMetric, fieldsFor, mergeCatalogEntries } from './gadget-editor-model';
@@ -70,10 +82,27 @@ function useGadgetDraft(definition: GadgetDefinition | null) {
 
 /** Loads the renderer, template, metric-catalog and compatible-count queries (static data is cached forever). */
 function useEditorQueries(definition: GadgetDefinition | null) {
-  const renderers = useQuery({ queryKey: dashboardKeys.renderers, queryFn: ({ signal }) => listGadgetRenderers(signal), staleTime: Infinity });
-  const templates = useQuery({ queryKey: dashboardKeys.templates, queryFn: ({ signal }) => listGadgetTemplates(signal), enabled: !definition, staleTime: Infinity });
-  const catalogQuery = useQuery({ queryKey: dashboardKeys.metricCatalog, queryFn: ({ signal }) => getMetricCatalog(signal), staleTime: Infinity });
-  const counts = useQuery({ queryKey: dashboardKeys.compatibleCounts, queryFn: ({ signal }) => listCompatibleSourceCounts(signal), enabled: !definition });
+  const renderers = useQuery({
+    queryKey: dashboardKeys.renderers,
+    queryFn: ({ signal }) => listGadgetRenderers(signal),
+    staleTime: Infinity,
+  });
+  const templates = useQuery({
+    queryKey: dashboardKeys.templates,
+    queryFn: ({ signal }) => listGadgetTemplates(signal),
+    enabled: !definition,
+    staleTime: Infinity,
+  });
+  const catalogQuery = useQuery({
+    queryKey: dashboardKeys.metricCatalog,
+    queryFn: ({ signal }) => getMetricCatalog(signal),
+    staleTime: Infinity,
+  });
+  const counts = useQuery({
+    queryKey: dashboardKeys.compatibleCounts,
+    queryFn: ({ signal }) => listCompatibleSourceCounts(signal),
+    enabled: !definition,
+  });
   return { renderers, templates, catalogQuery, counts };
 }
 
@@ -123,7 +152,12 @@ function needsDatasource(draft: GadgetDraft, sourceMode: string, definition: Gad
 }
 
 /** Field validity of the draft and the reason Save is disabled (shown beside Save). */
-function useDraftValidity(draft: GadgetDraft, descriptor: GadgetRenderer | undefined, definition: GadgetDefinition | null, catalogLoading: boolean) {
+function useDraftValidity(
+  draft: GadgetDraft,
+  descriptor: GadgetRenderer | undefined,
+  definition: GadgetDefinition | null,
+  catalogLoading: boolean,
+) {
   const t = useTranslations('gadgetSettings');
   const needsSource = needsDatasource(draft, descriptor?.source_mode ?? 'none', definition);
   const flags: ValidityFlags = {
@@ -142,8 +176,14 @@ function useDraftValidity(draft: GadgetDraft, descriptor: GadgetRenderer | undef
 /** CoinGecko assets configured on the first selected source (only when that is the single bound provider). */
 function useCoinAssets(sourceIds: string[], provider: string | null) {
   const coinSource = sourceIds[0] ?? '';
-  const coinConfiguration = useQuery({ queryKey: ['coingecko-gadget-source', coinSource], queryFn: ({ signal }) => getConnectorConfiguration(coinSource, signal), enabled: provider === 'coingecko' && Boolean(coinSource) });
-  return provider === 'coingecko' && coinConfiguration.data ? coinConfiguration.data.configuration.coingecko_assets ?? [{ id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin', series_symbol: 'BTC' }] : null;
+  const coinConfiguration = useQuery({
+    queryKey: ['coingecko-gadget-source', coinSource],
+    queryFn: ({ signal }) => getConnectorConfiguration(coinSource, signal),
+    enabled: provider === 'coingecko' && Boolean(coinSource),
+  });
+  return provider === 'coingecko' && coinConfiguration.data
+    ? (coinConfiguration.data.configuration.coingecko_assets ?? [{ id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin', series_symbol: 'BTC' }])
+    : null;
 }
 
 /**
@@ -164,7 +204,11 @@ function useProviderFacts(draft: GadgetDraft, queries: ReturnType<typeof useEdit
   const showSymbols = fields.has('symbols') && entry?.symbol_keyed === true;
   // Provider unknown (catalog failed, source absent from the loaded page, provider not in the catalog): symbols stay visible
   // and editable as free text so a saved definition is never opaque. Hidden while the catalog is still loading or nothing is bound.
-  const showSymbolsFallback = fields.has('symbols') && entry === undefined && !queries.catalogQuery.isPending && (sourceIds.length > 0 || splitList(symbols, true).length > 0);
+  const showSymbolsFallback =
+    fields.has('symbols') &&
+    entry === undefined &&
+    !queries.catalogQuery.isPending &&
+    (sourceIds.length > 0 || splitList(symbols, true).length > 0);
   // Region-keyed providers (World Bank countries, OpenAQ locations) plot one region per chart.
   const showRegion = renderer === 'finance_chart' && entry?.region_keyed === true;
   // Provider catalog drives the metric control; non-chart renderers with a catalog render a checkbox group.
@@ -190,15 +234,25 @@ function useSaveDefinition(
       const { filters, scope } = buildDefinitionPayload({ draft, ...payloadFacts });
       const { base, name, renderer, sourceIds, rules, rulesTouched } = draft;
       if (!base) {
-        return createGadgetDefinition({ name: name.trim(), renderer, source_ids: sourceIds, scope, filters, highlight_rules: rules }, session.csrfToken);
+        return createGadgetDefinition(
+          { name: name.trim(), renderer, source_ids: sourceIds, scope, filters, highlight_rules: rules },
+          session.csrfToken,
+        );
       }
       // Source ids are sent only when changed so a saved, now-incompatible source never blocks unrelated edits.
       const sourcesChanged = JSON.stringify(sourceIds) !== JSON.stringify(base.source_ids);
-      return patchGadgetDefinition(base.id, {
-        expected_revision: base.revision, name: name.trim(), filters, scope,
-        ...(sourcesChanged ? { source_ids: sourceIds } : {}),
-        ...(rulesTouched ? { highlight_rules: rules } : {}),
-      }, session.csrfToken);
+      return patchGadgetDefinition(
+        base.id,
+        {
+          expected_revision: base.revision,
+          name: name.trim(),
+          filters,
+          scope,
+          ...(sourcesChanged ? { source_ids: sourceIds } : {}),
+          ...(rulesTouched ? { highlight_rules: rules } : {}),
+        },
+        session.csrfToken,
+      );
     },
     onSuccess: async (saved) => {
       void client.invalidateQueries({ queryKey: dashboardKeys.definitions });
@@ -240,19 +294,119 @@ function useSaveFailure(error: unknown) {
 }
 
 /** Name field with touched-state validation. */
-function NameField({ nameId, draft, set, nameValid, afterName }: {
-  nameId: string; draft: GadgetDraft; set: ReturnType<typeof useGadgetDraft>['set']; nameValid: boolean; afterName?: ReactNode;
+function NameField({
+  nameId,
+  draft,
+  set,
+  nameValid,
+  afterName,
+}: {
+  nameId: string;
+  draft: GadgetDraft;
+  set: ReturnType<typeof useGadgetDraft>['set'];
+  nameValid: boolean;
+  afterName?: ReactNode;
 }) {
   const t = useTranslations('gadgetSettings');
   const { touched } = draft;
-  return <>
-    <div className="space-y-1.5">
-      <Label htmlFor={nameId} className="text-xs font-semibold">{t('name')}</Label>
-      <Input id={nameId} value={draft.name} maxLength={120} className="h-9" aria-invalid={touched && !nameValid} aria-describedby={touched && !nameValid ? `${nameId}-error` : undefined} onBlur={() => set('touched', true)} onChange={(event) => { set('touched', true); set('name', event.target.value); }} />
-      {touched && !nameValid && <p id={`${nameId}-error`} role="alert" className="text-xs text-destructive">{t('nameRequired')}</p>}
-    </div>
-    {afterName}
-  </>;
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label htmlFor={nameId} className="text-xs font-semibold">
+          {t('name')}
+        </Label>
+        <Input
+          id={nameId}
+          value={draft.name}
+          maxLength={120}
+          className="h-9"
+          aria-invalid={touched && !nameValid}
+          aria-describedby={touched && !nameValid ? `${nameId}-error` : undefined}
+          onBlur={() => set('touched', true)}
+          onChange={(event) => {
+            set('touched', true);
+            set('name', event.target.value);
+          }}
+        />
+        {touched && !nameValid && (
+          <p id={`${nameId}-error`} role="alert" className="text-xs text-destructive">
+            {t('nameRequired')}
+          </p>
+        )}
+      </div>
+      {afterName}
+    </>
+  );
+}
+
+/**
+ * One-shot deep-link preselect: once templates (and, when a source is requested, source rows) have loaded,
+ * applies the requested template and known source to the draft exactly once for new definitions.
+ *
+ * @param p.definition Existing definition being edited (disables the preselect).
+ * @param p.initialTemplateId Template id from the deep link.
+ * @param p.initialSourceId Source id from the deep link.
+ * @param p.queries Editor queries (templates).
+ * @param p.sourceRows Loaded source rows used to confirm the source exists.
+ * @param p.patch Draft patch function.
+ * @param p.t gadgetSettings translator.
+ * @returns Nothing; patches the draft as a side effect.
+ */
+function useDeepLinkPreselect(p: {
+  definition: GadgetEditorProps['definition'];
+  initialTemplateId?: string;
+  initialSourceId?: string;
+  queries: ReturnType<typeof useEditorQueries>;
+  sourceRows: { id: string }[];
+  patch: ReturnType<typeof useGadgetDraft>['patch'];
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const { definition, initialTemplateId, initialSourceId, queries, sourceRows, patch, t } = p;
+  const sourcesQuery = useSourceRows().query;
+  const preselected = useRef(false);
+  useEffect(() => {
+    if (preselected.current || definition || !initialTemplateId || queries.templates.isPending) return;
+    if (initialSourceId && sourcesQuery.isPending) return;
+    preselected.current = true;
+    const picked = queries.templates.data?.find((item) => item.id === initialTemplateId);
+    if (!picked) return;
+    const known = initialSourceId !== undefined && sourceRows.some((row) => row.id === initialSourceId);
+    patch({
+      ...draftPatchForTemplate(picked, picked.renderer, templateName(picked.renderer, t)),
+      ...(known ? { sourceIds: [initialSourceId] } : {}),
+    });
+  }, [
+    definition,
+    initialTemplateId,
+    initialSourceId,
+    queries.templates.isPending,
+    queries.templates.data,
+    sourcesQuery.isPending,
+    sourceRows,
+    patch,
+    t,
+  ]);
+}
+
+/**
+ * True when the editor currently renders a control for a server-reported field name, so unrendered field
+ * errors can be shown near Save instead of being invisible.
+ *
+ * @param field Server field name.
+ * @param facts Provider facts (visibility flags).
+ * @param fields Fields the current renderer exposes.
+ */
+function isFieldRendered(
+  field: string,
+  facts: Pick<ReturnType<typeof useProviderFacts>, 'showSymbols' | 'showSymbolsFallback' | 'showRegion'>,
+  fields: ReadonlySet<string>,
+): boolean {
+  if (field === 'symbols') return facts.showSymbols || facts.showSymbolsFallback;
+  if (field === 'regions') return facts.showRegion;
+  if (field === 'metrics') return fields.has('metrics');
+  if (field === 'map_layer_ids') return fields.has('map');
+  if (field === 'lookback_days') return fields.has('lookback');
+  return field === 'source_ids';
 }
 
 /** Everything the form body needs, assembled once by {@link useGadgetEditor}. */
@@ -265,7 +419,12 @@ type EditorModel = ReturnType<typeof useGadgetEditor>;
  *
  * @param props Editor props (definition and save callback).
  */
-function useGadgetEditor({ definition = null, onSaved, initialTemplateId, initialSourceId }: Pick<GadgetEditorProps, 'definition' | 'onSaved' | 'initialTemplateId' | 'initialSourceId'>) {
+function useGadgetEditor({
+  definition = null,
+  onSaved,
+  initialTemplateId,
+  initialSourceId,
+}: Pick<GadgetEditorProps, 'definition' | 'onSaved' | 'initialTemplateId' | 'initialSourceId'>) {
   const t = useTranslations('gadgetSettings');
   const nameId = useId();
   const limitId = useId();
@@ -289,35 +448,56 @@ function useGadgetEditor({ definition = null, onSaved, initialTemplateId, initia
     const picked = queries.templates.data?.find((item) => item.renderer === nextRenderer);
     patch(draftPatchForTemplate(picked, nextRenderer, templateName(nextRenderer, t)));
   };
-  // One-shot deep-link preselect: runs once templates (and, when a source is requested, source rows) have loaded.
-  const sourcesQuery = useSourceRows().query;
-  const preselected = useRef(false);
-  useEffect(() => {
-    if (preselected.current || definition || !initialTemplateId || queries.templates.isPending) return;
-    if (initialSourceId && sourcesQuery.isPending) return;
-    preselected.current = true;
-    const picked = queries.templates.data?.find((item) => item.id === initialTemplateId);
-    if (!picked) return;
-    const known = initialSourceId !== undefined && facts.sourceRows.some((row) => row.id === initialSourceId);
-    patch({ ...draftPatchForTemplate(picked, picked.renderer, templateName(picked.renderer, t)), ...(known ? { sourceIds: [initialSourceId] } : {}) });
-  }, [definition, initialTemplateId, initialSourceId, queries.templates.isPending, queries.templates.data, sourcesQuery.isPending, facts.sourceRows, patch, t]);
+  useDeepLinkPreselect({ definition, initialTemplateId, initialSourceId, queries, sourceRows: facts.sourceRows, patch, t });
   /** Applies a datasource selection (see {@link planSourceChange}). */
-  const changeSources = (next: string[]) => patch(planSourceChange({
-    next, draft, fields, catalog: facts.catalog,
-    providerOf: (id) => facts.sourceRows.find((row) => row.id === id)?.provider ?? null,
-  }));
+  const changeSources = (next: string[]) =>
+    patch(
+      planSourceChange({
+        next,
+        draft,
+        fields,
+        catalog: facts.catalog,
+        providerOf: (id) => facts.sourceRows.find((row) => row.id === id)?.provider ?? null,
+      }),
+    );
 
   // A field error for a field this editor does not currently render would otherwise be invisible, so show it near Save.
-  /** True when the editor currently renders a control for the server-reported field name. */
-  const fieldRendered = (field: string) => field === 'symbols' ? facts.showSymbols || facts.showSymbolsFallback : field === 'regions' ? facts.showRegion : field === 'metrics' ? fields.has('metrics') : field === 'map_layer_ids' ? fields.has('map') : field === 'lookback_days' ? fields.has('lookback') : field === 'source_ids';
+  const fieldRendered = (field: string) => isFieldRendered(field, facts, fields);
   const unrenderedFailure = failure && !fieldRendered(failure.field) ? failure.message : null;
-  const error = save.error && !failure ? t((apiFailureKey(save.error) === 'conflict' ? 'conflict' : 'saveFailed')) : unrenderedFailure;
+  const error = save.error && !failure ? t(apiFailureKey(save.error) === 'conflict' ? 'conflict' : 'saveFailed') : unrenderedFailure;
   const sectionFacts: SectionFacts = {
-    fields, entry: facts.entry, chartMulti: facts.chartMulti, metricGroup: facts.metricGroup, showSymbols: facts.showSymbols,
-    showSymbolsFallback: facts.showSymbolsFallback, showRegion: facts.showRegion, coinAssets: facts.coinAssets,
-    limitValid, lookbackValid, fieldError, nameId, limitId,
+    fields,
+    entry: facts.entry,
+    chartMulti: facts.chartMulti,
+    metricGroup: facts.metricGroup,
+    showSymbols: facts.showSymbols,
+    showSymbolsFallback: facts.showSymbolsFallback,
+    showRegion: facts.showRegion,
+    coinAssets: facts.coinAssets,
+    limitValid,
+    lookbackValid,
+    fieldError,
+    nameId,
+    limitId,
   };
-  return { queries, draft, set, patch, descriptor, validity, save, error, fieldError, sectionFacts, failureField: failure?.field, choose, changeSources, nameId, fields, sourceMode: descriptor?.source_mode ?? 'none' };
+  return {
+    queries,
+    draft,
+    set,
+    patch,
+    descriptor,
+    validity,
+    save,
+    error,
+    fieldError,
+    sectionFacts,
+    failureField: failure?.field,
+    choose,
+    changeSources,
+    nameId,
+    fields,
+    sourceMode: descriptor?.source_mode ?? 'none',
+  };
 }
 
 /** Datasource picker with its validation messages (hidden for renderers that read no sources and for live maps). */
@@ -378,25 +558,49 @@ function EditorFooter({ model, props }: { model: EditorModel; props: GadgetEdito
   const t = useTranslations('gadgetSettings');
   const { save, error, nameId, validity } = model;
   const { blockReason, valid } = validity;
-  return <>
-    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-    {blockReason && <p id={`${nameId}-block`} role="status" className="text-xs text-muted-foreground">{blockReason}</p>}
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      {props.footerExtra && <div className="me-auto">{props.footerExtra}</div>}
-      {props.onCancel && <Button type="button" variant="outline" disabled={save.isPending} onClick={props.onCancel}>{t('cancel')}</Button>}
-      <Button type="submit" disabled={save.isPending || !valid} aria-describedby={blockReason ? `${nameId}-block` : undefined}>{save.isPending ? t('saving') : (props.saveLabel ?? t('save'))}</Button>
-    </div>
-  </>;
+  return (
+    <>
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {blockReason && (
+        <p id={`${nameId}-block`} role="status" className="text-xs text-muted-foreground">
+          {blockReason}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {props.footerExtra && <div className="me-auto">{props.footerExtra}</div>}
+        {props.onCancel && (
+          <Button type="button" variant="outline" disabled={save.isPending} onClick={props.onCancel}>
+            {t('cancel')}
+          </Button>
+        )}
+        <Button type="submit" disabled={save.isPending || !valid} aria-describedby={blockReason ? `${nameId}-block` : undefined}>
+          {save.isPending ? t('saving') : (props.saveLabel ?? t('save'))}
+        </Button>
+      </div>
+    </>
+  );
 }
 
 /**
  * Opens the Advanced section when one of its fields is invalid (Save is disabled then, so no submit could do it) or
  * when the server rejects a field that lives inside it (`map_layer_ids` and `lookback_days`).
  */
-function useAutoOpenAdvanced(detailsRef: RefObject<HTMLDetailsElement | null>, validity: { limitValid: boolean; keywordsValid: boolean; lookbackValid: boolean }, failureField: string | undefined) {
+function useAutoOpenAdvanced(
+  detailsRef: RefObject<HTMLDetailsElement | null>,
+  validity: { limitValid: boolean; keywordsValid: boolean; lookbackValid: boolean },
+  failureField: string | undefined,
+) {
   const { limitValid, keywordsValid, lookbackValid } = validity;
-  useEffect(() => { if ((!limitValid || !keywordsValid || !lookbackValid) && detailsRef.current) detailsRef.current.open = true; }, [detailsRef, limitValid, keywordsValid, lookbackValid]);
-  useEffect(() => { if ((failureField === 'map_layer_ids' || failureField === 'lookback_days') && detailsRef.current) detailsRef.current.open = true; }, [detailsRef, failureField]);
+  useEffect(() => {
+    if ((!limitValid || !keywordsValid || !lookbackValid) && detailsRef.current) detailsRef.current.open = true;
+  }, [detailsRef, limitValid, keywordsValid, lookbackValid]);
+  useEffect(() => {
+    if ((failureField === 'map_layer_ids' || failureField === 'lookback_days') && detailsRef.current) detailsRef.current.open = true;
+  }, [detailsRef, failureField]);
 }
 
 /** The editor form for a chosen renderer. */
@@ -407,23 +611,45 @@ function EditorForm({ model, props }: { model: EditorModel; props: GadgetEditorP
   const detailsRef = useRef<HTMLDetailsElement>(null);
   useAutoOpenAdvanced(detailsRef, validity, model.failureField);
   const hasAdvanced = (['keywords', 'limit', 'rules', 'lookback', 'map', 'cii', 'channels'] as const).some((key) => model.fields.has(key));
-  return <form className="space-y-4" noValidate onSubmit={(event) => { event.preventDefault(); set('touched', true); if (validity.valid) save.mutate(); }}>
-    <fieldset disabled={save.isPending} className="m-0 min-w-0 space-y-4 border-0 p-0">
-      {!definition && <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Check className="size-3.5" aria-hidden="true" />
-        <span>{templateName(draft.renderer, t)}</span>
-        <Button type="button" variant="ghost" size="sm" onClick={() => { set('choice', null); set('renderer', ''); }}>{t('backToTemplates')}</Button>
-      </div>}
-      <MapModeField nameId={nameId} draft={draft} set={set} />
-      <SourceField model={model} />
-      {model.fields.has('metrics') && <MetricsField draft={draft} set={set} facts={sectionFacts} />}
-      <SymbolFields draft={draft} set={set} facts={sectionFacts} />
-      <RegionField draft={draft} set={set} facts={sectionFacts} />
-      <NameField nameId={nameId} draft={draft} set={set} nameValid={validity.nameValid} afterName={props.afterName} />
-      {hasAdvanced && <AdvancedSection ref={detailsRef} draft={draft} set={set} facts={sectionFacts} />}
-    </fieldset>
-    <EditorFooter model={model} props={props} />
-  </form>;
+  return (
+    <form
+      className="space-y-4"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        set('touched', true);
+        if (validity.valid) save.mutate();
+      }}
+    >
+      <fieldset disabled={save.isPending} className="m-0 min-w-0 space-y-4 border-0 p-0">
+        {!definition && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Check className="size-3.5" aria-hidden="true" />
+            <span>{templateName(draft.renderer, t)}</span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                set('choice', null);
+                set('renderer', '');
+              }}
+            >
+              {t('backToTemplates')}
+            </Button>
+          </div>
+        )}
+        <MapModeField nameId={nameId} draft={draft} set={set} />
+        <SourceField model={model} />
+        {model.fields.has('metrics') && <MetricsField draft={draft} set={set} facts={sectionFacts} />}
+        <SymbolFields draft={draft} set={set} facts={sectionFacts} />
+        <RegionField draft={draft} set={set} facts={sectionFacts} />
+        <NameField nameId={nameId} draft={draft} set={set} nameValid={validity.nameValid} afterName={props.afterName} />
+        {hasAdvanced && <AdvancedSection ref={detailsRef} draft={draft} set={set} facts={sectionFacts} />}
+      </fieldset>
+      <EditorFooter model={model} props={props} />
+    </form>
+  );
 }
 
 /**
@@ -436,7 +662,15 @@ export function GadgetEditor(props: GadgetEditorProps) {
   const { queries, draft } = model;
   const showTemplates = !props.definition && draft.choice === null;
   if (showTemplates) {
-    return <TemplateChooser renderers={queries.renderers} templates={queries.templates} counts={queries.counts} onChoose={model.choose} onCancel={props.onCancel} />;
+    return (
+      <TemplateChooser
+        renderers={queries.renderers}
+        templates={queries.templates}
+        counts={queries.counts}
+        onChoose={model.choose}
+        onCancel={props.onCancel}
+      />
+    );
   }
   return <EditorForm model={model} props={props} />;
 }

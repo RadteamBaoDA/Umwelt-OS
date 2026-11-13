@@ -26,13 +26,7 @@ const SAMPLE_STEPS: PlanStep[] = [
 
 describe('PlanCard', () => {
   it('renders plan title, description, steps, and initial progress counter', () => {
-    render(
-      <PlanCard
-        title="Weekly Knowledge Audit"
-        description="Three-stage grounded verification workflow."
-        steps={SAMPLE_STEPS}
-      />,
-    );
+    render(<PlanCard title="Weekly Knowledge Audit" description="Three-stage grounded verification workflow." steps={SAMPLE_STEPS} />);
 
     expect(screen.getByText('Weekly Knowledge Audit')).toBeInTheDocument();
     expect(screen.getByText('Three-stage grounded verification workflow.')).toBeInTheDocument();
@@ -46,13 +40,7 @@ describe('PlanCard', () => {
     const user = userEvent.setup();
     const onStepToggle = vi.fn();
 
-    render(
-      <PlanCard
-        title="Weekly Knowledge Audit"
-        steps={SAMPLE_STEPS}
-        onStepToggle={onStepToggle}
-      />,
-    );
+    render(<PlanCard title="Weekly Knowledge Audit" steps={SAMPLE_STEPS} onStepToggle={onStepToggle} />);
 
     const step3Checkbox = screen.getByRole('checkbox', { name: 'Synthesize executive summary' });
     expect(step3Checkbox).not.toBeChecked();
@@ -74,13 +62,7 @@ describe('PlanCard', () => {
     const user = userEvent.setup();
     const onSendPrompt = vi.fn();
 
-    render(
-      <PlanCard
-        title="Weekly Knowledge Audit"
-        steps={SAMPLE_STEPS}
-        onSendPrompt={onSendPrompt}
-      />,
-    );
+    render(<PlanCard title="Weekly Knowledge Audit" steps={SAMPLE_STEPS} onSendPrompt={onSendPrompt} />);
 
     await user.click(screen.getByTestId('plan-approve-button'));
     expect(onSendPrompt).toHaveBeenCalledTimes(1);
@@ -93,18 +75,10 @@ describe('PlanCard', () => {
   });
 
   it('renders localized Vietnamese labels when locale is vi-vi', () => {
-    render(
-      <PlanCard
-        title="Kế hoạch Rà soát"
-        steps={SAMPLE_STEPS}
-        locale="vi-vi"
-      />,
-    );
+    render(<PlanCard title="Kế hoạch Rà soát" steps={SAMPLE_STEPS} locale="vi-vi" />);
 
     expect(screen.getByTestId('plan-progress-counter')).toHaveTextContent('1 / 3 hoàn thành');
-    expect(screen.getByTestId('plan-approve-button')).toHaveTextContent(
-      'Phê duyệt & thực thi kế hoạch',
-    );
+    expect(screen.getByTestId('plan-approve-button')).toHaveTextContent('Phê duyệt & thực thi kế hoạch');
     expect(screen.getByTestId('plan-refine-button')).toHaveTextContent('Điều chỉnh kế hoạch');
   });
 

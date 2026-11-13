@@ -5,4 +5,6 @@ import { PickPhone } from '@/modules/pick';
 export const metadata: Metadata = { referrer: 'no-referrer', robots: { index: false, follow: false } };
 
 /** Renders the anonymous phone prompt picker outside the authenticated shell. */
-export default function PickPage() { return <PickPhone />; }
+export default function PickPage() {
+  return <PickPhone />;
+}

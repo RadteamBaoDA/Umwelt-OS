@@ -12,10 +12,19 @@ function Host({ initial = 'ink' }: { initial?: AccentId }) {
   const [value, setValue] = useState<AccentId>(initial);
   return <AccentPicker value={value} onChange={setValue} />;
 }
-const view = (initial?: AccentId) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Host initial={initial} /></NextIntlClientProvider>);
+const view = (initial?: AccentId) =>
+  render(
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <Host initial={initial} />
+    </NextIntlClientProvider>,
+  );
 
 describe('AccentPicker', () => {
-  afterEach(() => { cleanup(); localStorage.clear(); document.documentElement.removeAttribute('data-accent'); });
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+    document.documentElement.removeAttribute('data-accent');
+  });
 
   it('previews a chosen swatch on the page without persisting it', async () => {
     view();
@@ -32,7 +41,10 @@ describe('AccentPicker', () => {
 });
 
 describe('accent storage helpers', () => {
-  afterEach(() => { localStorage.clear(); document.documentElement.removeAttribute('data-accent'); });
+  afterEach(() => {
+    localStorage.clear();
+    document.documentElement.removeAttribute('data-accent');
+  });
 
   it('applyAccent persists, previewAccent only sets the attribute, ink clears both', () => {
     previewAccent('sea');

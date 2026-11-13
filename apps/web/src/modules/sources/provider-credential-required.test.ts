@@ -9,7 +9,7 @@ vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({}) }));
 import { providerCredentialRequired } from './connector-editor';
 
 const entry = (provider_id: string, auth_methods: string[], key_fields: string[] = []) =>
-  ({ provider_id, auth_methods, key_fields } as unknown as ConnectorCatalogEntry);
+  ({ provider_id, auth_methods, key_fields }) as unknown as ConnectorCatalogEntry;
 
 describe('providerCredentialRequired', () => {
   it('does not require a key for generic REST (none or optional header)', () => {

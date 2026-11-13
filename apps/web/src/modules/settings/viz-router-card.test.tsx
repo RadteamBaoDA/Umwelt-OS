@@ -8,14 +8,52 @@ import { VizRouterCard } from './viz-router-card';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 
-const read = { configuration_revision: 1, kind: 'internal', provider_id: null, model: '', mode: 'json_schema', api: 'chat', typesafe_key_configured: false, openrouter_key_configured: false, cloudflare_key_configured: false, account_id: null, gateway_url: null, allow_remote_visualization_routing: false, destination_id: null };
-const ai = { providers: [{ id: 'default', label: 'Gateway', local: false, models: [{ id: 'gpt-x', type: 'llm' }, { id: 'emb', type: 'embedding' }, { id: 'dec-1', type: 'decision' }] }] };
-const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-const mount = (locale: 'en-us' | 'vi-vi' = 'en-us', onError?: (error: unknown) => void) => render(<NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={messages[locale]} onError={onError}><QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><VizRouterCard /></QueryClientProvider></NextIntlClientProvider>);
+const read = {
+  configuration_revision: 1,
+  kind: 'internal',
+  provider_id: null,
+  model: '',
+  mode: 'json_schema',
+  api: 'chat',
+  typesafe_key_configured: false,
+  openrouter_key_configured: false,
+  cloudflare_key_configured: false,
+  account_id: null,
+  gateway_url: null,
+  allow_remote_visualization_routing: false,
+  destination_id: null,
+};
+const ai = {
+  providers: [
+    {
+      id: 'default',
+      label: 'Gateway',
+      local: false,
+      models: [
+        { id: 'gpt-x', type: 'llm' },
+        { id: 'emb', type: 'embedding' },
+        { id: 'dec-1', type: 'decision' },
+      ],
+    },
+  ],
+};
+const json = (body: unknown) =>
+  Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+const mount = (locale: 'en-us' | 'vi-vi' = 'en-us', onError?: (error: unknown) => void) =>
+  render(
+    <NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={messages[locale]} onError={onError}>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <VizRouterCard />
+      </QueryClientProvider>
+    </NextIntlClientProvider>,
+  );
 
 describe('visualization router card', () => {
   const fetchMock = vi.fn();
-  beforeEach(() => { fetchMock.mockReset(); vi.stubGlobal('fetch', fetchMock); });
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
 
   it('defaults to the internal router with no external controls', async () => {
     fetchMock.mockImplementation((url: string) => json(String(url).includes('viz-router') ? read : ai));
@@ -26,7 +64,15 @@ describe('visualization router card', () => {
   });
 
   it('saves the LLM classifier with consent and mode, then tests routing', async () => {
-    const saved = { ...read, configuration_revision: 2, kind: 'llm', provider_id: 'default', model: 'gpt-x', mode: 'forced_tool', allow_remote_visualization_routing: true };
+    const saved = {
+      ...read,
+      configuration_revision: 2,
+      kind: 'llm',
+      provider_id: 'default',
+      model: 'gpt-x',
+      mode: 'forced_tool',
+      allow_remote_visualization_routing: true,
+    };
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       if (String(url).endsWith('/viz-router/test')) return json({ ok: true, category: 'table', mode: 'forced_tool', error: null });
       if (String(url).includes('viz-router')) return json(init?.method === 'PUT' ? saved : read);
@@ -45,14 +91,32 @@ describe('visualization router card', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(true));
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')!;
-    expect(JSON.parse(put[1].body)).toEqual({ expected_revision: 1, kind: 'llm', provider_id: 'default', model: 'gpt-x', mode: 'forced_tool', api: 'chat', typesafe_key_action: 'unchanged', typesafe_key: null, api_key_action: 'unchanged', api_key: null, account_id: null, gateway_url: null, allow_remote_visualization_routing: true });
+    expect(JSON.parse(put[1].body)).toEqual({
+      expected_revision: 1,
+      kind: 'llm',
+      provider_id: 'default',
+      model: 'gpt-x',
+      mode: 'forced_tool',
+      api: 'chat',
+      typesafe_key_action: 'unchanged',
+      typesafe_key: null,
+      api_key_action: 'unchanged',
+      api_key: null,
+      account_id: null,
+      gateway_url: null,
+      allow_remote_visualization_routing: true,
+    });
     await userEvent.click(await screen.findByRole('button', { name: 'Test routing' }));
     expect(await screen.findByText(/Routing works with Forced tool call: answered "table"/)).toBeTruthy();
   });
 
   it('shows a localized error code from Test routing and never renders the key', async () => {
     const typesafe = { ...read, kind: 'typesafe', typesafe_key_configured: true, allow_remote_visualization_routing: true };
-    fetchMock.mockImplementation((url: string) => String(url).endsWith('/test') ? json({ ok: false, category: null, mode: null, error: 'auth_error' }) : json(String(url).includes('viz-router') ? typesafe : ai));
+    fetchMock.mockImplementation((url: string) =>
+      String(url).endsWith('/test')
+        ? json({ ok: false, category: null, mode: null, error: 'auth_error' })
+        : json(String(url).includes('viz-router') ? typesafe : ai),
+    );
     mount();
     await userEvent.click(await screen.findByRole('button', { name: 'Test routing' }));
     expect(await screen.findByText('The provider rejected the credentials.')).toBeTruthy();
@@ -72,9 +136,13 @@ describe('visualization router card', () => {
     ['vi-vi', 400, 'Yêu cầu thất bại.'],
   ] as const)('localizes %s HTTP %i test failures without missing messages', async (locale, status, expected) => {
     const typesafe = { ...read, kind: 'typesafe', typesafe_key_configured: true, allow_remote_visualization_routing: true };
-    fetchMock.mockImplementation((url: string) => String(url).endsWith('/viz-router/test')
-      ? Promise.resolve(new Response(JSON.stringify({ detail: 'Request failed' }), { status, headers: { 'Content-Type': 'application/json' } }))
-      : json(String(url).includes('viz-router') ? typesafe : ai));
+    fetchMock.mockImplementation((url: string) =>
+      String(url).endsWith('/viz-router/test')
+        ? Promise.resolve(
+            new Response(JSON.stringify({ detail: 'Request failed' }), { status, headers: { 'Content-Type': 'application/json' } }),
+          )
+        : json(String(url).includes('viz-router') ? typesafe : ai),
+    );
     const onError = vi.fn();
     mount(locale, onError);
     await userEvent.click(await screen.findByRole('button', { name: messages[locale].vizRouter.test.label }));
@@ -83,8 +151,17 @@ describe('visualization router card', () => {
   });
 
   it('saves OpenRouter with its own write-only key and validates required fields', async () => {
-    const saved = { ...read, configuration_revision: 2, kind: 'openrouter', model: 'openrouter/auto', openrouter_key_configured: true, allow_remote_visualization_routing: true };
-    fetchMock.mockImplementation((url: string, init?: RequestInit) => json(String(url).includes('viz-router') ? (init?.method === 'PUT' ? saved : read) : ai));
+    const saved = {
+      ...read,
+      configuration_revision: 2,
+      kind: 'openrouter',
+      model: 'openrouter/auto',
+      openrouter_key_configured: true,
+      allow_remote_visualization_routing: true,
+    };
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      json(String(url).includes('viz-router') ? (init?.method === 'PUT' ? saved : read) : ai),
+    );
     mount();
     await userEvent.click(await screen.findByRole('combobox', { name: 'Router' }));
     await userEvent.click(await screen.findByRole('option', { name: 'OpenRouter' }));
@@ -98,12 +175,23 @@ describe('visualization router card', () => {
     await userEvent.click(save);
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(true));
     const body = JSON.parse(fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')![1].body);
-    expect(body).toMatchObject({ kind: 'openrouter', model: 'openrouter/auto', mode: 'json_schema', api: 'decisions', api_key_action: 'replaced', api_key: 'or-secret', typesafe_key: null, account_id: null, allow_remote_visualization_routing: true });
+    expect(body).toMatchObject({
+      kind: 'openrouter',
+      model: 'openrouter/auto',
+      mode: 'json_schema',
+      api: 'decisions',
+      api_key_action: 'replaced',
+      api_key: 'or-secret',
+      typesafe_key: null,
+      account_id: null,
+      allow_remote_visualization_routing: true,
+    });
   });
 
   it('loads Decision models into the OpenRouter model list and hides the constraint mode', async () => {
     fetchMock.mockImplementation((url: string) => {
-      if (String(url).endsWith('/viz-router/decision-models')) return json({ ok: true, models: [{ id: 'vendor/decider-1', input_modalities: ['text'] }], error: null });
+      if (String(url).endsWith('/viz-router/decision-models'))
+        return json({ ok: true, models: [{ id: 'vendor/decider-1', input_modalities: ['text'] }], error: null });
       return json(String(url).includes('viz-router') ? read : ai);
     });
     mount();
@@ -137,7 +225,9 @@ describe('visualization router card', () => {
   });
 
   it('requires a valid Cloudflare account id or an https gateway URL', async () => {
-    fetchMock.mockImplementation((url: string) => json(String(url).includes('viz-router') ? { ...read, cloudflare_key_configured: true } : ai));
+    fetchMock.mockImplementation((url: string) =>
+      json(String(url).includes('viz-router') ? { ...read, cloudflare_key_configured: true } : ai),
+    );
     mount();
     await userEvent.click(await screen.findByRole('combobox', { name: 'Router' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Cloudflare Workers AI' }));

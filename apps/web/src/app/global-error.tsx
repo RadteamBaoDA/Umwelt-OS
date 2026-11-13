@@ -10,7 +10,9 @@ export default function GlobalError({ reset }: Readonly<{ error: Error & { diges
       <body style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem' }}>
         <main role="alert">
           <h1>Something went wrong / Đã xảy ra lỗi</h1>
-          <button type="button" onClick={reset}>Try again / Thử lại</button>
+          <button type="button" onClick={reset}>
+            Try again / Thử lại
+          </button>
         </main>
       </body>
     </html>

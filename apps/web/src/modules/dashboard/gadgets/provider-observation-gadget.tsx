@@ -218,20 +218,15 @@ function ObservationNotes({ items }: { items: WorldObservation[] }) {
   );
 }
 
-/** One reading as a KPI (single series), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
-function ObservationRows({
-  instance,
-  items,
-  history,
-  sources,
-  sourceIds,
-}: {
-  instance: GadgetInstance;
-  items: WorldObservation[];
-  history: ReturnType<typeof historyPerSeries>;
-  sources: ReturnType<typeof useEffectiveLookback>['sources'];
-  sourceIds: string[];
-}) {
+/**
+ * Formatting helpers shared by the observation layouts.
+ *
+ * @param sources Source rows keyed by id (used to prefix labels when several sources are bound).
+ * @param sourceIds Bound source ids; fewer than two means labels are not prefixed.
+ * @returns The dashboard translator, display preferences, a tooltip builder listing observed/published/collected
+ * times, a row-label builder, and a unit builder. Pure apart from reading translations and display preferences.
+ */
+function useObservationFormatters(sources: ReturnType<typeof useEffectiveLookback>['sources'], sourceIds: string[]) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   /** Formats an observation timestamp with the display locale and timezone. */
@@ -253,6 +248,24 @@ function ObservationRows({
       : `${sources[item.source_id]?.name || PROVIDER_PRESENTATION[item.provider]?.name || item.provider} · ${baseLabel(item)}`;
   /** Unit text shown beside the figure: bounded-index suffix, else the plain unit (bare "index" adds nothing). */
   const unitOf = (item: WorldObservation) => boundedIndexSuffix(item) ?? (item.unit === 'index' ? undefined : item.unit);
+  return { t, display, timesTitle, labelOf, unitOf };
+}
+
+/** One reading as a KPI (single series), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
+function ObservationRows({
+  instance,
+  items,
+  history,
+  sources,
+  sourceIds,
+}: {
+  instance: GadgetInstance;
+  items: WorldObservation[];
+  history: ReturnType<typeof historyPerSeries>;
+  sources: ReturnType<typeof useEffectiveLookback>['sources'];
+  sourceIds: string[];
+}) {
+  const { t, display, timesTitle, labelOf, unitOf } = useObservationFormatters(sources, sourceIds);
   const single = items.length === 1 ? items[0] : null;
   const kpiStrip = items.length >= 2 && items.length <= 8; // wide gadgets show these as one KPI row
   if (single) {
@@ -277,7 +290,10 @@ function ObservationRows({
     );
   }
   const list = (
-    <ul className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`} aria-label={instance.title || t('providerObs.title')}>
+    <ul
+      className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`}
+      aria-label={instance.title || t('providerObs.title')}
+    >
       {items.map((item) => (
         <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
           <SeriesRow
@@ -306,7 +322,8 @@ function ObservationRows({
         {items.map((item) => (
           <li key={item.id} title={timesTitle(item)} data-testid="observation-kpi">
             <GadgetKpi
-              size="sm" sparkHeight={24}
+              size="sm"
+              sparkHeight={24}
               label={labelOf(item)}
               value={item.value}
               currency={item.currency ?? undefined}
@@ -337,7 +354,14 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const t = useTranslations('dashboard');
   const { sourceIds, sourceId, query, items, history, sources, sourceQuery } = useProviderObservations(instance);
 
-  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObs.sourceRequired')} action={{ href: '/settings/sources', label: t('gadget.configureAction') }} />;
+  if (!sourceId)
+    return (
+      <GadgetNotice
+        kind="setup"
+        message={t('providerObs.sourceRequired')}
+        action={{ href: '/settings/sources', label: t('gadget.configureAction') }}
+      />
+    );
   if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observation.loading')} />;
   // No last good value to fall back on: plain error.
   if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observation.loadFailed')} />;

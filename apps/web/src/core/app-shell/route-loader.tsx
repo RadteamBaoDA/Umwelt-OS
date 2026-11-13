@@ -10,7 +10,8 @@ import { Loader2Icon } from 'lucide-react';
 const POLL_MS = 100;
 const STABLE_POLLS = 4;
 /** Any skeleton, busy state, pending dashboard marker, or page spinner means rendering is incomplete. */
-const BUSY_SELECTOR = '.skeleton, [aria-busy="true"]:not([data-route-loader]), [data-dashboard-ready="false"], .animate-spin:not([data-route-loader] *)';
+const BUSY_SELECTOR =
+  '.skeleton, [aria-busy="true"]:not([data-route-loader]), [data-dashboard-ready="false"], .animate-spin:not([data-route-loader] *)';
 /**
  * Cap on how long the opaque overlay may cover a non-dashboard route once it has arrived. Pages that poll (news, sources)
  * never reach "no fetch in flight", and every page renders its own skeletons, so holding a bare spinner longer only hides
@@ -105,8 +106,16 @@ function isChatPath(path: string) {
 /** Opaque full-viewport spinner; shared by the route-change overlay and the root Suspense fallback so both look identical. */
 export function RouteSpinner() {
   const t = useTranslations('shell');
-  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background" role="status" aria-live="polite" aria-busy="true" data-route-loader="">
-    <Loader2Icon className="size-8 animate-spin text-primary" aria-hidden="true" />
-    <span className="sr-only">{t('loadingWorkspace')}</span>
-  </div>;
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-background"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      data-route-loader=""
+    >
+      <Loader2Icon className="size-8 animate-spin text-primary" aria-hidden="true" />
+      <span className="sr-only">{t('loadingWorkspace')}</span>
+    </div>
+  );
 }

@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ACCENT_STORAGE_KEY, readAccent, syncServerAccent } from './accent';
 
 describe('syncServerAccent', () => {
-  beforeEach(() => { window.localStorage.clear(); document.documentElement.removeAttribute('data-accent'); });
+  beforeEach(() => {
+    window.localStorage.clear();
+    document.documentElement.removeAttribute('data-accent');
+  });
 
   it('applies the server accent and updates localStorage when it differs (server wins)', () => {
     window.localStorage.setItem(ACCENT_STORAGE_KEY, 'moss');

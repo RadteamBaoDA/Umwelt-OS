@@ -35,9 +35,7 @@ export const tablePayloadSchema = z
     subtitle: optionalText,
     source: optionalText,
     is_sample: z.boolean().optional(),
-    columns: z.array(
-      z.union([z.string(), z.object({ key: z.string().min(1), label: z.string() }).passthrough()]),
-    ),
+    columns: z.array(z.union([z.string(), z.object({ key: z.string().min(1), label: z.string() }).passthrough()])),
     rows: z.array(z.union([z.array(z.unknown()), z.record(z.string(), z.unknown())])).optional(),
     records: z.array(z.record(z.string(), z.unknown())).optional(),
   })

@@ -36,7 +36,11 @@ export function computeUpdatedGroupIds(
 
 /** Reads a group's stored last-visit time (null when absent or storage fails). */
 function readSeen(groupId: string): string | null {
-  try { return window.localStorage.getItem(SEEN_PREFIX + groupId); } catch { return null; }
+  try {
+    return window.localStorage.getItem(SEEN_PREFIX + groupId);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -48,17 +52,22 @@ function readSeen(groupId: string): string | null {
  * @param sources Dashboard sources from `useDashboardData`.
  * @param activeGroupId Currently selected group id ('' while loading).
  */
-export function useUpdatedGroups(
-  instances: GadgetInstance[] | undefined,
-  sources: Source[],
-  activeGroupId: string,
-): ReadonlySet<string> {
+export function useUpdatedGroups(instances: GadgetInstance[] | undefined, sources: Source[], activeGroupId: string): ReadonlySet<string> {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!activeGroupId) return undefined;
-    const record = () => { try { window.localStorage.setItem(SEEN_PREFIX + activeGroupId, new Date().toISOString()); } catch { /* storage unavailable */ } };
+    const record = () => {
+      try {
+        window.localStorage.setItem(SEEN_PREFIX + activeGroupId, new Date().toISOString());
+      } catch {
+        /* storage unavailable */
+      }
+    };
     if (readSeen(activeGroupId) === null) record();
-    return () => { record(); setTick((n) => n + 1); };
+    return () => {
+      record();
+      setTick((n) => n + 1);
+    };
   }, [activeGroupId]);
   return useMemo(() => {
     const seenAt: Record<string, string | null> = {};

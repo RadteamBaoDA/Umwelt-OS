@@ -19,8 +19,12 @@ function recordingClient() {
   const client = new QueryClient();
   const invalidated: unknown[] = [];
   const reset: unknown[] = [];
-  vi.spyOn(client, 'invalidateQueries').mockImplementation(async (filters) => { invalidated.push(filters?.queryKey); });
-  vi.spyOn(client, 'resetQueries').mockImplementation(async (filters) => { reset.push(filters?.queryKey); });
+  vi.spyOn(client, 'invalidateQueries').mockImplementation(async (filters) => {
+    invalidated.push(filters?.queryKey);
+  });
+  vi.spyOn(client, 'resetQueries').mockImplementation(async (filters) => {
+    reset.push(filters?.queryKey);
+  });
   return { client, invalidated, reset };
 }
 
@@ -54,7 +58,11 @@ describe('applyKnowledgeChange', () => {
   it('rejects index events with stray scope fields and accepts a valid one', () => {
     const { client, invalidated } = recordingClient();
     const valid = base({
-      scope: 'index', index_generation_id: ID, index_status: 'active', indexed_items: 3, failed_items: 0,
+      scope: 'index',
+      index_generation_id: ID,
+      index_status: 'active',
+      indexed_items: 3,
+      failed_items: 0,
     });
     expect(applyKnowledgeChange(client, { ...valid, source_id: ID }, queue)).toBe(false);
     expect(applyKnowledgeChange(client, { ...valid, deleted: true }, queue)).toBe(false);
@@ -115,9 +123,13 @@ describe('dashboard events', () => {
     applyDashboardChange(client, { ...event, scope: 'dashboard' });
     applyDashboardChange(client, { ...event, scope: 'definition' });
     expect(invalidated).toEqual([
-      ['daily-context'], ['notifications'],
-      ['dashboards'], ['dashboard', ID],
-      ['gadget-definitions'], ['gadget-definition', ID], ['dashboard'],
+      ['daily-context'],
+      ['notifications'],
+      ['dashboards'],
+      ['dashboard', ID],
+      ['gadget-definitions'],
+      ['gadget-definition', ID],
+      ['dashboard'],
     ]);
   });
 });

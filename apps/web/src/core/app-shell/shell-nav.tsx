@@ -33,20 +33,23 @@ export function navHref(item: NavItem, pathname: string, role: Role, firstSettin
 function NavLink({ item, href, active, expanded }: { item: NavItem; href: string; active: boolean; expanded: boolean }) {
   const t = useTranslations('shell');
   const Icon = navigationIcons[item.id];
-  const link = <Link
-    key={item.id}
-    href={href}
-    aria-current={active ? 'page' : undefined}
-    className="workspace-nav-link"
-  >
-    <Icon className="size-[18px] shrink-0" aria-hidden="true" />
-    <span className="workspace-nav-label">{t(item.messageKey)}</span>
-  </Link>;
+  const link = (
+    <Link key={item.id} href={href} aria-current={active ? 'page' : undefined} className="workspace-nav-link">
+      <Icon className="size-[18px] shrink-0" aria-hidden="true" />
+      <span className="workspace-nav-label">{t(item.messageKey)}</span>
+    </Link>
+  );
   // Expanded rail shows the label itself, so the tooltip would only repeat it.
-  return expanded ? link : <Tooltip>
-    <TooltipTrigger asChild>{link}</TooltipTrigger>
-    <TooltipContent className="workspace-nav-tooltip" side="right">{t(item.messageKey)}</TooltipContent>
-  </Tooltip>;
+  return expanded ? (
+    link
+  ) : (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent className="workspace-nav-tooltip" side="right">
+        {t(item.messageKey)}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 /**
@@ -56,7 +59,15 @@ function NavLink({ item, href, active, expanded }: { item: NavItem; href: string
  * @param firstSettingsHref Target of the Settings entry for members.
  * @param onToggle Flips the persisted expanded state.
  */
-export function ShellNav({ items, activeId, pathname, role, firstSettingsHref, expanded, onToggle }: {
+export function ShellNav({
+  items,
+  activeId,
+  pathname,
+  role,
+  firstSettingsHref,
+  expanded,
+  onToggle,
+}: {
   items: ReadonlyArray<NavItem>;
   activeId: string;
   pathname: string;
@@ -66,31 +77,49 @@ export function ShellNav({ items, activeId, pathname, role, firstSettingsHref, e
   onToggle: () => void;
 }) {
   const t = useTranslations('shell');
-  return <TooltipProvider delayDuration={300}>
-    <nav id="workspace-nav" className="workspace-nav" data-expanded={expanded || undefined} aria-label={t('mainNavigation')}>
-      <div className="workspace-nav-header">
-        <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS">{expanded ? <UmweltLogo /> : <UmweltMark />}</Link>
-      </div>
-      <div className="workspace-nav-links">
-        {items.map((item) => (
-          <NavLink
-            key={item.id}
-            item={item}
-            href={navHref(item, pathname, role, firstSettingsHref)}
-            active={activeId === item.id}
-            expanded={expanded}
-          />
-        ))}
-      </div>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button type="button" className="workspace-nav-link workspace-nav-toggle" onClick={onToggle} aria-expanded={expanded} aria-controls="workspace-nav">
-            {expanded ? <PanelLeftClose className="size-[18px] shrink-0" aria-hidden="true" /> : <PanelLeftOpen className="size-[18px] shrink-0" aria-hidden="true" />}
-            <span className="workspace-nav-label">{t(expanded ? 'collapseSidebar' : 'expandSidebar')}</span>
-          </button>
-        </TooltipTrigger>
-        {!expanded && <TooltipContent className="workspace-nav-tooltip" side="right">{t('expandSidebar')}</TooltipContent>}
-      </Tooltip>
-    </nav>
-  </TooltipProvider>;
+  return (
+    <TooltipProvider delayDuration={300}>
+      <nav id="workspace-nav" className="workspace-nav" data-expanded={expanded || undefined} aria-label={t('mainNavigation')}>
+        <div className="workspace-nav-header">
+          <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS">
+            {expanded ? <UmweltLogo /> : <UmweltMark />}
+          </Link>
+        </div>
+        <div className="workspace-nav-links">
+          {items.map((item) => (
+            <NavLink
+              key={item.id}
+              item={item}
+              href={navHref(item, pathname, role, firstSettingsHref)}
+              active={activeId === item.id}
+              expanded={expanded}
+            />
+          ))}
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="workspace-nav-link workspace-nav-toggle"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              aria-controls="workspace-nav"
+            >
+              {expanded ? (
+                <PanelLeftClose className="size-[18px] shrink-0" aria-hidden="true" />
+              ) : (
+                <PanelLeftOpen className="size-[18px] shrink-0" aria-hidden="true" />
+              )}
+              <span className="workspace-nav-label">{t(expanded ? 'collapseSidebar' : 'expandSidebar')}</span>
+            </button>
+          </TooltipTrigger>
+          {!expanded && (
+            <TooltipContent className="workspace-nav-tooltip" side="right">
+              {t('expandSidebar')}
+            </TooltipContent>
+          )}
+        </Tooltip>
+      </nav>
+    </TooltipProvider>
+  );
 }

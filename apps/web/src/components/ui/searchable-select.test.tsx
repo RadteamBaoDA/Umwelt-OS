@@ -7,7 +7,17 @@ afterEach(() => cleanup());
 
 /** Renders an open-ended select and opens its popover. */
 async function open(onValueChange = vi.fn(), allowCustom = true) {
-  render(<SearchableSelect value="" options={['AAA']} allowCustom={allowCustom} onValueChange={onValueChange} placeholder="pick" searchLabel="Search" aria-label="Field" />);
+  render(
+    <SearchableSelect
+      value=""
+      options={['AAA']}
+      allowCustom={allowCustom}
+      onValueChange={onValueChange}
+      placeholder="pick"
+      searchLabel="Search"
+      aria-label="Field"
+    />,
+  );
   await userEvent.click(screen.getByRole('combobox', { name: 'Field' }));
   return onValueChange;
 }
@@ -31,9 +41,12 @@ describe('SearchableSelect', () => {
     expect(screen.getByRole('combobox', { name: 'Field' }).getAttribute('aria-controls')).toBe(listbox.id);
   });
 
-  it.each([true, false])('selects the listed option on Enter when the text matches it case-insensitively (allowCustom=%s)', async (allowCustom) => {
-    const onValueChange = await open(vi.fn(), allowCustom);
-    await userEvent.type(await screen.findByLabelText('Search'), 'aaa{Enter}');
-    expect(onValueChange).toHaveBeenCalledWith('AAA');
-  });
+  it.each([true, false])(
+    'selects the listed option on Enter when the text matches it case-insensitively (allowCustom=%s)',
+    async (allowCustom) => {
+      const onValueChange = await open(vi.fn(), allowCustom);
+      await userEvent.type(await screen.findByLabelText('Search'), 'aaa{Enter}');
+      expect(onValueChange).toHaveBeenCalledWith('AAA');
+    },
+  );
 });

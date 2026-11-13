@@ -30,13 +30,16 @@ export function buildProviderGroups(
 ): ProviderTileGroup[] {
   const needle = foldSearchText(query.trim());
   /** True when the entry label or category label contains the folded search text (everything matches an empty query). */
-  const matches = (entry: ConnectorCatalogEntry) => !needle
-    || foldSearchText(`${entry.label} ${categoryLabel(entry.category ?? 'other')}`).includes(needle);
+  const matches = (entry: ConnectorCatalogEntry) =>
+    !needle || foldSearchText(`${entry.label} ${categoryLabel(entry.category ?? 'other')}`).includes(needle);
   const visible = entries.filter(matches);
   const keyless = visible.filter((entry) => entry.availability !== 'requires_credentials');
   const groups: ProviderTileGroup[] = [{ key: 'nokey', entries: keyless }];
   for (const category of order) {
-    groups.push({ key: category, entries: visible.filter((entry) => entry.availability === 'requires_credentials' && (entry.category ?? 'other') === category) });
+    groups.push({
+      key: category,
+      entries: visible.filter((entry) => entry.availability === 'requires_credentials' && (entry.category ?? 'other') === category),
+    });
   }
   return groups.filter((group) => group.entries.length > 0);
 }

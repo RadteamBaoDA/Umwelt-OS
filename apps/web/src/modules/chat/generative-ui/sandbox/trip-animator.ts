@@ -71,9 +71,7 @@ export function createTripAnimator(options: TripAnimationOptions): TripAnimatorC
   let playing = false;
   let disposed = false;
 
-  const reduceMotion = () =>
-    typeof window !== 'undefined' &&
-    (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
+  const reduceMotion = () => typeof window !== 'undefined' && (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
 
   const emit = () => {
     const progress = Math.min(1, elapsed / duration);

@@ -16,8 +16,12 @@ export function readDensity(): DensityId {
 /** Applies a density to <html> and persists it; `comfortable` removes the attribute and the stored key. */
 export function applyDensity(id: DensityId): void {
   const root = document.documentElement;
-  if (id === 'compact') root.setAttribute('data-density', 'compact'); else root.removeAttribute('data-density');
+  if (id === 'compact') root.setAttribute('data-density', 'compact');
+  else root.removeAttribute('data-density');
   try {
-    if (id === 'compact') localStorage.setItem(DENSITY_STORAGE_KEY, id); else localStorage.removeItem(DENSITY_STORAGE_KEY);
-  } catch { /* storage blocked: the density still applies for this page view */ }
+    if (id === 'compact') localStorage.setItem(DENSITY_STORAGE_KEY, id);
+    else localStorage.removeItem(DENSITY_STORAGE_KEY);
+  } catch {
+    /* storage blocked: the density still applies for this page view */
+  }
 }

@@ -28,7 +28,8 @@ export function formatDateTime(value: string | Date, locale: AppLocaleId, timezo
 export function formatTimeZoneLabel(timezone: string, locale: AppLocaleId): string {
   try {
     const part = new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { timeZone: timezone, timeZoneName: 'short' })
-      .formatToParts(new Date()).find((p) => p.type === 'timeZoneName');
+      .formatToParts(new Date())
+      .find((p) => p.type === 'timeZoneName');
     return part?.value ?? timezone;
   } catch {
     return timezone;

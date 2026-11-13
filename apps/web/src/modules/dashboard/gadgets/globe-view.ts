@@ -30,7 +30,9 @@ export function shouldRecentre(previousKey: string | null, nextKey: string): boo
 export function centroidView(points: Array<{ latitude: number; longitude: number }>): { lat: number; lng: number } | null {
   if (!points.length) return null;
   const rad = Math.PI / 180;
-  let x = 0, y = 0, z = 0;
+  let x = 0,
+    y = 0,
+    z = 0;
   for (const p of points) {
     x += Math.cos(p.latitude * rad) * Math.cos(p.longitude * rad);
     y += Math.cos(p.latitude * rad) * Math.sin(p.longitude * rad);

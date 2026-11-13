@@ -5,7 +5,11 @@ import { ApiError } from '@/core/api';
 import { collectAndWait, waitForActivation } from './use-source-actions';
 
 /** Phase of the post-enable verification fetch for a built-in source. */
-export type TestState = { phase: 'idle' | 'activating' | 'collecting' | 'succeeded' | 'no_changes' | 'failed'; code?: string | null; runId?: string | null };
+export type TestState = {
+  phase: 'idle' | 'activating' | 'collecting' | 'succeeded' | 'no_changes' | 'failed';
+  code?: string | null;
+  runId?: string | null;
+};
 
 /**
  * State machine for the built-in wizard's "prove a fetch" step.
@@ -29,7 +33,10 @@ export function useBuiltinTest(csrfToken: string, onSettled: () => void) {
     try {
       const activation = await waitForActivation(sourceId, ctl.signal);
       if (!activation || !current()) return;
-      if (!activation.ok) { setTest({ phase: 'failed', code: activation.code }); return; }
+      if (!activation.ok) {
+        setTest({ phase: 'failed', code: activation.code });
+        return;
+      }
       setTest({ phase: 'collecting' });
       const final = await collectAndWait(sourceId, csrfToken, { signal: ctl.signal });
       if (!final || !current()) return;
@@ -37,11 +44,18 @@ export function useBuiltinTest(csrfToken: string, onSettled: () => void) {
       else setTest({ phase: 'failed', code: final.error_code ?? final.status });
       onSettled();
     } catch (cause) {
-      if (current()) setTest({ phase: 'failed', code: cause instanceof ApiError ? cause.message || `http_${cause.status}` : 'request_failed' });
+      if (current())
+        setTest({ phase: 'failed', code: cause instanceof ApiError ? cause.message || `http_${cause.status}` : 'request_failed' });
     }
   }
 
   /** Cancels the in-flight verification run, if any. */
   const abort = () => controller.current?.abort();
-  return { test, runTest, abort, verified: test.phase === 'succeeded' || test.phase === 'no_changes', testing: test.phase === 'activating' || test.phase === 'collecting' };
+  return {
+    test,
+    runTest,
+    abort,
+    verified: test.phase === 'succeeded' || test.phase === 'no_changes',
+    testing: test.phase === 'activating' || test.phase === 'collecting',
+  };
 }

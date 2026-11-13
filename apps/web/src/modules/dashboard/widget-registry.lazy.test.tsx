@@ -8,9 +8,28 @@ vi.mock('./gadgets/brief-gadget', () => ({
 }));
 
 const RENDERERS = [
-  'daily_brief', 'tasks', 'goals', 'timeline', 'entity', 'personal_context', 'news_feed', 'telegram_feed', 'feed',
-  'text_panel', 'table_panel', 'job_list', 'video_panel', 'watch_rules', 'highlights', 'finance_chart',
-  'metrics_chart', 'github_project', 'weather', 'provider_observation', 'map', 'intelligence_panel',
+  'daily_brief',
+  'tasks',
+  'goals',
+  'timeline',
+  'entity',
+  'personal_context',
+  'news_feed',
+  'telegram_feed',
+  'feed',
+  'text_panel',
+  'table_panel',
+  'job_list',
+  'video_panel',
+  'watch_rules',
+  'highlights',
+  'finance_chart',
+  'metrics_chart',
+  'github_project',
+  'weather',
+  'provider_observation',
+  'map',
+  'intelligence_panel',
 ];
 
 describe('lazy gadget registry', () => {

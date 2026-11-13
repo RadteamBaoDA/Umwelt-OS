@@ -19,7 +19,11 @@ export interface DashboardDeepLink {
  *
  * @param options Readiness flag and the callbacks that act on the intent.
  */
-export function useDashboardDeepLink({ ready, onPreset, onAddTemplate }: {
+export function useDashboardDeepLink({
+  ready,
+  onPreset,
+  onAddTemplate,
+}: {
   /** True once the dashboard is loaded; the intent is held until then so later loads cannot undo it. */
   ready: boolean;
   /** Called once with a validated preset id. */
@@ -59,6 +63,7 @@ function parseDeepLink(params: URLSearchParams): DashboardDeepLink {
   const source = params.get('source');
   const next: DashboardDeepLink = {};
   if (preset && PRESET_ID.test(preset)) next.presetId = preset;
-  if (template && OPAQUE_ID.test(template)) next.addTemplate = { templateId: template, sourceId: source && OPAQUE_ID.test(source) ? source : undefined };
+  if (template && OPAQUE_ID.test(template))
+    next.addTemplate = { templateId: template, sourceId: source && OPAQUE_ID.test(source) ? source : undefined };
   return next;
 }

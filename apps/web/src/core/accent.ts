@@ -24,7 +24,8 @@ export function readAccent(): AccentId {
  */
 export function previewAccent(id: AccentId): void {
   const root = document.documentElement;
-  if (id === 'ink') root.removeAttribute('data-accent'); else root.setAttribute('data-accent', id);
+  if (id === 'ink') root.removeAttribute('data-accent');
+  else root.setAttribute('data-accent', id);
 }
 
 /**
@@ -33,8 +34,11 @@ export function previewAccent(id: AccentId): void {
 export function applyAccent(id: AccentId): void {
   previewAccent(id);
   try {
-    if (id === 'ink') localStorage.removeItem(ACCENT_STORAGE_KEY); else localStorage.setItem(ACCENT_STORAGE_KEY, id);
-  } catch { /* storage blocked: the accent still applies for this page view */ }
+    if (id === 'ink') localStorage.removeItem(ACCENT_STORAGE_KEY);
+    else localStorage.setItem(ACCENT_STORAGE_KEY, id);
+  } catch {
+    /* storage blocked: the accent still applies for this page view */
+  }
 }
 
 /**

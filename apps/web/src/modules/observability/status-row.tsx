@@ -18,10 +18,12 @@ export function StatusDot({ tone }: { tone: Tone }) {
  * Shared by the System status service list and the Global settings deployment list.
  */
 export function StatusRow({ tone, name, status, children }: { tone: Tone; name: ReactNode; status: ReactNode; children?: ReactNode }) {
-  return <li className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-2.5 last:border-0">
-    <StatusDot tone={tone} />
-    <span className="min-w-28 text-sm font-medium">{name}</span>
-    <span className="text-sm text-muted-foreground">{status}</span>
-    {children}
-  </li>;
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-2.5 last:border-0">
+      <StatusDot tone={tone} />
+      <span className="min-w-28 text-sm font-medium">{name}</span>
+      <span className="text-sm text-muted-foreground">{status}</span>
+      {children}
+    </li>
+  );
 }

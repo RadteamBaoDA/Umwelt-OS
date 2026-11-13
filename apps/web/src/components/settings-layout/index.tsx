@@ -17,7 +17,16 @@ function isEmptyStatus(status: React.ReactNode): boolean {
  * `eyebrow` is accepted for call-site compatibility but intentionally not rendered (ledger design: title only).
  * A status element with no text is omitted, so an idle save line never leaves an empty row.
  */
-export function SettingsPageHeader({ title, description, status }: { eyebrow?: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; status?: React.ReactNode }) {
+export function SettingsPageHeader({
+  title,
+  description,
+  status,
+}: {
+  eyebrow?: React.ReactNode;
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  status?: React.ReactNode;
+}) {
   return (
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0">
@@ -34,7 +43,15 @@ export function SettingsPageHeader({ title, description, status }: { eyebrow?: R
  * Settings row: label and muted 14px description in a ~240px left column beside the controls on the right.
  * One top rule separates rows (no card border); below 720px the label stacks above the controls.
  */
-export function SettingsSection({ title, description, children }: { title: React.ReactNode; description?: React.ReactNode; children: React.ReactNode }) {
+export function SettingsSection({
+  title,
+  description,
+  children,
+}: {
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section className="grid grid-cols-1 gap-4 border-t border-border pt-6 min-[901px]:grid-cols-[240px_minmax(0,1fr)] min-[901px]:gap-8">
       <div className="flex flex-col gap-1">
@@ -62,10 +79,53 @@ export function SettingsActions({ children }: { children: React.ReactNode }) {
 }
 
 /** Write-only secret field: never shows the stored value; typing replaces it, the checkbox removes it. `hideLabel` keeps the label as the accessible name only (the surrounding section title already shows it). */
-export function SecretField({ id, label, value, onValue, removed, onRemoved, configured, disabled, placeholder, removeLabel, status, hideLabel }: { id: string; label: string; value: string; onValue: (value: string) => void; removed: boolean; onRemoved: (removed: boolean) => void; configured: boolean; disabled?: boolean; placeholder: string; removeLabel: string; status: React.ReactNode; hideLabel?: boolean }) {
-  return <div className="flex flex-col gap-2">
-    <label className="field" htmlFor={id}><span className={hideLabel ? 'label sr-only' : 'label'}>{label}</span><PasswordInput id={id} disabled={disabled} autoComplete="new-password" value={value} onChange={(event) => onValue(event.target.value)} placeholder={placeholder} /></label>
-    <p className="m-0 text-sm text-muted-foreground">{status}</p>
-    {configured ? <CheckboxField><Checkbox id={`${id}-remove`} disabled={disabled} checked={removed} onCheckedChange={(checked) => onRemoved(checked === true)} /><label htmlFor={`${id}-remove`}>{removeLabel}</label></CheckboxField> : null}
-  </div>;
+export function SecretField({
+  id,
+  label,
+  value,
+  onValue,
+  removed,
+  onRemoved,
+  configured,
+  disabled,
+  placeholder,
+  removeLabel,
+  status,
+  hideLabel,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onValue: (value: string) => void;
+  removed: boolean;
+  onRemoved: (removed: boolean) => void;
+  configured: boolean;
+  disabled?: boolean;
+  placeholder: string;
+  removeLabel: string;
+  status: React.ReactNode;
+  hideLabel?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="field" htmlFor={id}>
+        <span className={hideLabel ? 'label sr-only' : 'label'}>{label}</span>
+        <PasswordInput
+          id={id}
+          disabled={disabled}
+          autoComplete="new-password"
+          value={value}
+          onChange={(event) => onValue(event.target.value)}
+          placeholder={placeholder}
+        />
+      </label>
+      <p className="m-0 text-sm text-muted-foreground">{status}</p>
+      {configured ? (
+        <CheckboxField>
+          <Checkbox id={`${id}-remove`} disabled={disabled} checked={removed} onCheckedChange={(checked) => onRemoved(checked === true)} />
+          <label htmlFor={`${id}-remove`}>{removeLabel}</label>
+        </CheckboxField>
+      ) : null}
+    </div>
+  );
 }

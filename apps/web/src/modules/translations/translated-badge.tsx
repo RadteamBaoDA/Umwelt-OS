@@ -8,7 +8,9 @@ export function TranslatedBadge({ showOriginal, onToggle }: { showOriginal: bool
   const t = useTranslations('translations');
   return (
     <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-      <span className="inline-flex h-6 items-center rounded-full border border-border bg-background px-2 font-semibold">{t('autoTranslated')}</span>
+      <span className="inline-flex h-6 items-center rounded-full border border-border bg-background px-2 font-semibold">
+        {t('autoTranslated')}
+      </span>
       <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={onToggle}>
         {showOriginal ? t('viewTranslation') : t('viewOriginal')}
       </Button>

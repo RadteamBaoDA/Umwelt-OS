@@ -1,15 +1,6 @@
 'use client';
 
-import {
-  AlertTriangle,
-  GripHorizontal,
-  Info,
-  Maximize2,
-  MoreVertical,
-  Settings,
-  Sparkles,
-  Trash2,
-} from 'lucide-react';
+import { AlertTriangle, GripHorizontal, Info, Maximize2, MoreVertical, Settings, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -25,13 +16,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { templateName } from '@/core/renderer-labels';
 import { formatDateTime } from '@/core/i18n';
 import { GadgetFreshnessProvider } from './gadget-freshness';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -90,7 +75,8 @@ export interface GadgetFrameProps {
  * Quiet-chrome classes for gadget header actions: hidden until the gadget is hovered or holds focus,
  * always visible on coarse pointers where hover does not exist. Focus-within keeps keyboard users unblocked.
  */
-const REVEAL_ON_HOVER = 'opacity-0 transition-opacity group-hover/gadget:opacity-100 group-focus-within/gadget:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100';
+const REVEAL_ON_HOVER =
+  'opacity-0 transition-opacity group-hover/gadget:opacity-100 group-focus-within/gadget:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100';
 
 /**
  * Formats an elapsed time as a localized relative phrase (minutes, hours or days).
@@ -117,7 +103,11 @@ function formatAgo(ms: number, locale: string): string {
  */
 function useRendererHost(
   isExpanded: boolean,
-  refs: { inlineHostRef: RefObject<HTMLDivElement | null>; inlineScrollRef: RefObject<HTMLDivElement | null>; expandedHostRef: RefObject<HTMLDivElement | null> },
+  refs: {
+    inlineHostRef: RefObject<HTMLDivElement | null>;
+    inlineScrollRef: RefObject<HTMLDivElement | null>;
+    expandedHostRef: RefObject<HTMLDivElement | null>;
+  },
 ) {
   const { inlineHostRef, inlineScrollRef, expandedHostRef } = refs;
   const [rendererHost, setRendererHost] = useState<HTMLDivElement | null>(null);
@@ -137,22 +127,28 @@ function useRendererHost(
   }, []);
 
   /** Moves the one renderer host and restores inline reading position after returning from Expand. */
-  const moveRendererHost = useCallback((destination: HTMLDivElement | null, expanded: boolean) => {
-    if (!rendererHost || !destination || rendererHost.parentElement === destination) return;
-    if (expanded && inlineScrollRef.current) {
-      inlineScrollPosition.current = inlineScrollRef.current.scrollTop;
-    }
-    destination.appendChild(rendererHost);
-    if (!expanded && inlineScrollRef.current) {
-      inlineScrollRef.current.scrollTop = inlineScrollPosition.current;
-    }
-  }, [inlineScrollRef, rendererHost]);
+  const moveRendererHost = useCallback(
+    (destination: HTMLDivElement | null, expanded: boolean) => {
+      if (!rendererHost || !destination || rendererHost.parentElement === destination) return;
+      if (expanded && inlineScrollRef.current) {
+        inlineScrollPosition.current = inlineScrollRef.current.scrollTop;
+      }
+      destination.appendChild(rendererHost);
+      if (!expanded && inlineScrollRef.current) {
+        inlineScrollRef.current.scrollTop = inlineScrollPosition.current;
+      }
+    },
+    [inlineScrollRef, rendererHost],
+  );
 
   /** Moves the host as soon as Radix attaches its lazily mounted expanded destination. */
-  const attachExpandedHost = useCallback((node: HTMLDivElement | null) => {
-    expandedHostRef.current = node;
-    if (node && isExpanded) moveRendererHost(node, true);
-  }, [expandedHostRef, isExpanded, moveRendererHost]);
+  const attachExpandedHost = useCallback(
+    (node: HTMLDivElement | null) => {
+      expandedHostRef.current = node;
+      if (node && isExpanded) moveRendererHost(node, true);
+    },
+    [expandedHostRef, isExpanded, moveRendererHost],
+  );
 
   /** Reparents the single portal host when the inline or expanded destination is ready. */
   useLayoutEffect(() => {
@@ -187,7 +183,10 @@ function useGadgetFooter() {
   const [collectedAt, setCollectedAt] = useState<string | null>(null);
   const [attribution, setAttribution] = useState<string | null>(null);
   /** Receives renderer-reported freshness and optional attribution for the footer line. */
-  const reportFreshness = useCallback((at: string | null, attr?: string | null) => { setCollectedAt(at); setAttribution(attr ?? null); }, []);
+  const reportFreshness = useCallback((at: string | null, attr?: string | null) => {
+    setCollectedAt(at);
+    setAttribution(attr ?? null);
+  }, []);
   const collectedMs = collectedAt ? Date.parse(collectedAt) : NaN;
   const freshnessLabel = Number.isFinite(collectedMs) ? t('freshness.updated', { time: formatAgo(collectedMs, display.locale) }) : null;
   const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
@@ -233,7 +232,9 @@ function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessT
     try {
       const result = await collectAndWait(worst.id, csrfToken, { signal: new AbortController().signal });
       setState(result && result.status !== 'succeeded' && result.status !== 'no_changes' ? 'failed' : 'idle');
-    } catch { setState('failed'); }
+    } catch {
+      setState('failed');
+    }
     await client.invalidateQueries({ queryKey: sourceKeys.list });
   };
   return (
@@ -242,7 +243,14 @@ function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessT
         <AlertTriangle className="w-3 h-3" aria-hidden />
         <span>{t(failing ? 'source.failingBadge' : 'source.staleBadge')}</span>
       </Badge>
-      <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-1.5 text-[11px]" disabled={state === 'running'} onClick={() => void collect()}>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-6 shrink-0 px-1.5 text-[11px]"
+        disabled={state === 'running'}
+        onClick={() => void collect()}
+      >
         {state === 'running' ? ts('collecting') : ts('collect.now')}
       </Button>
       {state === 'failed' && (
@@ -255,7 +263,12 @@ function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessT
 }
 
 /** Status badges that share the header row; overflow is clipped so streaming counts never change grid height. */
-function StatusBadges({ instance, unreadCount, ruleMatch, sourceHealth }: Pick<GadgetFrameProps, 'instance' | 'unreadCount' | 'ruleMatch' | 'sourceHealth'>) {
+function StatusBadges({
+  instance,
+  unreadCount,
+  ruleMatch,
+  sourceHealth,
+}: Pick<GadgetFrameProps, 'instance' | 'unreadCount' | 'ruleMatch' | 'sourceHealth'>) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const definition = instance.definition;
@@ -317,10 +330,7 @@ function EditMenu({ onConfigure, onRemove }: Pick<GadgetFrameProps, 'onConfigure
         {onRemove && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={onRemove}
-              className="gap-2 text-xs text-destructive focus:text-destructive"
-            >
+            <DropdownMenuItem onClick={onRemove} className="gap-2 text-xs text-destructive focus:text-destructive">
               <Trash2 className="w-3.5 h-3.5" />
               <span>{t('removeGadget.label')}</span>
             </DropdownMenuItem>
@@ -332,7 +342,14 @@ function EditMenu({ onConfigure, onRemove }: Pick<GadgetFrameProps, 'onConfigure
 }
 
 /** Header action controls; they cannot start title dragging. */
-function HeaderActions({ isEditMode, onAsk, onExpand, expandRef, onConfigure, onRemove }: {
+function HeaderActions({
+  isEditMode,
+  onAsk,
+  onExpand,
+  expandRef,
+  onConfigure,
+  onRemove,
+}: {
   isEditMode: boolean;
   onAsk: () => void;
   onExpand: () => void;
@@ -398,10 +415,7 @@ function PlannedGadgetBody({ instance }: { instance: GadgetInstance }) {
             {Object.entries(definition.scope).map(([key, values]) => {
               if (!values || !Array.isArray(values) || values.length === 0) return null;
               return (
-                <span
-                  key={key}
-                  className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground"
-                >
+                <span key={key} className="px-1.5 py-0.5 rounded bg-muted/30 text-muted-foreground">
                   {key}: {values.join(', ')}
                 </span>
               );
@@ -423,9 +437,7 @@ function ReadingQueueBar({ count, onApply }: { count: number; onApply: () => voi
   const t = useTranslations('dashboard');
   return (
     <div className="px-3 py-1.5 bg-raised border-b border-rule text-foreground text-xs flex items-center justify-between">
-      <span className="font-medium">
-        {t('readingUpdatesQueued', { count })}
-      </span>
+      <span className="font-medium">{t('readingUpdatesQueued', { count })}</span>
       <Button type="button" onClick={onApply}>
         {t('showUpdates')}
       </Button>
@@ -434,7 +446,13 @@ function ReadingQueueBar({ count, onApply }: { count: number; onApply: () => voi
 }
 
 /** Expanded dialog: only the destination container; the renderer host is moved into it by the frame. */
-function ExpandedDialog({ open, onOpenChange, title, triggerRef, attachHost }: {
+function ExpandedDialog({
+  open,
+  onOpenChange,
+  title,
+  triggerRef,
+  attachHost,
+}: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -444,7 +462,14 @@ function ExpandedDialog({ open, onOpenChange, title, triggerRef, attachHost }: {
   const t = useTranslations('dashboard');
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent closeLabel={t('close')} onCloseAutoFocus={(event) => { event.preventDefault(); triggerRef.current?.focus(); }} className="flex h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-lg p-0 sm:max-w-[1240px]">
+      <DialogContent
+        closeLabel={t('close')}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          triggerRef.current?.focus();
+        }}
+        className="flex h-[calc(100dvh-4rem)] max-h-[calc(100dvh-4rem)] w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-lg p-0 sm:max-w-[1240px]"
+      >
         <DialogHeader className="shrink-0 gap-0 border-b border-border py-4 pl-6 pr-16 text-left">
           <DialogTitle className="text-lg font-semibold leading-snug">{title}</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">{t('gadget.expandedDescription', { title })}</DialogDescription>
@@ -458,16 +483,22 @@ function ExpandedDialog({ open, onOpenChange, title, triggerRef, attachHost }: {
 /** Provenance footer: a fixed one-line row inside the flex column; hidden when freshness is unknown. */
 function ProvenanceFooter({ text, title }: { text: string; title: string | undefined }) {
   if (!text) return null;
-  return <p className="m-0 shrink-0 truncate border-t border-rule px-3.5 py-1 text-[11px] leading-4 text-muted-foreground" title={title} data-testid="gadget-provenance">{text}</p>;
+  return (
+    <p
+      className="m-0 shrink-0 truncate border-t border-rule px-3.5 py-1 text-[11px] leading-4 text-muted-foreground"
+      title={title}
+      data-testid="gadget-provenance"
+    >
+      {text}
+    </p>
+  );
 }
 
 /** Card chrome classes: selection ring, drag dimming and resize ring. */
 function cardClassName(isSelected: boolean, isDragging: boolean, isResizing: boolean): string {
   return `dashboard-gadget group group/gadget relative h-full w-full gap-0 rounded-lg py-0 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
     isSelected ? 'ring-2 ring-primary border-primary' : 'border-border'
-  } ${isDragging ? 'opacity-40 shadow-[var(--shadow-popover)] scale-[0.99]' : ''} ${
-    isResizing ? 'ring-1 ring-primary/60' : ''
-  }`;
+  } ${isDragging ? 'opacity-40 shadow-[var(--shadow-popover)] scale-[0.99]' : ''} ${isResizing ? 'ring-1 ring-primary/60' : ''}`;
 }
 
 /** Gadget title: the instance title, else the definition name, else the localized template name (never the raw renderer id). */
@@ -492,6 +523,58 @@ function useAskWithUmwelt(instance: GadgetInstance, displayTitle: string) {
       },
     });
   }, [openDrawer, instance.id, displayTitle, definition.renderer, definition.source_ids, definition.scope]);
+}
+
+/**
+ * Gadget header (artboard): one row with title, status badges and actions. In edit mode the title area is
+ * the drag handle.
+ *
+ * @param p Header state: refs for measurement, ids/titles, instance, badge inputs and action callbacks.
+ * @returns The header element; the ref is measured by useHeaderMeasurement in the parent.
+ */
+function GadgetHeader(p: {
+  headerRef: React.RefObject<HTMLElement | null>;
+  titleId: string;
+  displayTitle: string;
+  instance: GadgetInstance;
+  isEditMode: boolean;
+  unreadCount: number;
+  ruleMatch: GadgetFrameProps['ruleMatch'];
+  sourceHealth: GadgetFrameProps['sourceHealth'];
+  onDragHandlePointerDown: GadgetFrameProps['onDragHandlePointerDown'];
+  onAsk: () => void;
+  onExpand: () => void;
+  expandRef: React.RefObject<HTMLButtonElement | null>;
+  onConfigure: GadgetFrameProps['onConfigure'];
+  onRemove: GadgetFrameProps['onRemove'];
+}) {
+  const { headerRef, titleId, displayTitle, instance, isEditMode, unreadCount, ruleMatch, sourceHealth } = p;
+  const { onDragHandlePointerDown, onAsk, onExpand, expandRef, onConfigure, onRemove } = p;
+  return (
+    <header
+      ref={headerRef}
+      className={`@container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}
+    >
+      <div
+        className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
+        onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
+      >
+        {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
+        <h3 id={titleId} className="min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
+          {displayTitle}
+        </h3>
+      </div>
+      <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} sourceHealth={sourceHealth} />
+      <HeaderActions
+        isEditMode={isEditMode}
+        onAsk={onAsk}
+        onExpand={onExpand}
+        expandRef={expandRef}
+        onConfigure={onConfigure}
+        onRemove={onRemove}
+      />
+    </header>
+  );
 }
 
 /**
@@ -551,39 +634,54 @@ export function GadgetFrame({
         onClick={isEditMode ? onSelect : undefined}
         className={cardClassName(isSelected, isDragging, isResizing)}
       >
-        {/* Gadget Header (artboard): one row with title, status badges and actions. */}
-        <header ref={headerRef} className={`@container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}>
-          <div
-            className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
-            onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
-          >
-            {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
-            <h3 id={titleId} className="min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
-              {displayTitle}
-            </h3>
-          </div>
-          <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} sourceHealth={sourceHealth} />
-          <HeaderActions
-            isEditMode={isEditMode} onAsk={handleAskWithUmwelt} onExpand={toggleExpanded} expandRef={expandTriggerRef}
-            onConfigure={onConfigure} onRemove={onRemove}
-          />
-        </header>
+        <GadgetHeader
+          headerRef={headerRef}
+          titleId={titleId}
+          displayTitle={displayTitle}
+          instance={instance}
+          isEditMode={isEditMode}
+          unreadCount={unreadCount}
+          ruleMatch={ruleMatch}
+          sourceHealth={sourceHealth}
+          onDragHandlePointerDown={onDragHandlePointerDown}
+          onAsk={handleAskWithUmwelt}
+          onExpand={toggleExpanded}
+          expandRef={expandTriggerRef}
+          onConfigure={onConfigure}
+          onRemove={onRemove}
+        />
 
         <div ref={inlineScrollRef} className="dashboard-gadget-body @container/gadget min-h-0 flex-1 overflow-auto overscroll-contain">
-        {/* Queue controls scroll inside this fixed-floor body and never change the grid geometry. */}
-        {readingQueueCount > 0 && onApplyReadingQueue && <ReadingQueueBar count={readingQueueCount} onApply={onApplyReadingQueue} />}
+          {/* Queue controls scroll inside this fixed-floor body and never change the grid geometry. */}
+          {readingQueueCount > 0 && onApplyReadingQueue && <ReadingQueueBar count={readingQueueCount} onApply={onApplyReadingQueue} />}
 
-        {/* The reading floor sits on the host, not the body: a card shorter than the floor scrolls its body instead of clipping the bottom (footers, last rows) under the card edge. */}
-        {/* Floor is a CSS variable so a renderer whose root IS a GadgetNotice (empty/setup/error; a direct child of this host) drops it via :has(>...) and the body shrinks to the notice. The grid item's height stays fixed by the layout; only the body area gives way. Notices nested deeper (inline banners) deliberately keep the floor. */}
-        <div ref={inlineHostRef} className="h-full min-h-[var(--gadget-floor)] min-w-0 has-[>[data-gadget-notice]]:h-auto has-[>[data-gadget-notice]]:min-h-0" style={{ '--gadget-floor': `${bodyFloor}px` } as React.CSSProperties} />
+          {/* The reading floor sits on the host, not the body: a card shorter than the floor scrolls its body instead of clipping the bottom (footers, last rows) under the card edge. */}
+          {/* Floor is a CSS variable so a renderer whose root IS a GadgetNotice (empty/setup/error; a direct child of this host) drops it via :has(>...) and the body shrinks to the notice. The grid item's height stays fixed by the layout; only the body area gives way. Notices nested deeper (inline banners) deliberately keep the floor. */}
+          <div
+            ref={inlineHostRef}
+            className="h-full min-h-[var(--gadget-floor)] min-w-0 has-[>[data-gadget-notice]]:h-auto has-[>[data-gadget-notice]]:min-h-0"
+            style={{ '--gadget-floor': `${bodyFloor}px` } as React.CSSProperties}
+          />
         </div>
         <ProvenanceFooter text={footerText} title={freshnessTitle} />
       </Card>
 
       {/* Expanded Modal View (preserves filters, scroll position and local state) */}
-      <ExpandedDialog open={isExpanded} onOpenChange={setIsExpanded} title={displayTitle} triggerRef={expandTriggerRef} attachHost={attachExpandedHost} />
+      <ExpandedDialog
+        open={isExpanded}
+        onOpenChange={setIsExpanded}
+        title={displayTitle}
+        triggerRef={expandTriggerRef}
+        attachHost={attachExpandedHost}
+      />
       {/* Supplies exactly one renderer subtree to the stable host; it is never invoked in two surfaces. */}
-      {rendererHost && createPortal(<GadgetFreshnessProvider report={reportFreshness}>{children ? children : <PlannedGadgetBody instance={instance} />}</GadgetFreshnessProvider>, rendererHost)}
+      {rendererHost &&
+        createPortal(
+          <GadgetFreshnessProvider report={reportFreshness}>
+            {children ? children : <PlannedGadgetBody instance={instance} />}
+          </GadgetFreshnessProvider>,
+          rendererHost,
+        )}
     </>
   );
 }

@@ -17,22 +17,36 @@ vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEvent
 /** Minimal persisted message. */
 function msg(id: string, role: 'user' | 'assistant', content: string, revisionOf: string | null = null): ChatMessage {
   return {
-    id, conversation_id: 'c1', role, content, client_request_id: null, model_identity: null, citations: [],
-    response_id: `r-${id}`, revision_of_message_id: revisionOf, created_at: '2026-11-10T10:00:00Z',
+    id,
+    conversation_id: 'c1',
+    role,
+    content,
+    client_request_id: null,
+    model_identity: null,
+    citations: [],
+    response_id: `r-${id}`,
+    revision_of_message_id: revisionOf,
+    created_at: '2026-11-10T10:00:00Z',
   };
 }
 
 // u1/a1 -> edit u2 (revises u1) answered by a2 (revises u1, as the worker stores it) -> regenerate: u3 (copy of u2, revises a2) + a3 (revises a2).
 const edited = [
-  msg('u1', 'user', 'first'), msg('a1', 'assistant', 'answer one'),
-  msg('u2', 'user', 'first, edited', 'u1'), msg('a2', 'assistant', 'answer two', 'u1'),
-  msg('u3', 'user', 'first, edited', 'a2'), msg('a3', 'assistant', 'answer three', 'a2'),
+  msg('u1', 'user', 'first'),
+  msg('a1', 'assistant', 'answer one'),
+  msg('u2', 'user', 'first, edited', 'u1'),
+  msg('a2', 'assistant', 'answer two', 'u1'),
+  msg('u3', 'user', 'first, edited', 'a2'),
+  msg('a3', 'assistant', 'answer three', 'a2'),
 ];
 
 describe('buildRenderEntries', () => {
   it('passes unrevised turns through untouched', () => {
     const plain = [msg('u1', 'user', 'q'), msg('a1', 'assistant', 'a')];
-    expect(buildRenderEntries(plain, {}).map((e) => [e.msg.id, e.latest, e.nav])).toEqual([['u1', true, undefined], ['a1', true, undefined]]);
+    expect(buildRenderEntries(plain, {}).map((e) => [e.msg.id, e.latest, e.nav])).toEqual([
+      ['u1', true, undefined],
+      ['a1', true, undefined],
+    ]);
   });
 
   it('chains edit and regenerate revisions and shows the newest version by default', () => {
@@ -46,7 +60,10 @@ describe('buildRenderEntries', () => {
 
   it('shows the chosen older version with its own answer and marks it not latest', () => {
     const entries = buildRenderEntries(edited, { u1: 'u2' });
-    expect(entries.map((e) => [e.msg.id, e.latest])).toEqual([['u2', false], ['a2', false]]);
+    expect(entries.map((e) => [e.msg.id, e.latest])).toEqual([
+      ['u2', false],
+      ['a2', false],
+    ]);
     expect(entries[0].nav?.index).toBe(1);
   });
 
@@ -60,10 +77,14 @@ describe('buildRenderEntries', () => {
 
   it('keeps the revised thread chronological and ignores a missing parent', () => {
     const thread = [
-      msg('u1', 'user', 'one'), msg('a1', 'assistant', 'A1'),
-      msg('u2', 'user', 'two'), msg('a2', 'assistant', 'A2'),
-      msg('u3', 'user', 'one v2', 'u1'), msg('a3', 'assistant', 'A3', 'u1'),
-      msg('u4', 'user', 'orphan', 'gone'), msg('a4', 'assistant', 'A4', 'gone'),
+      msg('u1', 'user', 'one'),
+      msg('a1', 'assistant', 'A1'),
+      msg('u2', 'user', 'two'),
+      msg('a2', 'assistant', 'A2'),
+      msg('u3', 'user', 'one v2', 'u1'),
+      msg('a3', 'assistant', 'A3', 'u1'),
+      msg('u4', 'user', 'orphan', 'gone'),
+      msg('a4', 'assistant', 'A4', 'gone'),
     ];
     expect(buildRenderEntries(thread, {}).map((e) => e.msg.id)).toEqual(['u2', 'a2', 'u3', 'a3', 'u4', 'a4']);
   });

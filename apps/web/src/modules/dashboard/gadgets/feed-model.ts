@@ -85,27 +85,29 @@ const asString = (value: unknown): string | null => (typeof value === 'string' ?
 function documentToItem(doc: FeedDocument, isTelegram: boolean, sourceType: FeedStreamItem['sourceType']): FeedStreamItem[] {
   const telegram = telegramOf(doc);
   if (isTelegram && !telegram) return [];
-  return [{
-    id: doc.document_id,
-    title: doc.title,
-    sourceType,
-    author: asString(telegram?.channel_label),
-    channelLabel: asString(telegram?.channel_label),
-    messageId: asString(telegram?.message_id),
-    excerpt: doc.excerpt,
-    timestamp: doc.published_at || doc.observed_at,
-    sourceId: doc.source_id,
-    documentVersionId: doc.document_version_id,
-    publishedAt: telegram?.published_at ?? doc.published_at,
-    collectedAt: doc.observed_at,
-    editedAt: telegram?.edited_at ?? null,
-    media: telegram?.media ?? [],
-    imageUrl: doc.image_url ?? null,
-    url: safeFeedUrl(doc.canonical_url, isTelegram),
-    read: !!doc.read_at,
-    bookmarked: !!doc.bookmarked_at,
-    versionNumber: doc.version_number,
-  }];
+  return [
+    {
+      id: doc.document_id,
+      title: doc.title,
+      sourceType,
+      author: asString(telegram?.channel_label),
+      channelLabel: asString(telegram?.channel_label),
+      messageId: asString(telegram?.message_id),
+      excerpt: doc.excerpt,
+      timestamp: doc.published_at || doc.observed_at,
+      sourceId: doc.source_id,
+      documentVersionId: doc.document_version_id,
+      publishedAt: telegram?.published_at ?? doc.published_at,
+      collectedAt: doc.observed_at,
+      editedAt: telegram?.edited_at ?? null,
+      media: telegram?.media ?? [],
+      imageUrl: doc.image_url ?? null,
+      url: safeFeedUrl(doc.canonical_url, isTelegram),
+      read: !!doc.read_at,
+      bookmarked: !!doc.bookmarked_at,
+      versionNumber: doc.version_number,
+    },
+  ];
 }
 
 /** Transforms raw documents into standard feed items. */
@@ -125,11 +127,12 @@ export interface FeedClientFilters {
 /** Items that survive hiding, unread-only, source and text filters. */
 export function filterFeedItems(items: FeedStreamItem[], filters: FeedClientFilters): FeedStreamItem[] {
   const { hiddenIds, onlyUnread, sourceFilter, needle } = filters;
-  return items.filter((i) =>
-    !(i.documentVersionId && hiddenIds.has(i.documentVersionId))
-    && (!onlyUnread || !i.read)
-    && (sourceFilter === 'all' || i.sourceId === sourceFilter)
-    && (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
+  return items.filter(
+    (i) =>
+      !(i.documentVersionId && hiddenIds.has(i.documentVersionId)) &&
+      (!onlyUnread || !i.read) &&
+      (sourceFilter === 'all' || i.sourceId === sourceFilter) &&
+      (!needle || `${i.title} ${i.excerpt ?? ''}`.toLowerCase().includes(needle)),
   );
 }
 

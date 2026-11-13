@@ -3,16 +3,73 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider, useTranslations } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { mappingProviderId, guessModelType, maxProviders, modelTypeForModality, newProvider, parseDraftSnapshot, ProviderEditor, type ProviderRead } from './provider-editor';
+import {
+  mappingProviderId,
+  guessModelType,
+  maxProviders,
+  modelTypeForModality,
+  newProvider,
+  parseDraftSnapshot,
+  ProviderEditor,
+  type ProviderRead,
+} from './provider-editor';
 
-const cloud: ProviderRead = { id: 'default', kind: 'openai', label: 'OpenAI', base_url: 'https://api.openai.com/v1', destination_id: 'remote:x', credential_configured: true, local: false, policy_denied: false, models: [{ id: 'gpt-4o', type: 'llm' }] };
-const local: ProviderRead = { ...cloud, id: 'ollama-1', kind: 'ollama', label: 'Ollama', base_url: 'http://localhost:11434/v1', local: true, policy_denied: true, credential_configured: false };
+const cloud: ProviderRead = {
+  id: 'default',
+  kind: 'openai',
+  label: 'OpenAI',
+  base_url: 'https://api.openai.com/v1',
+  destination_id: 'remote:x',
+  credential_configured: true,
+  local: false,
+  policy_denied: false,
+  models: [{ id: 'gpt-4o', type: 'llm' }],
+};
+const local: ProviderRead = {
+  ...cloud,
+  id: 'ollama-1',
+  kind: 'ollama',
+  label: 'Ollama',
+  base_url: 'http://localhost:11434/v1',
+  local: true,
+  policy_denied: true,
+  credential_configured: false,
+};
 
-function Harness({ providers, onChange = vi.fn(), onDiscover = vi.fn(), discovered = {} }: { providers: ProviderRead[]; onChange?: (p: ProviderRead[]) => void; onDiscover?: (p: ProviderRead) => void; discovered?: Record<string, string[]> }) {
+function Harness({
+  providers,
+  onChange = vi.fn(),
+  onDiscover = vi.fn(),
+  discovered = {},
+}: {
+  providers: ProviderRead[];
+  onChange?: (p: ProviderRead[]) => void;
+  onDiscover?: (p: ProviderRead) => void;
+  discovered?: Record<string, string[]>;
+}) {
   const t = useTranslations('aiSettings');
-  return <ProviderEditor providers={providers} savedIds={providers.map((p) => p.id)} secrets={{}} disabled={false} discoveringId={null} discoverError={null} discovered={discovered} onChange={onChange} onSecret={vi.fn()} onDiscover={onDiscover} t={t as never} />;
+  return (
+    <ProviderEditor
+      providers={providers}
+      savedIds={providers.map((p) => p.id)}
+      secrets={{}}
+      disabled={false}
+      discoveringId={null}
+      discoverError={null}
+      discovered={discovered}
+      onChange={onChange}
+      onSecret={vi.fn()}
+      onDiscover={onDiscover}
+      t={t as never}
+    />
+  );
 }
-const renderEditor = (props: Parameters<typeof Harness>[0]) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Harness {...props} /></NextIntlClientProvider>);
+const renderEditor = (props: Parameters<typeof Harness>[0]) =>
+  render(
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <Harness {...props} />
+    </NextIntlClientProvider>,
+  );
 
 describe('provider editor', () => {
   it('shows local and policy-denied badges and discovers models', async () => {
@@ -66,8 +123,30 @@ describe('hosted provider cards', () => {
   });
   it('enables Discover for a new hosted provider once a key is typed', async () => {
     const p = newProvider('openai', []);
-    const Editor = ({ typed }: { typed?: string }) => { const t = useTranslations('aiSettings'); return <ProviderEditor providers={[p]} savedIds={[]} secrets={typed ? { [p.id]: { key: typed, action: 'replaced' } } : {}} disabled={false} discoveringId={null} discoverError={null} discovered={{}} onChange={vi.fn()} onSecret={vi.fn()} onDiscover={vi.fn()} t={t as never} />; };
-    const view = (typed?: string) => render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><Editor typed={typed} /></NextIntlClientProvider>);
+    const Editor = ({ typed }: { typed?: string }) => {
+      const t = useTranslations('aiSettings');
+      return (
+        <ProviderEditor
+          providers={[p]}
+          savedIds={[]}
+          secrets={typed ? { [p.id]: { key: typed, action: 'replaced' } } : {}}
+          disabled={false}
+          discoveringId={null}
+          discoverError={null}
+          discovered={{}}
+          onChange={vi.fn()}
+          onSecret={vi.fn()}
+          onDiscover={vi.fn()}
+          t={t as never}
+        />
+      );
+    };
+    const view = (typed?: string) =>
+      render(
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <Editor typed={typed} />
+        </NextIntlClientProvider>,
+      );
     const empty = view();
     expect((screen.getByRole('button', { name: 'Discover models' }) as HTMLButtonElement).disabled).toBe(true);
     empty.unmount();
@@ -101,7 +180,15 @@ describe('provider helpers', () => {
 
 describe('model types', () => {
   it('guesses types from ids', () => {
-    const cases: [string, string][] = [['text-embedding-3-small', 'embedding'], ['bge-reranker-v2', 'reranker'], ['whisper-1', 'asr'], ['tts-1', 'tts'], ['llava:7b', 'vision'], ['qwen2-vl', 'vision'], ['gpt-4o', 'llm']];
+    const cases: [string, string][] = [
+      ['text-embedding-3-small', 'embedding'],
+      ['bge-reranker-v2', 'reranker'],
+      ['whisper-1', 'asr'],
+      ['tts-1', 'tts'],
+      ['llava:7b', 'vision'],
+      ['qwen2-vl', 'vision'],
+      ['gpt-4o', 'llm'],
+    ];
     for (const [id, type] of cases) expect(guessModelType(id)).toBe(type);
   });
 });

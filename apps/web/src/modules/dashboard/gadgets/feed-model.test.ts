@@ -1,14 +1,31 @@
 import { describe, expect, it } from 'vitest';
 import {
-  defaultSourceTypeFor, documentsToItems, filterFeedItems, newestCollectedAt, safeFeedUrl, staleSelections,
-  type FeedDocument, type FeedStreamItem,
+  defaultSourceTypeFor,
+  documentsToItems,
+  filterFeedItems,
+  newestCollectedAt,
+  safeFeedUrl,
+  staleSelections,
+  type FeedDocument,
+  type FeedStreamItem,
 } from './feed-model';
 
-const doc = (over: Partial<FeedDocument> = {}): FeedDocument => ({
-  document_id: 'd1', title: 'Title', excerpt: 'Body', published_at: '2026-01-02T00:00:00Z', observed_at: '2026-01-03T00:00:00Z',
-  source_id: 's1', document_version_id: 'v1', canonical_url: 'https://example.com/a', read_at: null, bookmarked_at: null, version_number: 2,
-  provider_metadata: null, ...over,
-}) as FeedDocument;
+const doc = (over: Partial<FeedDocument> = {}): FeedDocument =>
+  ({
+    document_id: 'd1',
+    title: 'Title',
+    excerpt: 'Body',
+    published_at: '2026-01-02T00:00:00Z',
+    observed_at: '2026-01-03T00:00:00Z',
+    source_id: 's1',
+    document_version_id: 'v1',
+    canonical_url: 'https://example.com/a',
+    read_at: null,
+    bookmarked_at: null,
+    version_number: 2,
+    provider_metadata: null,
+    ...over,
+  }) as FeedDocument;
 const item = (over: Partial<FeedStreamItem> = {}): FeedStreamItem => ({ id: 'i', title: 'T', sourceType: 'news', timestamp: 't', ...over });
 
 describe('feed model', () => {
@@ -29,15 +46,35 @@ describe('feed model', () => {
   });
 
   it('maps documents to items and drops non-Telegram documents from a Telegram feed', () => {
-    const telegramDoc = doc({ provider_metadata: { provider: 'telegram', telegram: { channel_label: 'Chan', message_id: '7', published_at: 'p', edited_at: null, media: [] } } as unknown as FeedDocument['provider_metadata'] });
+    const telegramDoc = doc({
+      provider_metadata: {
+        provider: 'telegram',
+        telegram: { channel_label: 'Chan', message_id: '7', published_at: 'p', edited_at: null, media: [] },
+      } as unknown as FeedDocument['provider_metadata'],
+    });
     const [mapped] = documentsToItems([telegramDoc], true, 'telegram');
-    expect(mapped).toMatchObject({ id: 'd1', channelLabel: 'Chan', messageId: '7', url: null, read: false, versionNumber: 2, timestamp: '2026-01-02T00:00:00Z' });
+    expect(mapped).toMatchObject({
+      id: 'd1',
+      channelLabel: 'Chan',
+      messageId: '7',
+      url: null,
+      read: false,
+      versionNumber: 2,
+      timestamp: '2026-01-02T00:00:00Z',
+    });
     expect(documentsToItems([doc()], true, 'telegram')).toEqual([]);
-    expect(documentsToItems([doc({ read_at: 'x', published_at: null })], false, 'document')[0]).toMatchObject({ read: true, timestamp: '2026-01-03T00:00:00Z', url: 'https://example.com/a' });
+    expect(documentsToItems([doc({ read_at: 'x', published_at: null })], false, 'document')[0]).toMatchObject({
+      read: true,
+      timestamp: '2026-01-03T00:00:00Z',
+      url: 'https://example.com/a',
+    });
   });
 
   it('filters by hidden version, unread, source and text', () => {
-    const items = [item({ id: 'a', title: 'Alpha', documentVersionId: 'v1', sourceId: 's1', read: true }), item({ id: 'b', title: 'Beta', excerpt: 'gamma', sourceId: 's2' })];
+    const items = [
+      item({ id: 'a', title: 'Alpha', documentVersionId: 'v1', sourceId: 's1', read: true }),
+      item({ id: 'b', title: 'Beta', excerpt: 'gamma', sourceId: 's2' }),
+    ];
     const base = { hiddenIds: new Set<string>(), onlyUnread: false, sourceFilter: 'all', needle: '' };
     expect(filterFeedItems(items, base)).toHaveLength(2);
     expect(filterFeedItems(items, { ...base, hiddenIds: new Set(['v1']) }).map((i) => i.id)).toEqual(['b']);
@@ -49,7 +86,14 @@ describe('feed model', () => {
   it('finds the newest collection time and stale selections', () => {
     expect(newestCollectedAt([item({ collectedAt: '2026-01-01' }), item({ collectedAt: '2026-02-01' }), item()])).toBe('2026-02-01');
     expect(newestCollectedAt([item()])).toBeNull();
-    const selected = [{ sourceId: 's', documentId: 'a', documentVersionId: 'v1', versionNumber: 1 }, { sourceId: 's', documentId: 'b', documentVersionId: 'v9', versionNumber: 1 }];
-    expect(staleSelections(selected, [item({ id: 'a', documentVersionId: 'v1' }), item({ id: 'b', documentVersionId: 'v2' })]).map((s) => s.documentId)).toEqual(['b']);
+    const selected = [
+      { sourceId: 's', documentId: 'a', documentVersionId: 'v1', versionNumber: 1 },
+      { sourceId: 's', documentId: 'b', documentVersionId: 'v9', versionNumber: 1 },
+    ];
+    expect(
+      staleSelections(selected, [item({ id: 'a', documentVersionId: 'v1' }), item({ id: 'b', documentVersionId: 'v2' })]).map(
+        (s) => s.documentId,
+      ),
+    ).toEqual(['b']);
   });
 });

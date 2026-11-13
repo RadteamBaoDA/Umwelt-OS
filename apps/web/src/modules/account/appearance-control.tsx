@@ -22,37 +22,58 @@ export function AppearanceControl() {
   const display = useDisplayPreferences();
   const { theme, setTheme } = useTheme();
   const displayRef = useRef(display);
-  useEffect(() => { displayRef.current = display; });
+  useEffect(() => {
+    displayRef.current = display;
+  });
   useEffect(() => () => displayRef.current.setPreview(null, displayRef.current.authGeneration), []);
-  return <Dialog>
-    <DialogTrigger asChild>
-      <Button type="button" variant="ghost"><GlobeIcon aria-hidden="true" className="size-4" />{login('appearance')}</Button>
-    </DialogTrigger>
-    <DialogContent className="max-w-sm">
-      <DialogHeader>
-        <DialogTitle>{login('appearance')}</DialogTitle>
-        <DialogDescription>{login('appearanceHelp')}</DialogDescription>
-      </DialogHeader>
-      <div className="field">
-        <Label id="login-theme-label">{t('theme')}</Label>
-        <RadioGroup aria-labelledby="login-theme-label" value={theme ?? 'system'} onValueChange={(value) => setTheme(value as ThemePreference)} className="theme-options">
-          {(['light', 'dark', 'system'] as const).map((value) => <Label className="theme-option" key={value} htmlFor={`login-theme-${value}`}>
-            <RadioGroupItem id={`login-theme-${value}`} value={value} />
-            <span>{t(value)}</span>
-          </Label>)}
-        </RadioGroup>
-      </div>
-      <div className="field">
-        <Label htmlFor="login-locale">{t('language')}</Label>
-        <Select value={display.locale} onValueChange={(value) => display.setPreview({ theme: 'system', locale: value as AppLocaleId, timezone: display.timezone }, display.authGeneration)}>
-          <SelectTrigger id="login-locale"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="en-us">{t('englishUs')}</SelectItem>
-            <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-muted-foreground text-xs">{t('languageHelp')}</p>
-      </div>
-    </DialogContent>
-  </Dialog>;
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button type="button" variant="ghost">
+          <GlobeIcon aria-hidden="true" className="size-4" />
+          {login('appearance')}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>{login('appearance')}</DialogTitle>
+          <DialogDescription>{login('appearanceHelp')}</DialogDescription>
+        </DialogHeader>
+        <div className="field">
+          <Label id="login-theme-label">{t('theme')}</Label>
+          <RadioGroup
+            aria-labelledby="login-theme-label"
+            value={theme ?? 'system'}
+            onValueChange={(value) => setTheme(value as ThemePreference)}
+            className="theme-options"
+          >
+            {(['light', 'dark', 'system'] as const).map((value) => (
+              <Label className="theme-option" key={value} htmlFor={`login-theme-${value}`}>
+                <RadioGroupItem id={`login-theme-${value}`} value={value} />
+                <span>{t(value)}</span>
+              </Label>
+            ))}
+          </RadioGroup>
+        </div>
+        <div className="field">
+          <Label htmlFor="login-locale">{t('language')}</Label>
+          <Select
+            value={display.locale}
+            onValueChange={(value) =>
+              display.setPreview({ theme: 'system', locale: value as AppLocaleId, timezone: display.timezone }, display.authGeneration)
+            }
+          >
+            <SelectTrigger id="login-locale">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="en-us">{t('englishUs')}</SelectItem>
+              <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground text-xs">{t('languageHelp')}</p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }

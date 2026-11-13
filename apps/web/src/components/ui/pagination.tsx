@@ -35,7 +35,10 @@ export function usePagination<T>(items: T[], initialPageSize = 20): PaginationSt
   const page = Math.min(Math.max(1, rawPage), pageCount);
   const pageItems = items.slice((page - 1) * pageSize, page * pageSize);
   const setPage = (next: number) => setRawPage(Math.min(Math.max(1, next), pageCount));
-  const setPageSize = (size: number) => { setSize(size); setRawPage(1); };
+  const setPageSize = (size: number) => {
+    setSize(size);
+    setRawPage(1);
+  };
   return { pageItems, page, pageCount, pageSize, total, setPage, setPageSize };
 }
 
@@ -67,19 +70,35 @@ function PagerBody(props: TablePaginationProps) {
         <label className="flex items-center gap-2">
           <span>{t('rowsPerPage')}</span>
           <Select value={String(props.pageSize)} onValueChange={(v) => props.setPageSize(Number(v))}>
-            <SelectTrigger aria-label={t('rowsPerPage')} className="w-20"><SelectValue /></SelectTrigger>
-            <SelectContent>{PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent>
+            <SelectTrigger aria-label={t('rowsPerPage')} className="w-20">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZES.map((n) => (
+                <SelectItem key={n} value={String(n)}>
+                  {n}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </label>
       )}
       <span aria-live="polite">
         {cursor
           ? t('pageNumber', { page: props.page })
-          : t('pageRange', { start: (props.page - 1) * props.pageSize + 1, end: Math.min(props.page * props.pageSize, props.total), total: props.total })}
+          : t('pageRange', {
+              start: (props.page - 1) * props.pageSize + 1,
+              end: Math.min(props.page * props.pageSize, props.total),
+              total: props.total,
+            })}
       </span>
       <div className="flex items-center gap-1">
-        <Button type="button" variant="outline" size="icon" aria-label={t('previousPage')} disabled={prevDisabled} onClick={onPrev}><ChevronLeftIcon size={16} aria-hidden /></Button>
-        <Button type="button" variant="outline" size="icon" aria-label={t('nextPage')} disabled={nextDisabled} onClick={onNext}><ChevronRightIcon size={16} aria-hidden /></Button>
+        <Button type="button" variant="outline" size="icon" aria-label={t('previousPage')} disabled={prevDisabled} onClick={onPrev}>
+          <ChevronLeftIcon size={16} aria-hidden />
+        </Button>
+        <Button type="button" variant="outline" size="icon" aria-label={t('nextPage')} disabled={nextDisabled} onClick={onNext}>
+          <ChevronRightIcon size={16} aria-hidden />
+        </Button>
       </div>
     </div>
   );

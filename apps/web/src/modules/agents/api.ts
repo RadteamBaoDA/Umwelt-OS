@@ -35,10 +35,7 @@ export function getAgentProfiles(): Promise<AgentProfile[]> {
 }
 
 /** Save one optimistic profile revision with exact registry tool contracts and source scope. */
-export function updateAgentProfile(
-  profile: AgentProfile,
-  csrfToken: string,
-): Promise<AgentProfile> {
+export function updateAgentProfile(profile: AgentProfile, csrfToken: string): Promise<AgentProfile> {
   return apiRequest<AgentProfile>(`/api/v1/agents/profiles/${encodeURIComponent(profile.id)}`, {
     method: 'PATCH',
     headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
@@ -71,12 +68,14 @@ export function getAgentRun(runId: string): Promise<AgentRun> {
 }
 
 /** Read bounded profile or conversation history using the opaque server cursor. */
-export function listAgentRuns(params: {
-  profile_id?: string;
-  conversation_id?: string;
-  limit?: number;
-  cursor?: string;
-} = {}): Promise<{ items: AgentRun[]; next_cursor: string | null }> {
+export function listAgentRuns(
+  params: {
+    profile_id?: string;
+    conversation_id?: string;
+    limit?: number;
+    cursor?: string;
+  } = {},
+): Promise<{ items: AgentRun[]; next_cursor: string | null }> {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) query.set(key, String(value));
@@ -88,7 +87,8 @@ export function listAgentRuns(params: {
 /** Commit cancellation intent for the selected durable agent run. */
 export function cancelAgentRun(runId: string, csrfToken: string): Promise<AgentRun> {
   return apiRequest<AgentRun>(`/api/v1/agent-runs/${encodeURIComponent(runId)}/cancel`, {
-    method: 'POST', headers: csrfHeaders(csrfToken),
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
   });
 }
 

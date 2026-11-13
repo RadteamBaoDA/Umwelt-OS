@@ -20,6 +20,35 @@ type SafeConfiguration = {
   n8n_configured: boolean;
   mcp_widgets_enabled: boolean;
 };
+/** Lists the safe deployment flags as status rows; pure render of `configuration`, no side effects. */
+function DeploymentStatusList({ configuration }: { configuration: SafeConfiguration }) {
+  const t = useTranslations('globalSettings');
+  return (
+    <ul className="m-0 list-none p-0">
+      {(
+        [
+          ['multiWorkspace', 'multi_workspace_enabled'],
+          ['secureCookies', 'secure_cookies'],
+          ['googleLogin', 'google_login_configured'],
+          ['githubApp', 'github_app_configured'],
+          ['n8n', 'n8n_configured'],
+          ['mcpWidgets', 'mcp_widgets_enabled'],
+        ] as const
+      ).map(([label, key]) => {
+        const on = configuration[key];
+        return (
+          <StatusRow
+            key={key}
+            tone={on ? 'success' : 'muted'}
+            name={t(label)}
+            status={key.endsWith('_configured') ? (on ? t('st.configured') : t('st.notConfigured')) : on ? t('enabled') : t('disabled')}
+          />
+        );
+      })}
+    </ul>
+  );
+}
+
 /** Shows a pointer to System status, the account's workspaces, and operator terms-review requests. */
 function GlobalSettingsContent() {
   const t = useTranslations('globalSettings');
@@ -43,12 +72,32 @@ function GlobalSettingsContent() {
     queryFn: ({ signal }) => apiRequest<PendingReview[]>('/api/v1/operator/live-map/terms-review', { signal }),
   });
 
-  if (!session.isInstanceAdmin) return <p role="alert" className="text-muted-foreground">{t('accessDenied')}</p>;
-  if (configuration.isPending || reviews.isPending || liveReviews.isPending) return <div className="content-panel skeleton" aria-label={t('loading')} />;
-  if (configuration.isError || reviews.isError || liveReviews.isError) return <section className="content-panel">
-    <p role="alert" className="text-destructive">{t('loadFailed')}</p>
-    <Button variant="outline" onClick={() => { void configuration.refetch(); void reviews.refetch(); void liveReviews.refetch(); }}>{t('retry')}</Button>
-  </section>;
+  if (!session.isInstanceAdmin)
+    return (
+      <p role="alert" className="text-muted-foreground">
+        {t('accessDenied')}
+      </p>
+    );
+  if (configuration.isPending || reviews.isPending || liveReviews.isPending)
+    return <div className="content-panel skeleton" aria-label={t('loading')} />;
+  if (configuration.isError || reviews.isError || liveReviews.isError)
+    return (
+      <section className="content-panel">
+        <p role="alert" className="text-destructive">
+          {t('loadFailed')}
+        </p>
+        <Button
+          variant="outline"
+          onClick={() => {
+            void configuration.refetch();
+            void reviews.refetch();
+            void liveReviews.refetch();
+          }}
+        >
+          {t('retry')}
+        </Button>
+      </section>
+    );
 
   /** Switches the selected workspace and opens its read-only or owner dashboard. */
   const openWorkspace = (id: string) => {
@@ -56,38 +105,50 @@ function GlobalSettingsContent() {
     router.push('/dashboard');
   };
 
-  return <div className="flex flex-col gap-5">
-    <SettingsPageHeader eyebrow={t('title')} title={t('title')} description={t('description')} />
-    <SettingsSection title={t('providerReviewsPending', { count: reviews.data.length + liveReviews.data.length })}>
-      {reviews.data.length === 0 && liveReviews.data.length === 0 ? <p className="m-0 text-sm text-muted-foreground">{t('noProviderReviews')}</p> : <ProviderReviewTable rows={[...reviews.data, ...liveReviews.data]} />}
-    </SettingsSection>
-    <SettingsSection title={t('deployment')}>
-      <div className="flex flex-col gap-2">
-        <Link className="self-start text-sm underline underline-offset-4" href="/settings/system">{t('viewServices')}</Link>
-        <ul className="m-0 list-none p-0">
-          {([['multiWorkspace', 'multi_workspace_enabled'], ['secureCookies', 'secure_cookies'], ['googleLogin', 'google_login_configured'], ['githubApp', 'github_app_configured'], ['n8n', 'n8n_configured'], ['mcpWidgets', 'mcp_widgets_enabled']] as const).map(([label, key]) => {
-            const on = configuration.data[key];
-            return <StatusRow key={key} tone={on ? 'success' : 'muted'} name={t(label)} status={key.endsWith('_configured') ? (on ? t('st.configured') : t('st.notConfigured')) : (on ? t('enabled') : t('disabled'))} />;
-          })}
+  return (
+    <div className="flex flex-col gap-5">
+      <SettingsPageHeader eyebrow={t('title')} title={t('title')} description={t('description')} />
+      <SettingsSection title={t('providerReviewsPending', { count: reviews.data.length + liveReviews.data.length })}>
+        {reviews.data.length === 0 && liveReviews.data.length === 0 ? (
+          <p className="m-0 text-sm text-muted-foreground">{t('noProviderReviews')}</p>
+        ) : (
+          <ProviderReviewTable rows={[...reviews.data, ...liveReviews.data]} />
+        )}
+      </SettingsSection>
+      <SettingsSection title={t('deployment')}>
+        <div className="flex flex-col gap-2">
+          <Link className="self-start text-sm underline underline-offset-4" href="/settings/system">
+            {t('viewServices')}
+          </Link>
+          <DeploymentStatusList configuration={configuration.data} />
+        </div>
+      </SettingsSection>
+      <SettingsSection title={t('workspaces')}>
+        <ul className="m-0 flex list-none flex-col gap-3 p-0">
+          {workspaces.map((workspace) => (
+            <li key={workspace.id} className="flex flex-wrap items-center gap-3 border-b border-border pb-3 last:border-0 last:pb-0">
+              <p className="m-0 min-w-0 font-medium">{workspace.name}</p>
+              <Button variant="outline" onClick={() => openWorkspace(workspace.id)}>
+                {t('openWorkspace')}
+              </Button>
+            </li>
+          ))}
         </ul>
-      </div>
-    </SettingsSection>
-    <SettingsSection title={t('workspaces')}>
-      <ul className="m-0 flex list-none flex-col gap-3 p-0">
-        {workspaces.map((workspace) => <li key={workspace.id} className="flex flex-wrap items-center gap-3 border-b border-border pb-3 last:border-0 last:pb-0">
-          <p className="m-0 min-w-0 font-medium">{workspace.name}</p>
-          <Button variant="outline" onClick={() => openWorkspace(workspace.id)}>{t('openWorkspace')}</Button>
-        </li>)}
-      </ul>
-    </SettingsSection>
-  </div>;
+      </SettingsSection>
+    </div>
+  );
 }
 
 /** Renders global controls only for the instance administrator inside the authenticated shell. */
 function GlobalSettingsPage() {
   const t = useTranslations('globalSettings');
   const session = useWorkspaceSession();
-  if (!session.isInstanceAdmin) return <p role="alert" className="text-muted-foreground">{t('accessDenied')}</p>;
+  if (!session.isInstanceAdmin)
+    return (
+      <p role="alert" className="text-muted-foreground">
+        {t('accessDenied')}
+      </p>
+    );
   return <GlobalSettingsContent />;
 }
 

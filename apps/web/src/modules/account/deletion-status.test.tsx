@@ -9,7 +9,16 @@ afterEach(() => vi.unstubAllGlobals());
 
 function mount(locale: 'en-us' | 'vi-vi' = 'en-us') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ accountDeletion: getCatalog(locale, 'accountDeletion') }}><AccountDeletionStatus /></NextIntlClientProvider></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <NextIntlClientProvider
+        locale={locale === 'en-us' ? 'en-US' : 'vi-VN'}
+        messages={{ accountDeletion: getCatalog(locale, 'accountDeletion') }}
+      >
+        <AccountDeletionStatus />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe('AccountDeletionStatus', () => {
@@ -20,12 +29,18 @@ describe('AccountDeletionStatus', () => {
     expect(await screen.findByText('Current step: Removing graph data')).toBeInTheDocument();
     expect(screen.getByText('Cleanup issue: Graph cleanup needs a retry')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('The account stays locked');
-    expect(fetcher).toHaveBeenCalledWith('/api/v1/auth/account/deletion-status', expect.objectContaining({ cache: 'no-store', credentials: 'same-origin' }));
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/auth/account/deletion-status',
+      expect.objectContaining({ cache: 'no-store', credentials: 'same-origin' }),
+    );
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it('does not display unknown phases or internal failure values', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ status: 'failed', phase: 'private@example.com', error_code: 'database password=secret' })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(Response.json({ status: 'failed', phase: 'private@example.com', error_code: 'database password=secret' })),
+    );
     mount();
     expect(await screen.findByText('Current step: Progress details unavailable')).toBeInTheDocument();
     expect(screen.getByText('Cleanup issue: Cleanup needs a retry or host operator assistance')).toBeInTheDocument();
@@ -34,7 +49,10 @@ describe('AccountDeletionStatus', () => {
   });
 
   it('localizes Vietnamese progress and failure categories', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ status: 'failed', phase: 'storage', error_code: 'storage_cleanup_failed' })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(Response.json({ status: 'failed', phase: 'storage', error_code: 'storage_cleanup_failed' })),
+    );
     mount('vi-vi');
     expect(await screen.findByText('Bước hiện tại: Đang xóa tệp đã tải lên')).toBeInTheDocument();
     expect(screen.getByText('Vấn đề khi dọn dữ liệu: Cần thử lại việc xóa tệp đã tải lên')).toBeInTheDocument();

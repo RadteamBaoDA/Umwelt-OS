@@ -9,7 +9,16 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
-import { grantShare, listShares, listWorkspaceMembers, revokeShare, shareKeys, type ShareResourceType, type ShareRow, type WorkspaceMember } from './api';
+import {
+  grantShare,
+  listShares,
+  listWorkspaceMembers,
+  revokeShare,
+  shareKeys,
+  type ShareResourceType,
+  type ShareRow,
+  type WorkspaceMember,
+} from './api';
 
 /** Maps a share failure to a message key: 403 role, 404 invisible, 409 refresh. */
 export function shareErrorKey(error: unknown): 'error.role' | 'error.invisible' | 'error.refresh' | 'error.failed' {
@@ -33,6 +42,49 @@ type ShareDialogProps = {
 };
 
 /**
+ * One member row in the share dialog: shows the member label and a Revoke button when shared, else a Share button.
+ *
+ * @param p.member Workspace member shown.
+ * @param p.shared True when an active grant exists for the member.
+ * @param p.busy Disables the action while any grant or revoke is pending.
+ * @param p.onRevoke Revokes the member's grant.
+ * @param p.onGrant Grants the member access.
+ */
+function ShareMemberRow({
+  member,
+  shared,
+  busy,
+  onRevoke,
+  onGrant,
+}: {
+  member: WorkspaceMember;
+  shared: boolean;
+  busy: boolean;
+  onRevoke: () => void;
+  onGrant: () => void;
+}) {
+  const t = useTranslations('sharing');
+  const label = member.email ?? t('memberFallback', { id: member.user_id });
+  return (
+    <li className="flex items-center justify-between gap-2 py-2 text-sm">
+      <span className="min-w-0 truncate">
+        {label}
+        {shared && <span className="ml-2 text-xs text-muted-foreground">{t('shared')}</span>}
+      </span>
+      {shared ? (
+        <Button type="button" size="sm" variant="outline" disabled={busy} aria-label={t('revokeFor', { member: label })} onClick={onRevoke}>
+          {t('revoke')}
+        </Button>
+      ) : (
+        <Button type="button" size="sm" disabled={busy} aria-label={t('shareWith', { member: label })} onClick={onGrant}>
+          {t('shareAction')}
+        </Button>
+      )}
+    </li>
+  );
+}
+
+/**
  * Owner-only dialog listing workspace members with an explicit Share / Revoke choice per member.
  * It never offers a whole-workspace share. Renders nothing for members.
  */
@@ -45,14 +97,20 @@ export function ShareDialog({ resourceType, resourceId, resourceRevision, semant
   const workspaceId = selection?.id ?? '';
   const enabled = isOwner && Boolean(workspaceId);
   const members = useQuery({ queryKey: shareKeys.members(workspaceId), queryFn: () => listWorkspaceMembers(workspaceId), enabled });
-  const shares = useQuery({ queryKey: shareKeys.list(workspaceId, resourceType, resourceId), queryFn: () => listShares(workspaceId, resourceType, resourceId), enabled });
+  const shares = useQuery({
+    queryKey: shareKeys.list(workspaceId, resourceType, resourceId),
+    queryFn: () => listShares(workspaceId, resourceType, resourceId),
+    enabled,
+  });
   /** Refetches sharing state after a mutation. */
-  const refresh = () => Promise.all([
-    client.invalidateQueries({ queryKey: shareKeys.members(workspaceId) }),
-    client.invalidateQueries({ queryKey: shareKeys.list(workspaceId, resourceType, resourceId) }),
-  ]);
+  const refresh = () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: shareKeys.members(workspaceId) }),
+      client.invalidateQueries({ queryKey: shareKeys.list(workspaceId, resourceType, resourceId) }),
+    ]);
   const grantMutation = useMutation({
-    mutationFn: (member: WorkspaceMember) => (grant ?? ((m, rev, token) => grantShare(workspaceId, resourceType, resourceId, m, rev, token)))(member, resourceRevision, csrfToken),
+    mutationFn: (member: WorkspaceMember) =>
+      (grant ?? ((m, rev, token) => grantShare(workspaceId, resourceType, resourceId, m, rev, token)))(member, resourceRevision, csrfToken),
     onSettled: refresh,
   });
   const revokeMutation = useMutation({
@@ -69,33 +127,46 @@ export function ShareDialog({ resourceType, resourceId, resourceRevision, semant
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button type="button" variant="outline" size="sm"><Share2 className="h-3.5 w-3.5" aria-hidden />{t('share')}</Button>
+        <Button type="button" variant="outline" size="sm">
+          <Share2 className="h-3.5 w-3.5" aria-hidden />
+          {t('share')}
+        </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t(resourceType === 'document' ? 'titleDocument' : 'titleBrief')}</DialogTitle>
           <DialogDescription>{semantics}</DialogDescription>
         </DialogHeader>
-        {(members.isPending || shares.isPending) && <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p>}
-        {(members.isError || shares.isError) && <p role="alert" className="text-sm text-destructive">{t(shareErrorKey(members.error ?? shares.error))}</p>}
+        {(members.isPending || shares.isPending) && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {t('loading')}
+          </p>
+        )}
+        {(members.isError || shares.isError) && (
+          <p role="alert" className="text-sm text-destructive">
+            {t(shareErrorKey(members.error ?? shares.error))}
+          </p>
+        )}
         {members.isSuccess && candidates.length === 0 && <p className="text-sm text-muted-foreground">{t('noMembers')}</p>}
         {candidates.length > 0 && (
           <ul className="divide-y divide-border" aria-label={t('members')}>
-            {candidates.map((member) => {
-              const shared = active.has(member.user_id);
-              const label = member.email ?? t('memberFallback', { id: member.user_id });
-              return (
-                <li key={member.user_id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                  <span className="min-w-0 truncate">{label}{shared && <span className="ml-2 text-xs text-muted-foreground">{t('shared')}</span>}</span>
-                  {shared
-                    ? <Button type="button" size="sm" variant="outline" disabled={busy} aria-label={t('revokeFor', { member: label })} onClick={() => revokeMutation.mutate(member)}>{t('revoke')}</Button>
-                    : <Button type="button" size="sm" disabled={busy} aria-label={t('shareWith', { member: label })} onClick={() => grantMutation.mutate(member)}>{t('shareAction')}</Button>}
-                </li>
-              );
-            })}
+            {candidates.map((member) => (
+              <ShareMemberRow
+                key={member.user_id}
+                member={member}
+                shared={active.has(member.user_id)}
+                busy={busy}
+                onRevoke={() => revokeMutation.mutate(member)}
+                onGrant={() => grantMutation.mutate(member)}
+              />
+            ))}
           </ul>
         )}
-        {error && <p role="alert" className="text-sm text-destructive">{t(shareErrorKey(error))}</p>}
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {t(shareErrorKey(error))}
+          </p>
+        )}
         {grantMutation.error && renderError?.(grantMutation.error)}
       </DialogContent>
     </Dialog>
@@ -105,5 +176,7 @@ export function ShareDialog({ resourceType, resourceId, resourceRevision, semant
 /** Share control for a document; binds the grant to its current version and includes later versions while active. */
 export function DocumentShareButton({ documentId, currentVersion }: { documentId: string; currentVersion: number }) {
   const t = useTranslations('sharing');
-  return <ShareDialog resourceType="document" resourceId={documentId} resourceRevision={currentVersion} semantics={t('semanticsDocument')} />;
+  return (
+    <ShareDialog resourceType="document" resourceId={documentId} resourceRevision={currentVersion} semantics={t('semanticsDocument')} />
+  );
 }

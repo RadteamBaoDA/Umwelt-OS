@@ -12,18 +12,33 @@ vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 // Radix Select is awkward in jsdom; a native select keeps the test on the save/409 logic.
 vi.mock('@/components/ui/select', () => ({
-  Select: ({ value, onValueChange, children }: { value: string; onValueChange: (v: string) => void; children: React.ReactNode }) => <select aria-label="history" value={value} onChange={(e) => onValueChange(e.target.value)}>{children}</select>,
-  SelectTrigger: () => null, SelectValue: () => null, SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Select: ({ value, onValueChange, children }: { value: string; onValueChange: (v: string) => void; children: React.ReactNode }) => (
+    <select aria-label="history" value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {children}
+    </select>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => <option value={value}>{children}</option>,
 }));
 
 /** Renders the retention row with fresh query state. */
 function view() {
-  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><NextIntlClientProvider locale="en-US" messages={{ observability: getCatalog('en-us', 'observability') }} onError={() => undefined}><HistoryRetention oldestSampleAt={null} /></NextIntlClientProvider></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={{ observability: getCatalog('en-us', 'observability') }} onError={() => undefined}>
+        <HistoryRetention oldestSampleAt={null} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe('HistoryRetention', () => {
-  beforeEach(() => { api.get.mockReset(); api.save.mockReset(); });
+  beforeEach(() => {
+    api.get.mockReset();
+    api.save.mockReset();
+  });
   it('saves with the loaded revision and shows the saved stamp', async () => {
     api.get.mockResolvedValue({ retention_days: 30, sample_interval_minutes: 1, revision: 4 });
     api.save.mockResolvedValue({ retention_days: 7, sample_interval_minutes: 1, revision: 5 });
@@ -44,7 +59,9 @@ describe('HistoryRetention', () => {
     expect(api.save).toHaveBeenCalledWith('csrf', 4, { sample_interval_minutes: 5 });
   });
   it('refetches and explains on a stale revision (409)', async () => {
-    api.get.mockResolvedValueOnce({ retention_days: 30, sample_interval_minutes: 1, revision: 4 }).mockResolvedValue({ retention_days: 90, sample_interval_minutes: 1, revision: 6 });
+    api.get
+      .mockResolvedValueOnce({ retention_days: 30, sample_interval_minutes: 1, revision: 4 })
+      .mockResolvedValue({ retention_days: 90, sample_interval_minutes: 1, revision: 6 });
     api.save.mockRejectedValue(new ApiError(409, 'stale'));
     view();
     await waitFor(() => expect((screen.getAllByLabelText('history')[0] as HTMLSelectElement).value).toBe('30'));

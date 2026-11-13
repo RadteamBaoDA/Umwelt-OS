@@ -74,6 +74,13 @@ export type NewsTrend = {
 };
 
 /** Bounded current trend response. */
-export type TrendPage = { items: NewsTrend[]; as_of: string; history_days: number; truncated: boolean; incomplete: boolean; incomplete_reasons: string[] };
+export type TrendPage = {
+  items: NewsTrend[];
+  as_of: string;
+  history_days: number;
+  truncated: boolean;
+  incomplete: boolean;
+  incomplete_reasons: string[];
+};
 /** Story detail and its separate evidence continuation. */
 export type StoryDetail = { story: Story | null; evidence_cursor: string | null; incomplete_reasons: string[] };

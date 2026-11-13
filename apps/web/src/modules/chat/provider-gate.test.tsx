@@ -11,14 +11,20 @@ const base = {
   defaults: { chat: { model: 'gpt', provider_id: null } },
   privacy: { allow_remote_reasoning: true, reasoning_destinations: ['remote:x'] },
 };
-const local = { ...base, providers: [{ id: 'ol', credential_configured: false, local: true, policy_denied: false, destination_id: null }], privacy: undefined };
+const local = {
+  ...base,
+  providers: [{ id: 'ol', credential_configured: false, local: true, policy_denied: false, destination_id: null }],
+  privacy: undefined,
+};
 
 afterEach(() => vi.unstubAllGlobals());
 
 /** Wraps hook renders in a fresh query client. */
 function wrapper(client: QueryClient) {
   /** Provides the shared client. */
-  function Wrapper({ children }: { children: ReactNode }) { return <QueryClientProvider client={client}>{children}</QueryClientProvider>; }
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  }
   return Wrapper;
 }
 
@@ -87,8 +93,15 @@ describe('useChatProviderReady', () => {
 });
 
 describe('ProviderGateAlert', () => {
-  it.each([['en-us', 'Open Settings'], ['vi-vi', 'Mở Cài đặt']] as const)('links to Settings in %s', (locale, label) => {
-    render(<NextIntlClientProvider locale={locale} messages={messages[locale]}><ProviderGateAlert onDismiss={() => undefined} /></NextIntlClientProvider>);
+  it.each([
+    ['en-us', 'Open Settings'],
+    ['vi-vi', 'Mở Cài đặt'],
+  ] as const)('links to Settings in %s', (locale, label) => {
+    render(
+      <NextIntlClientProvider locale={locale} messages={messages[locale]}>
+        <ProviderGateAlert onDismiss={() => undefined} />
+      </NextIntlClientProvider>,
+    );
     expect(screen.getByRole('alert')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: label })).toHaveAttribute('href', MODELS_SETTINGS_HREF);
   });

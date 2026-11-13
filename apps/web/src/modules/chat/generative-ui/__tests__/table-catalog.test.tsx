@@ -49,13 +49,7 @@ describe('TableCatalog', () => {
 
   it('sorts rows ascending and descending when clicking a sortable column header', async () => {
     const user = userEvent.setup();
-    render(
-      <TableCatalog
-        title="Data Connector Matrix"
-        columns={SAMPLE_COLUMNS}
-        rows={SAMPLE_ROWS}
-      />,
-    );
+    render(<TableCatalog title="Data Connector Matrix" columns={SAMPLE_COLUMNS} rows={SAMPLE_ROWS} />);
 
     const sortByCostBtn = screen.getByTestId('table-sort-cost');
 
@@ -72,13 +66,7 @@ describe('TableCatalog', () => {
 
   it('filters rows by search query and shows empty state when no rows match', async () => {
     const user = userEvent.setup();
-    render(
-      <TableCatalog
-        title="Data Connector Matrix"
-        columns={SAMPLE_COLUMNS}
-        rows={SAMPLE_ROWS}
-      />,
-    );
+    render(<TableCatalog title="Data Connector Matrix" columns={SAMPLE_COLUMNS} rows={SAMPLE_ROWS} />);
 
     const filterInput = screen.getByTestId('table-catalog-filter-input');
     await user.type(filterInput, 'ArXiv');
@@ -96,13 +84,7 @@ describe('TableCatalog', () => {
     const onSendPrompt = vi.fn();
 
     render(
-      <TableCatalog
-        title="Bảng Nguồn Dữ Liệu"
-        columns={SAMPLE_COLUMNS}
-        rows={SAMPLE_ROWS}
-        locale="vi-vi"
-        onSendPrompt={onSendPrompt}
-      />,
+      <TableCatalog title="Bảng Nguồn Dữ Liệu" columns={SAMPLE_COLUMNS} rows={SAMPLE_ROWS} locale="vi-vi" onSendPrompt={onSendPrompt} />,
     );
 
     // In vi-VN, 99.8% uses a comma decimal separator (99,8%)
@@ -114,4 +96,3 @@ describe('TableCatalog', () => {
     expect(onSendPrompt.mock.calls[0][0]).toContain('GitHub Collector');
   });
 });
-

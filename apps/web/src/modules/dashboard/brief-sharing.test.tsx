@@ -8,9 +8,13 @@ import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({ listWorkspaceMembers: vi.fn(), listShares: vi.fn(), grantShare: vi.fn(), getDocument: vi.fn() }));
 vi.mock('@/modules/knowledge/api', async (original) => ({ ...(await original<typeof import('@/modules/knowledge/api')>()), ...api }));
-vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: 'w1', role: 'owner', revision: 1 }, isOwner: true }) }));
+vi.mock('@/core/workspace-context', () => ({
+  useWorkspace: () => ({ selection: { id: 'w1', role: 'owner', revision: 1 }, isOwner: true }),
+}));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
-vi.mock('next/link', () => ({ default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock('next/link', () => ({
+  default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
+}));
 
 import { BriefShareButton } from './brief-sharing';
 
@@ -27,7 +31,13 @@ describe('BriefShareButton', () => {
   it('links only the owner-visible documents listed by a 409 brief_evidence_not_shared', async () => {
     api.grantShare.mockRejectedValue(new ApiError(409, 'x', { code: 'brief_evidence_not_shared', document_ids: ['doc-1'] }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sharing: getCatalog('en-us', 'sharing') }}><BriefShareButton brief={{ id: 'b1', revision: 2 }} /></NextIntlClientProvider></QueryClientProvider>);
+    render(
+      <QueryClientProvider client={client}>
+        <NextIntlClientProvider locale="en-US" messages={{ sharing: getCatalog('en-us', 'sharing') }}>
+          <BriefShareButton brief={{ id: 'b1', revision: 2 }} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
     await userEvent.click(screen.getByRole('button', { name: 'Share' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Share with m@example.com' }));
     const link = await screen.findByRole('link', { name: 'Evidence doc' });

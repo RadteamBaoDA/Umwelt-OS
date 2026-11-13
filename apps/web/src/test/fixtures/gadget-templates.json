@@ -1,9 +1,6 @@
 [
   {
-    "accepted_shapes": [
-      "event",
-      "news"
-    ],
+    "accepted_shapes": ["event", "news"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -33,9 +30,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "messages"
-    ],
+    "accepted_shapes": ["messages"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -65,9 +60,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "news"
-    ],
+    "accepted_shapes": ["news"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -97,11 +90,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "event",
-      "measurement",
-      "news"
-    ],
+    "accepted_shapes": ["event", "measurement", "news"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -131,9 +120,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "job"
-    ],
+    "accepted_shapes": ["job"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -163,9 +150,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "video"
-    ],
+    "accepted_shapes": ["video"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -195,9 +180,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "series"
-    ],
+    "accepted_shapes": ["series"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -227,9 +210,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "located"
-    ],
+    "accepted_shapes": ["located"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -247,16 +228,7 @@
       "live_map_country": null,
       "live_map_github_owner": null,
       "live_map_github_repo": null,
-      "live_map_providers": [
-        "usgs",
-        "eonet",
-        "hackernews",
-        "lobsters",
-        "cisa_kev",
-        "nvd",
-        "business",
-        "fed"
-      ],
+      "live_map_providers": ["usgs", "eonet", "hackernews", "lobsters", "cisa_kev", "nvd", "business", "fed"],
       "live_map_sec_cik": null,
       "lookback_days": null,
       "map_layer_ids": [],
@@ -268,9 +240,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "located"
-    ],
+    "accepted_shapes": ["located"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -450,9 +420,7 @@
     "source_mode": "none"
   },
   {
-    "accepted_shapes": [
-      "weather"
-    ],
+    "accepted_shapes": ["weather"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -482,9 +450,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "measurement"
-    ],
+    "accepted_shapes": ["measurement"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],
@@ -514,9 +480,7 @@
     "source_mode": "multi"
   },
   {
-    "accepted_shapes": [
-      "project_activity"
-    ],
+    "accepted_shapes": ["project_activity"],
     "filters": {
       "exclude_keywords": [],
       "keywords": [],

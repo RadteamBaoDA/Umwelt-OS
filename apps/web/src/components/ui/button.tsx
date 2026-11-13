@@ -37,8 +37,7 @@ export const buttonVariants = cva(
 );
 
 /** Props accepted by the shared New York shadcn button, including its Radix Slot mode. */
-export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
-  VariantProps<typeof buttonVariants> & { asChild?: boolean };
+export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants> & { asChild?: boolean };
 
 /**
  * Render a native or slotted button with variant classes and forward its ref and native props.
@@ -46,25 +45,23 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
  * Native disabled behavior is preserved, while Slot mode transfers props to its single child.
  * @param props Native button props plus variant, size, className, and optional asChild selection.
  */
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
-    // Preserve the old `.secondary` appearance only for callers that have no explicit variant.
-    const effectiveVariant = variant ?? (className?.split(/\s+/).includes('secondary') ? 'outline' : 'default');
-    const Component = asChild ? Slot.Root : 'button';
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({ className, variant, size, asChild = false, ...props }, ref) => {
+  // Preserve the old `.secondary` appearance only for callers that have no explicit variant.
+  const effectiveVariant = variant ?? (className?.split(/\s+/).includes('secondary') ? 'outline' : 'default');
+  const Component = asChild ? Slot.Root : 'button';
 
-    return (
-      <Component
-        {...props}
-        ref={ref}
-        data-slot="button"
-        data-variant={effectiveVariant}
-        data-size={size ?? 'default'}
-        // The `bare` variant emits no base utilities so component-layer CSS classes (e.g. `.avatar-button`) and the
-        // native inline-block display are not overridden by utility-layer rules.
-        className={effectiveVariant === 'bare' ? className : cn(buttonVariants({ variant: effectiveVariant, size, className }))}
-      />
-    );
-  },
-);
+  return (
+    <Component
+      {...props}
+      ref={ref}
+      data-slot="button"
+      data-variant={effectiveVariant}
+      data-size={size ?? 'default'}
+      // The `bare` variant emits no base utilities so component-layer CSS classes (e.g. `.avatar-button`) and the
+      // native inline-block display are not overridden by utility-layer rules.
+      className={effectiveVariant === 'bare' ? className : cn(buttonVariants({ variant: effectiveVariant, size, className }))}
+    />
+  );
+});
 
 Button.displayName = 'Button';

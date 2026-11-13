@@ -65,10 +65,7 @@ export function SelectedDayProvider({ children }: { children: ReactNode }) {
     }
   }, [current, timezone, chatContext, selectDay]);
 
-  const value = useMemo<SelectedDay>(
-    () => ({ date: override ?? today, timezone, today, setDate }),
-    [override, today, timezone, setDate],
-  );
+  const value = useMemo<SelectedDay>(() => ({ date: override ?? today, timezone, today, setDate }), [override, today, timezone, setDate]);
   return <SelectedDayContext.Provider value={value}>{children}</SelectedDayContext.Provider>;
 }
 

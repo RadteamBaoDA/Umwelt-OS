@@ -12,24 +12,37 @@ vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => 
 
 const future = new Date(Date.now() + 86_400_000).toISOString();
 const invitation: InvitationRead = {
-  id: 'i1', email: 'p@x.co', created_at: future, expires_at: future, accepted_at: null, accepted_by_user_id: null, revoked_at: null,
+  id: 'i1',
+  email: 'p@x.co',
+  created_at: future,
+  expires_at: future,
+  accepted_at: null,
+  accepted_by_user_id: null,
+  revoked_at: null,
 };
 
 function json(body: unknown, status = 200) {
-  return Promise.resolve(new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
+  return Promise.resolve(
+    new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }),
+  );
 }
 
 function renderMembers() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-    <QueryClientProvider client={client}><WorkspaceMembers /></QueryClientProvider>
-  </NextIntlClientProvider>);
+  return render(
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <QueryClientProvider client={client}>
+        <WorkspaceMembers />
+      </QueryClientProvider>
+    </NextIntlClientProvider>,
+  );
 }
 
 describe('workspace members', () => {
   const fetchMock = vi.fn();
   beforeEach(() => {
-    ws.selection.role = 'owner'; ws.isOwner = true;
+    ws.selection.role = 'owner';
+    ws.isOwner = true;
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock);
   });
@@ -42,7 +55,8 @@ describe('workspace members', () => {
   });
 
   it('hides management from members and sends no requests', () => {
-    ws.selection.role = 'member'; ws.isOwner = false;
+    ws.selection.role = 'member';
+    ws.isOwner = false;
     renderMembers();
     expect(screen.getByText('Only the workspace owner can manage members.')).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -54,7 +68,10 @@ describe('workspace members', () => {
         expect(JSON.parse(String(init.body))).toEqual({ email: 'new@x.co', expected_revision: 4 });
         return json({ invitation_id: 'i2', invitation_url: 'https://app/invitations/accept?token=abc', expires_at: future }, 201);
       }
-      return json({ items: path.includes('/members') ? [{ user_id: 1, email: 'o@x.co', role: 'owner', membership_revision: 1 }] : [invitation], next_cursor: null });
+      return json({
+        items: path.includes('/members') ? [{ user_id: 1, email: 'o@x.co', role: 'owner', membership_revision: 1 }] : [invitation],
+        next_cursor: null,
+      });
     });
     const user = userEvent.setup();
     renderMembers();
@@ -71,7 +88,10 @@ describe('workspace members', () => {
         deletes.push([path, new Headers(init.headers).get('If-Match')]);
         return json(null, 204);
       }
-      return json({ items: path.includes('/members') ? [{ user_id: 7, email: 'm@x.co', role: 'member', membership_revision: 2 }] : [invitation], next_cursor: null });
+      return json({
+        items: path.includes('/members') ? [{ user_id: 7, email: 'm@x.co', role: 'member', membership_revision: 2 }] : [invitation],
+        next_cursor: null,
+      });
     });
     const user = userEvent.setup();
     renderMembers();

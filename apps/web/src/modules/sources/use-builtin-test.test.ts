@@ -6,7 +6,10 @@ const actions = vi.hoisted(() => ({ waitForActivation: vi.fn(), collectAndWait: 
 vi.mock('./use-source-actions', () => actions);
 
 describe('useBuiltinTest', () => {
-  beforeEach(() => { actions.waitForActivation.mockReset(); actions.collectAndWait.mockReset(); });
+  beforeEach(() => {
+    actions.waitForActivation.mockReset();
+    actions.collectAndWait.mockReset();
+  });
 
   it('records success and notifies the caller', async () => {
     actions.waitForActivation.mockResolvedValue({ ok: true, code: null });
@@ -14,7 +17,9 @@ describe('useBuiltinTest', () => {
     const settled = vi.fn();
     const { result } = renderHook(() => useBuiltinTest('csrf', settled));
     expect(result.current.test.phase).toBe('idle');
-    await act(async () => { await result.current.runTest('s1'); });
+    await act(async () => {
+      await result.current.runTest('s1');
+    });
     expect(result.current.test).toEqual({ phase: 'succeeded', runId: 'run-1' });
     expect(result.current.verified).toBe(true);
     expect(result.current.testing).toBe(false);
@@ -24,7 +29,9 @@ describe('useBuiltinTest', () => {
   it('fails with the activation code and does not collect', async () => {
     actions.waitForActivation.mockResolvedValue({ ok: false, code: 'credential_missing' });
     const { result } = renderHook(() => useBuiltinTest('csrf', vi.fn()));
-    await act(async () => { await result.current.runTest('s1'); });
+    await act(async () => {
+      await result.current.runTest('s1');
+    });
     expect(result.current.test).toEqual({ phase: 'failed', code: 'credential_missing' });
     expect(actions.collectAndWait).not.toHaveBeenCalled();
   });
@@ -33,22 +40,35 @@ describe('useBuiltinTest', () => {
     actions.waitForActivation.mockResolvedValue({ ok: true, code: null });
     actions.collectAndWait.mockResolvedValueOnce({ status: 'failed', ingestion_run_id: null, error_code: null });
     const { result } = renderHook(() => useBuiltinTest('csrf', vi.fn()));
-    await act(async () => { await result.current.runTest('s1'); });
+    await act(async () => {
+      await result.current.runTest('s1');
+    });
     expect(result.current.test).toEqual({ phase: 'failed', code: 'failed' });
     actions.collectAndWait.mockRejectedValueOnce(new Error('boom'));
-    await act(async () => { await result.current.runTest('s1'); });
+    await act(async () => {
+      await result.current.runTest('s1');
+    });
     await waitFor(() => expect(result.current.test).toEqual({ phase: 'failed', code: 'request_failed' }));
   });
 
   it('ignores a run superseded by abort', async () => {
     let release: (value: unknown) => void = () => undefined;
-    actions.waitForActivation.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    actions.waitForActivation.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
     const { result } = renderHook(() => useBuiltinTest('csrf', vi.fn()));
     let pending: Promise<void> = Promise.resolve();
-    act(() => { pending = result.current.runTest('s1'); });
+    act(() => {
+      pending = result.current.runTest('s1');
+    });
     expect(result.current.testing).toBe(true);
     act(() => result.current.abort());
-    await act(async () => { release({ ok: true, code: null }); await pending; });
+    await act(async () => {
+      release({ ok: true, code: null });
+      await pending;
+    });
     expect(actions.collectAndWait).not.toHaveBeenCalled();
   });
 });

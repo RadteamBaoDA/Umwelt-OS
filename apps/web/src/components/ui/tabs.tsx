@@ -8,17 +8,19 @@ import { Tabs as TabsPrimitive } from 'radix-ui';
 const Tabs = TabsPrimitive.Root;
 
 /** Renders the semantic tab list and forwards props and refs to Radix's keyboard-managed list. */
-const TabsList = React.forwardRef<
-  React.ElementRef<typeof TabsPrimitive.List>,
-  React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
->(({ className, ...props }, ref) => (
-  <TabsPrimitive.List
-    ref={ref}
-    data-slot="tabs-list"
-    className={cn('inline-flex h-9 items-center justify-start gap-4 border-b border-border bg-transparent text-muted-foreground', className)}
-    {...props}
-  />
-));
+const TabsList = React.forwardRef<React.ElementRef<typeof TabsPrimitive.List>, React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>>(
+  ({ className, ...props }, ref) => (
+    <TabsPrimitive.List
+      ref={ref}
+      data-slot="tabs-list"
+      className={cn(
+        'inline-flex h-9 items-center justify-start gap-4 border-b border-border bg-transparent text-muted-foreground',
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
 TabsList.displayName = TabsPrimitive.List.displayName;
 
 /** Renders a selectable tab with semantic active and focus styles; Radix supplies roving keyboard focus. */
@@ -29,7 +31,10 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     data-slot="tabs-trigger"
-    className={cn('inline-flex items-center justify-center whitespace-nowrap -mb-px border-b-2 border-transparent bg-transparent px-1 py-1 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:border-foreground data-[state=active]:text-foreground', className)}
+    className={cn(
+      'inline-flex items-center justify-center whitespace-nowrap -mb-px border-b-2 border-transparent bg-transparent px-1 py-1 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:border-foreground data-[state=active]:text-foreground',
+      className,
+    )}
     {...props}
   />
 ));
@@ -43,7 +48,10 @@ const TabsContent = React.forwardRef<
   <TabsPrimitive.Content
     ref={ref}
     data-slot="tabs-content"
-    className={cn('mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2', className)}
+    className={cn(
+      'mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+      className,
+    )}
     {...props}
   />
 ));

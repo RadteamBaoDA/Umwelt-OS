@@ -28,8 +28,19 @@ export function useFeedFilters() {
     setTimeWindowRaw(value);
   };
   return {
-    onlyUnread, setOnlyUnread, selectMode, setSelectMode, searchText, setSearchText, sourceFilter, setSourceFilter,
-    language, setLanguage, timeWindow, setTimeWindow, windowSince,
+    onlyUnread,
+    setOnlyUnread,
+    selectMode,
+    setSelectMode,
+    searchText,
+    setSearchText,
+    sourceFilter,
+    setSourceFilter,
+    language,
+    setLanguage,
+    timeWindow,
+    setTimeWindow,
+    windowSince,
   };
 }
 
@@ -71,7 +82,12 @@ export function useFeedQueries({ sourceIds, channelIds, language, windowSince }:
 
 /** One interaction change sent to the server for a document version. */
 type InteractionChange = {
-  id: string; versionNumber: number; item?: SelectedTelegramIdentity; read?: boolean; bookmarked?: boolean; dismissed?: boolean;
+  id: string;
+  versionNumber: number;
+  item?: SelectedTelegramIdentity;
+  read?: boolean;
+  bookmarked?: boolean;
+  dismissed?: boolean;
 };
 
 /**
@@ -87,7 +103,10 @@ type InteractionChange = {
  * @param instanceId Gadget instance id (mutation scope).
  * @param refs The Undo button and feed root elements owned by the component (focus targets).
  */
-export function useFeedModeration(instanceId: string, refs: { undoRef: RefObject<HTMLButtonElement | null>; rootRef: RefObject<HTMLDivElement | null> }) {
+export function useFeedModeration(
+  instanceId: string,
+  refs: { undoRef: RefObject<HTMLButtonElement | null>; rootRef: RefObject<HTMLDivElement | null> },
+) {
   const session = useWorkspaceSession();
   const queryClient = useQueryClient();
   const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
@@ -101,16 +120,27 @@ export function useFeedModeration(instanceId: string, refs: { undoRef: RefObject
     // Serialize hide/undo/read/save so an Undo can never overtake the Hide it reverses.
     scope: { id: `feed-interaction:${instanceId}` },
     mutationFn: (change: InteractionChange) =>
-      setGadgetDocumentInteraction(change.id, change.versionNumber, {
-        read: change.read, bookmarked: change.bookmarked, dismissed: change.dismissed,
-      }, session.csrfToken),
+      setGadgetDocumentInteraction(
+        change.id,
+        change.versionNumber,
+        {
+          read: change.read,
+          bookmarked: change.bookmarked,
+          dismissed: change.dismissed,
+        },
+        session.csrfToken,
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: documentKeys.all }),
     onError: (_error, change) => {
       if (change.dismissed === undefined || !change.item) return;
       const { item } = change;
       if (change.dismissed) {
         setHideFailed(true);
-        setHiddenIds((current) => { const next = new Set(current); next.delete(item.documentVersionId); return next; });
+        setHiddenIds((current) => {
+          const next = new Set(current);
+          next.delete(item.documentVersionId);
+          return next;
+        });
       } else {
         // Undo failed: the server still has it hidden, so restore the hidden state and offer a retry.
         setHiddenIds((current) => new Set(current).add(item.documentVersionId));
@@ -131,7 +161,9 @@ export function useFeedModeration(instanceId: string, refs: { undoRef: RefObject
     setUndoFailed(false);
     setHideFailed(false);
     focusTarget.current = hidden ? 'undo' : 'root';
-    items.forEach((item) => interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, item, dismissed: hidden }));
+    items.forEach((item) =>
+      interactionMutation.mutate({ id: item.documentId, versionNumber: item.versionNumber, item, dismissed: hidden }),
+    );
   };
   useEffect(() => {
     const target = focusTarget.current;
@@ -159,8 +191,20 @@ export function useAutoFetchWhenEmpty(args: {
   const autoFetches = useRef({ scope: '', count: 0 });
   useEffect(() => {
     const budget = autoFetches.current;
-    if (budget.scope !== serverScope || displayedCount > 0) { budget.scope = serverScope; budget.count = 0; }
-    if (filtering || displayedCount > 0 || hasInitialItems || !docsQuery.hasNextPage || docsQuery.isFetching || docsQuery.isError || budget.count >= 3) return;
+    if (budget.scope !== serverScope || displayedCount > 0) {
+      budget.scope = serverScope;
+      budget.count = 0;
+    }
+    if (
+      filtering ||
+      displayedCount > 0 ||
+      hasInitialItems ||
+      !docsQuery.hasNextPage ||
+      docsQuery.isFetching ||
+      docsQuery.isError ||
+      budget.count >= 3
+    )
+      return;
     budget.count += 1;
     void docsQuery.fetchNextPage();
   }, [displayedCount, hasInitialItems, docsQuery, serverScope, filtering]);

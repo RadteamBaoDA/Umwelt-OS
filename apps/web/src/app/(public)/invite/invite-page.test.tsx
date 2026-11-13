@@ -20,9 +20,13 @@ function json(body: unknown, status = 200) {
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-    <QueryClientProvider client={client}><InviteAccept /></QueryClientProvider>
-  </NextIntlClientProvider>);
+  return render(
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <QueryClientProvider client={client}>
+        <InviteAccept />
+      </QueryClientProvider>
+    </NextIntlClientProvider>,
+  );
 }
 
 describe('invite page', () => {
@@ -41,7 +45,9 @@ describe('invite page', () => {
   });
 
   it('strips the token from the URL and never renders it', async () => {
-    fetchMock.mockImplementation((path: string) => path.includes('auth/session') ? json({ detail: 'x' }, 401) : json({ configured: false }));
+    fetchMock.mockImplementation((path: string) =>
+      path.includes('auth/session') ? json({ detail: 'x' }, 401) : json({ configured: false }),
+    );
     const { container } = renderPage();
     await screen.findByLabelText('Choose a password');
     expect(window.location.search).toBe('');

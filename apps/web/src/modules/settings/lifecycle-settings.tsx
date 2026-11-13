@@ -9,20 +9,32 @@ import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { Input } from '@/components/ui/input';
 
-type Retention = { configuration_revision: number; agent_trace_days: number; raw_source_retention: 'retain'; document_history_retention: 'retain' };
+type Retention = {
+  configuration_revision: number;
+  agent_trace_days: number;
+  raw_source_retention: 'retain';
+  document_history_retention: 'retain';
+};
 type Module = { id: string; name: string; enabled: boolean; explicitly_disabled: boolean; blocked_by: string[] };
 type ModuleState = { configuration_revision: number; modules: Module[] };
-type Summary = { completed_at: string | null; agent_traces_redacted: number; temporary_data_deleted: number; next_eligible_at: string | null };
+type Summary = {
+  completed_at: string | null;
+  agent_traces_redacted: number;
+  temporary_data_deleted: number;
+  next_eligible_at: string | null;
+};
 
 /** Renders revision-fenced retention controls, dependency-aware module switches and the latest cleanup outcome. */
 export function LifecycleSettings() {
   const s0 = useLifecycleSettingsController();
 
   const vm: LifecycleSettingsVm = s0;
-  return <section className="mt-6 space-y-5 border-t border-border pt-5" aria-labelledby="lifecycle-title">
-<LifecycleRetention vm={vm} />
-<LifecycleModulesAndMaintenance vm={vm} />
-  </section>;
+  return (
+    <section className="mt-6 space-y-5 border-t border-border pt-5" aria-labelledby="lifecycle-title">
+      <LifecycleRetention vm={vm} />
+      <LifecycleModulesAndMaintenance vm={vm} />
+    </section>
+  );
 }
 
 type LifecycleSettingsVm = ReturnType<typeof useLifecycleSettingsController>;
@@ -31,19 +43,47 @@ type LifecycleSettingsVm = ReturnType<typeof useLifecycleSettingsController>;
 function LifecycleRetention({ vm }: { vm: LifecycleSettingsVm }) {
   const { t, retention, saveRetention, days, setDays } = vm;
   return (
-<>
-    <h2 id="lifecycle-title" className="text-lg font-semibold">{t('lifecycle.title')}</h2>
-    <article className="space-y-3">
-      <h3 className="font-medium">{t('retention.title')}</h3>
-      <p className="text-muted-foreground text-sm">{t('retention.description')}</p>
-      {retention.data && <div className="flex flex-wrap items-end gap-3">
-        <label className="label">{t('agentTraceDays')}<Input className="mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
-        <Button variant="outline" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
-      </div>}
-      {retention.isError && <p role="alert" className="text-destructive">{t('lifecycle.loadFailed')}</p>}
-      {saveRetention.isError && <p role="alert" className="text-destructive">{t('lifecycle.saveFailed')}</p>}
-    </article>
-</>
+    <>
+      <h2 id="lifecycle-title" className="text-lg font-semibold">
+        {t('lifecycle.title')}
+      </h2>
+      <article className="space-y-3">
+        <h3 className="font-medium">{t('retention.title')}</h3>
+        <p className="text-muted-foreground text-sm">{t('retention.description')}</p>
+        {retention.data && (
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="label">
+              {t('agentTraceDays')}
+              <Input
+                className="mt-1 w-32"
+                type="number"
+                min={1}
+                max={3650}
+                value={days ?? retention.data.agent_trace_days}
+                onChange={(event) => setDays(Number(event.target.value))}
+              />
+            </label>
+            <Button
+              variant="outline"
+              disabled={saveRetention.isPending || days === null || days < 1 || days > 3650}
+              onClick={() => saveRetention.mutate(retention.data!)}
+            >
+              {t('saveRetention')}
+            </Button>
+          </div>
+        )}
+        {retention.isError && (
+          <p role="alert" className="text-destructive">
+            {t('lifecycle.loadFailed')}
+          </p>
+        )}
+        {saveRetention.isError && (
+          <p role="alert" className="text-destructive">
+            {t('lifecycle.saveFailed')}
+          </p>
+        )}
+      </article>
+    </>
   );
 }
 
@@ -51,23 +91,53 @@ function LifecycleRetention({ vm }: { vm: LifecycleSettingsVm }) {
 function LifecycleModulesAndMaintenance({ vm }: { vm: LifecycleSettingsVm }) {
   const { t, locale, modules, summary, toggleModule } = vm;
   return (
-<>
-    <article className="space-y-3">
-      <h3 className="font-medium">{t('modulesTitle')}</h3>
-      <p className="text-muted-foreground text-sm">{t('modulesDescription')}</p>
-      {modules.data?.modules.map((module) => <label key={module.id} className="flex items-center justify-between gap-4 border-b border-border py-2 text-sm">
-        <span>{module.name}{module.blocked_by.length > 0 && <span className="text-muted-foreground block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
-        <Checkbox aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onCheckedChange={() => toggleModule.mutate({ state: modules.data!, module })} />
-      </label>)}
-      {modules.isError && <p role="alert" className="text-destructive">{t('lifecycle.loadFailed')}</p>}
-      {toggleModule.isError && <p role="alert" className="text-destructive">{t('moduleSaveFailed')}</p>}
-    </article>
-    <article className="space-y-2">
-      <h3 className="font-medium">{t('maintenanceTitle')}</h3>
-      {summary.data && <p className="text-muted-foreground text-sm">{t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}{summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}{summary.data.next_eligible_at ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}` : ''}</p>}
-      {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycle.loadFailed')}</p>}
-    </article>
-</>
+    <>
+      <article className="space-y-3">
+        <h3 className="font-medium">{t('modulesTitle')}</h3>
+        <p className="text-muted-foreground text-sm">{t('modulesDescription')}</p>
+        {modules.data?.modules.map((module) => (
+          <label key={module.id} className="flex items-center justify-between gap-4 border-b border-border py-2 text-sm">
+            <span>
+              {module.name}
+              {module.blocked_by.length > 0 && (
+                <span className="text-muted-foreground block">
+                  {t('blockedBy')}: {module.blocked_by.join(', ')}
+                </span>
+              )}
+            </span>
+            <Checkbox
+              aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`}
+              checked={module.enabled}
+              disabled={toggleModule.isPending || module.blocked_by.length > 0}
+              onCheckedChange={() => toggleModule.mutate({ state: modules.data!, module })}
+            />
+          </label>
+        ))}
+        {modules.isError && (
+          <p role="alert" className="text-destructive">
+            {t('lifecycle.loadFailed')}
+          </p>
+        )}
+        {toggleModule.isError && (
+          <p role="alert" className="text-destructive">
+            {t('moduleSaveFailed')}
+          </p>
+        )}
+      </article>
+      <article className="space-y-2">
+        <h3 className="font-medium">{t('maintenanceTitle')}</h3>
+        {summary.data && (
+          <p className="text-muted-foreground text-sm">
+            {t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}
+            {summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}
+            {summary.data.next_eligible_at
+              ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}`
+              : ''}
+          </p>
+        )}
+        {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycle.loadFailed')}</p>}
+      </article>
+    </>
   );
 }
 
@@ -82,12 +152,27 @@ function useLifecycleSettingsController() {
   const summary = useQuery({ queryKey: ['maintenance-summary'], queryFn: () => apiRequest<Summary>('/api/v1/system/maintenance') });
   const [days, setDays] = useState<number | null>(null);
   const saveRetention = useMutation({
-    mutationFn: (value: Retention) => apiRequest<Retention>('/api/v1/settings/retention', { method: 'PATCH', headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: value.configuration_revision, agent_trace_days: days ?? value.agent_trace_days }) }),
-    onSuccess: (value) => { setDays(null); cache.setQueryData(['retention-settings'], value); },
+    mutationFn: (value: Retention) =>
+      apiRequest<Retention>('/api/v1/settings/retention', {
+        method: 'PATCH',
+        headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expected_revision: value.configuration_revision, agent_trace_days: days ?? value.agent_trace_days }),
+      }),
+    onSuccess: (value) => {
+      setDays(null);
+      cache.setQueryData(['retention-settings'], value);
+    },
   });
   const toggleModule = useMutation({
-    mutationFn: ({ state, module }: { state: ModuleState; module: Module }) => apiRequest<ModuleState>('/api/v1/settings/modules', { method: 'PATCH', headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ expected_revision: state.configuration_revision, module_id: module.id, enabled: !module.enabled }) }),
-    onSuccess: (value) => { cache.setQueryData(['module-lifecycle'], value); },
+    mutationFn: ({ state, module }: { state: ModuleState; module: Module }) =>
+      apiRequest<ModuleState>('/api/v1/settings/modules', {
+        method: 'PATCH',
+        headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expected_revision: state.configuration_revision, module_id: module.id, enabled: !module.enabled }),
+      }),
+    onSuccess: (value) => {
+      cache.setQueryData(['module-lifecycle'], value);
+    },
   });
 
   return { t, locale, cache, retention, modules, summary, saveRetention, toggleModule, days, setDays, csrfToken };

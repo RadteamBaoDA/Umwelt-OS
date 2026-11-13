@@ -61,7 +61,11 @@ function timezoneItemLabel(zone: string, locale: AppLocaleId): string {
 /** Lists IANA time zones from the platform, always including the current value so an unlisted saved zone stays selectable. */
 function timezoneOptions(current: string): string[] {
   let zones: string[] = [];
-  try { zones = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone') ?? []; } catch { zones = []; }
+  try {
+    zones = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.('timeZone') ?? [];
+  } catch {
+    zones = [];
+  }
   return !current || zones.includes(current) ? zones : [current, ...zones];
 }
 
@@ -78,16 +82,24 @@ export function PreferencesDialog(props: PreferencesDialogProps) {
   const { dismiss, hasConflict } = s3;
 
   const vm: PreferencesDialogVm = s3;
-  return <Dialog open={open} onOpenChange={(nextOpen) => { if (nextOpen) onOpenChange(true); else dismiss(); }}>
-    <DialogContent className="preferences-dialog" onCloseAutoFocus={onCloseAutoFocus}>
-      <DialogHeader>
-        <DialogTitle>{t('title')}</DialogTitle>
-        <DialogDescription>{t('description')}</DialogDescription>
-      </DialogHeader>
-<PreferencesStatusPanels vm={vm} />
-{draft && !hasConflict && <PreferencesForm vm={vm} draft={draft} />}
-    </DialogContent>
-  </Dialog>;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) onOpenChange(true);
+        else dismiss();
+      }}
+    >
+      <DialogContent className="preferences-dialog" onCloseAutoFocus={onCloseAutoFocus}>
+        <DialogHeader>
+          <DialogTitle>{t('title')}</DialogTitle>
+          <DialogDescription>{t('description')}</DialogDescription>
+        </DialogHeader>
+        <PreferencesStatusPanels vm={vm} />
+        {draft && !hasConflict && <PreferencesForm vm={vm} draft={draft} />}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 type PreferencesDialogVm = ReturnType<typeof usePreferencesActions>;
@@ -96,11 +108,122 @@ type PreferencesDialogVm = ReturnType<typeof usePreferencesActions>;
 function PreferencesStatusPanels({ vm }: { vm: PreferencesDialogVm }) {
   const { t, reloadPending, reloadError, loading, loadError, retrying, save, dismiss, hasConflict, discardAndReload, retryLoad } = vm;
   return (
-<>
-      {loading && <><p role="status" className="text-muted-foreground">{t('loading')}</p><DialogFooter><Button type="button" variant="outline" onClick={dismiss}>{t('cancel')}</Button></DialogFooter></>}
-      {loadError && <div className="status-panel" role="alert"><p>{reloadError ? t('reloadFailed') : t('loadFailed')}</p><DialogFooter><Button type="button" variant="outline" onClick={dismiss}>{t('cancel')}</Button><Button type="button" disabled={reloadPending || retrying} onClick={retryLoad}>{reloadPending ? t('loading') : t('retry')}</Button></DialogFooter></div>}
-      {hasConflict && <div className="status-panel" role="alert"><p>{t('conflict')}</p>{reloadError && <p>{t('conflictReloadFailed')}</p>}<DialogFooter><Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>{t('cancel')}</Button><Button type="button" disabled={reloadPending || retrying} onClick={discardAndReload}>{reloadPending ? t('loading') : reloadError ? t('retry') : t('reloadDiscard')}</Button></DialogFooter></div>}
-</>
+    <>
+      {loading && (
+        <>
+          <p role="status" className="text-muted-foreground">
+            {t('loading')}
+          </p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={dismiss}>
+              {t('cancel')}
+            </Button>
+          </DialogFooter>
+        </>
+      )}
+      {loadError && (
+        <div className="status-panel" role="alert">
+          <p>{reloadError ? t('reloadFailed') : t('loadFailed')}</p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={dismiss}>
+              {t('cancel')}
+            </Button>
+            <Button type="button" disabled={reloadPending || retrying} onClick={retryLoad}>
+              {reloadPending ? t('loading') : t('retry')}
+            </Button>
+          </DialogFooter>
+        </div>
+      )}
+      {hasConflict && (
+        <div className="status-panel" role="alert">
+          <p>{t('conflict')}</p>
+          {reloadError && <p>{t('conflictReloadFailed')}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>
+              {t('cancel')}
+            </Button>
+            <Button type="button" disabled={reloadPending || retrying} onClick={discardAndReload}>
+              {reloadPending ? t('loading') : reloadError ? t('retry') : t('reloadDiscard')}
+            </Button>
+          </DialogFooter>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Theme radio group bound to `draft.theme`; each change replaces the draft via `setDraft`. */
+function ThemeField({
+  t,
+  draft,
+  setDraft,
+}: {
+  t: PreferencesDialogVm['t'];
+  draft: OwnerPreferences;
+  setDraft: PreferencesDialogVm['setDraft'];
+}) {
+  return (
+    <div className="field">
+      <Label>{t('theme')}</Label>
+      <RadioGroup
+        aria-label={t('theme')}
+        value={draft.theme}
+        onValueChange={(value) => {
+          const next = value as ThemePreference;
+          setDraft({ ...draft, theme: next });
+        }}
+        className="theme-options"
+      >
+        {(['light', 'dark', 'system'] as const).map((value) => (
+          <Label className="theme-option" key={value} htmlFor={`theme-${value}`}>
+            <span className="theme-swatch" data-theme-preview={value} aria-hidden="true" />
+            <span className="inline-flex items-center gap-2">
+              <RadioGroupItem id={`theme-${value}`} value={value} />
+              {value === 'light' ? (
+                <SunIcon aria-hidden="true" className="size-4" />
+              ) : value === 'dark' ? (
+                <MoonIcon aria-hidden="true" className="size-4" />
+              ) : (
+                <MonitorIcon aria-hidden="true" className="size-4" />
+              )}
+              <span>{t(value)}</span>
+            </span>
+          </Label>
+        ))}
+      </RadioGroup>
+    </div>
+  );
+}
+
+/** Timezone select bound to `draft.timezone`, listing platform zones labelled for `draft.locale`. */
+function TimezoneField({
+  t,
+  draft,
+  setDraft,
+}: {
+  t: PreferencesDialogVm['t'];
+  draft: OwnerPreferences;
+  setDraft: PreferencesDialogVm['setDraft'];
+}) {
+  return (
+    <div className="field">
+      <Label htmlFor="preference-timezone">{t('timezone')}</Label>
+      <Select value={draft.timezone} onValueChange={(next) => setDraft({ ...draft, timezone: next })}>
+        <SelectTrigger id="preference-timezone" aria-describedby="preference-timezone-help">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {timezoneOptions(draft.timezone).map((zone) => (
+            <SelectItem key={zone} value={zone}>
+              {timezoneItemLabel(zone, draft.locale)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p id="preference-timezone-help" className="text-muted-foreground text-xs">
+        {t('scheduleTimezoneNote')}
+      </p>
+    </div>
   );
 }
 
@@ -108,67 +231,90 @@ function PreferencesStatusPanels({ vm }: { vm: PreferencesDialogVm }) {
 function PreferencesForm({ vm, draft }: { vm: PreferencesDialogVm; draft: OwnerPreferences }) {
   const { t, setDraft, accentDraft, setAccentDraft, preferences, savingDisabled, save, dismiss, dirty } = vm;
   return (
-      <form className="preferences-form" onSubmit={(event) => { event.preventDefault(); save.mutate(draft); }}>
-        <fieldset disabled={save.isPending || savingDisabled} className="preferences-fields">
-          <legend>{t('appearance')}</legend>
-          <div className="field">
-            <Label>{t('theme')}</Label>
-            <RadioGroup aria-label={t('theme')} value={draft.theme} onValueChange={(value) => {
-              const next = value as ThemePreference;
-              setDraft({ ...draft, theme: next });
-            }} className="theme-options">
-              {(['light', 'dark', 'system'] as const).map((value) => <Label className="theme-option" key={value} htmlFor={`theme-${value}`}>
-                <span className="theme-swatch" data-theme-preview={value} aria-hidden="true" />
-                <span className="inline-flex items-center gap-2">
-                  <RadioGroupItem id={`theme-${value}`} value={value} />
-                  {value === 'light' ? <SunIcon aria-hidden="true" className="size-4" /> : value === 'dark' ? <MoonIcon aria-hidden="true" className="size-4" /> : <MonitorIcon aria-hidden="true" className="size-4" />}<span>{t(value)}</span>
-                </span>
-              </Label>)}
-            </RadioGroup>
-          </div>
-          <div className="field">
-            <Label htmlFor="preference-display-name">{t('displayName')}</Label>
-            <Input id="preference-display-name" value={draft.display_name ?? ''} placeholder={preferences?.resolved_display_name} maxLength={80} autoComplete="nickname"
-              aria-describedby="preference-display-name-help" onChange={(event) => setDraft({ ...draft, display_name: event.target.value })} />
-            <p id="preference-display-name-help" className="text-muted-foreground text-xs">{t('displayNameHelp')}</p>
-          </div>
-          <AccentPicker value={accentDraft} onChange={setAccentDraft} />
-          <div className="field">
-            <Label htmlFor="preference-locale">{t('language')}</Label>
-            <Select value={draft.locale} onValueChange={(value) => {
+    <form
+      className="preferences-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save.mutate(draft);
+      }}
+    >
+      <fieldset disabled={save.isPending || savingDisabled} className="preferences-fields">
+        <legend>{t('appearance')}</legend>
+        <ThemeField t={t} draft={draft} setDraft={setDraft} />
+        <div className="field">
+          <Label htmlFor="preference-display-name">{t('displayName')}</Label>
+          <Input
+            id="preference-display-name"
+            value={draft.display_name ?? ''}
+            placeholder={preferences?.resolved_display_name}
+            maxLength={80}
+            autoComplete="nickname"
+            aria-describedby="preference-display-name-help"
+            onChange={(event) => setDraft({ ...draft, display_name: event.target.value })}
+          />
+          <p id="preference-display-name-help" className="text-muted-foreground text-xs">
+            {t('displayNameHelp')}
+          </p>
+        </div>
+        <AccentPicker value={accentDraft} onChange={setAccentDraft} />
+        <div className="field">
+          <Label htmlFor="preference-locale">{t('language')}</Label>
+          <Select
+            value={draft.locale}
+            onValueChange={(value) => {
               const next = value as AppLocaleId;
               setDraft({ ...draft, locale: next });
-            }}>
-              <SelectTrigger id="preference-locale" aria-describedby="preference-locale-help"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="en-us">{t('englishUs')}</SelectItem>
-                <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
-              </SelectContent>
-            </Select>
-            <p id="preference-locale-help" className="text-muted-foreground text-xs">{t('languageHelp')}</p>
-          </div>
-          <div className="field">
-            <Label htmlFor="preference-timezone">{t('timezone')}</Label>
-            <Select value={draft.timezone} onValueChange={(next) => setDraft({ ...draft, timezone: next })}>
-              <SelectTrigger id="preference-timezone" aria-describedby="preference-timezone-help"><SelectValue /></SelectTrigger>
-              <SelectContent>{timezoneOptions(draft.timezone).map((zone) => <SelectItem key={zone} value={zone}>{timezoneItemLabel(zone, draft.locale)}</SelectItem>)}</SelectContent>
-            </Select>
-            <p id="preference-timezone-help" className="text-muted-foreground text-xs">{t('scheduleTimezoneNote')}</p>
-          </div>
-        </fieldset>
-        <p className="text-muted-foreground" role="status">{save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}</p>
-        {save.error && <p className="error" role="alert">{save.error instanceof ApiError && save.error.status === 409 ? t('conflict') : t('saveFailed')}</p>}
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>{t('cancel')}</Button>
-          <Button type="submit" disabled={savingDisabled || save.isPending || !dirty || !isValidTimezone(draft.timezone)}>{save.isPending ? t('saving') : t('save')}</Button>
-        </DialogFooter>
-      </form>
+            }}
+          >
+            <SelectTrigger id="preference-locale" aria-describedby="preference-locale-help">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="en-us">{t('englishUs')}</SelectItem>
+              <SelectItem value="vi-vi">{t('vietnamese')}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p id="preference-locale-help" className="text-muted-foreground text-xs">
+            {t('languageHelp')}
+          </p>
+        </div>
+        <TimezoneField t={t} draft={draft} setDraft={setDraft} />
+      </fieldset>
+      <p className="text-muted-foreground" role="status">
+        {save.isPending ? t('saving') : dirty ? t('unsaved') : t('saved')}
+      </p>
+      {save.error && (
+        <p className="error" role="alert">
+          {save.error instanceof ApiError && save.error.status === 409 ? t('conflict') : t('saveFailed')}
+        </p>
+      )}
+      <DialogFooter>
+        <Button type="button" variant="outline" disabled={save.isPending} onClick={dismiss}>
+          {t('cancel')}
+        </Button>
+        <Button type="submit" disabled={savingDisabled || save.isPending || !dirty || !isValidTimezone(draft.timezone)}>
+          {save.isPending ? t('saving') : t('save')}
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }
 
 /** Holds the preference draft, accent draft, baselines and the refs fencing stale reload and edit-session results. */
 function usePreferencesDraftState(props: PreferencesDialogProps) {
-  const { open, preferences, csrfToken, loading = false, loadError = false, retrying = false, onRetry, authGeneration = 0, onCloseAutoFocus, savingDisabled = false, onOpenChange } = props;
+  const {
+    open,
+    preferences,
+    csrfToken,
+    loading = false,
+    loadError = false,
+    retrying = false,
+    onRetry,
+    authGeneration = 0,
+    onCloseAutoFocus,
+    savingDisabled = false,
+    onOpenChange,
+  } = props;
   const t = useTranslations('preferences');
   const client = useQueryClient();
   const { locale, timezone, setPreview, isCurrentGeneration } = useDisplayPreferences();
@@ -183,32 +329,86 @@ function usePreferencesDraftState(props: PreferencesDialogProps) {
   const mountedRef = useRef(true);
   const openRef = useRef(open);
   const generationRef = useRef(authGeneration);
-  useLayoutEffect(() => { openRef.current = open; generationRef.current = authGeneration; });
+  useLayoutEffect(() => {
+    openRef.current = open;
+    generationRef.current = authGeneration;
+  });
   const editSessionRef = useRef(0);
   const reloadRequestRef = useRef(0);
   const reloadControllerRef = useRef<AbortController | null>(null);
   const previousOpenRef = useRef(false);
   const previousGenerationRef = useRef(authGeneration);
 
-  return { t, client, baselineRef, mountedRef, openRef, generationRef, editSessionRef, reloadRequestRef, reloadControllerRef, previousOpenRef, previousGenerationRef, draft, setDraft, accentDraft, setAccentDraft, accentBaseline, setAccentBaseline, reloadPending, setReloadPending, reloadError, setReloadError, baselineValues, setBaselineValues, open, preferences, csrfToken, loading, loadError, retrying, onRetry, authGeneration, onCloseAutoFocus, savingDisabled, onOpenChange, locale, timezone, setPreview, isCurrentGeneration };
+  return {
+    t,
+    client,
+    baselineRef,
+    mountedRef,
+    openRef,
+    generationRef,
+    editSessionRef,
+    reloadRequestRef,
+    reloadControllerRef,
+    previousOpenRef,
+    previousGenerationRef,
+    draft,
+    setDraft,
+    accentDraft,
+    setAccentDraft,
+    accentBaseline,
+    setAccentBaseline,
+    reloadPending,
+    setReloadPending,
+    reloadError,
+    setReloadError,
+    baselineValues,
+    setBaselineValues,
+    open,
+    preferences,
+    csrfToken,
+    loading,
+    loadError,
+    retrying,
+    onRetry,
+    authGeneration,
+    onCloseAutoFocus,
+    savingDisabled,
+    onOpenChange,
+    locale,
+    timezone,
+    setPreview,
+    isCurrentGeneration,
+  };
 }
 
 /** Declares the save mutation; success is ignored once the dialog unmounted or the auth generation changed. */
 function usePreferencesSave(p: ReturnType<typeof usePreferencesDraftState>) {
-  const { client, mountedRef, generationRef, setDraft, accentDraft, csrfToken, authGeneration, onOpenChange, setPreview, isCurrentGeneration } = p;
+  const {
+    client,
+    mountedRef,
+    generationRef,
+    setDraft,
+    accentDraft,
+    csrfToken,
+    authGeneration,
+    onOpenChange,
+    setPreview,
+    isCurrentGeneration,
+  } = p;
   const save = useMutation({
-    mutationFn: (value: OwnerPreferences) => apiRequest<OwnerPreferences>('/api/v1/settings/preferences', {
-      method: 'PUT',
-      headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        expected_revision: value.configuration_revision,
-        theme: value.theme,
-        locale: value.locale,
-        timezone: value.timezone,
-        display_name: value.display_name?.trim() || null,
-        accent: accentDraft === 'ink' ? null : accentDraft,
+    mutationFn: (value: OwnerPreferences) =>
+      apiRequest<OwnerPreferences>('/api/v1/settings/preferences', {
+        method: 'PUT',
+        headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_revision: value.configuration_revision,
+          theme: value.theme,
+          locale: value.locale,
+          timezone: value.timezone,
+          display_name: value.display_name?.trim() || null,
+          accent: accentDraft === 'ink' ? null : accentDraft,
+        }),
       }),
-    }),
     onSuccess: (value) => {
       if (!mountedRef.current || generationRef.current !== authGeneration || !isCurrentGeneration(authGeneration)) return;
       client.setQueryData(['owner-preferences'], value);
@@ -222,9 +422,24 @@ function usePreferencesSave(p: ReturnType<typeof usePreferencesDraftState>) {
   return { ...p, save };
 }
 
-/** Resets and aborts in-flight work on open/close/auth-generation changes, seeds the draft from stored preferences and mirrors the draft as a live preview. */
-function usePreferencesLifecycle(p: ReturnType<typeof usePreferencesSave>) {
-  const { baselineRef, mountedRef, generationRef, editSessionRef, reloadRequestRef, reloadControllerRef, previousOpenRef, previousGenerationRef, draft, setDraft, setAccentDraft, setAccentBaseline, setReloadPending, setReloadError, setBaselineValues, open, preferences, authGeneration, locale, setPreview, save } = p;
+/** Layout effects: abort in-flight work on unmount and on open/close/auth-generation changes (resets draft and save state as needed). */
+function usePreferencesResetEffects(p: ReturnType<typeof usePreferencesSave>) {
+  const {
+    mountedRef,
+    generationRef,
+    editSessionRef,
+    reloadRequestRef,
+    reloadControllerRef,
+    previousOpenRef,
+    previousGenerationRef,
+    setDraft,
+    setReloadPending,
+    setReloadError,
+    open,
+    authGeneration,
+    setPreview,
+    save,
+  } = p;
   const resetSave = save.reset;
   useLayoutEffect(() => {
     mountedRef.current = true;
@@ -264,8 +479,39 @@ function usePreferencesLifecycle(p: ReturnType<typeof usePreferencesSave>) {
       setReloadError(false);
       setDraft(null);
     }
-  }, [open, authGeneration, resetSave, setPreview, editSessionRef, previousGenerationRef, previousOpenRef, reloadControllerRef, reloadRequestRef, setDraft, setReloadError, setReloadPending]);
+  }, [
+    open,
+    authGeneration,
+    resetSave,
+    setPreview,
+    editSessionRef,
+    previousGenerationRef,
+    previousOpenRef,
+    reloadControllerRef,
+    reloadRequestRef,
+    setDraft,
+    setReloadError,
+    setReloadPending,
+  ]);
+}
 
+/** Effects: seed the draft from stored preferences when opened, revert previews on close, and mirror the draft as a live preview. */
+function usePreferencesSeedEffects(p: ReturnType<typeof usePreferencesSave>) {
+  const {
+    baselineRef,
+    draft,
+    setDraft,
+    setAccentDraft,
+    setAccentBaseline,
+    setBaselineValues,
+    open,
+    preferences,
+    authGeneration,
+    locale,
+    setPreview,
+    save,
+  } = p;
+  const resetSave = save.reset;
   useEffect(() => {
     if (!open) {
       setPreview(null, authGeneration);
@@ -275,7 +521,11 @@ function usePreferencesLifecycle(p: ReturnType<typeof usePreferencesSave>) {
       return;
     }
     if (draft || !preferences) return;
-    const values = { theme: preferences.theme || 'system', locale: preferences.persisted ? preferences.locale : locale, timezone: preferences.timezone };
+    const values = {
+      theme: preferences.theme || 'system',
+      locale: preferences.persisted ? preferences.locale : locale,
+      timezone: preferences.timezone,
+    };
     baselineRef.current = values;
     setBaselineValues(values);
     resetSave();
@@ -283,20 +533,156 @@ function usePreferencesLifecycle(p: ReturnType<typeof usePreferencesSave>) {
     setAccentDraft(preferences.accent ?? readAccent());
     setAccentBaseline(preferences.accent ?? readAccent());
     setPreview(values, authGeneration);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `locale` only seeds the baseline of unsaved preferences; re-running when the live preview changes it must not reseed the draft
-  }, [open, preferences, authGeneration, draft, setPreview, resetSave, baselineRef, setAccentBaseline, setAccentDraft, setBaselineValues, setDraft]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `locale` only seeds the baseline of unsaved preferences; re-running when the live preview changes it must not reseed the draft
+  }, [
+    open,
+    preferences,
+    authGeneration,
+    draft,
+    setPreview,
+    resetSave,
+    baselineRef,
+    setAccentBaseline,
+    setAccentDraft,
+    setBaselineValues,
+    setDraft,
+  ]);
 
   useEffect(() => {
     if (!open || !draft) return;
-    setPreview({ theme: draft.theme, locale: draft.locale, timezone: isValidTimezone(draft.timezone) ? draft.timezone : baselineRef.current.timezone }, authGeneration);
+    setPreview(
+      {
+        theme: draft.theme,
+        locale: draft.locale,
+        timezone: isValidTimezone(draft.timezone) ? draft.timezone : baselineRef.current.timezone,
+      },
+      authGeneration,
+    );
   }, [open, draft, authGeneration, setPreview, baselineRef]);
+}
 
+/** Runs the reset layout effects then the seed/preview effects, in that order; returns its input unchanged. */
+function usePreferencesLifecycle(p: ReturnType<typeof usePreferencesSave>) {
+  usePreferencesResetEffects(p);
+  usePreferencesSeedEffects(p);
   return p;
+}
+
+/**
+ * Builds the reload/retry actions over the dialog state. Not a hook (calls no React hooks); each
+ * attempt is fenced by edit session, request id and auth generation so stale results are dropped.
+ */
+function createReloadActions(p: ReturnType<typeof usePreferencesLifecycle>) {
+  const {
+    client,
+    baselineRef,
+    mountedRef,
+    openRef,
+    generationRef,
+    editSessionRef,
+    reloadRequestRef,
+    reloadControllerRef,
+    setDraft,
+    setReloadPending,
+    setReloadError,
+    setBaselineValues,
+    onRetry,
+    authGeneration,
+    locale,
+    setPreview,
+    isCurrentGeneration,
+    save,
+  } = p;
+  /** Aborts the previous request and starts a reload attempt bound to this edit session and auth generation. */
+  const startReload = () => {
+    reloadControllerRef.current?.abort();
+    const controller = new AbortController();
+    reloadControllerRef.current = controller;
+    const request = ++reloadRequestRef.current;
+    setReloadPending(true);
+    setReloadError(false);
+    return { controller, request, session: editSessionRef.current, generation: authGeneration };
+  };
+  /** Accepts a reload result only while the dialog is mountedRef and open and its request, edit session, and auth generation remain current. */
+  const isReloadCurrent = (attempt: ReturnType<typeof startReload>) =>
+    Boolean(
+      attempt &&
+      mountedRef.current &&
+      openRef.current &&
+      attempt.session === editSessionRef.current &&
+      attempt.request === reloadRequestRef.current &&
+      attempt.generation === generationRef.current &&
+      isCurrentGeneration(attempt.generation),
+    );
+  /** Clears the stored controller when it matches this attempt and resets pending state; callers must check attempt freshness first. */
+  const finishReload = (attempt: ReturnType<typeof startReload>) => {
+    if (reloadControllerRef.current === attempt.controller) reloadControllerRef.current = null;
+    setReloadPending(false);
+  };
+  /** Reloads through the optional callback while retaining the draft; keeps it on failure or stale results and replaces it only after a non-null result passes the freshness check. */
+  const discardAndReload = async () => {
+    const attempt = startReload();
+    let latest: OwnerPreferences | null = null;
+    try {
+      latest = (await onRetry?.(attempt.controller.signal)) ?? null;
+    } catch {
+      latest = null;
+    }
+    if (!isReloadCurrent(attempt)) return;
+    finishReload(attempt);
+    if (!latest) {
+      setReloadError(true);
+      return;
+    }
+    const values = { theme: latest.theme, locale: latest.persisted ? latest.locale : locale, timezone: latest.timezone };
+    client.setQueryData(['owner-preferences'], latest);
+    baselineRef.current = values;
+    setBaselineValues(values);
+    save.reset();
+    setDraft({ ...latest, ...values });
+    setPreview(values, authGeneration);
+  };
+  /** Retries the optional preference reload and applies its result only while this dialog attempt remains current. */
+  const retryLoad = async () => {
+    const attempt = startReload();
+    let latest: OwnerPreferences | null = null;
+    try {
+      latest = (await onRetry?.(attempt.controller.signal)) ?? null;
+    } catch {
+      latest = null;
+    }
+    if (!isReloadCurrent(attempt)) return;
+    finishReload(attempt);
+    if (!latest) {
+      setReloadError(true);
+      return;
+    }
+    client.setQueryData(['owner-preferences'], latest);
+  };
+
+  return { startReload, isReloadCurrent, finishReload, discardAndReload, retryLoad };
 }
 
 /** Dismiss, reload and retry actions with their stale-result fences, plus the dirty and conflict flags. */
 function usePreferencesActions(p: ReturnType<typeof usePreferencesLifecycle>) {
-  const { client, baselineRef, mountedRef, openRef, generationRef, editSessionRef, reloadRequestRef, reloadControllerRef, draft, setDraft, accentDraft, accentBaseline, setReloadPending, setReloadError, baselineValues, setBaselineValues, preferences, onRetry, authGeneration, onOpenChange, locale, setPreview, isCurrentGeneration, save } = p;
+  const {
+    openRef,
+    editSessionRef,
+    reloadRequestRef,
+    reloadControllerRef,
+    draft,
+    setDraft,
+    accentDraft,
+    accentBaseline,
+    setReloadPending,
+    setReloadError,
+    baselineValues,
+    preferences,
+    authGeneration,
+    onOpenChange,
+    setPreview,
+    save,
+  } = p;
   /** Restores committed preferences and clears the temporary preview when the dialog is dismissed. */
   const restore = () => {
     // Closing without Save clears the live theme or locale preview, restoring the committed values.
@@ -325,71 +711,29 @@ function usePreferencesActions(p: ReturnType<typeof usePreferencesLifecycle>) {
     onOpenChange(false);
   };
 
-  const dirty = Boolean(draft && (!draft.persisted ||
-    draft.theme !== baselineValues.theme || draft.locale !== baselineValues.locale || draft.timezone !== baselineValues.timezone || (draft.display_name ?? '') !== (preferences?.display_name ?? '') || accentDraft !== accentBaseline
-  ));
-  const hasConflict = save.error instanceof ApiError && save.error.status === 409;
-  /** Aborts the previous request and starts a reload attempt bound to this edit session and auth generation. */
-  const startReload = () => {
-    reloadControllerRef.current?.abort();
-    const controller = new AbortController();
-    reloadControllerRef.current = controller;
-    const request = ++reloadRequestRef.current;
-    setReloadPending(true);
-    setReloadError(false);
-    return { controller, request, session: editSessionRef.current, generation: authGeneration };
-  };
-  /** Accepts a reload result only while the dialog is mountedRef and open and its request, edit session, and auth generation remain current. */
-  const isReloadCurrent = (attempt: ReturnType<typeof startReload>) => Boolean(
-    attempt && mountedRef.current && openRef.current &&
-    attempt.session === editSessionRef.current && attempt.request === reloadRequestRef.current &&
-    attempt.generation === generationRef.current && isCurrentGeneration(attempt.generation)
+  const dirty = Boolean(
+    draft &&
+    (!draft.persisted ||
+      draft.theme !== baselineValues.theme ||
+      draft.locale !== baselineValues.locale ||
+      draft.timezone !== baselineValues.timezone ||
+      (draft.display_name ?? '') !== (preferences?.display_name ?? '') ||
+      accentDraft !== accentBaseline),
   );
-  /** Clears the stored controller when it matches this attempt and resets pending state; callers must check attempt freshness first. */
-  const finishReload = (attempt: ReturnType<typeof startReload>) => {
-    if (reloadControllerRef.current === attempt.controller) reloadControllerRef.current = null;
-    setReloadPending(false);
-  };
-  /** Reloads through the optional callback while retaining the draft; keeps it on failure or stale results and replaces it only after a non-null result passes the freshness check. */
-  const discardAndReload = async () => {
-    const attempt = startReload();
-    let latest: OwnerPreferences | null = null;
-    try {
-      latest = await onRetry?.(attempt.controller.signal) ?? null;
-    } catch {
-      latest = null;
-    }
-    if (!isReloadCurrent(attempt)) return;
-    finishReload(attempt);
-    if (!latest) {
-      setReloadError(true);
-      return;
-    }
-    const values = { theme: latest.theme, locale: latest.persisted ? latest.locale : locale, timezone: latest.timezone };
-    client.setQueryData(['owner-preferences'], latest);
-    baselineRef.current = values;
-    setBaselineValues(values);
-    save.reset();
-    setDraft({ ...latest, ...values });
-    setPreview(values, authGeneration);
-  };
-  /** Retries the optional preference reload and applies its result only while this dialog attempt remains current. */
-  const retryLoad = async () => {
-    const attempt = startReload();
-    let latest: OwnerPreferences | null = null;
-    try {
-      latest = await onRetry?.(attempt.controller.signal) ?? null;
-    } catch {
-      latest = null;
-    }
-    if (!isReloadCurrent(attempt)) return;
-    finishReload(attempt);
-    if (!latest) {
-      setReloadError(true);
-      return;
-    }
-    client.setQueryData(['owner-preferences'], latest);
-  };
+  const hasConflict = save.error instanceof ApiError && save.error.status === 409;
+  const { startReload, isReloadCurrent, finishReload, discardAndReload, retryLoad } = createReloadActions(p);
 
-  return { ...p, restore, invalidateReload, dismiss, dirty, hasConflict, startReload, isReloadCurrent, finishReload, discardAndReload, retryLoad };
+  return {
+    ...p,
+    restore,
+    invalidateReload,
+    dismiss,
+    dirty,
+    hasConflict,
+    startReload,
+    isReloadCurrent,
+    finishReload,
+    discardAndReload,
+    retryLoad,
+  };
 }

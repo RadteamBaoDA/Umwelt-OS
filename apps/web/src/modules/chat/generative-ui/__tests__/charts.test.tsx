@@ -6,13 +6,7 @@ import { GenerativePieChart } from '../components/charts/pie-chart';
 
 describe('Generative UI Charts & Config', () => {
   it('exposes the 5 semantic CSS chart tokens and cycles safely via resolveSeriesColor', () => {
-    expect(CHART_PALETTE).toEqual([
-      'var(--chart-1)',
-      'var(--chart-2)',
-      'var(--chart-3)',
-      'var(--chart-4)',
-      'var(--chart-5)',
-    ]);
+    expect(CHART_PALETTE).toEqual(['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']);
     expect(resolveSeriesColor(0)).toBe('var(--chart-1)');
     expect(resolveSeriesColor(5)).toBe('var(--chart-1)');
     expect(resolveSeriesColor(2, 'var(--chart-4)')).toBe('var(--chart-4)');
@@ -159,7 +153,6 @@ describe('Generative UI Charts & Config', () => {
     expect(screen.getByTestId('bar-chart-canvas')).toHaveAttribute('data-chart-type', chartType);
   });
 });
-
 
 describe('Chart export', () => {
   const evil = '<img src=x onerror=alert(1)>';

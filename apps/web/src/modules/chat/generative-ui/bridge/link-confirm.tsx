@@ -99,7 +99,12 @@ export function WidgetLinkConfirmDialog({
   onResolve: (confirmed: boolean) => void;
 }) {
   return (
-    <AlertDialog open={url !== null} onOpenChange={(open) => { if (!open) onResolve(false); }}>
+    <AlertDialog
+      open={url !== null}
+      onOpenChange={(open) => {
+        if (!open) onResolve(false);
+      }}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{labels.title}</AlertDialogTitle>

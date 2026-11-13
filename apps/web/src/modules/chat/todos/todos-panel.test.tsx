@@ -11,7 +11,14 @@ vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => 
 
 import { TodosPanel } from './todos-panel';
 
-const todo = { id: '11111111-1111-4111-8111-111111111111', title: 'Write draft', description: 'First pass', emoji: '📝', status: 'pending' as const, position: 0 };
+const todo = {
+  id: '11111111-1111-4111-8111-111111111111',
+  title: 'Write draft',
+  description: 'First pass',
+  emoji: '📝',
+  status: 'pending' as const,
+  position: 0,
+};
 
 function renderPanel(isStreaming = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

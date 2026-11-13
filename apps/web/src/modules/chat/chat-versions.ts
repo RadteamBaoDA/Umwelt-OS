@@ -112,9 +112,10 @@ export function buildRenderEntries(messages: ChatMessage[], selected: Record<str
     // Older versions are emitted only through the newest one's slot.
     if (entry !== newest) continue;
     const shown = versions.find((turn) => turn.user.id === selected[chainId]) ?? newest;
-    const nav: VersionNav | undefined = versions.length > 1
-      ? { chainId, index: versions.indexOf(shown), count: versions.length, versionIds: versions.map((turn) => turn.user.id) }
-      : undefined;
+    const nav: VersionNav | undefined =
+      versions.length > 1
+        ? { chainId, index: versions.indexOf(shown), count: versions.length, versionIds: versions.map((turn) => turn.user.id) }
+        : undefined;
     const editsDiffer = versions.some((turn) => turn.user.content !== versions[0].user.content);
     const onUser = Boolean(nav) && (editsDiffer || !shown.assistant);
     out.push({ msg: shown.user, latest: shown === newest, nav: onUser ? nav : undefined });

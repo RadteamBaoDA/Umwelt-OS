@@ -22,6 +22,13 @@ export function TranslationNote({ issue }: { issue: TranslationResult | undefine
   const t = useTranslations('translations');
   if (!issue) return null;
   const code = CODES.find((known) => known === issue.errorCode) ?? null;
-  const text = issue.status === 'pending' ? t('note.pending') : code ? t(REASON_KEYS[code]) : issue.status === 'blocked' ? t('note.blocked') : t('note.failed');
+  const text =
+    issue.status === 'pending'
+      ? t('note.pending')
+      : code
+        ? t(REASON_KEYS[code])
+        : issue.status === 'blocked'
+          ? t('note.blocked')
+          : t('note.failed');
   return <span className="block text-xs text-muted-foreground">{text}</span>;
 }

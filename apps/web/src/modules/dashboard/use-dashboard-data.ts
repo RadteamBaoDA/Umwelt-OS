@@ -55,11 +55,7 @@ export function useManagementDialog(manageLinkReady: boolean): ManagementDialogS
  * Redirects to the first dashboard when the URL addresses a missing dashboard or the bare `/dashboard` route.
  * Side effect: `router.replace` once the dashboard list has loaded; the query string is preserved.
  */
-function useCanonicalDashboardRedirect(
-  dashboardId: string | undefined,
-  dashboards: { id: string }[],
-  listLoaded: boolean,
-): void {
+function useCanonicalDashboardRedirect(dashboardId: string | undefined, dashboards: { id: string }[], listLoaded: boolean): void {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -107,12 +103,18 @@ function useDashboardSources(activeDashboard: Dashboard | null, isOwner: boolean
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sourcesQuery.data, activeDashboard],
   );
-  const staleSources = (sourcesQuery.data?.items ?? []).filter((s) =>
-    dashboardSourceIds.has(s.id) && s.status === 'active' && s.last_error_at
-    && (!s.last_success_at || Date.parse(s.last_error_at) > Date.parse(s.last_success_at)));
+  const staleSources = (sourcesQuery.data?.items ?? []).filter(
+    (s) =>
+      dashboardSourceIds.has(s.id) &&
+      s.status === 'active' &&
+      s.last_error_at &&
+      (!s.last_success_at || Date.parse(s.last_error_at) > Date.parse(s.last_success_at)),
+  );
   /** Newest successful collection across sources, for the title summary; null when unknown. */
   const lastUpdatedAt = useMemo(() => {
-    const times = (sourcesQuery.data?.items ?? []).map((s) => (s.last_success_at ? Date.parse(s.last_success_at) : NaN)).filter(Number.isFinite);
+    const times = (sourcesQuery.data?.items ?? [])
+      .map((s) => (s.last_success_at ? Date.parse(s.last_success_at) : NaN))
+      .filter(Number.isFinite);
     return times.length ? Math.max(...times) : null;
   }, [sourcesQuery.data]);
   return {
@@ -155,8 +157,7 @@ function isRouteReady(
   if (list.isError) return true;
   if (!list.isSuccess) return false;
   const requestedDashboardExists = !dashboardId || dashboards.some((dashboard) => dashboard.id === dashboardId);
-  return dashboards.length === 0
-    || requestedDashboardExists && (!selectedDashboardId || detail.isSuccess || detail.isError);
+  return dashboards.length === 0 || (requestedDashboardExists && (!selectedDashboardId || detail.isSuccess || detail.isError));
 }
 
 /**
@@ -179,25 +180,34 @@ export function useDashboardData(dashboardId: string | undefined) {
   const dashboards = useMemo(() => dashboardsQuery.data ?? [], [dashboardsQuery.data]);
   const selectedDashboardId = dashboardId ?? dashboards[0]?.id ?? null;
   // Legacy `?manage=highlights` deep link: ready once the owner's dashboard list resolved to the addressed dashboard.
-  const manageLinkReady = searchParams.get('manage') === 'highlights' && isOwner && dashboardsQuery.isSuccess
-    && addressedDashboardResolved(dashboards, dashboardId);
+  const manageLinkReady =
+    searchParams.get('manage') === 'highlights' &&
+    isOwner &&
+    dashboardsQuery.isSuccess &&
+    addressedDashboardResolved(dashboards, dashboardId);
   const management = useManagementDialog(manageLinkReady);
   useCanonicalDashboardRedirect(dashboardId, dashboards, dashboardsQuery.isSuccess);
 
   /** Navigates to a dashboard's canonical URL after the caller's dirty-state guard succeeds. */
-  const navigateToDashboard = useCallback((id: string, replace = false) => {
-    const href = `/dashboard/${encodeURIComponent(id)}`;
-    if (replace) router.replace(href);
-    else router.push(href);
-  }, [router]);
+  const navigateToDashboard = useCallback(
+    (id: string, replace = false) => {
+      const href = `/dashboard/${encodeURIComponent(id)}`;
+      if (replace) router.replace(href);
+      else router.push(href);
+    },
+    [router],
+  );
 
   const activeDashboardQuery = useActiveDashboardQuery(selectedDashboardId);
   const activeDashboard = activeDashboardQuery.data ?? null;
   const dashboardRouteReady = isRouteReady(dashboardsQuery, activeDashboardQuery, dashboards, dashboardId, selectedDashboardId);
   const sources = useDashboardSources(activeDashboard, isOwner);
   // A dashboard that already has gadgets is never hidden behind first-run setup.
-  const showFirstRun = isOwner && sources.allSources.isSuccess && (sources.allSources.items?.length ?? 1) === 0
-    && (activeDashboard?.instances.length ?? 0) === 0;
+  const showFirstRun =
+    isOwner &&
+    sources.allSources.isSuccess &&
+    (sources.allSources.items?.length ?? 1) === 0 &&
+    (activeDashboard?.instances.length ?? 0) === 0;
 
   return { dashboards, selectedDashboardId, activeDashboard, dashboardRouteReady, navigateToDashboard, management, sources, showFirstRun };
 }

@@ -17,12 +17,21 @@ export function useLocalPref<T extends string>(key: string, fallback: T, allowed
     try {
       const stored = typeof window === 'undefined' ? null : window.localStorage.getItem(key);
       return stored && (allowed as readonly string[]).includes(stored) ? (stored as T) : fallback;
-    } catch { return fallback; }
+    } catch {
+      return fallback;
+    }
   });
   /** Applies and persists a new value. */
-  const set = useCallback((next: T) => {
-    setValue(next);
-    try { window.localStorage.setItem(key, next); } catch { /* storage unavailable */ }
-  }, [key]);
+  const set = useCallback(
+    (next: T) => {
+      setValue(next);
+      try {
+        window.localStorage.setItem(key, next);
+      } catch {
+        /* storage unavailable */
+      }
+    },
+    [key],
+  );
   return [value, set];
 }

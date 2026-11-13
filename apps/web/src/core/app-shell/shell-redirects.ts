@@ -27,17 +27,20 @@ export function computeShellRedirects(
   isInstanceAdmin: boolean | undefined,
 ): ShellRedirects {
   const inSettings = pathname.startsWith('/settings');
-  const memberSettingsRedirect = role === 'member' && inSettings
-    && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href))
-    ? visibleSettingsGroups[0]?.href
-    : undefined;
-  const adminViewerSettingsRedirect = role === 'admin_viewer' && inSettings && pathname !== '/settings/global'
-    ? isInstanceAdmin ? '/settings/global' : '/dashboard'
-    : undefined;
-  const adminViewerPrivateRedirect = role === 'admin_viewer'
-    && (pathname === '/chat' || pathname.startsWith('/chat/') || pathname.startsWith('/knowledge/memory'))
-    ? '/dashboard'
-    : undefined;
+  const memberSettingsRedirect =
+    role === 'member' && inSettings && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href))
+      ? visibleSettingsGroups[0]?.href
+      : undefined;
+  const adminViewerSettingsRedirect =
+    role === 'admin_viewer' && inSettings && pathname !== '/settings/global'
+      ? isInstanceAdmin
+        ? '/settings/global'
+        : '/dashboard'
+      : undefined;
+  const adminViewerPrivateRedirect =
+    role === 'admin_viewer' && (pathname === '/chat' || pathname.startsWith('/chat/') || pathname.startsWith('/knowledge/memory'))
+      ? '/dashboard'
+      : undefined;
   return { memberSettingsRedirect, adminViewerSettingsRedirect, adminViewerPrivateRedirect };
 }
 
@@ -52,15 +55,21 @@ export function visibleMainNavigationFor(
   settingsGroupCount: number,
   isInstanceAdmin: boolean,
 ): NavigationDestination[] {
-  return items.filter((item) => destinationEnabled(item, availability)
-    && (destinationForRole(item, role) || item.id === 'settings' && isInstanceAdmin)
-    && !(role === 'admin_viewer' && item.id === 'chat')
-    && (item.id !== 'settings' || settingsGroupCount > 0 || isInstanceAdmin));
+  return items.filter(
+    (item) =>
+      destinationEnabled(item, availability) &&
+      (destinationForRole(item, role) || (item.id === 'settings' && isInstanceAdmin)) &&
+      !(role === 'admin_viewer' && item.id === 'chat') &&
+      (item.id !== 'settings' || settingsGroupCount > 0 || isInstanceAdmin),
+  );
 }
 
 /** Id of the destination that owns the pathname ('settings' for any /settings path, '' when none matches). */
 export function activeNavigationId(items: ReadonlyArray<NavigationDestination>, pathname: string): string {
-  const match = items.find((item) => item.id !== 'settings'
-    && ((item.id === 'dashboard' && pathname.startsWith('/dashboard/')) || pathname === item.href || pathname.startsWith(`${item.href}/`)));
+  const match = items.find(
+    (item) =>
+      item.id !== 'settings' &&
+      ((item.id === 'dashboard' && pathname.startsWith('/dashboard/')) || pathname === item.href || pathname.startsWith(`${item.href}/`)),
+  );
   return match?.id ?? (pathname.startsWith('/settings') ? 'settings' : '');
 }

@@ -8,6 +8,129 @@ import { fetchGoals, fetchGoalsByIds } from './api';
 import type { Goal, GoalPage } from './types';
 import { BareButton } from '@/components/bare-button';
 
+/** One goal tile: title, localized status, summary line and a clamped 0-100 progress bar; clicking calls `onSelect`. */
+function GoalCard({ goal, onSelect }: { goal: Goal; onSelect?: (goal: Goal) => void }) {
+  const t = useTranslations('taskGoal');
+  const goalStatusLabels = {
+    active: t('goal.statusActive'),
+    completed: t('goal.statusCompleted'),
+    paused: t('goal.statusPaused'),
+    cancelled: t('goal.statusCancelled'),
+  };
+  return (
+    <li>
+      <BareButton
+        type="button"
+        onClick={() => onSelect?.(goal)}
+        className="w-full rounded-lg border border-border p-3 text-left hover:bg-primary/30"
+      >
+        <span className="flex justify-between gap-2">
+          <strong className="truncate text-sm">{goal.title}</strong>
+          <span className="text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span>
+        </span>
+        <span className="mt-1 block text-xs text-muted-foreground">
+          {t('goal.summary', { progress: goal.progress, count: goal.milestones.length, deadline: goal.deadline ?? t('no.deadline') })}
+        </span>
+        <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
+          <span className="block h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }} />
+        </span>
+      </BareButton>
+    </li>
+  );
+}
+
+/**
+ * Loading, load-failed (with retry), missing-id, truncated-id and empty-state messages for the goal
+ * list. `emptyKind` picks the empty text: more pages exist, no goals at all, or none match filters.
+ */
+function GoalListNotices({
+  query,
+  missing,
+  idsTruncatedBy,
+  showEmpty,
+  emptyKind,
+}: {
+  query: { isLoading: boolean; isError: boolean; refetch: () => unknown };
+  missing: string[];
+  idsTruncatedBy: number;
+  showEmpty: boolean;
+  emptyKind: 'page' | 'none-yet' | 'none';
+}) {
+  const t = useTranslations('taskGoal');
+  return (
+    <>
+      {query.isLoading && (
+        <p role="status" className="py-5 text-sm text-muted-foreground">
+          {t('loadingGoals')}
+        </p>
+      )}
+      {query.isError && (
+        <div role="alert" className="text-sm text-destructive">
+          {t('goal.loadFailed')}{' '}
+          <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>
+            {t('retry')}
+          </Button>
+        </div>
+      )}
+      {!!missing.length && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('missing.goalIds', { ids: missing.join(', ') })}
+        </p>
+      )}
+      {idsTruncatedBy > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('selectedIdsTruncated', { count: idsTruncatedBy, limit: 100 })}
+        </p>
+      )}
+      {!query.isLoading && !query.isError && showEmpty && (
+        <p className="py-5 text-sm text-muted-foreground">
+          {emptyKind === 'page' ? t('no.goalsThisPage') : emptyKind === 'none-yet' ? t('no.goalsYet') : t('no.goals')}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Page indicator plus Previous/Next buttons for the owner cursor pages; buttons are disabled while the next page is fetching. */
+function GoalPager({
+  showPageInfo,
+  showNext,
+  pageIndex,
+  pageSize,
+  fetching,
+  onPrevious,
+  onNext,
+}: {
+  showPageInfo: boolean;
+  showNext: boolean;
+  pageIndex: number;
+  pageSize: number;
+  fetching: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const t = useTranslations('taskGoal');
+  return (
+    <>
+      {showPageInfo && (
+        <p className="text-xs text-muted-foreground">
+          {t('ownerPageNumber', { page: pageIndex + 1 })} · {t('pageResultBound', { count: pageSize })}
+        </p>
+      )}
+      {pageIndex > 0 && (
+        <Button type="button" variant="outline" disabled={fetching} onClick={onPrevious}>
+          {t('previousPage')}
+        </Button>
+      )}
+      {showNext && (
+        <Button type="button" variant="outline" disabled={fetching} onClick={onNext}>
+          {fetching ? t('loading') : t('nextOwnerPage')}
+        </Button>
+      )}
+    </>
+  );
+}
+
 /** Renders one bounded owner cursor page or explicit IDs and exposes detail/create actions. */
 // eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function GoalList({
@@ -29,12 +152,6 @@ export function GoalList({
   hideTitle?: boolean;
 }) {
   const t = useTranslations('taskGoal');
-  const goalStatusLabels = {
-    active: t('goal.statusActive'),
-    completed: t('goal.statusCompleted'),
-    paused: t('goal.statusPaused'),
-    cancelled: t('goal.statusCancelled'),
-  };
   const boundedIds = ids?.slice(0, 100) ?? [];
   const include = filters?.keywords ?? [];
   const exclude = filters?.exclude_keywords ?? [];
@@ -90,76 +207,27 @@ export function GoalList({
           </Button>
         )}
       </header>
-      {query.isLoading && (
-        <p role="status" className="py-5 text-sm text-muted-foreground">
-          {t('loadingGoals')}
-        </p>
-      )}
-      {query.isError && (
-        <div role="alert" className="text-sm text-destructive">
-          {t('goal.loadFailed')}{' '}
-          <Button type="button" variant="outline" size="sm" onClick={() => void query.refetch()}>
-            {t('retry')}
-          </Button>
-        </div>
-      )}
-      {!!missing.length && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {t('missing.goalIds', { ids: missing.join(', ') })}
-        </p>
-      )}
-      {boundedIds.length < (ids?.length ?? 0) && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {t('selectedIdsTruncated', { count: (ids?.length ?? 0) - boundedIds.length, limit: 100 })}
-        </p>
-      )}
-      {!query.isLoading && !query.isError && goals.length === 0 && (
-        <p className="py-5 text-sm text-muted-foreground">
-          {canAdvance ? t('no.goalsThisPage') : !ids && !include.length && !exclude.length ? t('no.goalsYet') : t('no.goals')}
-        </p>
-      )}
+      <GoalListNotices
+        query={query}
+        missing={missing}
+        idsTruncatedBy={(ids?.length ?? 0) - boundedIds.length}
+        showEmpty={goals.length === 0}
+        emptyKind={canAdvance ? 'page' : !ids && !include.length && !exclude.length ? 'none-yet' : 'none'}
+      />
       <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
         {goals.map((goal) => (
-          <li key={goal.id}>
-            <BareButton
-              type="button"
-              onClick={() => onSelectGoal?.(goal)}
-              className="w-full rounded-lg border border-border p-3 text-left hover:bg-primary/30"
-            >
-              <span className="flex justify-between gap-2">
-                <strong className="truncate text-sm">{goal.title}</strong>
-                <span className="text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span>
-              </span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                {t('goal.summary', { progress: goal.progress, count: goal.milestones.length, deadline: goal.deadline ?? t('no.deadline') })}
-              </span>
-              <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
-                <span className="block h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }} />
-              </span>
-            </BareButton>
-          </li>
+          <GoalCard key={goal.id} goal={goal} onSelect={onSelectGoal} />
         ))}
       </ul>
-      {!boundedIds.length && (pageIndex > 0 || canAdvance) && (
-        <p className="text-xs text-muted-foreground">
-          {t('ownerPageNumber', { page: pageIndex + 1 })} · {t('pageResultBound', { count: pageSize })}
-        </p>
-      )}
-      {pageIndex > 0 && (
-        <Button
-          type="button"
-          variant="outline"
-          disabled={query.isFetchingNextPage}
-          onClick={() => setActivePage({ key: pageKey, index: pageIndex - 1 })}
-        >
-          {t('previousPage')}
-        </Button>
-      )}
-      {canAdvance && !boundedIds.length && (
-        <Button type="button" variant="outline" disabled={query.isFetchingNextPage} onClick={() => void loadNextOwnerPage()}>
-          {query.isFetchingNextPage ? t('loading') : t('nextOwnerPage')}
-        </Button>
-      )}
+      <GoalPager
+        showPageInfo={!boundedIds.length && (pageIndex > 0 || canAdvance)}
+        showNext={canAdvance && !boundedIds.length}
+        pageIndex={pageIndex}
+        pageSize={pageSize}
+        fetching={query.isFetchingNextPage}
+        onPrevious={() => setActivePage({ key: pageKey, index: pageIndex - 1 })}
+        onNext={() => void loadNextOwnerPage()}
+      />
     </section>
   );
 }

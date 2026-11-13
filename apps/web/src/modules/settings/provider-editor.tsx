@@ -11,13 +11,33 @@ import { FieldGrid } from '@/components/settings-layout';
 
 /** Literal catalog key per provider kind (no runtime key building). */
 const PROVIDER_KIND_KEYS = {
-  openai: 'kind.openai', openrouter: 'kind.openrouter', groq: 'kind.groq', gemini: 'kind.gemini',
-  anthropic: 'kind.anthropic', ollama: 'kind.ollama', lmstudio: 'kind.lmstudio', custom: 'kind.custom',
+  openai: 'kind.openai',
+  openrouter: 'kind.openrouter',
+  groq: 'kind.groq',
+  gemini: 'kind.gemini',
+  anthropic: 'kind.anthropic',
+  ollama: 'kind.ollama',
+  lmstudio: 'kind.lmstudio',
+  custom: 'kind.custom',
 } as const;
 export const providerKinds = ['openai', 'openrouter', 'groq', 'gemini', 'anthropic', 'ollama', 'lmstudio', 'custom'] as const;
 export type ProviderKind = (typeof providerKinds)[number];
 export type CredentialAction = 'unchanged' | 'replaced' | 'removed';
-export const modelTypes = ['llm', 'embedding', 'reranker', 'decision', 'background', 'vision', 'asr', 'tts', 'image', 'video', 'speech', 'audio', 'transcription'] as const;
+export const modelTypes = [
+  'llm',
+  'embedding',
+  'reranker',
+  'decision',
+  'background',
+  'vision',
+  'asr',
+  'tts',
+  'image',
+  'video',
+  'speech',
+  'audio',
+  'transcription',
+] as const;
 export type ModelType = (typeof modelTypes)[number];
 /** Types the owner can pick; vision/asr/tts are legacy and only shown for rows that already carry them. */
 export const selectableModelTypes = ['llm', 'embedding', 'reranker', 'decision', 'background'] as const;
@@ -33,12 +53,32 @@ export function isHostedKind(kind: ProviderKind): boolean {
 
 /** Maps an OpenRouter output modality to the model type it is stored as; unknown values fall back to `llm`. */
 export function modelTypeForModality(modality: string): ModelType {
-  const map: Record<string, ModelType> = { text: 'llm', embeddings: 'embedding', rerank: 'reranker', decisions: 'decision', image: 'image', video: 'video', speech: 'speech', audio: 'audio', transcription: 'transcription' };
+  const map: Record<string, ModelType> = {
+    text: 'llm',
+    embeddings: 'embedding',
+    rerank: 'reranker',
+    decisions: 'decision',
+    image: 'image',
+    video: 'video',
+    speech: 'speech',
+    audio: 'audio',
+    transcription: 'transcription',
+  };
   return map[modality] ?? 'llm';
 }
 
 export type ProviderModel = { id: string; type: ModelType; vision?: boolean };
-export type ProviderRead = { id: string; kind: ProviderKind; label: string; base_url: string | null; destination_id: string | null; credential_configured: boolean; local: boolean; policy_denied: boolean; models: ProviderModel[] };
+export type ProviderRead = {
+  id: string;
+  kind: ProviderKind;
+  label: string;
+  base_url: string | null;
+  destination_id: string | null;
+  credential_configured: boolean;
+  local: boolean;
+  policy_denied: boolean;
+  models: ProviderModel[];
+};
 
 /** Guesses a model type from its id; the owner can override it. Never returns `decision` (always a manual choice). */
 export function guessModelType(id: string): ModelType {
@@ -52,7 +92,9 @@ export function guessModelType(id: string): ModelType {
 }
 
 /** Gateway role and capability used for a draft test of each model type; decision/asr/tts have no test (decision is probed from the visualization router). */
-export const testRoleByType: Partial<Record<ModelType, { role: 'chat' | 'background' | 'embedding' | 'reranker' | 'vision'; capability: string }>> = {
+export const testRoleByType: Partial<
+  Record<ModelType, { role: 'chat' | 'background' | 'embedding' | 'reranker' | 'vision'; capability: string }>
+> = {
   llm: { role: 'chat', capability: 'chat' },
   embedding: { role: 'embedding', capability: 'embeddings' },
   reranker: { role: 'reranker', capability: 'reranking' },
@@ -72,7 +114,11 @@ export const providerPresets: Record<ProviderKind, { baseUrl: string; local: boo
   openai: { baseUrl: 'https://api.openai.com/v1', local: false, models: ['gpt-4o', 'gpt-4o-mini', 'text-embedding-3-small'] },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', local: false, models: ['openai/gpt-4o-mini', 'anthropic/claude-3.5-sonnet'] },
   groq: { baseUrl: 'https://api.groq.com/openai/v1', local: false, models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'] },
-  gemini: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', local: false, models: ['gemini-2.0-flash', 'gemini-1.5-pro'] },
+  gemini: {
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    local: false,
+    models: ['gemini-2.0-flash', 'gemini-1.5-pro'],
+  },
   anthropic: { baseUrl: 'https://api.anthropic.com/v1', local: false, models: ['claude-sonnet-4-5', 'claude-haiku-4-5'] },
   ollama: { baseUrl: 'http://localhost:11434/v1', local: true, models: ['llama3.2', 'qwen2.5', 'nomic-embed-text'] },
   lmstudio: { baseUrl: 'http://localhost:1234/v1', local: true, models: [] },
@@ -85,7 +131,17 @@ export function newProvider(kind: ProviderKind, existing: ProviderRead[]): Provi
   let n = 1;
   while (ids.has(`${kind}-${n}`)) n += 1;
   const preset = providerPresets[kind];
-  return { id: `${kind}-${n}`, kind, label: kind, base_url: preset.baseUrl || null, destination_id: null, credential_configured: false, local: preset.local, policy_denied: false, models: [] };
+  return {
+    id: `${kind}-${n}`,
+    kind,
+    label: kind,
+    base_url: preset.baseUrl || null,
+    destination_id: null,
+    credential_configured: false,
+    local: preset.local,
+    policy_denied: false,
+    models: [],
+  };
 }
 
 /** Provider id a role mapping points at: its own id, else "default", else the first provider. */
@@ -94,12 +150,27 @@ export function mappingProviderId(providerId: string | null | undefined, provide
 }
 
 /** Parses a stored settings draft; returns null for other revisions, old (providers-less) shapes or bad JSON. Never carries keys. */
-export function parseDraftSnapshot<T extends { providers?: ProviderRead[] }>(raw: string | null, revision: number): { revision: number; draft: (T & { providers: ProviderRead[] }) | null; gatewayAction?: CredentialAction; searchAction?: CredentialAction; providerActions: Record<string, CredentialAction>; hadSecret: boolean } | null {
+export function parseDraftSnapshot<T extends { providers?: ProviderRead[] }>(
+  raw: string | null,
+  revision: number,
+): {
+  revision: number;
+  draft: (T & { providers: ProviderRead[] }) | null;
+  gatewayAction?: CredentialAction;
+  searchAction?: CredentialAction;
+  providerActions: Record<string, CredentialAction>;
+  hadSecret: boolean;
+} | null {
   try {
     const snap = raw ? JSON.parse(raw) : null;
     if (!snap || snap.revision !== revision) return null;
     const actions = snap.providerActions && typeof snap.providerActions === 'object' ? snap.providerActions : {};
-    return { ...snap, draft: snap.draft ? { ...snap.draft, providers: Array.isArray(snap.draft.providers) ? snap.draft.providers : [] } : null, providerActions: actions, hadSecret: Boolean(snap.hadSecret) };
+    return {
+      ...snap,
+      draft: snap.draft ? { ...snap.draft, providers: Array.isArray(snap.draft.providers) ? snap.draft.providers : [] } : null,
+      providerActions: actions,
+      hadSecret: Boolean(snap.hadSecret),
+    };
   } catch {
     return null;
   }
@@ -122,56 +193,252 @@ type Props = {
 
 /** Result chip for one model test; pairs an icon with text so state never depends on color. */
 export function ModelTestChip({ state, t }: { state: ModelTestState | undefined; t: Translate }) {
-  const [Icon, key] = state === 'supported' ? [Check, 'cap.passed' as const] : state === 'failed' ? [AlertCircle, 'cap.failed' as const] : state === 'unsupported' ? [X, 'cap.unsupported' as const] : [Minus, state === 'pending' ? ('checkingConnection' as const) : ('cap.notChecked' as const)];
-  return <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs"><Icon className="size-3" aria-hidden="true" />{t(key)}</span>;
+  const [Icon, key] =
+    state === 'supported'
+      ? [Check, 'cap.passed' as const]
+      : state === 'failed'
+        ? [AlertCircle, 'cap.failed' as const]
+        : state === 'unsupported'
+          ? [X, 'cap.unsupported' as const]
+          : [Minus, state === 'pending' ? ('checkingConnection' as const) : ('cap.notChecked' as const)];
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs">
+      <Icon className="size-3" aria-hidden="true" />
+      {t(key)}
+    </span>
+  );
+}
+
+type ProviderCardProps = {
+  provider: ProviderRead;
+  secret: ProviderSecret;
+  isNew: boolean;
+  disabled: boolean;
+  discovering: boolean;
+  discoverError: string | null;
+  discoveredCount: number;
+  patch: (id: string, change: Partial<ProviderRead>) => void;
+  onDelete: () => void;
+  onSecret: (id: string, secret: ProviderSecret) => void;
+  onDiscover: (provider: ProviderRead) => void;
+  t: Translate;
+};
+
+/** Form fields of one provider card (kind, label, endpoint or fixed hosted endpoint, credential input). Kind changes re-derive `local` and `base_url` from the preset; edits go through `patch`, secrets through `onSecret`. */
+function ProviderFields({
+  provider,
+  secret,
+  disabled,
+  patch,
+  onSecret,
+  t,
+}: Pick<ProviderCardProps, 'provider' | 'secret' | 'disabled' | 'patch' | 'onSecret' | 't'>) {
+  const hosted = isHostedKind(provider.kind);
+  return (
+    <FieldGrid>
+      <label className="field">
+        <span className="label">{t('provider.kind')}</span>
+        <Select
+          disabled={disabled}
+          value={provider.kind}
+          onValueChange={(value) => {
+            const kind = value as ProviderKind;
+            const old = providerPresets[provider.kind];
+            const preset = providerPresets[kind];
+            // Hosted kinds always take the preset endpoint (drops any typed URL); self-hosted keeps a custom URL unless it still equals the old preset.
+            const keep = !isHostedKind(kind) && !isHostedKind(provider.kind) && provider.base_url && provider.base_url !== old.baseUrl;
+            patch(provider.id, { kind, local: preset.local, base_url: keep ? provider.base_url : preset.baseUrl || null });
+          }}
+        >
+          <SelectTrigger aria-label={t('provider.kind')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {providerKinds.map((kind) => (
+              <SelectItem key={kind} value={kind}>
+                {t(PROVIDER_KIND_KEYS[kind])}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
+      <label className="field">
+        <span className="label">{t('provider.label')}</span>
+        <Input
+          disabled={disabled}
+          maxLength={80}
+          value={provider.label}
+          onChange={(event) => patch(provider.id, { label: event.target.value })}
+        />
+      </label>
+      {hosted ? (
+        <div className="field">
+          <span className="label">{t('provider.endpoint')}</span>
+          <p className="text-muted-foreground m-0 break-all text-sm">{provider.base_url ?? providerPresets[provider.kind].baseUrl}</p>
+          <span className="text-muted-foreground text-xs">{t('provider.endpointFixed')}</span>
+        </div>
+      ) : (
+        <label className="field">
+          <span className="label">{t('provider.baseUrl')}</span>
+          <Input
+            type="url"
+            disabled={disabled}
+            value={provider.base_url ?? ''}
+            onChange={(event) => patch(provider.id, { base_url: event.target.value || null })}
+            placeholder={providerPresets[provider.kind].baseUrl || 'https://gateway.example/v1'}
+          />
+        </label>
+      )}
+      <label className="field">
+        <span className="label">{t('provider.key')}</span>
+        <PasswordInput
+          disabled={disabled || secret.action === 'removed'}
+          autoComplete="new-password"
+          value={secret.key}
+          onChange={(event) => onSecret(provider.id, { key: event.target.value, action: event.target.value ? 'replaced' : 'unchanged' })}
+          placeholder={provider.local ? t('provider.keyOptional') : t('gatewayCredentialHelp')}
+        />
+      </label>
+    </FieldGrid>
+  );
+}
+
+/** Discover / remove-credential buttons of one provider card. Discover is disabled while running, without an endpoint, or for a new remote provider with no key typed yet. */
+function ProviderActions({
+  provider,
+  secret,
+  isNew,
+  disabled,
+  discovering,
+  onSecret,
+  onDiscover,
+  t,
+}: Pick<ProviderCardProps, 'provider' | 'secret' | 'isNew' | 'disabled' | 'discovering' | 'onSecret' | 'onDiscover' | 't'>) {
+  const hosted = isHostedKind(provider.kind);
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        disabled={disabled || discovering || (!hosted && !provider.base_url) || (isNew && !provider.local && !secret.key)}
+        onClick={() => onDiscover(provider)}
+      >
+        {discovering ? t('checkingConnection') : t('provider.discover')}
+      </Button>
+      {provider.credential_configured && (
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          onClick={() =>
+            onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })
+          }
+        >
+          {secret.action === 'removed' ? t('provider.keyKeep') : t('removeGatewayCredential')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** One provider card: title bar with delete, fields, credential status, policy warning, actions and discovery result/error. */
+function ProviderCard(props: ProviderCardProps) {
+  const { provider, secret, disabled, discoveredCount, discoverError, onDelete, t } = props;
+  const hostHint = provider.kind === 'ollama' || provider.kind === 'lmstudio';
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border p-4" data-testid={`provider-${provider.id}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="m-0 mr-auto text-base font-semibold">{provider.label || provider.id}</h3>
+        {provider.local && <Badge variant="outline">{t('provider.local')}</Badge>}
+        {provider.policy_denied && <Badge variant="destructive">{t('provider.policyDenied')}</Badge>}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          aria-label={t('provider.delete', { label: provider.label || provider.id })}
+          onClick={onDelete}
+        >
+          <Trash2 className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
+      <ProviderFields {...props} />
+      {hostHint && <p className="text-muted-foreground m-0 text-xs">{t('provider.dockerHint')}</p>}
+      <p className="text-muted-foreground m-0 text-xs">
+        {t('credential')}{' '}
+        {secret.action === 'removed' ? t('provider.keyWillRemove') : provider.credential_configured ? t('configured') : t('notConfigured')}
+        {provider.destination_id ? ` · ${provider.destination_id}` : ''}. {t('credentialNeverShown')}
+      </p>
+      {provider.policy_denied && (
+        <p className="error m-0" role="alert">
+          {t('blockedEndpoint')}
+        </p>
+      )}
+      <ProviderActions {...props} />
+      <div role="status" aria-live="polite">
+        {discoveredCount > 0 && (
+          <p className="text-muted-foreground m-0">
+            <Check className="inline size-4" aria-hidden="true" /> {t('models.available', { count: discoveredCount })}
+          </p>
+        )}
+      </div>
+      {discoverError !== null && (
+        <p className="error m-0" role="alert">
+          <X className="inline size-4" aria-hidden="true" /> {discoverError}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** Editable list of provider cards: preset, label, endpoint, credential and discovery. Models live in the separate Models section. */
-export function ProviderEditor({ providers, savedIds, secrets, disabled, discoveringId, discoverError, discovered, onChange, onSecret, onDiscover, t }: Props) {
-  const patch = (id: string, change: Partial<ProviderRead>) => onChange(providers.map((item) => (item.id === id ? { ...item, ...change } : item)));
-  return <div className="flex flex-col gap-4">
-    {providers.length === 0 && <p className="text-muted-foreground m-0">{t('providers.empty')}</p>}
-    {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
-    {providers.map((provider) => {
-      const secret = secrets[provider.id] ?? { key: '', action: 'unchanged' as const };
-      const isNew = !savedIds.includes(provider.id);
-      const hosted = isHostedKind(provider.kind);
-      const hostHint = provider.kind === 'ollama' || provider.kind === 'lmstudio';
-      return <div key={provider.id} className="flex flex-col gap-3 rounded-lg border border-border p-4" data-testid={`provider-${provider.id}`}>
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="m-0 mr-auto text-base font-semibold">{provider.label || provider.id}</h3>
-          {provider.local && <Badge variant="outline">{t('provider.local')}</Badge>}
-          {provider.policy_denied && <Badge variant="destructive">{t('provider.policyDenied')}</Badge>}
-          <Button type="button" variant="outline" disabled={disabled} aria-label={t('provider.delete', { label: provider.label || provider.id })} onClick={() => onChange(providers.filter((item) => item.id !== provider.id))}><Trash2 className="size-4" aria-hidden="true" /></Button>
-        </div>
-        <FieldGrid>
-          <label className="field"><span className="label">{t('provider.kind')}</span>
-            <Select disabled={disabled} value={provider.kind} onValueChange={(value) => {
-              const kind = value as ProviderKind;
-              const old = providerPresets[provider.kind];
-              const preset = providerPresets[kind];
-              // Hosted kinds always take the preset endpoint (drops any typed URL); self-hosted keeps a custom URL unless it still equals the old preset.
-              const keep = !isHostedKind(kind) && !isHostedKind(provider.kind) && provider.base_url && provider.base_url !== old.baseUrl;
-              patch(provider.id, { kind, local: preset.local, base_url: keep ? provider.base_url : preset.baseUrl || null });
-            }}><SelectTrigger aria-label={t('provider.kind')}><SelectValue /></SelectTrigger><SelectContent>{providerKinds.map((kind) => <SelectItem key={kind} value={kind}>{t(PROVIDER_KIND_KEYS[kind])}</SelectItem>)}</SelectContent></Select></label>
-          <label className="field"><span className="label">{t('provider.label')}</span><Input disabled={disabled} maxLength={80} value={provider.label} onChange={(event) => patch(provider.id, { label: event.target.value })} /></label>
-          {hosted
-            ? <div className="field"><span className="label">{t('provider.endpoint')}</span><p className="text-muted-foreground m-0 break-all text-sm">{provider.base_url ?? providerPresets[provider.kind].baseUrl}</p><span className="text-muted-foreground text-xs">{t('provider.endpointFixed')}</span></div>
-            : <label className="field"><span className="label">{t('provider.baseUrl')}</span><Input type="url" disabled={disabled} value={provider.base_url ?? ''} onChange={(event) => patch(provider.id, { base_url: event.target.value || null })} placeholder={providerPresets[provider.kind].baseUrl || 'https://gateway.example/v1'} /></label>}
-          <label className="field"><span className="label">{t('provider.key')}</span><PasswordInput disabled={disabled || secret.action === 'removed'} autoComplete="new-password" value={secret.key} onChange={(event) => onSecret(provider.id, { key: event.target.value, action: event.target.value ? 'replaced' : 'unchanged' })} placeholder={provider.local ? t('provider.keyOptional') : t('gatewayCredentialHelp')} /></label>
-        </FieldGrid>
-        {hostHint && <p className="text-muted-foreground m-0 text-xs">{t('provider.dockerHint')}</p>}
-        <p className="text-muted-foreground m-0 text-xs">{t('credential')} {secret.action === 'removed' ? t('provider.keyWillRemove') : provider.credential_configured ? t('configured') : t('notConfigured')}{provider.destination_id ? ` · ${provider.destination_id}` : ''}. {t('credentialNeverShown')}</p>
-        {provider.policy_denied && <p className="error m-0" role="alert">{t('blockedEndpoint')}</p>}
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" disabled={disabled || discoveringId === provider.id || (!hosted && !provider.base_url) || (isNew && !provider.local && !secret.key)} onClick={() => onDiscover(provider)}>{discoveringId === provider.id ? t('checkingConnection') : t('provider.discover')}</Button>
-          {provider.credential_configured && <Button type="button" variant="outline" disabled={disabled} onClick={() => onSecret(provider.id, secret.action === 'removed' ? { key: '', action: 'unchanged' } : { key: '', action: 'removed' })}>{secret.action === 'removed' ? t('provider.keyKeep') : t('removeGatewayCredential')}</Button>}
-        </div>
-        <div role="status" aria-live="polite">{(discovered[provider.id]?.length ?? 0) > 0 && <p className="text-muted-foreground m-0"><Check className="inline size-4" aria-hidden="true" /> {t('models.available', { count: discovered[provider.id].length })}</p>}</div>
-        {discoverError?.id === provider.id && <p className="error m-0" role="alert"><X className="inline size-4" aria-hidden="true" /> {discoverError.text}</p>}
-      </div>;
-    })}
-    <div><Button type="button" variant="outline" disabled={disabled || providers.length >= maxProviders} onClick={() => onChange([...providers, newProvider('openai', providers)])}><Plus className="size-4" aria-hidden="true" /> {t('provider.add')}</Button>
-      {providers.length >= maxProviders && <p className="text-muted-foreground m-0 mt-2 text-xs">{t('provider.max', { max: maxProviders })}</p>}</div>
-  </div>;
+export function ProviderEditor({
+  providers,
+  savedIds,
+  secrets,
+  disabled,
+  discoveringId,
+  discoverError,
+  discovered,
+  onChange,
+  onSecret,
+  onDiscover,
+  t,
+}: Props) {
+  const patch = (id: string, change: Partial<ProviderRead>) =>
+    onChange(providers.map((item) => (item.id === id ? { ...item, ...change } : item)));
+  return (
+    <div className="flex flex-col gap-4">
+      {providers.length === 0 && <p className="text-muted-foreground m-0">{t('providers.empty')}</p>}
+      {providers.map((provider) => (
+        <ProviderCard
+          key={provider.id}
+          provider={provider}
+          secret={secrets[provider.id] ?? { key: '', action: 'unchanged' as const }}
+          isNew={!savedIds.includes(provider.id)}
+          disabled={disabled}
+          discovering={discoveringId === provider.id}
+          discoverError={discoverError?.id === provider.id ? discoverError.text : null}
+          discoveredCount={discovered[provider.id]?.length ?? 0}
+          patch={patch}
+          onDelete={() => onChange(providers.filter((item) => item.id !== provider.id))}
+          onSecret={onSecret}
+          onDiscover={onDiscover}
+          t={t}
+        />
+      ))}
+      <div>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled || providers.length >= maxProviders}
+          onClick={() => onChange([...providers, newProvider('openai', providers)])}
+        >
+          <Plus className="size-4" aria-hidden="true" /> {t('provider.add')}
+        </Button>
+        {providers.length >= maxProviders && (
+          <p className="text-muted-foreground m-0 mt-2 text-xs">{t('provider.max', { max: maxProviders })}</p>
+        )}
+      </div>
+    </div>
+  );
 }

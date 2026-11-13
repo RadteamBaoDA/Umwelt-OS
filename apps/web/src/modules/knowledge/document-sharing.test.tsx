@@ -7,11 +7,16 @@ import { ApiError } from '@/core/api';
 import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({
-  listWorkspaceMembers: vi.fn(), listShares: vi.fn(), grantShare: vi.fn(), revokeShare: vi.fn(),
+  listWorkspaceMembers: vi.fn(),
+  listShares: vi.fn(),
+  grantShare: vi.fn(),
+  revokeShare: vi.fn(),
 }));
 const ws = vi.hoisted(() => ({ isOwner: true }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
-vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: 'w1', role: ws.isOwner ? 'owner' : 'member', revision: 1 }, isOwner: ws.isOwner }) }));
+vi.mock('@/core/workspace-context', () => ({
+  useWorkspace: () => ({ selection: { id: 'w1', role: ws.isOwner ? 'owner' : 'member', revision: 1 }, isOwner: ws.isOwner }),
+}));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 
 import { DocumentShareButton } from './document-sharing';
@@ -19,13 +24,23 @@ import { DocumentShareButton } from './document-sharing';
 const member = { user_id: 7, email: 'm@example.com', role: 'member' as const, membership_revision: 3 };
 function renderButton() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sharing: getCatalog('en-us', 'sharing') }}><DocumentShareButton documentId="d1" currentVersion={4} /></NextIntlClientProvider></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <NextIntlClientProvider locale="en-US" messages={{ sharing: getCatalog('en-us', 'sharing') }}>
+        <DocumentShareButton documentId="d1" currentVersion={4} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe('DocumentShareButton', () => {
   beforeEach(() => {
-    vi.clearAllMocks(); ws.isOwner = true;
-    api.listWorkspaceMembers.mockResolvedValue({ items: [{ ...member, user_id: 1, role: 'owner', email: 'o@example.com' }, member], next_cursor: null });
+    vi.clearAllMocks();
+    ws.isOwner = true;
+    api.listWorkspaceMembers.mockResolvedValue({
+      items: [{ ...member, user_id: 1, role: 'owner', email: 'o@example.com' }, member],
+      next_cursor: null,
+    });
     api.listShares.mockResolvedValue({ items: [], next_cursor: null });
   });
 

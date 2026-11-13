@@ -13,8 +13,12 @@ class FakeEventSource {
   onerror: (() => void) | null = null;
   listeners = new Map<string, Listener[]>();
   close = vi.fn();
-  constructor(readonly url: string) { FakeEventSource.instances.push(this); }
-  addEventListener(name: string, fn: Listener) { this.listeners.set(name, [...(this.listeners.get(name) ?? []), fn]); }
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
+  addEventListener(name: string, fn: Listener) {
+    this.listeners.set(name, [...(this.listeners.get(name) ?? []), fn]);
+  }
   /** Delivers a named server event with the given SSE id and payload. */
   emit(name: string, data: string, id = '') {
     for (const fn of this.listeners.get(name) ?? []) fn(new MessageEvent(name, { data, lastEventId: id }));
@@ -22,7 +26,8 @@ class FakeEventSource {
 }
 
 /** Builds a JSON Response for the stubbed fetch. */
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 /** Creates a connection with spy dependencies and a shared cursor ref. */
 function build() {
@@ -48,9 +53,15 @@ describe('RealtimeConnection', () => {
     snapshot = () => json({ cursor: CURSOR, floor_sequence: '0' });
     session = () => json({ authenticated: true });
     vi.stubGlobal('EventSource', FakeEventSource);
-    vi.stubGlobal('fetch', vi.fn(async (path: string) => (path === '/api/v1/auth/session' ? session() : snapshot())));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (path: string) => (path === '/api/v1/auth/session' ? session() : snapshot())),
+    );
   });
-  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
   it('opens a stream at the snapshot cursor, releases the barrier and reports connected on open', async () => {
     const { deps, connection } = build();

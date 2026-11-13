@@ -63,9 +63,7 @@
     "region_keyed": false,
     "seed_symbol": false,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "BTCUSDT"
-    ],
+    "suggested_symbols": ["BTCUSDT"],
     "symbol_keyed": true
   },
   "coingecko": {
@@ -82,9 +80,7 @@
     "region_keyed": false,
     "seed_symbol": false,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "BTC"
-    ],
+    "suggested_symbols": ["BTC"],
     "symbol_keyed": true
   },
   "coinpaprika": {
@@ -101,9 +97,7 @@
     "region_keyed": false,
     "seed_symbol": true,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "BTC"
-    ],
+    "suggested_symbols": ["BTC"],
     "symbol_keyed": true
   },
   "disease_sh": {
@@ -149,11 +143,7 @@
     "region_keyed": false,
     "seed_symbol": true,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "EUR/USD",
-      "EUR/JPY",
-      "EUR/GBP"
-    ],
+    "suggested_symbols": ["EUR/USD", "EUR/JPY", "EUR/GBP"],
     "symbol_keyed": true
   },
   "frankfurter": {
@@ -170,9 +160,7 @@
     "region_keyed": false,
     "seed_symbol": true,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "USD/VND"
-    ],
+    "suggested_symbols": ["USD/VND"],
     "symbol_keyed": true
   },
   "fred": {
@@ -189,11 +177,7 @@
     "region_keyed": false,
     "seed_symbol": false,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "DFF",
-      "CPIAUCSL",
-      "DGS10"
-    ],
+    "suggested_symbols": ["DFF", "CPIAUCSL", "DGS10"],
     "symbol_keyed": true
   },
   "iss_position": {
@@ -261,13 +245,7 @@
     "region_keyed": false,
     "seed_symbol": true,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "USA",
-      "CHN",
-      "JPN",
-      "DEU",
-      "GBR"
-    ],
+    "suggested_symbols": ["USA", "CHN", "JPN", "DEU", "GBR"],
     "symbol_keyed": true
   },
   "open_er_api": {
@@ -284,13 +262,7 @@
     "region_keyed": false,
     "seed_symbol": true,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "USD/VND",
-      "USD/EUR",
-      "USD/JPY",
-      "USD/GBP",
-      "USD/CNY"
-    ],
+    "suggested_symbols": ["USD/VND", "USD/EUR", "USD/JPY", "USD/GBP", "USD/CNY"],
     "symbol_keyed": true
   },
   "open_meteo": {
@@ -419,11 +391,7 @@
     "region_keyed": false,
     "seed_symbol": false,
     "suggested_regions": [],
-    "suggested_symbols": [
-      "VNINDEX",
-      "VN30",
-      "FPT"
-    ],
+    "suggested_symbols": ["VNINDEX", "VN30", "FPT"],
     "symbol_keyed": true
   },
   "world_bank": {

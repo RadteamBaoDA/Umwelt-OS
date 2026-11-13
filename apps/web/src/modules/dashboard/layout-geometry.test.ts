@@ -69,7 +69,12 @@ describe('findFrameCoordinates', () => {
   it('places into the shortest zone wide enough, leftmost on ties', () => {
     expect(findFrameCoordinates([], 'three_columns', 4, 6)).toEqual({ x: 0, y: 0, w: 7, h: 6 });
     expect(findFrameCoordinates([rect('a', 0, 0, 7, 6)], 'three_columns', 4, 6)).toEqual({ x: 7, y: 0, w: 7, h: 6 });
-    expect(findFrameCoordinates([rect('a', 0, 0, 7, 6), rect('b', 7, 0, 7, 2)], 'three_columns', 4, 6)).toEqual({ x: 14, y: 0, w: 6, h: 6 });
+    expect(findFrameCoordinates([rect('a', 0, 0, 7, 6), rect('b', 7, 0, 7, 2)], 'three_columns', 4, 6)).toEqual({
+      x: 14,
+      y: 0,
+      w: 6,
+      h: 6,
+    });
     expect(findFrameCoordinates([], 'main_rail', 7, 6)).toEqual({ x: 0, y: 0, w: 14, h: 6 });
     expect(findFrameCoordinates([rect('a', 0, 0, 14, 6)], 'main_rail', 4, 6)).toEqual({ x: 14, y: 0, w: 6, h: 6 });
   });

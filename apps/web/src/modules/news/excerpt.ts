@@ -30,8 +30,7 @@ export function cleanExcerpt(title: string, excerpt: string | null | undefined):
       i += 1;
     }
     text = text.slice(i).replace(/^[\s.:!?\-–—…]+/, '');
-  }
-  else {
+  } else {
     // Identifier-like lead token (e.g. "CVE-2026-91920") repeated from a longer title.
     const token = title.trim().split(/\s+/)[0] ?? '';
     if (token.length >= 6 && /\d/.test(token) && text.startsWith(token)) {

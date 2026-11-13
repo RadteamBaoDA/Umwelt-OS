@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chunk, MAX_POLL_MS, POLL_MS, useContentTranslation } from './use-content-translation';
 
 const api = vi.hoisted(() => ({
-  fetchTranslationSettings: vi.fn(), submitTranslationBatch: vi.fn(), readTranslationBatch: vi.fn(),
+  fetchTranslationSettings: vi.fn(),
+  submitTranslationBatch: vi.fn(),
+  readTranslationBatch: vi.fn(),
 }));
 const ws = vi.hoisted(() => ({ id: 'w1', generation: 1 }));
 vi.mock('./api', () => api);
@@ -14,19 +16,23 @@ vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: {
 vi.mock('@/core/api', () => ({ workspaceGeneration: () => ws.generation }));
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-const wrapper = ({ children }: { children: ReactNode }) =>
-  createElement(QueryClientProvider, { client }, children);
+const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
 const ids = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, revision: 'r' }));
-const settle = () => act(async () => { await vi.advanceTimersByTimeAsync(0); });
+const settle = () =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
 const accepted = (items: Array<{ resource_id: string; status: string }>, batch = 'b1') => ({
-  batch_id: batch, items: items.map((i) => ({ resource_type: 'news_story', ...i })),
+  batch_id: batch,
+  items: items.map((i) => ({ resource_type: 'news_story', ...i })),
 });
 
 describe('useContentTranslation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     client.clear();
-    ws.id = 'w1'; ws.generation = 1;
+    ws.id = 'w1';
+    ws.generation = 1;
     (Object.values(api) as Array<{ mockReset(): void }>).forEach((fn) => fn.mockReset());
     api.fetchTranslationSettings.mockResolvedValue({ enabled: true, target_language: 'vi', configuration_revision: 3 });
   });
@@ -38,22 +44,35 @@ describe('useContentTranslation', () => {
 
   it('requests only the supplied page ids, in chunks of at most 25', async () => {
     api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) =>
-      accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))));
+      accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))),
+    );
     renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
-    await settle(); await settle();
+    await settle();
+    await settle();
     const sizes = api.submitTranslationBatch.mock.calls.map((c: unknown[][]) => c[0].length).sort((a: number, b: number) => a - b);
     expect(sizes).toEqual([5, 25]);
-    expect(api.submitTranslationBatch.mock.calls.flatMap((c: unknown[][]) => c[0] as Array<{ resource_id: string }>).every((i: { resource_id: string }) => /^s\d+$/.test(i.resource_id))).toBe(true);
+    expect(
+      api.submitTranslationBatch.mock.calls
+        .flatMap((c: unknown[][]) => c[0] as Array<{ resource_id: string }>)
+        .every((i: { resource_id: string }) => /^s\d+$/.test(i.resource_id)),
+    ).toBe(true);
   });
 
   it('drops a late result after a workspace switch', async () => {
     let resolve!: (value: unknown) => void;
-    api.submitTranslationBatch.mockReturnValue(new Promise((r) => { resolve = r; }));
+    api.submitTranslationBatch.mockReturnValue(
+      new Promise((r) => {
+        resolve = r;
+      }),
+    );
     const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
     await settle();
     ws.generation = 2;
     await act(async () => {
-      resolve({ ...accepted([{ resource_id: 's0', status: 'ready' }]), items: [{ resource_type: 'news_story', resource_id: 's0', status: 'ready', translation: { title: 'x' } }] });
+      resolve({
+        ...accepted([{ resource_id: 's0', status: 'ready' }]),
+        items: [{ resource_type: 'news_story', resource_id: 's0', status: 'ready', translation: { title: 'x' } }],
+      });
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.results.size).toBe(0);
@@ -61,29 +80,42 @@ describe('useContentTranslation', () => {
 
   it('stops polling after 60 s and does not resubmit', async () => {
     api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'pending' }]));
-    api.readTranslationBatch.mockResolvedValue({ batch_id: 'b1', items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }] });
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
+    });
     renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
     await settle();
-    await act(async () => { await vi.advanceTimersByTimeAsync(MAX_POLL_MS + POLL_MS * 3); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MAX_POLL_MS + POLL_MS * 3);
+    });
     const polls = api.readTranslationBatch.mock.calls.length;
     expect(polls).toBeLessThanOrEqual(MAX_POLL_MS / POLL_MS);
-    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 5); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS * 5);
+    });
     expect(api.readTranslationBatch.mock.calls.length).toBe(polls);
     expect(api.submitTranslationBatch).toHaveBeenCalledTimes(1);
   });
 
   it('shares one cache between two consumers and exposes blocked reasons', async () => {
     api.submitTranslationBatch.mockResolvedValue({
-      batch_id: null, items: [
+      batch_id: null,
+      items: [
         { resource_type: 'news_story', resource_id: 's0', status: 'ready', translation: { title: 'x' }, original_revision: 'r' },
         { resource_type: 'news_story', resource_id: 's1', status: 'blocked', error_code: 'privacy_blocked' },
       ],
     });
     const first = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
-    await settle(); await settle();
-    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    await settle();
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
     const second = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
-    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
     expect(api.submitTranslationBatch).toHaveBeenCalledTimes(1);
     for (const hook of [first, second]) {
       expect(hook.result.current.results.get('s0')?.translation?.title).toBe('x');

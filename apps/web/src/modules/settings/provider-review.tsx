@@ -47,14 +47,40 @@ type ReviewDecision = {
 export function ProviderReviewTable({ rows }: { rows: PendingReview[] }) {
   const t = useTranslations('globalSettings');
   const display = useDisplayPreferences();
-  const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
+  const catalog = useQuery({
+    queryKey: connectorKeys.catalog,
+    queryFn: ({ signal }) => getConnectorCatalog(signal),
+    staleTime: 5 * 60_000,
+  });
   const pager = usePagination(rows);
-  return <><Table>
-    <TableHeader><TableRow>
-      <TableHead>{t('provider')}</TableHead><TableHead>{t('workspace')}</TableHead><TableHead>{t('termsVersion')}</TableHead><TableHead>{t('declaredUse')}</TableHead><TableHead><span className="sr-only">{t('review')}</span></TableHead>
-    </TableRow></TableHeader>
-    <TableBody>{pager.pageItems.map((row) => <ProviderReviewTableRow key={`${row.workspace_id}-${row.source_id ?? `live-${row.provider_id}`}`} row={row} locale={display.locale} providerName={catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id} />)}</TableBody>
-  </Table><TablePagination {...pager} /></>;
+  return (
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t('provider')}</TableHead>
+            <TableHead>{t('workspace')}</TableHead>
+            <TableHead>{t('termsVersion')}</TableHead>
+            <TableHead>{t('declaredUse')}</TableHead>
+            <TableHead>
+              <span className="sr-only">{t('review')}</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {pager.pageItems.map((row) => (
+            <ProviderReviewTableRow
+              key={`${row.workspace_id}-${row.source_id ?? `live-${row.provider_id}`}`}
+              row={row}
+              locale={display.locale}
+              providerName={catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id}
+            />
+          ))}
+        </TableBody>
+      </Table>
+      <TablePagination {...pager} />
+    </>
+  );
 }
 
 /** One pending review row; owns the open state of its decision sheet. */
@@ -65,20 +91,46 @@ export function ProviderReviewTableRow({ row, locale, providerName }: { row: Pen
   const version = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
     ? formatDate(row.terms_version, locale as AppLocaleId, 'UTC')
     : row.terms_version;
-  const use = row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? t(USE_KEYS[row.declared_use]) : row.declared_use;
-  return <TableRow>
-    <TableCell className="font-medium">{providerName}{termsUrl && <> <a href={termsUrl} target="_blank" rel="noopener noreferrer" className="font-normal text-primary underline underline-offset-4">{t('termsLink')}</a></>}</TableCell>
-    <TableCell>{row.workspace_name}</TableCell>
-    <TableCell className="tabular-nums">{version}</TableCell>
-    <TableCell>{use}</TableCell>
-    <TableCell className="text-right"><Button type="button" variant="outline" onClick={() => setOpen(true)}>{t('review')}</Button></TableCell>
-    <Sheet open={open} onOpenChange={setOpen}>
-      <SheetContent>
-        <SheetHeader><SheetTitle>{t('reviewTitle')}</SheetTitle><SheetDescription>{providerName} · {row.workspace_name}</SheetDescription></SheetHeader>
-        <div className="px-4 pb-4"><ProviderReviewRow row={row} onDone={() => setOpen(false)} /></div>
-      </SheetContent>
-    </Sheet>
-  </TableRow>;
+  const use =
+    row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial'
+      ? t(USE_KEYS[row.declared_use])
+      : row.declared_use;
+  return (
+    <TableRow>
+      <TableCell className="font-medium">
+        {providerName}
+        {termsUrl && (
+          <>
+            {' '}
+            <a href={termsUrl} target="_blank" rel="noopener noreferrer" className="font-normal text-primary underline underline-offset-4">
+              {t('termsLink')}
+            </a>
+          </>
+        )}
+      </TableCell>
+      <TableCell>{row.workspace_name}</TableCell>
+      <TableCell className="tabular-nums">{version}</TableCell>
+      <TableCell>{use}</TableCell>
+      <TableCell className="text-right">
+        <Button type="button" variant="outline" onClick={() => setOpen(true)}>
+          {t('review')}
+        </Button>
+      </TableCell>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>{t('reviewTitle')}</SheetTitle>
+            <SheetDescription>
+              {providerName} · {row.workspace_name}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="px-4 pb-4">
+            <ProviderReviewRow row={row} onDone={() => setOpen(false)} />
+          </div>
+        </SheetContent>
+      </Sheet>
+    </TableRow>
+  );
 }
 
 /** Records an operator decision with its exact terms version and required evidence reference; `onDone` runs after a saved decision. */
@@ -86,10 +138,12 @@ function ProviderReviewRow(props: { row: PendingReview; onDone?: () => void }) {
   const s0 = useProviderReviewController(props);
 
   const vm: ProviderReviewRowVm = s0;
-  return <article className="flex flex-col gap-3 border-b border-border pb-4 last:border-0 last:pb-0">
-<ProviderReviewSummary vm={vm} />
-<ProviderReviewForm vm={vm} />
-  </article>;
+  return (
+    <article className="flex flex-col gap-3 border-b border-border pb-4 last:border-0 last:pb-0">
+      <ProviderReviewSummary vm={vm} />
+      <ProviderReviewForm vm={vm} />
+    </article>
+  );
 }
 
 type ProviderReviewRowVm = ReturnType<typeof useProviderReviewController>;
@@ -98,14 +152,38 @@ type ProviderReviewRowVm = ReturnType<typeof useProviderReviewController>;
 function ProviderReviewSummary({ vm }: { vm: ProviderReviewRowVm }) {
   const { t, providerName, termsVersion, useLabel, row } = vm;
   return (
-<>
-    <dl className="m-0 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-      <div><dt className="text-muted-foreground">{t('workspaces')}</dt><dd className="m-0 font-medium">{row.workspace_name}</dd></div>
-      <div><dt className="text-muted-foreground">{t('provider')}</dt><dd className="m-0 flex flex-wrap items-center gap-2 font-medium">{providerName}{safeHttpUrl(row.terms_url) && <a href={safeHttpUrl(row.terms_url)} target="_blank" rel="noopener noreferrer" className="font-normal text-primary underline underline-offset-4">{t('termsLink')}</a>}</dd></div>
-      <div><dt className="text-muted-foreground">{t('termsVersion')}</dt><dd className="m-0">{termsVersion}</dd></div>
-      <div><dt className="text-muted-foreground">{t('declaredUse')}</dt><dd className="m-0">{useLabel(row.declared_use)}</dd></div>
-    </dl>
-</>
+    <>
+      <dl className="m-0 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+        <div>
+          <dt className="text-muted-foreground">{t('workspaces')}</dt>
+          <dd className="m-0 font-medium">{row.workspace_name}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">{t('provider')}</dt>
+          <dd className="m-0 flex flex-wrap items-center gap-2 font-medium">
+            {providerName}
+            {safeHttpUrl(row.terms_url) && (
+              <a
+                href={safeHttpUrl(row.terms_url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-normal text-primary underline underline-offset-4"
+              >
+                {t('termsLink')}
+              </a>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">{t('termsVersion')}</dt>
+          <dd className="m-0">{termsVersion}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">{t('declaredUse')}</dt>
+          <dd className="m-0">{useLabel(row.declared_use)}</dd>
+        </div>
+      </dl>
+    </>
   );
 }
 
@@ -113,38 +191,61 @@ function ProviderReviewSummary({ vm }: { vm: ProviderReviewRowVm }) {
 function ProviderReviewForm({ vm }: { vm: ProviderReviewRowVm }) {
   const { t, mutation, submit, evidence, setEvidence, allowedUse, setAllowedUse, row } = vm;
   return (
-<>
-    <form className="flex flex-col gap-3" onSubmit={(event) => submit(event, 'approved')}>
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`evidence-${row.workspace_id}-${row.source_id ?? row.provider_id}`}>{t('evidence')}</Label>
-          <Input id={`evidence-${row.workspace_id}-${row.source_id ?? row.provider_id}`} required value={evidence} onChange={(event) => setEvidence(event.target.value)} aria-describedby={`evidence-help-${row.workspace_id}-${row.source_id ?? row.provider_id}`} />
-          <p id={`evidence-help-${row.workspace_id}-${row.source_id ?? row.provider_id}`} className="m-0 text-xs text-muted-foreground">{t('evidenceHelp')}</p>
+    <>
+      <form className="flex flex-col gap-3" onSubmit={(event) => submit(event, 'approved')}>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`evidence-${row.workspace_id}-${row.source_id ?? row.provider_id}`}>{t('evidence')}</Label>
+            <Input
+              id={`evidence-${row.workspace_id}-${row.source_id ?? row.provider_id}`}
+              required
+              value={evidence}
+              onChange={(event) => setEvidence(event.target.value)}
+              aria-describedby={`evidence-help-${row.workspace_id}-${row.source_id ?? row.provider_id}`}
+            />
+            <p id={`evidence-help-${row.workspace_id}-${row.source_id ?? row.provider_id}`} className="m-0 text-xs text-muted-foreground">
+              {t('evidenceHelp')}
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={`allowed-use-${row.workspace_id}-${row.source_id ?? row.provider_id}`}>{t('allowedUse')}</Label>
+            <Select
+              disabled={Boolean(row.acknowledged_at)}
+              value={allowedUse}
+              onValueChange={(value) => setAllowedUse(value as NonNullable<ReviewDecision['allowed_use']>)}
+            >
+              <SelectTrigger id={`allowed-use-${row.workspace_id}-${row.source_id ?? row.provider_id}`}>
+                <SelectValue placeholder={t('allowedUse')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="personal">{t('use.personal')}</SelectItem>
+                <SelectItem value="noncommercial">{t('use.noncommercial')}</SelectItem>
+                <SelectItem value="commercial">{t('use.commercial')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`allowed-use-${row.workspace_id}-${row.source_id ?? row.provider_id}`}>{t('allowedUse')}</Label>
-          <Select disabled={Boolean(row.acknowledged_at)} value={allowedUse} onValueChange={(value) => setAllowedUse(value as NonNullable<ReviewDecision['allowed_use']>)}>
-            <SelectTrigger id={`allowed-use-${row.workspace_id}-${row.source_id ?? row.provider_id}`}><SelectValue placeholder={t('allowedUse')} /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="personal">{t('use.personal')}</SelectItem>
-              <SelectItem value="noncommercial">{t('use.noncommercial')}</SelectItem>
-              <SelectItem value="commercial">{t('use.commercial')}</SelectItem>
-            </SelectContent>
-          </Select>
+        {!evidence.trim() && <p className="m-0 text-xs text-muted-foreground">{t('evidenceRequired')}</p>}
+        {mutation.isError && (
+          <p role="alert" className="m-0 text-sm text-destructive">
+            {t('reviewFailed')}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={mutation.isPending || !evidence.trim() || !allowedUse}>
+            {mutation.isPending ? t('saving') : t('approve')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={mutation.isPending || !evidence.trim()}
+            onClick={(event) => submit(event, 'rejected')}
+          >
+            {mutation.isPending ? t('saving') : t('reject')}
+          </Button>
         </div>
-      </div>
-      {!evidence.trim() && <p className="m-0 text-xs text-muted-foreground">{t('evidenceRequired')}</p>}
-      {mutation.isError && <p role="alert" className="m-0 text-sm text-destructive">{t('reviewFailed')}</p>}
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={mutation.isPending || !evidence.trim() || !allowedUse}>
-          {mutation.isPending ? t('saving') : t('approve')}
-        </Button>
-        <Button type="button" variant="outline" disabled={mutation.isPending || !evidence.trim()} onClick={(event) => submit(event, 'rejected')}>
-          {mutation.isPending ? t('saving') : t('reject')}
-        </Button>
-      </div>
-    </form>
-</>
+      </form>
+    </>
   );
 }
 
@@ -156,31 +257,43 @@ function useProviderReviewController(props: { row: PendingReview; onDone?: () =>
   const client = useQueryClient();
   const [evidence, setEvidence] = useState('');
   const display = useDisplayPreferences();
-  const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
+  const catalog = useQuery({
+    queryKey: connectorKeys.catalog,
+    queryFn: ({ signal }) => getConnectorCatalog(signal),
+    staleTime: 5 * 60_000,
+  });
   // Falls back to the raw provider id when the catalog has no entry, so unknown providers stay identifiable.
   const providerName = catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id;
   // Terms versions are ISO dates (UTC midnight, so no zone shift); any other format is shown verbatim rather than guessed at.
   const termsVersion = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
     ? formatDate(row.terms_version, display.locale, 'UTC')
     : row.terms_version;
-  const useLabel = (value: string) => (value === 'personal' || value === 'noncommercial' || value === 'commercial' ? t(USE_KEYS[value]) : value);
+  const useLabel = (value: string) =>
+    value === 'personal' || value === 'noncommercial' || value === 'commercial' ? t(USE_KEYS[value]) : value;
   const [allowedUse, setAllowedUse] = useState<ReviewDecision['allowed_use'] | ''>(
     row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? row.declared_use : '',
   );
   const mutation = useMutation({
-    mutationFn: ({ state, allowed_use, evidence_ref }: Omit<ReviewDecision, 'row'>) => apiRequest(
-      row.acknowledged_at
-        ? `/api/v1/operator/live-map/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.provider_id)}/terms-review`
-        : `/api/v1/operator/connectors/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.source_id ?? '')}/terms-review`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...csrfHeaders(session.csrfToken) },
-        body: JSON.stringify(row.acknowledged_at
-          ? { state, evidence_ref, version: row.terms_version, declared_use: row.declared_use, acknowledged_at: row.acknowledged_at }
-          : { state, ...(allowed_use ? { allowed_use } : {}), evidence_ref, reviewed_terms_version: row.terms_version }),
-      },
-    ),
-    onSuccess: () => { onDone?.(); void client.invalidateQueries({ queryKey: ['operator-live-map-terms-review'] }); return client.invalidateQueries({ queryKey: ['operator-provider-terms-review'] }); },
+    mutationFn: ({ state, allowed_use, evidence_ref }: Omit<ReviewDecision, 'row'>) =>
+      apiRequest(
+        row.acknowledged_at
+          ? `/api/v1/operator/live-map/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.provider_id)}/terms-review`
+          : `/api/v1/operator/connectors/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.source_id ?? '')}/terms-review`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...csrfHeaders(session.csrfToken) },
+          body: JSON.stringify(
+            row.acknowledged_at
+              ? { state, evidence_ref, version: row.terms_version, declared_use: row.declared_use, acknowledged_at: row.acknowledged_at }
+              : { state, ...(allowed_use ? { allowed_use } : {}), evidence_ref, reviewed_terms_version: row.terms_version },
+          ),
+        },
+      ),
+    onSuccess: () => {
+      onDone?.();
+      void client.invalidateQueries({ queryKey: ['operator-live-map-terms-review'] });
+      return client.invalidateQueries({ queryKey: ['operator-provider-terms-review'] });
+    },
   });
 
   /** Submits one decision only when the required evidence and approval scope are present. */
@@ -191,5 +304,22 @@ function useProviderReviewController(props: { row: PendingReview; onDone?: () =>
     mutation.mutate({ state, ...(state === 'approved' && allowedUse ? { allowed_use: allowedUse } : {}), evidence_ref });
   };
 
-  return { t, session, client, display, catalog, providerName, termsVersion, useLabel, mutation, submit, evidence, setEvidence, allowedUse, setAllowedUse, row, onDone };
+  return {
+    t,
+    session,
+    client,
+    display,
+    catalog,
+    providerName,
+    termsVersion,
+    useLabel,
+    mutation,
+    submit,
+    evidence,
+    setEvidence,
+    allowedUse,
+    setAllowedUse,
+    row,
+    onDone,
+  };
 }

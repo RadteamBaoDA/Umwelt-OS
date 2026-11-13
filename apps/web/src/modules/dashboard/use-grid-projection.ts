@@ -6,8 +6,13 @@ import { getGridUnitMetrics, type ActiveGesture } from './grid-geometry';
 import { projectReadableMobilePlacements, projectTabletPlacements, TABLET_GRID_COLUMNS } from './widget-registry';
 
 /** Full-width reading flow for a panel too narrow to hold two readable gadget columns. */
-function projectSingleColumnPlacements(placements: DashboardPlacement[], instances: GadgetInstance[],
-  desktopCellSize: number, singleCellSize: number, frameHeaderHeight: number): DashboardPlacement[] | null {
+function projectSingleColumnPlacements(
+  placements: DashboardPlacement[],
+  instances: GadgetInstance[],
+  desktopCellSize: number,
+  singleCellSize: number,
+  frameHeaderHeight: number,
+): DashboardPlacement[] | null {
   if (!(desktopCellSize > 0) || !(singleCellSize > 0)) return null;
   let y = 0;
   const ordered = [...placements].sort((a, b) => a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id));
@@ -51,11 +56,12 @@ function useTabletProjection(inputs: GridProjectionInputs, gridMetrics: ReturnTy
     [gridWidth, tabletActive],
   );
   const tabletProjection = useMemo(
-    () => (tabletActive && tabletMetrics && gridMetrics && frameHeaderHeight > 0
-      ? gridWidth >= 680
-        ? projectTabletPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
-        : projectSingleColumnPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
-      : null),
+    () =>
+      tabletActive && tabletMetrics && gridMetrics && frameHeaderHeight > 0
+        ? gridWidth >= 680
+          ? projectTabletPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
+          : projectSingleColumnPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
+        : null,
     [frameHeaderHeight, gridMetrics, gridWidth, instances, placements, tabletActive, tabletMetrics],
   );
   const rendering = tabletActive && tabletProjection !== null && tabletMetrics !== null;
@@ -80,16 +86,16 @@ export function useGridProjection(inputs: GridProjectionInputs) {
   // Matching column width and row height makes every persisted unit square; gaps define the shared stride.
   const gridMetrics = useMemo(() => getGridUnitMetrics(gridWidth, columnCount), [columnCount, gridWidth]);
   const cellSize = gridMetrics?.cellSize ?? 0;
-  const readableProjection = useMemo(() => isMobileView
-    ? projectReadableMobilePlacements(placements, instances, columnCount, cellSize, frameHeaderHeight)
-    : null,
-  [cellSize, columnCount, frameHeaderHeight, instances, isMobileView, placements]);
+  const readableProjection = useMemo(
+    () => (isMobileView ? projectReadableMobilePlacements(placements, instances, columnCount, cellSize, frameHeaderHeight) : null),
+    [cellSize, columnCount, frameHeaderHeight, instances, isMobileView, placements],
+  );
   const projectionMeasurementReady = gridMetrics !== null && frameHeaderHeight > 0;
   const tablet = useTabletProjection(inputs, gridMetrics);
   const displayPlacements = tablet.rendering
     ? tablet.tabletProjection!
     : isMobileView && !isEditMode
-      ? readableProjection ?? effectivePlacements
+      ? (readableProjection ?? effectivePlacements)
       : effectivePlacements;
 
   /** Publishes only the measured local view projection; null means width or coverage is unavailable. */
@@ -100,8 +106,7 @@ export function useGridProjection(inputs: GridProjectionInputs) {
 
   /** Shares the same root-width measurement used by square tracks with instance creation. */
   useEffect(() => {
-    onGridMetricsChange?.(gridMetrics && frameHeaderHeight > 0
-      ? { ...gridMetrics, frameHeaderHeight } : null);
+    onGridMetricsChange?.(gridMetrics && frameHeaderHeight > 0 ? { ...gridMetrics, frameHeaderHeight } : null);
   }, [frameHeaderHeight, gridMetrics, onGridMetricsChange]);
 
   return {

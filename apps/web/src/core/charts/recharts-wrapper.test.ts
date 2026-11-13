@@ -21,7 +21,13 @@ describe('formatYTick', () => {
 
 describe('yTicks', () => {
   it('yields distinct formatted labels on a narrow snapped domain', () => {
-    const domain = paddedYDomain([{ x: 1, value: 77373 }, { x: 2, value: 77484 }] as never, [{ dataKey: 'value' }] as never);
+    const domain = paddedYDomain(
+      [
+        { x: 1, value: 77373 },
+        { x: 2, value: 77484 },
+      ] as never,
+      [{ dataKey: 'value' }] as never,
+    );
     const ticks = yTicks(domain)!;
     const span = (domain[1] as number) - (domain[0] as number);
     const labels = ticks.map((v) => formatYTick(v, 'en-us', span));

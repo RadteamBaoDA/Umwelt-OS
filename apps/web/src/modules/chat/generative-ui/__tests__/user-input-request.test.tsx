@@ -24,9 +24,7 @@ describe('MeetingTimePicker request path', () => {
     const user = userEvent.setup();
     const onSubmitInput = vi.fn().mockResolvedValue(undefined);
     const onSendPrompt = vi.fn();
-    render(
-      <MeetingTimePicker title="Sync" slots={SLOTS} requestId="req-1" onSubmitInput={onSubmitInput} onSendPrompt={onSendPrompt} />,
-    );
+    render(<MeetingTimePicker title="Sync" slots={SLOTS} requestId="req-1" onSubmitInput={onSubmitInput} onSendPrompt={onSendPrompt} />);
     await user.click(screen.getByTestId('meeting-slot-s2'));
     await user.click(screen.getByTestId('meeting-confirm-button'));
     expect(onSubmitInput).toHaveBeenCalledWith('req-1', 's2');
@@ -55,9 +53,7 @@ describe('MeetingTimePicker request path', () => {
   });
 
   it('localizes the cancelled banner in Vietnamese', () => {
-    render(
-      <MeetingTimePicker slots={SLOTS} locale="vi-vi" requestId="req-1" onSubmitInput={vi.fn()} inputState="cancelled" />,
-    );
+    render(<MeetingTimePicker slots={SLOTS} locale="vi-vi" requestId="req-1" onSubmitInput={vi.fn()} inputState="cancelled" />);
     expect(screen.getByTestId('meeting-input-state-banner')).toHaveTextContent('đã bị hủy');
   });
 });
@@ -95,15 +91,11 @@ describe('UserInputRequest', () => {
     const user = userEvent.setup();
     const onSubmitInput = vi.fn().mockResolvedValue(undefined);
     const request: InputRequest = { ...TIME_REQUEST, kind: 'text', slots: [] };
-    const { rerender } = render(
-      <UserInputRequest request={request} state="pending" locale="vi-vi" onSubmitInput={onSubmitInput} />,
-    );
+    const { rerender } = render(<UserInputRequest request={request} state="pending" locale="vi-vi" onSubmitInput={onSubmitInput} />);
     await user.type(screen.getByTestId('input-text'), '  Ada ');
     await user.click(screen.getByTestId('input-submit'));
     expect(onSubmitInput).toHaveBeenCalledWith('req-1', 'Ada');
-    rerender(
-      <UserInputRequest request={request} state="answered" answeredLabel="Ada" locale="vi-vi" onSubmitInput={onSubmitInput} />,
-    );
+    rerender(<UserInputRequest request={request} state="answered" answeredLabel="Ada" locale="vi-vi" onSubmitInput={onSubmitInput} />);
     expect(screen.getByTestId('input-state-banner')).toHaveTextContent('Đã gửi câu trả lời: Ada');
     rerender(<UserInputRequest request={request} state="expired" locale="vi-vi" onSubmitInput={onSubmitInput} />);
     expect(screen.getByTestId('input-state-banner')).toHaveTextContent('hết hạn');

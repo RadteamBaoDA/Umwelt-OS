@@ -15,10 +15,21 @@ export function PopoverTrigger({ ...props }: React.ComponentProps<typeof Popover
 }
 
 /** Portals themed popover content below its trigger; reuses the select-content surface tokens and matches the trigger width. */
-export function PopoverContent({ className, align = 'start', sideOffset = 4, ...props }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+export function PopoverContent({
+  className,
+  align = 'start',
+  sideOffset = 4,
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   return (
     <PopoverPrimitive.Portal>
-      <PopoverPrimitive.Content data-slot="popover-content" align={align} sideOffset={sideOffset} className={cn("select-content", className)} {...props} />
+      <PopoverPrimitive.Content
+        data-slot="popover-content"
+        align={align}
+        sideOffset={sideOffset}
+        className={cn('select-content', className)}
+        {...props}
+      />
     </PopoverPrimitive.Portal>
   );
 }
