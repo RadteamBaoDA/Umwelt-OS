@@ -1087,7 +1087,8 @@ async def _create_due_requests(
     process) so lag is visible without flooding the log every tick.
 
     Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
-    consideration is committed before scope work so a busy workspace cannot starve others.
+    consideration is committed before scope work so a busy workspace cannot starve others. The
+    consideration upsert carries one row per distinct workspace, however many of its sources were picked.
     """
     from modules.settings.public import module_is_enabled
 
@@ -1131,7 +1132,14 @@ async def _create_due_requests(
         )
         await session.execute(
             pg_insert(ConnectorWorkspaceDispatch)
-            .values([{"workspace_id": row[1], "last_considered_at": now} for row in picked])
+            # One row per workspace: per_workspace > 1 picks several sources of the same workspace, and Postgres rejects
+            # two rows for one key in a single ON CONFLICT DO UPDATE (which aborted every tick before _enqueue_queued).
+            .values(
+                [
+                    {"workspace_id": workspace_id, "last_considered_at": now}
+                    for workspace_id in dict.fromkeys(row[1] for row in picked)
+                ]
+            )
             .on_conflict_do_update(
                 index_elements=["workspace_id"], set_={"last_considered_at": now}
             )

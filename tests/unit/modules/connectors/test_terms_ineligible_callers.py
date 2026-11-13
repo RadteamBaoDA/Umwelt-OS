@@ -213,3 +213,45 @@ async def test_scheduler_rolls_back_and_skips_terms_ineligible_source(
     assert (
         log.count("rollback") >= 2 and log.count("commit") == 1
     )  # no dispatch row after the denial
+
+
+async def test_scheduler_dedupes_workspace_rows_in_consideration_upsert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_id = uuid4()
+    due = datetime.now(UTC) - timedelta(hours=2)
+    picked = [(uuid4(), workspace_id, due, 15), (uuid4(), workspace_id, due, 15)]
+    statements: list[object] = []
+
+    class Session(_Ctx):
+        """Scripted session: several due sources of one workspace; records executed statements."""
+
+        async def execute(self, stmt: object, params: object = None) -> object:
+            """Record the statement and return the picked rows for the selection query."""
+            statements.append(stmt)
+            return SimpleNamespace(all=lambda: picked)
+
+        async def commit(self) -> None:
+            """No-op commit."""
+
+        async def scalar(self, stmt: object) -> object:
+            """No owner, so the per-source phase is skipped."""
+            return None
+
+        async def get(self, model: object, key: object) -> object:
+            """No provisioning row."""
+            return None
+
+    await scheduler._create_due_requests(
+        lambda: Session([]),
+        datetime.now(UTC),
+        False,  # type: ignore[arg-type]
+        4,
+    )
+    upsert = statements[-1]
+    # Two rows for one workspace in a single ON CONFLICT DO UPDATE raise CardinalityViolation in Postgres.
+    params = upsert.compile().params  # type: ignore[attr-defined]
+    assert [k for k in params if k.startswith("workspace_id")] in (
+        ["workspace_id"],
+        ["workspace_id_m0"],
+    )
