@@ -75,11 +75,14 @@ test.describe('dashboard ux', () => {
     await expect(boxes.first()).toBeVisible({ timeout: 30_000 });
     for (const box of await boxes.all()) {
       const label = (await box.getAttribute('aria-label')) ?? '';
-      const keep = label === `Add ${BBC}` || label === `Add ${TUOITRE}`;
+      const itemLabel = (name: string) => uiText('sources', 'starter.itemSelect', { name });
+      const keep = label === itemLabel(BBC) || label === itemLabel(TUOITRE);
       if ((await box.isChecked()) !== keep) await box.setChecked(keep);
     }
     await wizard.getByRole('button', { name: uiText('sources', 'next'), exact: true }).click();
-    await expect(wizard.getByTestId('starter-row-bbc_world')).toContainText(/Done|Already added/i, { timeout: 120_000 });
+    // Row status is the owner-locale statusDone / statusExists label (en "Done"/"Already added", vi "Xong"/"Đã thêm").
+    const rowDone = new RegExp(`${escapeRe(uiText('sources', 'starter.statusDone'))}|${escapeRe(uiText('sources', 'starter.statusExists'))}`, 'i');
+    await expect(wizard.getByTestId('starter-row-bbc_world')).toContainText(rowDone, { timeout: 120_000 });
     await wizard.getByRole('button', { name: uiText('sources', 'buildDashboard') }).click();
     // The preset picker opens in place with the Monitor preset preselected. "Monitor" is the server's preset label
     // (modules/dashboard/gadgets.py), not catalog copy, so it stays literal in every locale.
