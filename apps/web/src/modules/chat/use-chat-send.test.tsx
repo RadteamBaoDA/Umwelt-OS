@@ -135,7 +135,7 @@ describe('useChatSend', () => {
     expect(chatCtrl.setActiveConversationId).toHaveBeenCalledWith('new2');
   });
 
-  it('rejects an unresolved specialist prompt, restoring it and showing agentRetryPending', async () => {
+  it('rejects an unresolved specialist prompt, restoring it and showing agent.retryPending', async () => {
     const pending = { prompt: 'other', profileId: 'p', profileRevision: 1, conversationId: 'c1', clientRequestId: 'q' };
     const { deps, chatCtrl, live } = makeDeps({ pendingProfileRun: pending, conversationId: 'c1' });
     const { result } = render(deps);
@@ -145,19 +145,19 @@ describe('useChatSend', () => {
     });
     expect(ok).toBe(false);
     expect(chatCtrl.setDraft).toHaveBeenCalledWith('other');
-    expect(live.patch).toHaveBeenLastCalledWith({ isPending: false, error: 'agentRetryPending' });
+    expect(live.patch).toHaveBeenLastCalledWith({ isPending: false, error: 'agent.retryPending' });
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(h.startAgentRun).not.toHaveBeenCalled();
   });
 
-  it('rejects an unavailable specialist with agentUnavailable and restores the draft', async () => {
+  it('rejects an unavailable specialist with agent.unavailable and restores the draft', async () => {
     const { deps, chatCtrl, live } = makeDeps({ conversationId: 'c1', selectedProfileId: 'spec', profiles: [] });
     const { result } = render(deps);
     await act(async () => {
       await result.current.handleSend('hi');
     });
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hi');
-    expect(live.patch).toHaveBeenLastCalledWith({ error: 'agentUnavailable' });
+    expect(live.patch).toHaveBeenLastCalledWith({ error: 'agent.unavailable' });
   });
 
   it('starts a specialist run with an immutable envelope instead of sending a message', async () => {

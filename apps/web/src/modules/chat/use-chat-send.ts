@@ -212,7 +212,7 @@ function resolveSelectedProfile(d: ChatSendDeps, retryEnvelope: PendingSpecialis
     !retryEnvelope &&
     (!selected || !selected.enabled || selected.capability === 'unavailable')
   ) {
-    throw new LocalizedError(d.tAgents('agentUnavailable'));
+    throw new LocalizedError(d.tAgents('agent.unavailable'));
   }
   return selected;
 }
@@ -271,7 +271,7 @@ async function startSpecialistRun(
   profile: AgentProfile | undefined,
 ): Promise<void> {
   const { chatCtrl } = d;
-  if (!retryEnvelope && !profile) throw new LocalizedError(d.tAgents('agentUnavailable'));
+  if (!retryEnvelope && !profile) throw new LocalizedError(d.tAgents('agent.unavailable'));
   const envelope: PendingSpecialistRun = retryEnvelope ?? {
     prompt: content,
     profileId: profile!.id,
@@ -357,7 +357,7 @@ function describeSendError(d: ChatSendDeps, attempt: SendAttempt, err: unknown, 
     attempt.selectionStage && hasSelectionItems && err instanceof ApiError && !!err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
   if (err instanceof LocalizedError) return err.message;
   if (selectionFailure) return d.t(chatFailureKey(err, 'error.sending'));
-  if (attempt.attemptedProfileRun?.prompt === content) return d.tAgents('agentStartFailed');
+  if (attempt.attemptedProfileRun?.prompt === content) return d.tAgents('agent.startFailed');
   return d.t(chatFailureKey(err, 'error.sending'));
 }
 
@@ -402,7 +402,7 @@ function rejectUnresolvedSpecialist(d: ChatSendDeps, content: string): boolean {
   const unresolved = pendingProfileRun ?? otherPending;
   if (!unresolved || (unresolved === pendingProfileRun && unresolved.prompt === content && mode === 'full')) return false;
   chatCtrl.setDraft(unresolved.prompt);
-  d.live.patch({ isPending: false, error: d.tAgents('agentRetryPending') });
+  d.live.patch({ isPending: false, error: d.tAgents('agent.retryPending') });
   return true;
 }
 
