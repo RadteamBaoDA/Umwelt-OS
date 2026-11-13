@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { uiText } from './ui-text';
 
 // Web search UI (P15 W4). All network is mocked via page.route; nothing reaches a real backend or provider.
 // Mirrors WEB_SEARCH_SEND_ENABLED (modules/chat/api.ts), enabled with W2; the toggle-off case is skipped while it is true.
@@ -48,12 +49,17 @@ test.describe('web search toggle', () => {
     await expect(page.locator('#chat-web-search')).toHaveCount(0);
   });
 
-  test('is disabled with an explanation when unconfigured', async ({ page }) => {
+  test('links to web search setup when unconfigured', async ({ page }) => {
     test.skip(!SEND_ENABLED, 'toggle hidden until W3 enables WEB_SEARCH_SEND_ENABLED');
     await mockChat(page, { configured: false });
     await page.goto('/chat');
     await page.getByRole('button', { name: 'Add context, files or options' }).click();
-    await expect(page.getByRole('menuitemcheckbox', { name: 'Search the web' })).toBeDisabled();
+    // Unconfigured: the item is a link to Settings (not a disabled checkbox), with the setup hint as its explanation.
+    const setup = page.getByTestId('chat-web-search-setup');
+    await expect(setup).toHaveAttribute('href', '/settings/web-search');
+    await expect(setup).toContainText(uiText('chat', 'web.searchToggle'));
+    await expect(setup).toContainText(uiText('chat', 'web.searchNotSetUp'));
+    await expect(page.getByRole('menuitemcheckbox', { name: uiText('chat', 'web.searchToggle') })).toHaveCount(0);
   });
 
   test('is hidden while the send flag is off', async ({ page }) => {
