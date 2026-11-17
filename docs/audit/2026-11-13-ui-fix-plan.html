@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Umwelt-OS – Kế hoạch sửa UI 2026-11-13</title>
+<style>
+  :root { --bg:#f2f5f2; --surface:#fff; --text:#17211c; --muted:#5c6660; --line:#e3e7e3; --accent:#176a4a; --danger:#c4242a; --warn:#a65b00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0e110f; --surface:#161a17; --text:#edf3ee; --muted:#a7b1aa; --line:#252b27; --accent:#77c69c; --danger:#e5566f; --warn:#fbbf24; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 system-ui, "Segoe UI", sans-serif; }
+  main { max-width:1080px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:24px; margin:0 0 8px; }
+  h2 { font-size:20px; margin:40px 0 12px; padding-top:16px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:24px 0 8px; }
+  p, li { max-width:78ch; }
+  a { color:var(--accent); }
+  code { font:13px ui-monospace, Consolas, monospace; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 4px; overflow-wrap:anywhere; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px; margin:12px 0; }
+  .muted { color:var(--muted); }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; background:var(--surface); }
+  th, td { text-align:left; vertical-align:top; padding:8px 12px; border:1px solid var(--line); }
+  th { font-size:13px; color:var(--muted); font-weight:600; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; border:1px solid currentColor; border-radius:4px; padding:0 6px; white-space:nowrap; }
+  .hi { color:var(--danger); } .mid { color:var(--warn); } .lo { color:var(--muted); } .ok { color:var(--accent); }
+  nav a { margin-right:12px; white-space:nowrap; }
+</style>
+</head>
+<body>
+<main>
+<h1>Umwelt-OS – Kế hoạch sửa UI</h1>
+<p class="muted">Ngày 2026-11-13 · nhánh <code>feature/fix-ui</code> (đầu nhánh <code>eb77edde</code>, cây làm việc sạch) · thực hiện 21 gói đã duyệt trong <a href="2026-11-12-ui-audit.html">report audit 2026-11-12</a>. Chưa sửa dòng code nào.</p>
+<nav><a href="#pham-vi">Phạm vi</a><a href="#dot">Các đợt</a><a href="#chi-tiet">Chi tiết gói</a><a href="#quy-tac">Quy tắc</a><a href="#kiem">Kiểm chứng</a><a href="#rui-ro">Rủi ro</a><a href="#quyet">Cần owner quyết</a></nav>
+
+<h2 id="pham-vi">Phạm vi</h2>
+<div class="card">
+<ul>
+<li><strong>Làm:</strong> 21 gói A1–A4, F1–F6, R1–R2, D1–D4, W1–W5, chia 5 đợt. Mỗi đợt kết thúc bằng test, một commit local và (từ đợt 2) một lượt chụp lại.</li>
+<li><strong>Để sau:</strong> W6 (xem trước trực tiếp trong trình sửa gadget, xem prompt hiệu lực). Gói này có thể cần API backend mới; kế hoạch chỉ gồm bước khảo sát ở đợt 5, không gồm việc xây.</li>
+<li><strong>Không đổi:</strong> thứ tự trường và lời gọi API của form; lưới gadget và vị trí ô; bố cục desktop ngoài Dashboard; backend.</li>
+<li><strong>Không push.</strong> Mọi commit ở local; owner tự push.</li>
+</ul>
+</div>
+
+<h2 id="dot">Các đợt</h2>
+<p>Thứ tự xếp theo rủi ro tăng dần. <code>app/globals.css</code> bị 8 gói chạm tới, nên trong mỗi đợt chỉ một agent được sửa file này.</p>
+<div class="wrap"><table>
+<tr><th>Đợt</th><th>Gói</th><th>Nội dung</th><th>Agent</th><th>Cổng kết thúc</th></tr>
+<tr><td><strong>1. Nền tảng</strong></td><td>A1, A2, F1, W1, W2</td><td>Viền focus, giảm chuyển động, kiểu hiển thị lỗi, hai hộp xác nhận</td><td>2 song song: (a) <code>globals.css</code> + <code>tokens.json</code>; (b) W1, W2</td><td>vitest, typecheck, lint · commit</td></tr>
+<tr><td><strong>2. Form</strong></td><td>F2, F3, F4, F5, F6</td><td>Một cột, wizard nêu lý do, kiểm tra khi rời trường, trạng thái đang lưu, chuỗi lỗi</td><td>3 song song theo thư mục: (a) sources; (b) public + account + settings; (c) còn lại. F6 chạy sau cùng, một agent.</td><td>vitest, typecheck, lint · chụp lại · commit</td></tr>
+<tr><td><strong>3. Responsive + a11y còn lại</strong></td><td>R1, R2, A3, A4</td><td>Bảng thành card dưới 768px, vùng nhấn, viền ô nhập, ring và nhãn còn thiếu</td><td>2 song song: (a) R1; (b) R2 + A3 + A4 (giữ <code>globals.css</code>)</td><td>như trên · so ảnh 1440px với đợt 2: không đổi bố cục</td></tr>
+<tr><td><strong>4. Dashboard</strong></td><td>D1, D2, D3, D4</td><td>Thanh lọc dùng chung, bố cục 390px, thang chữ và trạng thái rỗng, khung bản đồ</td><td>Tuần tự: D1 → D2 (cùng vùng file), rồi D3 + D4 song song</td><td>như trên · ảnh Dashboard 1440 và 390px để owner xem</td></tr>
+<tr><td><strong>5. WYSIWYG</strong></td><td>W3, W4, W5 (+ khảo sát W6)</td><td>Xoá xem trước cũ, số gadget dùng chung, xem trước tablet/điện thoại</td><td>2 song song: (a) W3 + W4; (b) W5. Khảo sát W6 bằng analyst, chỉ đọc.</td><td>như trên · commit · cập nhật report</td></tr>
+</table></div>
+<p>Sau đợt 5: một lượt review độc lập (analyst) trên toàn bộ diff của 5 đợt, rồi chụp bộ ảnh “sau” cuối cùng và bổ sung vào report audit.</p>
+
+<h2 id="chi-tiet">Chi tiết từng gói</h2>
+
+<h3>Đợt 1 – Nền tảng</h3>
+<div class="wrap"><table>
+<tr><th>Gói</th><th>Việc làm</th><th>File</th><th>Kiểm</th></tr>
+<tr><td>A1</td><td>Sáu rule <code>:focus-visible</code> đổi từ accent pha 40% sang <code>var(--accent)</code> đặc. Thêm <code>.checkbox:focus-visible</code> cùng kiểu. Ghi giá trị mới vào token.</td><td><code>apps/web/src/app/globals.css</code> (dòng 178, 247, 265, 307, 312, 337), <code>docs/design-system/tokens.json</code></td><td>Lượt đo focus: mọi điểm dừng có viền đặc; tương phản 6.57:1 sáng, 8.66:1 tối</td></tr>
+<tr><td>A2</td><td>Thêm <code>transition-duration: .01ms !important</code> vào rule giảm chuyển động.</td><td><code>globals.css:373</code></td><td>Lượt đo giảm chuyển động: 0 phần tử còn transition</td></tr>
+<tr><td>F1</td><td>Thêm rule <code>.input[aria-invalid='true']</code> và <code>.input:user-invalid</code> (viền <code>danger</code>, viền focus màu danger); chữ trợ giúp trong <code>.field</code> đổi màu khi trường sai.</td><td><code>globals.css</code> (sau dòng 178)</td><td>Thử tay: gõ sai rồi rời trường ở một trường phạm vi nguồn</td></tr>
+<tr><td>W1</td><td>Mục “Xoá” trong menu sửa của gadget mở hộp xác nhận (<code>AlertDialog</code> sẵn có) trước khi gọi xoá.</td><td><code>modules/dashboard/gadget-frame.tsx</code>, <code>core/messages/dashboard.ts</code> (en/vi)</td><td>Test vitest mới: bấm Xoá không gọi API cho tới khi xác nhận</td></tr>
+<tr><td>W2</td><td>Hộp xác nhận trước “Thu hồi” điều khoản Live Map và trước “Xoay / Thu hồi” khoá webhook.</td><td><code>modules/dashboard/live-map-config.tsx</code>, <code>modules/automations/rule-editor.tsx</code>, messages</td><td>Test vitest mới cho từng hành động</td></tr>
+</table></div>
+
+<h3>Đợt 2 – Form</h3>
+<div class="wrap"><table>
+<tr><th>Gói</th><th>Việc làm</th><th>File</th><th>Kiểm</th></tr>
+<tr><td>F2</td><td><code>FieldGrid</code> thành một cột. Gỡ lưới hai cột viết tay.</td><td><code>components/settings-layout/index.tsx:51</code>; <code>sources/mcp-editor.tsx</code>, <code>automations/rule-editor.tsx:226</code>, <code>sources/builtin-options.tsx</code>, <code>settings/provider-review.tsx</code>, <code>dashboard/gadget-editor-sections.tsx</code>, <code>news/topic-settings.tsx</code></td><td>Ảnh Settings 1440px: form một cột</td></tr>
+<tr><td>F3</td><td>Wizard nguồn: Next luôn bật; khi bước chưa hợp lệ, đưa focus về trường sai đầu tiên và hiện một dòng lý do nối bằng <code>aria-describedby</code>. <code>ScopeField</code> và <code>OptionalScopeInput</code>: trạng thái touched khi rời trường; <code>aria-invalid</code> từ kiểm tra của trình duyệt và từ danh sách lỗi máy chủ. Starter pack: lỗi chỉ hiện sau khi rời trường; tên trống có thông báo.</td><td><code>sources/source-wizard.tsx:110</code>, <code>scope-fields.tsx</code>, <code>provider-scope.tsx:140,252</code>, <code>starter-pack-wizard.tsx</code>, <code>connector-editor/provider-step.tsx</code></td><td>Test vitest: Next ở bước sai đưa focus về trường lỗi; lỗi máy chủ gắn đúng trường. Các test wizard hiện có vẫn đạt.</td></tr>
+<tr><td>F4</td><td>react-hook-form: <code>mode:'onBlur', reValidateMode:'onBlur'</code> ở 6 chỗ. Form thủ công: chỉ đánh dấu lỗi sau khi rời trường; thay nút khoá im lặng bằng thông báo dưới trường. Nối lỗi với trường bằng <code>id</code> + <code>aria-describedby</code>.</td><td>RHF: <code>login/page.tsx:271</code>, <code>setup/page.tsx:39</code>, <code>knowledge/entity-list.tsx:77</code>, <code>use-entity-detail.ts:42</code>, <code>document-form.tsx:33</code>, <code>search/search-page.tsx</code>. Thủ công: <code>invite-accept.tsx</code>, <code>account/change-password-dialog.tsx</code>, <code>account-deletion.tsx</code>, <code>settings/workspace-members.tsx</code>, <code>viz-router-card.tsx</code>, <code>web-search-settings.tsx</code>, <code>system-prompts.tsx</code>, <code>tasks/task-form.tsx:87</code>, <code>dashboard/gadget-editor.tsx:236</code>, <code>sources/source-rename.tsx</code>, <code>timeline/timeline-page.tsx</code>, <code>sources/mcp-collection-editor.tsx</code></td><td>Mỗi form một test: gõ không báo lỗi, rời trường mới báo. Số và thứ tự request không đổi.</td></tr>
+<tr><td>F5</td><td>Nút gửi hiện nhãn “Đang lưu…” và <code>aria-busy</code> khi đang gửi. Upload: khoá nút khi đang gửi; không hiện thông báo lỗi thô của máy chủ.</td><td><code>dashboard/live-map-config.tsx</code>, <code>settings/ai-settings.tsx</code>, <code>sources/mcp-editor.tsx</code>, <code>ingestion/upload.tsx</code></td><td>Test: bấm gửi hai lần chỉ tạo một request (upload)</td></tr>
+<tr><td>F6</td><td>Viết lại khoảng 35 chuỗi lỗi en/vi theo bảng trong report; tách <code>starterFieldInvalid</code> thành chuỗi theo loại; thêm 4 chuỗi còn thiếu.</td><td><code>core/messages/sources.ts</code>, <code>gadget-settings.ts</code>, <code>login.ts</code>, <code>setup.ts</code>, <code>account.ts</code>, <code>dashboard.ts</code>, <code>chat.ts</code>, <code>ui-sweep.ts</code>, <code>documents.ts</code>, <code>preferences.ts</code>, <code>workspace-members.ts</code>, <code>automations/messages.ts</code></td><td>Test đối chiếu khoá en/vi hiện có vẫn đạt; cập nhật các test khẳng định chuỗi cũ</td></tr>
+</table></div>
+<p class="muted">Trước khi viết chuỗi theo loại cho starter pack, agent đọc <code>EDIT_VALIDATORS</code> trong <code>starter-packs.ts:115-121</code> để lấy đúng dấu phân cách và giới hạn; ba định dạng (crypto, từ khoá việc làm, thời tiết) chưa được xác minh trong lượt audit.</p>
+
+<h3>Đợt 3 – Responsive và accessibility còn lại</h3>
+<div class="wrap"><table>
+<tr><th>Gói</th><th>Việc làm</th><th>File</th><th>Kiểm</th></tr>
+<tr><td>R1</td><td>Thêm chế độ xếp chồng vào <code>Table</code> theo mẫu <code>sources/source-table.tsx:58-65</code>: dưới 768px header thành <code>sr-only</code>, mỗi hàng là một card, mỗi ô hiện nhãn cột. Áp cho 9 bảng. Gỡ rule cuộn ngang ở <code>globals.css:446</code> cho các bảng đã chuyển.</td><td><code>components/ui/table.tsx</code>; <code>observability/database-panel.tsx</code>, <code>system-status-dashboard.tsx</code>, <code>usage-panel.tsx</code>, <code>settings/provider-review.tsx</code>, <code>models-section.tsx</code>, <code>n8n-settings.tsx</code>, <code>sources/sync-history.tsx</code>, <code>dashboard/gadgets/job-list.tsx</code>, <code>chat/generative-ui/components/table-catalog.tsx</code></td><td>Lượt đo ở 390 và 768px: 0 vùng cuộn ngang ở System status và Global settings. Ảnh 1440px không đổi.</td></tr>
+<tr><td>R2</td><td>Vùng nhấn tối thiểu 44px trên cảm ứng và dưới 768px: checkbox (giữ ô 18px, mở rộng vùng nhấn), logo, avatar, nút icon thanh trên, liên kết điều hướng, chip “Add … gadget”, ba nút trong khung gadget (28–36px).</td><td><code>globals.css</code>, <code>components/ui/checkbox.tsx</code>, <code>dashboard/gadget-frame.tsx:279,327,340</code>, <code>dashboard-overview.tsx:35</code>, <code>dashboard-panels.tsx:31</code></td><td>Lượt đo ở 390px với con trỏ cảm ứng: không còn phần tử dưới 24px; danh sách dưới 44px chỉ còn liên kết trong câu văn</td></tr>
+<tr><td>A3</td><td>Đổi <code>--control</code>: #868f88 (sáng, 3.33:1) và #667069 (tối, 3.42:1). Đồng bộ token.</td><td><code>globals.css:58,108</code>, <code>tokens.json</code></td><td>Owner xem ảnh trước/sau của một trang form trước khi commit (viền đậm hơn trên toàn app)</td></tr>
+<tr><td>A4</td><td>Ring cho ô soạn chat, ô bảng lệnh, mục feed, khung bản đồ khi canvas có focus. Nhãn cho bộ chọn ở Models. Kiểm từng nút trong 8 nút icon nghi thiếu nhãn; thêm <code>aria-label</code> en/vi cho nút được xác nhận thiếu.</td><td><code>chat/chat-composer.tsx:472</code>, <code>core/command-palette.tsx:322</code>, <code>dashboard/gadgets/feed-gadget.tsx:404</code>, <code>map-gadget.tsx</code>, <code>settings/models-section.tsx</code>, <code>chat/chat-attachments.tsx</code>, <code>chat-context-bar.tsx</code>, <code>news/story-list.tsx</code>, <code>dashboard/gadget-frame.tsx</code></td><td>Lượt đo focus: 0 điểm dừng không có dấu hiệu; 0 ô nhập thiếu nhãn</td></tr>
+</table></div>
+
+<h3>Đợt 4 – Dashboard</h3>
+<div class="wrap"><table>
+<tr><th>Gói</th><th>Việc làm</th><th>File</th><th>Kiểm</th></tr>
+<tr><td>D1</td><td>Một thanh lọc dùng chung cho Overview thay hai bộ lặp. 13 chip chỉ hiện khi vừa một hàng (từ 1100px); hẹp hơn thì là một menu chọn danh mục. Trạng thái lọc và request giữ nguyên.</td><td><code>dashboard/dashboard-overview.tsx</code>, <code>gadgets/live-map-gadget.tsx</code>, <code>gadgets/map-gadget.tsx</code></td><td>Test hiện có của live-map và overview vẫn đạt; test mới cho menu danh mục</td></tr>
+<tr><td>D2</td><td>Dưới 720px: gom Comfortable, Edit layout, Topics, Add tab vào một menu. Bỏ tab World map / Gadgets; bản đồ và gadget nối tiếp trong một luồng cuộn.</td><td><code>dashboard/dashboard-header.tsx</code>, <code>dashboard-panels.tsx</code>, <code>dashboard-page.tsx</code></td><td>Ảnh 390px: bản đồ nằm trong màn hình đầu; gadget đầu tiên thấy được khi cuộn, không cần đổi tab</td></tr>
+<tr><td>D3</td><td>Tiêu đề gadget 16px/600. Cỡ 24px đậm chỉ dùng khi có số liệu; trạng thái rỗng dùng 14px <code>muted</code> kèm đúng một nút nền đậm cho bước kế tiếp.</td><td><code>dashboard/gadget-frame.tsx</code>, các gadget có trạng thái rỗng (feed, highlights, watchlist, jobs, video, activity, message-list), <code>globals.css</code></td><td>Lượt đo: tiêu đề gadget 16px. Ảnh từng gadget trong thư mục <code>gadgets/</code></td></tr>
+<tr><td>D4</td><td>Khung bản đồ Overview cao theo nội dung. Dòng ghi công nguồn xuống dòng, không bị cắt. Bỏ 2 gradient. Đưa spacing lẻ của vùng dashboard về thang 4–32.</td><td><code>dashboard/dashboard-overview.tsx</code>, <code>globals.css:258,302</code></td><td>Ảnh toàn trang: không còn cột trắng; tìm <code>gradient</code> trong <code>apps/web/src</code> không còn kết quả ngoài chú thích</td></tr>
+</table></div>
+<p class="muted">Ô mẫu theme “system” hiện dùng gradient chia đôi để thể hiện sáng/tối. Thay bằng hai nửa màu đặc đặt cạnh nhau (hai phần tử), giữ nguyên ý nghĩa.</p>
+
+<h3>Đợt 5 – WYSIWYG</h3>
+<div class="wrap"><table>
+<tr><th>Gói</th><th>Việc làm</th><th>File</th><th>Kiểm</th></tr>
+<tr><td>W3</td><td>Xoá kết quả xem trước khi bản nháp đổi: quy tắc nổi bật, automation, mẫu REST. Đặt lại tiêu đề nháp khi đóng hộp thoại cấu hình gadget.</td><td><code>settings/highlight-rule-editor.tsx:244</code>, <code>automations/rule-editor.tsx:263,319</code>, <code>sources/rest-sample-preview.tsx:18-35</code>, <code>dashboard/gadget-settings.tsx:51-54</code></td><td>Test: sửa nháp sau khi xem trước thì kết quả cũ biến mất</td></tr>
+<tr><td>W4</td><td>Cạnh nút Lưu của trình sửa gadget, hiện số gadget đang dùng chung định nghĩa (dùng <code>getGadgetDefinitionUsage</code> sẵn có).</td><td><code>dashboard/gadget-settings.tsx</code>, messages</td><td>Test: định nghĩa dùng ở 2 nơi hiện đúng số</td></tr>
+<tr><td>W5</td><td>Trong chế độ sửa bố cục, thêm nút xem trước chỉ đọc cho tablet và điện thoại, dùng bản chiếu sẵn có.</td><td><code>dashboard/layout-editor.tsx</code>, <code>use-grid-projection.ts</code></td><td>Test: bật xem trước tablet cho ra đúng vị trí của <code>projectTabletPlacements</code>; không ghi gì vào bố cục</td></tr>
+<tr><td>W6 (khảo sát)</td><td>Chỉ đọc: backend có endpoint nào cho xem trước gadget từ bản nháp và cho prompt hiệu lực không. Kết quả là một ghi chú để owner quyết có làm tiếp.</td><td>không sửa file</td><td>–</td></tr>
+</table></div>
+
+<h2 id="quy-tac">Quy tắc thực thi</h2>
+<ul>
+<li><strong>GitNexus:</strong> chạy <code>impact</code> (upstream) trước khi sửa mỗi hàm, component hay hook; cảnh báo owner nếu rủi ro HIGH hoặc CRITICAL; kết quả UNKNOWN phải xác nhận bằng tìm kiếm văn bản. Chạy <code>detect_changes</code> trước mỗi commit. Chỉ mục đang chậm một commit, chạy <code>analyze --index-only</code> trước đợt 1.</li>
+<li><strong>Tài liệu trong code:</strong> JSDoc cho mọi hàm, component, hook bị đổi; chú thích ngắn ở chỗ xử lý blur, touched và hộp xác nhận.</li>
+<li><strong>Design system:</strong> dùng skill <code>umwelt-os-ui-system</code>; chỉ token ngữ nghĩa và primitive trong <code>components/ui</code>; không thêm thư viện. Đổi token trong CSS thì đổi <code>tokens.json</code> cùng lúc.</li>
+<li><strong>Agent:</strong> implementer (Haiku), tối đa 3 song song, mỗi prompt có giới hạn thời gian và số lần thử. Dùng Sonnet cho F3 và D1/D2 (đổi hành vi qua nhiều file). Analyst (Opus) chỉ cho review cuối và khảo sát W6.</li>
+<li><strong>Next.js:</strong> đọc hướng dẫn trong <code>node_modules/next/dist/docs/</code> trước khi đụng tới API của framework (theo <code>apps/web/AGENTS.md</code>).</li>
+<li><strong>Commit:</strong> một commit local mỗi đợt, tiêu đề dạng mệnh lệnh (ví dụ <code>fix(web): on-blur validation and actionable form errors</code>). Không push.</li>
+</ul>
+
+<h2 id="kiem">Kiểm chứng</h2>
+<div class="wrap"><table>
+<tr><th>Khi nào</th><th>Lệnh / việc</th><th>Đạt khi</th></tr>
+<tr><td>Sau mỗi gói</td><td>vitest cho thư mục bị đổi</td><td>Toàn bộ đạt, gồm test mới của gói</td></tr>
+<tr><td>Cuối mỗi đợt</td><td><code>npm run test --workspace apps/web</code>, <code>./scripts/dev.ps1 typecheck</code>, <code>./scripts/dev.ps1 lint</code></td><td>Đạt; báo đúng con số nếu có test hỏng</td></tr>
+<tr><td>Cuối đợt 2, 3, 4, 5</td><td>Chạy lại lượt chụp và đo trên stack Docker dùng-một-lần (khoảng 25 phút), xuất vào thư mục riêng của từng đợt</td><td>Không trang nào cuộn ngang; các chỉ số trong cột “Kiểm” của đợt đó đạt</td></tr>
+<tr><td>Cuối đợt 3 trở đi</td><td>So ảnh 1440px của Chat và Settings với ảnh đợt trước</td><td>Bố cục desktop không đổi</td></tr>
+<tr><td>Sau đợt 5</td><td>Review độc lập toàn bộ diff; chạy một lượt e2e nhóm <code>rest</code></td><td>Không còn phát hiện mức cao; e2e đạt</td></tr>
+</table></div>
+<p>Lượt đo sẽ được chỉnh hai điểm trước đợt 2: chạy thêm một lượt với con trỏ cảm ứng (để số vùng nhấn phản ánh điện thoại thật) và thêm dashboard “All gadget types” vào danh sách trang đo.</p>
+
+<h2 id="rui-ro">Rủi ro và cách xử lý đã đánh giá</h2>
+<p>Mỗi rủi ro dưới đây đã được kiểm trong code hoặc test hiện có. Cột “Cách xử lý đã chọn” thay cho cách làm ở phần chi tiết gói khi hai bên khác nhau.</p>
+<div class="wrap"><table>
+<tr><th>#</th><th>Rủi ro</th><th>Đã kiểm thấy gì</th><th>Cách xử lý đã chọn</th><th>Còn lại</th></tr>
+<tr><td>1</td><td><strong>F3 đổi nút Next của wizard nguồn</strong> <span class="tag hi">Cao</span></td>
+<td>Nút bị khoá bằng thuộc tính <code>disabled</code> ở <code>sources/source-wizard.tsx:110</code>. Hai chỗ trong e2e chờ nút bật rồi mới bấm (<code>tests/e2e/sources-helpers.ts:250</code>, <code>sources-wizard.spec.ts:69</code>). Nếu nút luôn bật, phép chờ đó qua ngay và test bấm Next trước khi bước hợp lệ, nên e2e sẽ chập chờn. Ba test đơn vị kiểm thuộc tính <code>disabled</code> (<code>builtin-sources.test.tsx:50</code>, <code>starter-pack-wizard.test.tsx:123,145</code>).</td>
+<td><strong>Không gỡ trạng thái khoá; đổi <code>disabled</code> thành <code>aria-disabled="true"</code>.</strong> Nút vẫn nhận focus và nhận bấm; khi bấm lúc bước chưa hợp lệ thì không chuyển bước, chỉ hiện dòng lý do và đưa focus về trường sai. Playwright coi <code>aria-disabled</code> là đang khoá, nên hai phép chờ trong e2e giữ nguyên ý nghĩa. Sửa 3 khẳng định trong test đơn vị sang <code>aria-disabled</code>. Khi <code>locked</code> (đang gửi) vẫn dùng <code>disabled</code> thật.</td>
+<td>Thấp. Chạy <code>sources-wizard.spec.ts</code> trong lượt Docker cuối đợt 2 để xác nhận.</td></tr>
+<tr><td>2</td><td><strong>F4 làm hỏng test khẳng định lỗi hiện khi gõ</strong> <span class="tag mid">TB</span></td>
+<td>7 file test vừa mô phỏng gõ vừa khẳng định lỗi hoặc trạng thái khoá: <code>account/account-deletion.test.tsx</code>, <code>dashboard/gadget-editor.test.tsx</code>, <code>sources/source-rename.test.tsx</code>, <code>sources/starter-pack-wizard.test.tsx</code>, <code>sources/builtin-sources.test.tsx</code>, <code>settings/models-section.test.tsx</code>, <code>chat/chat-composer.test.tsx</code>.</td>
+<td>Trong 5 file đầu, thêm bước rời trường (<code>userEvent.tab()</code>) trước khẳng định lỗi, và thêm khẳng định ngược: đang gõ thì chưa có lỗi. <code>models-section</code> và <code>chat-composer</code> không thuộc F4 (nút gửi của chat khoá khi rỗng là hành vi đúng), không đổi. Agent liệt kê từng khẳng định bị sửa trong báo cáo đợt.</td>
+<td>Thấp.</td></tr>
+<tr><td>3</td><td><strong>R1: card làm trang quá dài trên điện thoại</strong> <span class="tag lo">Thấp</span> (hạ từ TB)</td>
+<td>Hai bảng lỗi nặng nhất (thống kê Postgres, duyệt điều khoản) đều đã phân trang bằng <code>usePagination</code> (<code>database-panel.tsx:79</code>, <code>provider-review.tsx:44</code>). Khung <code>Table</code> đã giới hạn chiều cao <code>min(36rem, 70vh)</code> và cuộn dọc.</td>
+<td>Giữ phân trang và khung cuộn dọc sẵn có. Card gồm cột đầu làm tiêu đề, các cột còn lại thành lưới nhãn/giá trị hai cột để mỗi card cao khoảng 100px.</td>
+<td>Thấp.</td></tr>
+<tr><td>4</td><td><strong>R1: đổi <code>display</code> của bảng làm mất ngữ nghĩa bảng với trình đọc màn hình</strong> <span class="tag mid">TB</span> (mới)</td>
+<td>Mẫu hiện có ở <code>sources/source-entry.tsx:204,711</code> đặt <code>display:block</code> cho <code>tr</code> và <code>td</code>. Một số trình duyệt bỏ vai trò bảng khi <code>display</code> đổi.</td>
+<td>Khi bật chế độ xếp chồng, primitive <code>Table</code> gắn vai trò tường minh: <code>role="table"</code>, <code>rowgroup</code>, <code>row</code>, <code>columnheader</code>, <code>cell</code>. Nhãn cột trong card lấy từ thuộc tính <code>data-label</code> và ẩn với trình đọc màn hình (đã có header <code>sr-only</code>), tránh đọc hai lần.</td>
+<td>Thấp. Chưa thử trên Safari/VoiceOver thật.</td></tr>
+<tr><td>5</td><td><strong>D1: hai bản đồ trên Overview</strong> <span class="tag hi">Cao</span> (đổi cách làm)</td>
+<td>Hai bản đồ không phải một component lặp bộ lọc. Bên trái là khung cố định của trang Overview (<code>LiveMapOverview</code> trong <code>dashboard-overview.tsx:45</code>); bên phải là gadget “map” do mẫu Overview tạo ra (<code>modules/dashboard/gadgets.py</code>, <code>PresetSlot("map", "map")</code> đứng đầu). “Một thanh lọc dùng chung” như gói D1 ban đầu sẽ phải nối trạng thái của hai component khác nhau, là thay đổi lớn và dễ lỗi.</td>
+<td><strong>Bỏ trùng thay vì nối bộ lọc.</strong> Hai lựa chọn, cần owner chọn: (a) bỏ ô “map” khỏi mẫu Overview, vì khung bên trái đã là bản đồ (sửa một dòng backend, chỉ áp cho dashboard tạo mới; dashboard đang có thì owner tự xoá gadget); (b) giữ gadget map, bỏ khung bản đồ cố định bên trái. Đề xuất (a). Phần còn lại của D1 giữ nguyên: 13 chip thành menu danh mục ở màn hình hẹp, chỉ trong <code>live-map-gadget.tsx</code>.</td>
+<td>TB cho tới khi owner chọn. Lựa chọn (a) đụng backend, ngoài phạm vi “chỉ frontend” ban đầu.</td></tr>
+<tr><td>6</td><td><strong>D2: bỏ tab World map / Gadgets ở màn hình hẹp</strong> <span class="tag mid">TB</span></td>
+<td><code>dashboard-overview.tsx:55-66</code>: tab là cách hiện tại để khung bản đồ và khung gadget, mỗi cái cuộn riêng, cùng vừa một màn hình. Trang dashboard không cuộn ở cấp trang (<code>globals.css:233</code>).</td>
+<td>Ở chế độ compact, xếp bản đồ (chiều cao cố định <code>clamp(11rem, 30vh, 20rem)</code>) phía trên khung gadget trong cùng một vùng cuộn. Không đổi quy tắc “trang không cuộn” ở desktop. Giữ nút thu gọn bản đồ cho màn hình hẹp.</td>
+<td>TB. Bản đồ là canvas WebGL chưa chụp được tự động; owner xem trên điện thoại thật trước khi chốt.</td></tr>
+<tr><td>7</td><td><strong>A3 đổi viền ô nhập trên toàn app</strong> <span class="tag lo">Thấp</span></td>
+<td><code>--control</code> chỉ dùng cho <code>.input</code>, <code>.checkbox</code>, <code>.filters-toggle</code> và 5 chỗ <code>border-input</code>. Đường kẻ và viền card dùng <code>--line</code>, không bị ảnh hưởng.</td>
+<td>Làm như kế hoạch, commit riêng. Owner xem ảnh trước/sau của một trang form.</td>
+<td>Thấp.</td></tr>
+<tr><td>8</td><td><strong>Bản đồ trắng trong ảnh chụp tự động</strong> <span class="tag mid">TB</span> (nâng từ Thấp)</td>
+<td>Canvas có kích thước đúng nhưng trắng; dòng ghi công bản đồ vẫn hiện. Chưa xác định được nguyên nhân: có thể WebGL không khởi tạo trong trình duyệt không giao diện, có thể ô bản đồ không tải được. Vì vậy hiện không có bằng chứng tự động nào cho D1, D2, D4.</td>
+<td>Trước đợt 4, thêm vào spec chụp: bật WebGL phần mềm cho Chromium, ghi lại lỗi console của bản đồ và đếm điểm ảnh không trắng trong vùng canvas. Nếu vẫn trắng thì ghi rõ nguyên nhân và dùng ảnh do owner chụp tay cho đợt 4.</td>
+<td>TB cho tới khi thử.</td></tr>
+<tr><td>9</td><td><strong>Kết luận audit sai vì là suy ra, chưa quan sát</strong> <span class="tag mid">TB</span> (mới)</td>
+<td>Đã có một trường hợp: report audit ghi “cột bản đồ trắng suốt 7000px”. Đó là do cách chụp toàn trang kéo dài cửa sổ; ở màn hình thật khung bản đồ cao bằng cửa sổ và không có cột trắng đó. Các kết luận WYSIWYG về dashboard cũng mới là đọc code.</td>
+<td>Đang chạy lượt thao tác thật (sửa bố cục, đổi cỡ, xoá, trình sửa gadget, preset, Chat có nội dung). Gói W1–W5 và D4 chỉ bắt đầu sau khi kết quả đó được đối chiếu; gói nào dựa trên kết luận sai sẽ bị rút hoặc sửa.</td>
+<td>Chờ kết quả lượt chạy.</td></tr>
+</table></div>
+
+<div class="card"><strong>Cập nhật sau lượt thao tác thật (13/11).</strong> Hai kết luận của audit đổi và kéo theo thay đổi kế hoạch:
+<ul>
+<li><strong>Thêm gói W0 (cao):</strong> chế độ xem của dashboard không hiển thị bố cục đã sắp ở chế độ sửa, kể cả trên desktop. Nguyên nhân là <code>isTabletView={true}</code> đặt cứng ở <code>dashboard/dashboard-canvas.tsx:150</code>. W0 và W5 chuyển lên <strong>trước</strong> đợt Dashboard, vì D1–D4 sửa giao diện của chính bố cục xem đó.</li>
+<li><strong>Thêm ba gói Chat:</strong> CH1 (câu trả lời bị dừng mất sau khi mở lại, cần khảo sát trước), CH2 (vùng nhấn trích dẫn và Copy code), CH3 (bố cục 390px).</li>
+<li><strong>W1 đã xác nhận bằng thao tác thật</strong> và nhỏ hơn dự tính: chuỗi xác nhận đã có sẵn, chỉ cần nối vào.</li>
+</ul>
+Thứ tự đợt mới: 1 Nền tảng → 2 Form → 3 Responsive + a11y (+ CH2) → <strong>4 Bố cục xem (W0, W5)</strong> → 5 Dashboard (D1–D4, CH3) → 6 WYSIWYG còn lại (W3, W4, CH1). Chi tiết W0, W5, CH1–CH3 ở mục 7 của <a href="2026-11-12-ui-audit.html#fix">report audit</a>.</div>
+
+<h3>Rủi ro của gói W0</h3>
+<div class="wrap"><table>
+<tr><th>Rủi ro</th><th>Đã kiểm thấy gì</th><th>Cách xử lý</th></tr>
+<tr><td>Đổi bố cục xem của mọi dashboard đang có <span class="tag hi">Cao</span></td><td>Hiện mọi dashboard xem ở dạng 2 cột. Sau W0, khi khung gadget rộng từ 1100px (bản đồ thu gọn trên màn hình lớn), người dùng sẽ thấy lưới 20 cột lần đầu. Với bản đồ mở ở 1440px, khung gadget rộng 726px nên vẫn là 2 cột như hiện nay.</td><td>Ngưỡng theo chiều rộng khung, không theo cửa sổ, để trường hợp phổ biến (bản đồ mở) không đổi. Owner xem ảnh trước/sau của 3 dashboard mẫu trước khi commit. Đây là thay đổi bố cục desktop có chủ đích, ngoại lệ của nguyên tắc “không đổi desktop”.</td></tr>
+<tr><td>Bố cục 20 cột do preset tạo chưa từng được xem thật <span class="tag mid">TB</span></td><td>Các preset đặt ô theo lưới 20 cột nhưng chưa ai thấy chúng ở dạng đó ngoài chế độ sửa.</td><td>Chụp 12 dashboard preset ở dạng 20 cột trong lượt Docker của đợt 4; ô nào bị cắt nội dung thì chỉnh kích thước trong preset.</td></tr>
+<tr><td>Test hiện có khẳng định bản chiếu tablet <span class="tag mid">TB</span></td><td><code>widget-registry.tablet.test.ts</code>, <code>dashboard-grid.test.tsx</code>, <code>layout-geometry.test.ts</code> kiểm bản chiếu.</td><td>Bản chiếu không đổi, chỉ đổi điều kiện bật. Thêm test cho ngưỡng 1100px; các test bản chiếu giữ nguyên.</td></tr>
+</table></div>
+
+<h2 id="da-quyet">Owner đã quyết (13/11)</h2>
+<ul>
+<li><strong>W0:</strong> đồng ý. Chế độ xem hiển thị lưới 20 cột khi khung gadget rộng từ 1100px.</li>
+<li><strong>Hai bản đồ trên Overview:</strong> chọn (a). Bỏ ô “map” khỏi mẫu Overview (<code>modules/dashboard/gadgets.py</code>), giữ khung bản đồ bên trái. Chỉ áp cho dashboard tạo mới.</li>
+<li><strong>CH1:</strong> được khảo sát cả backend chat. Đang khảo sát, chỉ đọc.</li>
+</ul>
+
+<h2 id="ch1">CH1 – kết quả khảo sát (chỉ đọc code)</h2>
+<p><strong>Nguyên nhân.</strong> Khi bấm Stop, máy chủ chỉ đổi trạng thái lượt chạy thành <code>cancelled</code> (<code>modules/chat/_worker/settle.py:205-228</code>); không tạo tin nhắn trợ lý nào. Tin nhắn trợ lý chỉ được ghi khi lượt chạy thành công (<code>_worker/finalize.py:408-486</code>). Phần chữ đã stream chỉ tồn tại trong trạng thái tạm của trình duyệt, và bị xoá mỗi lần đổi hoặc mở lại hội thoại (<code>apps/web/src/modules/chat/use-conversation-selection.ts:76-84</code>). API chi tiết hội thoại không cho biết lượt chạy cuối đã bị huỷ, nên trang mở lại không biết đã có lần dừng.</p>
+<p><strong>Có chủ đích một phần.</strong> Code ghi rõ “the server never persists a partial on Stop” (<code>chat-transcript.tsx:1171</code>). Không tìm thấy quy tắc riêng tư nào buộc phải bỏ phần dở. Đặc tả lại nghiêng về giữ: “Persist the transcript and recoverable run progress” (<code>specs/personal-intelligence-os-spec-v2.md:4784</code>).</p>
+<div class="wrap"><table>
+<tr><th>Phương án</th><th>Kết quả cho người dùng</th><th>Thay đổi</th><th>Rủi ro</th></tr>
+<tr><td><strong>B – chỉ khôi phục dấu “đã dừng”</strong> (đề xuất)</td><td>Mở lại hội thoại vẫn thấy “Generation stopped · Retry”. Phần chữ dở vẫn mất.</td><td>API chi tiết hội thoại trả thêm <code>stopped_response_id</code> (trạng thái đã lưu sẵn); frontend dùng nó khi không có trạng thái tạm. Khoảng 15 dòng Python, 5 dòng TypeScript, tạo lại <code>api-types.gen.ts</code>. Không migration.</td><td>Thấp. Không lưu thêm nội dung nào.</td></tr>
+<tr><td>C – phát lại phần dở từ sự kiện stream đã lưu</td><td>Thấy lại phần chữ dở, nhưng chỉ trong 1 ngày (sự kiện stream bị dọn sau 1 ngày).</td><td>Cỡ vừa, không migration.</td><td>Hành vi không nhất quán theo thời gian. Không đề xuất.</td></tr>
+<tr><td>A – lưu phần dở thành tin nhắn</td><td>Phần chữ dở còn vĩnh viễn, đúng nghĩa WYSIWYG.</td><td>Lớn, qua nhiều module: worker, lịch sử cho model, trích xuất bộ nhớ, xuất chat, tìm kiếm, xoá theo quy tắc riêng tư.</td><td>Cao. Lưu thêm đầu ra của model, phải tuân theo xoá và che dữ liệu. Đi ngược thiết kế hiện tại.</td></tr>
+</table></div>
+<p class="muted">Chưa xác minh: phạm vi ảnh hưởng đầy đủ của phương án A; quy tắc <code>stopped_response_id</code> với chuỗi sửa/tạo lại tin nhắn.</p>
+
+<h2 id="quyet">Cần owner quyết trước khi bắt đầu</h2>
+<ol>
+<li><strong>Bắt đầu đợt 1?</strong> Report audit nói code chỉ được sửa sau khi duyệt; kế hoạch này là bước duyệt đó.</li>
+<li><strong>Chạy Docker sau mỗi đợt</strong> (4 lượt, mỗi lượt khoảng 25 phút), hay chỉ chạy sau đợt 2 và đợt 5?</li>
+<li><strong>Publish lại bản design system trên claude.ai</strong> sau khi token đổi (A1, A3)? Mặc định là không publish cho tới khi owner đồng ý.</li>
+<li><strong><code>.taste-skill/</code></strong> (ảnh chụp) chưa nằm trong <code>.gitignore</code>. Đề xuất thêm vào <code>.gitignore</code> ở đợt 1.</li>
+<li><strong>Hai bản đồ trên Overview:</strong> (a) bỏ ô “map” khỏi mẫu Overview, hay (b) bỏ khung bản đồ cố định bên trái? Đề xuất (a).</li>
+<li><strong>W0:</strong> đồng ý để chế độ xem hiển thị lưới 20 cột khi khung gadget rộng từ 1100px? Đây là thay đổi bố cục desktop có chủ đích.</li>
+<li><strong>CH1:</strong> cho phép khảo sát cả backend chat để tìm nguyên nhân câu trả lời bị dừng không còn sau khi mở lại?</li>
+</ol>
+</main>
+</body>
+</html>

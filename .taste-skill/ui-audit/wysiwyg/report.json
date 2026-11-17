@@ -1,0 +1,3376 @@
+{
+  "dashboard": {
+    "id": "01a1d464-72b5-70d5-8aa5-9de0c5380bf4",
+    "name": "All gadget types",
+    "gadgets": 19,
+    "all": [
+      "e2e-ux home",
+      "Monitor",
+      "Overview",
+      "Technology",
+      "Finance",
+      "Personal",
+      "World",
+      "Commodity",
+      "Happy",
+      "Energy",
+      "Monitor",
+      "News",
+      "Markets",
+      "Work",
+      "All gadget types",
+      "Overview",
+      "Technology",
+      "Finance",
+      "Personal",
+      "World",
+      "Commodity",
+      "Happy",
+      "Energy",
+      "Monitor",
+      "News",
+      "Markets",
+      "Work"
+    ]
+  },
+  "A/1440": {
+    "view": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 690,
+        "y": 201,
+        "w": 726,
+        "h": 675,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 21
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 690,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 1059,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 690,
+        "y": 662,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 1059,
+        "y": 662,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 14
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 690,
+        "y": 939,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 690,
+        "y": 1308,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 690,
+        "y": 1677,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 690,
+        "y": 2415,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 690,
+        "y": 2876,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 1059,
+        "y": 2876,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 1059,
+        "y": 3153,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 1059,
+        "y": 3522,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 690,
+        "y": 3706,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 1059,
+        "y": 939,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 690,
+        "y": 3153,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 690,
+        "y": 2138,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 1059,
+        "y": 2138,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 690,
+        "y": 3430,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "viewCollapsed": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 245,
+        "w": 1336,
+        "h": 631,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 337,
+        "w": 662,
+        "h": 662,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 754,
+        "y": 337,
+        "w": 662,
+        "h": 662,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 80,
+        "y": 1011,
+        "w": 662,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 754,
+        "y": 1011,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 80,
+        "y": 1348,
+        "w": 662,
+        "h": 662,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 80,
+        "y": 2022,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 2528,
+        "w": 1336,
+        "h": 662,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 3539,
+        "w": 1336,
+        "h": 662,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 80,
+        "y": 4213,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 754,
+        "y": 4213,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 754,
+        "y": 4718,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 754,
+        "y": 5224,
+        "w": 662,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 80,
+        "y": 5561,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 754,
+        "y": 1517,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 4718,
+        "w": 662,
+        "h": 494,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 80,
+        "y": 3202,
+        "w": 662,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 754,
+        "y": 3202,
+        "w": 662,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 5224,
+        "w": 662,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "edit": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 350,
+        "w": 1336,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 3
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 442,
+        "w": 392,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 484,
+        "y": 442,
+        "w": 392,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 889,
+        "y": 442,
+        "w": 392,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 80,
+        "y": 981,
+        "w": 662,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 754,
+        "y": 981,
+        "w": 662,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 619,
+        "y": 1520,
+        "w": 527,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 1924,
+        "w": 797,
+        "h": 595,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 2531,
+        "w": 797,
+        "h": 595,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 889,
+        "y": 2598,
+        "w": 325,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 889,
+        "y": 3002,
+        "w": 325,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 754,
+        "y": 3407,
+        "w": 527,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 417,
+        "y": 3609,
+        "w": 325,
+        "h": 258,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 417,
+        "y": 3878,
+        "w": 527,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 80,
+        "y": 1452,
+        "w": 527,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 3137,
+        "w": 662,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 889,
+        "y": 1924,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 889,
+        "y": 2261,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 3609,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "toolbar": [
+      "Expand sidebar",
+      "Search or run a commandCtrl K",
+      "O",
+      "All gadget types",
+      "Comfortable",
+      "Done editing",
+      "Topics",
+      "Add tab",
+      "Undo",
+      "Redo",
+      "Tidy layout",
+      "Use readable mobile sizes",
+      "Add gadget",
+      "Add group",
+      "Presets",
+      "Cancel",
+      "Save layout",
+      "Show local weather",
+      "What we know about the global Microsoft outageMicrosoft has said the outage was not caused by a cyber-security incident, but efforts to fix the issues have so far been largely unsuccessful.1 source·51 min. ago",
+      "Australian cricket's sandpapergate is back - and it cuts deep in a 'nation of good sports'Claims the entire Australian team knew of the 2018 sandpaper cheating plot are dividing the cricket world.2 hr. ago",
+      "Watch: How Microsoft services went down around the worldMicrosoft is struggling to fix a global outage, with services including Teams, Outlook and AI software Copilot affected by \"connectivity problems\".4 hr. ago",
+      "African Miss Universe beauty queens in limbo as US visa restrictions biteHall has been seeking a US visa in South Africa as other African beauty queens face similar hurdles.4 hr. ago",
+      "Ex-Nvidia CEO Jensen Huang summoned to testify before Congress about affair with alleged Chinese spyHuang abruptly quit on Thursday as head of one of the world's most valuable companies after revelations of alleged extramarital affairs.7 hr. ago",
+      "Show 15 more",
+      "Unread only (0)",
+      "Select",
+      "New task",
+      "New goal",
+      "Today",
+      "Generate brief"
+    ]
+  },
+  "A/768": {
+    "view": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 249,
+        "w": 664,
+        "h": 751,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 341,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 80,
+        "y": 679,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 80,
+        "y": 1017,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 80,
+        "y": 1271,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 80,
+        "y": 1609,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 80,
+        "y": 2200,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 2538,
+        "w": 664,
+        "h": 411,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 3637,
+        "w": 664,
+        "h": 411,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 80,
+        "y": 4059,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 80,
+        "y": 4313,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 80,
+        "y": 4820,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 80,
+        "y": 5496,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 80,
+        "y": 5834,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 80,
+        "y": 1947,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 4566,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 80,
+        "y": 2961,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 80,
+        "y": 3299,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 5158,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "viewCollapsed": null,
+    "edit": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 418,
+        "w": 664,
+        "h": 583,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 32
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 510,
+        "w": 191,
+        "h": 258,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 5
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 283,
+        "y": 510,
+        "w": 191,
+        "h": 258,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 486,
+        "y": 510,
+        "w": 191,
+        "h": 157,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 80,
+        "y": 780,
+        "w": 326,
+        "h": 225,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 18
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 418,
+        "y": 780,
+        "w": 326,
+        "h": 258,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 350,
+        "y": 1050,
+        "w": 258,
+        "h": 191,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 1253,
+        "w": 394,
+        "h": 292,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 1557,
+        "w": 394,
+        "h": 292,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 486,
+        "y": 1591,
+        "w": 157,
+        "h": 191,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 486,
+        "y": 1794,
+        "w": 157,
+        "h": 191,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 418,
+        "y": 1997,
+        "w": 258,
+        "h": 225,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 5
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 249,
+        "y": 2098,
+        "w": 157,
+        "h": 123,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 249,
+        "y": 2233,
+        "w": 258,
+        "h": 191,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 80,
+        "y": 1016,
+        "w": 258,
+        "h": 225,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 1861,
+        "w": 326,
+        "h": 225,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 486,
+        "y": 1253,
+        "w": 157,
+        "h": 157,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 486,
+        "y": 1422,
+        "w": 157,
+        "h": 157,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 2098,
+        "w": 157,
+        "h": 157,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "toolbar": [
+      "Expand sidebar",
+      "Search or run a commandCtrl K",
+      "O",
+      "All gadget types",
+      "Comfortable",
+      "Done editing",
+      "Topics",
+      "Add tab",
+      "Undo",
+      "Redo",
+      "Tidy layout",
+      "Use readable mobile sizes",
+      "Add gadget",
+      "Add group",
+      "Presets",
+      "Cancel",
+      "Save layout",
+      "Show local weather",
+      "What we know about the global Microsoft outageMicrosoft has said the outage was not caused by a cyber-security incident, but efforts to fix the issues have so far been largely unsuccessful.1 source·52 min. ago",
+      "Australian cricket's sandpapergate is back - and it cuts deep in a 'nation of good sports'Claims the entire Australian team knew of the 2018 sandpaper cheating plot are dividing the cricket world.3 hr. ago",
+      "Watch: How Microsoft services went down around the worldMicrosoft is struggling to fix a global outage, with services including Teams, Outlook and AI software Copilot affected by \"connectivity problems\".4 hr. ago",
+      "African Miss Universe beauty queens in limbo as US visa restrictions biteHall has been seeking a US visa in South Africa as other African beauty queens face similar hurdles.4 hr. ago",
+      "Ex-Nvidia CEO Jensen Huang summoned to testify before Congress about affair with alleged Chinese spyHuang abruptly quit on Thursday as head of one of the world's most valuable companies after revelations of alleged extramarital affairs.7 hr. ago",
+      "Show 15 more",
+      "Unread only (0)",
+      "Select",
+      "New task",
+      "New goal",
+      "Today",
+      "Generate brief"
+    ]
+  },
+  "A/390": {
+    "view": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 28,
+        "y": 427,
+        "w": 334,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 26
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 28,
+        "y": 565,
+        "w": 334,
+        "h": 334,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 2
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 28,
+        "y": 911,
+        "w": 334,
+        "h": 334,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 28,
+        "y": 1257,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 28,
+        "y": 1499,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 17
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 28,
+        "y": 1758,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 28,
+        "y": 2260,
+        "w": 334,
+        "h": 334,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 28,
+        "y": 2606,
+        "w": 334,
+        "h": 403,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 28,
+        "y": 3021,
+        "w": 334,
+        "h": 403,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 28,
+        "y": 4197,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 28,
+        "y": 4440,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 28,
+        "y": 4682,
+        "w": 334,
+        "h": 299,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 5
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 28,
+        "y": 5252,
+        "w": 334,
+        "h": 299,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 28,
+        "y": 5564,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 28,
+        "y": 2018,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 28,
+        "y": 3436,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 28,
+        "y": 3678,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 28,
+        "y": 3938,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 28,
+        "y": 4993,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "viewCollapsed": null,
+    "edit": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 28,
+        "y": 678,
+        "w": 334,
+        "h": 75,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 29
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 28,
+        "y": 816,
+        "w": 334,
+        "h": 126,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 2
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 28,
+        "y": 954,
+        "w": 334,
+        "h": 126,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 28,
+        "y": 1092,
+        "w": 334,
+        "h": 74,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 28,
+        "y": 1179,
+        "w": 334,
+        "h": 109,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 17
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 28,
+        "y": 1300,
+        "w": 334,
+        "h": 126,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 28,
+        "y": 1559,
+        "w": 334,
+        "h": 92,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 28,
+        "y": 1663,
+        "w": 334,
+        "h": 144,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 28,
+        "y": 1819,
+        "w": 334,
+        "h": 144,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 28,
+        "y": 2268,
+        "w": 334,
+        "h": 92,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 28,
+        "y": 2372,
+        "w": 334,
+        "h": 92,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 28,
+        "y": 2476,
+        "w": 334,
+        "h": 109,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 5
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 28,
+        "y": 2684,
+        "w": 334,
+        "h": 57,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 28,
+        "y": 2753,
+        "w": 334,
+        "h": 92,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 28,
+        "y": 1438,
+        "w": 334,
+        "h": 109,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 28,
+        "y": 1974,
+        "w": 334,
+        "h": 109,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 28,
+        "y": 2095,
+        "w": 334,
+        "h": 74,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 28,
+        "y": 2182,
+        "w": 334,
+        "h": 74,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 28,
+        "y": 2597,
+        "w": 334,
+        "h": 74,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "toolbar": [
+      "Search or run a commandCtrl K",
+      "O",
+      "All gadget types",
+      "Comfortable",
+      "Done editing",
+      "Topics",
+      "Add tab",
+      "Undo",
+      "Redo",
+      "Tidy layout",
+      "Use readable mobile sizes",
+      "Add gadget",
+      "Add group",
+      "Presets",
+      "Cancel",
+      "Save layout",
+      "Show local weather",
+      "What we know about the global Microsoft outageMicrosoft has said the outage was not caused by a cyber-security incident, but efforts to fix the issues have so far been largely unsuccessful.1 source·52 min. ago",
+      "Australian cricket's sandpapergate is back - and it cuts deep in a 'nation of good sports'Claims the entire Australian team knew of the 2018 sandpaper cheating plot are dividing the cricket world.3 hr. ago",
+      "Watch: How Microsoft services went down around the worldMicrosoft is struggling to fix a global outage, with services including Teams, Outlook and AI software Copilot affected by \"connectivity problems\".4 hr. ago",
+      "African Miss Universe beauty queens in limbo as US visa restrictions biteHall has been seeking a US visa in South Africa as other African beauty queens face similar hurdles.4 hr. ago",
+      "Ex-Nvidia CEO Jensen Huang summoned to testify before Congress about affair with alleged Chinese spyHuang abruptly quit on Thursday as head of one of the world's most valuable companies after revelations of alleged extramarital affairs.7 hr. ago",
+      "Show 15 more",
+      "Unread only (0)",
+      "Select",
+      "Open map",
+      "Open map",
+      "New task",
+      "New goal",
+      "Today"
+    ]
+  },
+  "B": {
+    "gesture": "pointer-south",
+    "handleCount": 54,
+    "saveEnabled": true,
+    "before": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 690,
+        "y": 201,
+        "w": 726,
+        "h": 675,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 21
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 690,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 1059,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 690,
+        "y": 662,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 1059,
+        "y": 662,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 14
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 690,
+        "y": 939,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 690,
+        "y": 1308,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 690,
+        "y": 1677,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 690,
+        "y": 2415,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 690,
+        "y": 2876,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 1059,
+        "y": 2876,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 1059,
+        "y": 3153,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 1059,
+        "y": 3522,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 690,
+        "y": 3706,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 1059,
+        "y": 939,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 690,
+        "y": 3153,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 690,
+        "y": 2138,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 1059,
+        "y": 2138,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 690,
+        "y": 3430,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "editBefore": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 350,
+        "w": 1336,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 3
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 442,
+        "w": 392,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 484,
+        "y": 442,
+        "w": 392,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 889,
+        "y": 442,
+        "w": 392,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 80,
+        "y": 981,
+        "w": 662,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 754,
+        "y": 981,
+        "w": 662,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 619,
+        "y": 1520,
+        "w": 527,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 1924,
+        "w": 797,
+        "h": 595,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 2531,
+        "w": 797,
+        "h": 595,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 889,
+        "y": 2598,
+        "w": 325,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 889,
+        "y": 3002,
+        "w": 325,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 754,
+        "y": 3407,
+        "w": 527,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 417,
+        "y": 3609,
+        "w": 325,
+        "h": 258,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 417,
+        "y": 3878,
+        "w": 527,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 80,
+        "y": 1452,
+        "w": 527,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 3137,
+        "w": 662,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 889,
+        "y": 1924,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 889,
+        "y": 2261,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 3609,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "editAfter": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 348,
+        "w": 1336,
+        "h": 529,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 3
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 89,
+        "w": 392,
+        "h": 662,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 484,
+        "y": 89,
+        "w": 392,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 889,
+        "y": 89,
+        "w": 392,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 80,
+        "y": 762,
+        "w": 662,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 754,
+        "y": 628,
+        "w": 662,
+        "h": 527,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 619,
+        "y": 1234,
+        "w": 527,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 1706,
+        "w": 797,
+        "h": 595,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 2312,
+        "w": 797,
+        "h": 595,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 889,
+        "y": 2312,
+        "w": 325,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 889,
+        "y": 2717,
+        "w": 325,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 754,
+        "y": 3121,
+        "w": 527,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 417,
+        "y": 3391,
+        "w": 325,
+        "h": 258,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 417,
+        "y": 3660,
+        "w": 527,
+        "h": 392,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 80,
+        "y": 1234,
+        "w": 527,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 2919,
+        "w": 662,
+        "h": 460,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 889,
+        "y": 1638,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 889,
+        "y": 1975,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 3391,
+        "w": 325,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "savedView": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 690,
+        "y": 201,
+        "w": 726,
+        "h": 675,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 21
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 690,
+        "y": -58,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 1059,
+        "y": -58,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 690,
+        "y": 311,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 690,
+        "y": 588,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 14
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 1059,
+        "y": 311,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 690,
+        "y": 865,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 690,
+        "y": 1234,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 690,
+        "y": 1972,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 690,
+        "y": 2433,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 1059,
+        "y": 2433,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 1059,
+        "y": 2710,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 1059,
+        "y": 3079,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 690,
+        "y": 3263,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 1059,
+        "y": 680,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 690,
+        "y": 2710,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 1059,
+        "y": 957,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 690,
+        "y": 1695,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 690,
+        "y": 2986,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "reloaded": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 690,
+        "y": 201,
+        "w": 726,
+        "h": 675,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 21
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 690,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 1059,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 690,
+        "y": 662,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 690,
+        "y": 939,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 14
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 1059,
+        "y": 662,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 690,
+        "y": 1216,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 690,
+        "y": 1585,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 690,
+        "y": 2323,
+        "w": 726,
+        "h": 449,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 690,
+        "y": 2784,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 1059,
+        "y": 2784,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 1059,
+        "y": 3061,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 1059,
+        "y": 3430,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 690,
+        "y": 3614,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 1059,
+        "y": 1031,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 690,
+        "y": 3061,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 1059,
+        "y": 1308,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 690,
+        "y": 2046,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 690,
+        "y": 3337,
+        "w": 357,
+        "h": 265,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "reloaded768": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 80,
+        "y": 249,
+        "w": 664,
+        "h": 751,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 80,
+        "y": 341,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 80,
+        "y": 679,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 80,
+        "y": 1017,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 80,
+        "y": 1609,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 80,
+        "y": 1271,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 80,
+        "y": 2200,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 80,
+        "y": 2876,
+        "w": 664,
+        "h": 411,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 80,
+        "y": 3637,
+        "w": 664,
+        "h": 411,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 80,
+        "y": 4059,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 80,
+        "y": 4313,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 80,
+        "y": 4820,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 80,
+        "y": 5496,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 80,
+        "y": 5834,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 80,
+        "y": 1947,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 80,
+        "y": 4566,
+        "w": 664,
+        "h": 242,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 80,
+        "y": 2538,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 80,
+        "y": 3299,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 80,
+        "y": 5158,
+        "w": 664,
+        "h": 326,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ],
+    "reloaded390": [
+      {
+        "index": 0,
+        "title": "feed",
+        "x": 28,
+        "y": 427,
+        "w": 334,
+        "h": 325,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 26
+      },
+      {
+        "index": 1,
+        "title": "feed",
+        "x": 28,
+        "y": 565,
+        "w": 334,
+        "h": 334,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 2
+      },
+      {
+        "index": 2,
+        "title": "message list",
+        "x": 28,
+        "y": 911,
+        "w": 334,
+        "h": 334,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 3,
+        "title": "text",
+        "x": 28,
+        "y": 1257,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 4,
+        "title": "table",
+        "x": 28,
+        "y": 1499,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 17
+      },
+      {
+        "index": 5,
+        "title": "jobs",
+        "x": 28,
+        "y": 1758,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 6,
+        "title": "chart",
+        "x": 28,
+        "y": 2260,
+        "w": 334,
+        "h": 334,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 7,
+        "title": "map earth",
+        "x": 28,
+        "y": 2606,
+        "w": 334,
+        "h": 403,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 8,
+        "title": "map flat",
+        "x": 28,
+        "y": 3021,
+        "w": 334,
+        "h": 403,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 9,
+        "title": "tasks",
+        "x": 28,
+        "y": 4197,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 10,
+        "title": "goals",
+        "x": 28,
+        "y": 4440,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 1
+      },
+      {
+        "index": 11,
+        "title": "daily brief",
+        "x": 28,
+        "y": 4682,
+        "w": 334,
+        "h": 299,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 5
+      },
+      {
+        "index": 12,
+        "title": "metric",
+        "x": 28,
+        "y": 5252,
+        "w": 334,
+        "h": 299,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 13,
+        "title": "activity",
+        "x": 28,
+        "y": 5564,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 14,
+        "title": "video",
+        "x": 28,
+        "y": 2018,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 15,
+        "title": "related signals",
+        "x": 28,
+        "y": 3436,
+        "w": 334,
+        "h": 230,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 16,
+        "title": "highlights",
+        "x": 28,
+        "y": 3678,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 17,
+        "title": "watchlist",
+        "x": 28,
+        "y": 3938,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 18,
+        "title": "weather",
+        "x": 28,
+        "y": 4993,
+        "w": 334,
+        "h": 247,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      }
+    ]
+  },
+  "C": {
+    "before": 19,
+    "removedTitle": "weather",
+    "confirmDialogShown": 0,
+    "afterRemove": 18,
+    "requestsOnRemove": [
+      "DELETE /api/v1/dashboards/01a1d464-72b5-70d5-8aa5-9de0c5380bf4/instances/01a1d464-7a36-723c-b3ab-da04a7ac814e"
+    ],
+    "undoEnabled": false,
+    "saveEnabled": false,
+    "discardPromptShown": 0,
+    "afterCancel": 18,
+    "afterReload": 18
+  },
+  "D/1440": {
+    "gadget": "feed",
+    "dialog": {
+      "fields": 20,
+      "liveRegions": 0,
+      "charts": 0,
+      "text": "Configure gadget instanceChange the data source, filters and highlight rules of this News feed gadget. It updates everywhere the saved gadget is used.Data sourceChoose up to 32 sources.EMSC earthquakes (M4+)EMSC earthquakes · updated Nov 13, 2026, 5:49 PMBáo Thanh NiênThanh Niên News · updated Nov 13, 2026, 5:49 PMUploadsupdated Nov 13, 2026, 5:32 PMBBC World NewsBBC World News · updated Nov 13, 2",
+      "scrollsX": false,
+      "width": 576,
+      "viewport": 1440
+    }
+  },
+  "D/390": {
+    "gadget": "feed",
+    "dialog": {
+      "fields": 20,
+      "liveRegions": 0,
+      "charts": 0,
+      "text": "Configure gadget instanceChange the data source, filters and highlight rules of this News feed gadget. It updates everywhere the saved gadget is used.Data sourceChoose up to 32 sources.EMSC earthquakes (M4+)EMSC earthquakes · updated Nov 13, 2026, 5:49 PMBáo Thanh NiênThanh Niên News · updated Nov 13, 2026, 5:49 PMUploadsupdated Nov 13, 2026, 5:32 PMBBC World NewsBBC World News · updated Nov 13, 2",
+      "scrollsX": false,
+      "width": 358,
+      "viewport": 390
+    }
+  },
+  "E": {
+    "pickerText": "Dashboard presetsChoose a pre-configured template to set up gadgets and layouts.Select presetOverview4 slots: Map, Feed, Highlights, Daily briefTechnology1 slots: FeedFinance2 slots: Chart, FeedPersonal3 slots: Tasks, Goals, Daily briefWorld4 slots: Map, Feed, Highlights, Daily briefCommodity2 slots: Chart, FeedHappy1 slots: FeedEnergy2 slots: Chart, FeedMonitor14 slots: Situation map, Live news, VN market, Crypto, Fear & Greed, USD/VND, Macro, Weather, Highlights, Tech, Security, Jobs, Daily br",
+    "pressed": [
+      "Finance2 slots: Chart, Feed",
+      "Create as a new dashboard"
+    ],
+    "tabsBefore": 0,
+    "tabsAfter": 5,
+    "applied": [
+      {
+        "index": 0,
+        "title": "Chart",
+        "x": 690,
+        "y": 201,
+        "w": 726,
+        "h": 675,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 5
+      },
+      {
+        "index": 1,
+        "title": "Chart",
+        "x": 690,
+        "y": 293,
+        "w": 357,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 0
+      },
+      {
+        "index": 2,
+        "title": "Feed",
+        "x": 690,
+        "y": 662,
+        "w": 726,
+        "h": 357,
+        "gridColumn": null,
+        "gridRow": null,
+        "clipped": 4
+      }
+    ]
+  },
+  "G/conversations": [
+    "Naming a primary colour",
+    "Write a very long, detailed essay (at least 1500",
+    "Three Largest Planets by Diameter",
+    "Bat and ball puzzle: solving for the ball's price",
+    "e2e-real-2-1794566466073",
+    "hi from the drawer",
+    "[think] mobile check",
+    "[think] [fake:think_delay_ms=800] giải thích",
+    "regen me",
+    "long answer [fake:tokens=300,delay_ms=100]"
+  ],
+  "G/chat0/1440": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [],
+    "codeBlocks": [],
+    "messageWidths": [
+      312,
+      720
+    ],
+    "under24": [
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 47
+  },
+  "G/chat0/768": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [],
+    "codeBlocks": [],
+    "messageWidths": [
+      280,
+      350
+    ],
+    "under24": [
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 47
+  },
+  "G/chat0/390": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [],
+    "codeBlocks": [],
+    "messageWidths": [
+      240,
+      300
+    ],
+    "under24": [
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 16
+  },
+  "G/chat1/1440": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [],
+    "codeBlocks": [],
+    "messageWidths": [
+      576
+    ],
+    "under24": [
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 40
+  },
+  "G/chat1/768": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [],
+    "codeBlocks": [],
+    "messageWidths": [
+      280
+    ],
+    "under24": [
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 40
+  },
+  "G/chat1/390": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [],
+    "codeBlocks": [],
+    "messageWidths": [
+      240
+    ],
+    "under24": [
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 9
+  },
+  "G/chat2/1440": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [],
+    "pastViewport": 0,
+    "tables": [
+      {
+        "display": "table",
+        "width": 718,
+        "columns": 5
+      }
+    ],
+    "codeBlocks": [],
+    "messageWidths": [
+      576,
+      720
+    ],
+    "under24": [
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Rank\" 49x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Planet\" 56x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Equatorial diameter (k\" 163x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Diameter vs. Earth (×)\" 147x16",
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 53
+  },
+  "G/chat2/768": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [
+      {
+        "el": "div.relative.w-full.max-h-[min(36rem,70vh)]",
+        "scrollWidth": 623,
+        "clientWidth": 348
+      }
+    ],
+    "pastViewport": 32,
+    "tables": [
+      {
+        "display": "table",
+        "width": 623,
+        "columns": 5
+      }
+    ],
+    "codeBlocks": [],
+    "messageWidths": [
+      280,
+      350
+    ],
+    "under24": [
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Rank\" 49x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Planet\" 56x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Equatorial diameter (k\" 163x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Diameter vs. Earth (×)\" 147x16",
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 53
+  },
+  "G/chat2/390": {
+    "docOverflowPx": 0,
+    "horizontalScrollers": [
+      {
+        "el": "div.relative.w-full.max-h-[min(36rem,70vh)]",
+        "scrollWidth": 623,
+        "clientWidth": 298
+      }
+    ],
+    "pastViewport": 35,
+    "tables": [
+      {
+        "display": "table",
+        "width": 623,
+        "columns": 5
+      }
+    ],
+    "codeBlocks": [],
+    "messageWidths": [
+      240,
+      300
+    ],
+    "under24": [
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Rank\" 49x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Planet\" 56x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Equatorial diameter (k\" 163x16",
+      "button.inline-flex.items-center.gap-1.5 \"Sort by Diameter vs. Earth (×)\" 147x16",
+      "input.sr-only \"\" 1x1"
+    ],
+    "nameless": [],
+    "interactiveCount": 22
+  }
+}
