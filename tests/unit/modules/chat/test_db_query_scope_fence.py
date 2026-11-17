@@ -57,7 +57,15 @@ def test_document_scope_filter_uses_null_safe_provenance_match() -> None:
     """Documents compare the version provenance discriminator null-safely, per source."""
     src = uuid4()
     sql = _sql(select(db_query.Document.id).where(db_query.document_scope_filter({src: None})))
-    assert "IS NOT DISTINCT FROM NULL" in sql and "provider_scope_discriminator" in sql
+    assert "IS NOT DISTINCT FROM CASE documents.source_id" in sql
+    assert "provider_scope_discriminator" in sql and "documents.source_id IN" in sql
+    # One provenance lookup per row, not one correlated subquery per source.
+    two = _sql(
+        select(db_query.Document.id).where(
+            db_query.document_scope_filter({src: "a", uuid4(): None})
+        )
+    )
+    assert two.count("provider_scope_discriminator") == 1
     assert "false" in _sql(select(1).where(db_query.document_scope_filter({}))).lower()
 
 
@@ -76,3 +84,22 @@ def test_cross_source_dedup_uses_full_series_key_and_other_sources_only() -> Non
     assert "observations_1.source_id != observations.source_id" in sql
     for col in ("unit", "currency", "latitude", "longitude"):
         assert f"observations_1.{col} IS NOT DISTINCT FROM observations.{col}" in sql
+
+
+def test_cross_source_dedup_bounds_competing_rows_by_caller_window_and_providers() -> None:
+    """The anti-join inner side repeats the caller's window and providers (planner bound, same result)."""
+    from datetime import UTC, datetime
+
+    from modules.chat._db_scope import not_superseded_across_sources
+
+    clause = not_superseded_across_sources(
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+        source_scopes=None,
+        observed_from=datetime(2026, 1, 1, tzinfo=UTC),
+        observed_to=datetime(2026, 2, 1, tzinfo=UTC),
+        providers=["binance"],
+    )
+    sql = str(clause.compile(dialect=postgresql.dialect()))
+    assert "observations_1.observed_at >= " in sql and "observations_1.observed_at < " in sql
+    assert "observations_1.provider IN" in sql

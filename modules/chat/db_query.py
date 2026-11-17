@@ -1084,6 +1084,9 @@ def _observation_filters(
                 workspace_id=workspace_id,
                 allowed_source_ids=allowed_source_ids,
                 source_scopes=source_scopes,
+                observed_from=date_from,
+                observed_to=date_to,
+                providers=[p.strip().lower() for p in args.providers or [] if p.strip()],
             )
         )
     if args.providers:

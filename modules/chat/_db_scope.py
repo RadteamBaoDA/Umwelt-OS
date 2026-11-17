@@ -6,10 +6,11 @@ under another scope (a replaced configuration) are hidden. Pure SQLAlchemy expre
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import String, and_, false, or_, select, tuple_
+from sqlalchemy import String, and_, case, false, or_, select, tuple_
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -51,15 +52,20 @@ def document_scope_filter(source_scopes: SourceScopes) -> Any:
     ``IS NOT DISTINCT FROM`` so a source without a verifiable scope (None) matches only versions that carry
     no discriminator. An empty mapping matches nothing (fail closed). Requires ``Document`` and
     ``DocumentVersion`` in the enclosing FROM.
+
+    One ``CASE source_id`` expected value and ONE provenance lookup per row: an OR of per-source pairs made
+    the planner evaluate a correlated subquery per source and seq-scan every version (measured 0.8 s on 50k).
     """
-    pairs = [
-        and_(
-            Document.source_id == source_id,
-            version_scope_discriminator().is_not_distinct_from(discriminator),
-        )
-        for source_id, discriminator in source_scopes.items()
-    ]
-    return or_(*pairs) if pairs else false()
+    if not source_scopes:
+        return false()
+    expected = case(
+        {source_id: discriminator for source_id, discriminator in source_scopes.items()},
+        value=Document.source_id,
+    )
+    return and_(
+        Document.source_id.in_(list(source_scopes)),
+        version_scope_discriminator().is_not_distinct_from(expected),
+    )
 
 
 def observation_scope_predicates(
@@ -94,6 +100,9 @@ def not_superseded_across_sources(
     workspace_id: UUID,
     allowed_source_ids: list[UUID],
     source_scopes: SourceScopes | None,
+    observed_from: datetime | None = None,
+    observed_to: datetime | None = None,
+    providers: list[str] | None = None,
 ) -> Any:
     """``NOT EXISTS`` clause keeping one current row per cross-source series point.
 
@@ -105,8 +114,22 @@ def not_superseded_across_sources(
     by ``str(ingestion_observation_id)`` (the same key the dashboard history dedup and ``is_current`` use).
     Competing rows must themselves be current and inside the readable scope, so a hidden row never hides a
     visible one.
+
+    ``observed_from`` / ``observed_to`` (exclusive) and ``providers`` repeat the caller's own window and
+    provider filters on the competing side. They change no result (the key already equates ``observed_at``
+    and ``provider``) but bound the anti-join's inner side: without them an aggregate hashed the whole
+    table (1.8 s on 2M rows) whatever its window.
     """
+    # ponytail: the null-safe key columns are not hashable, so an unfiltered all-source aggregate still runs
+    # ~0.9 s SQL on 2M rows (default work_mem); coalesce-based hash keys or a dedup column if that matters.
     newer = aliased(Observation)
+    bounds: list[Any] = []
+    if observed_from is not None:
+        bounds.append(newer.observed_at >= observed_from)
+    if observed_to is not None:
+        bounds.append(newer.observed_at < observed_to)
+    if providers:
+        bounds.append(newer.provider.in_(providers))
     return ~(
         select(1)
         .where(
@@ -117,6 +140,7 @@ def not_superseded_across_sources(
                 source_scopes=source_scopes,
             ),
             newer.is_current.is_(True),
+            *bounds,
             newer.provider == Observation.provider,
             newer.metric == Observation.metric,
             newer.observed_at == Observation.observed_at,
