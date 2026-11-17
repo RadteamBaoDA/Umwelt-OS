@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 
 from modules.chat import db_query
 from modules.chat.db_query import CHAT_SQL_LOGIN_ROLE, _run_sql_as_reader
-from tests.integration.test_observation_history import POINT, _observation, _seed
+from tests.integration.test_observation_history import DISCRIMINATOR, POINT, _observation, _seed
 
 pytestmark = pytest.mark.integration
 
@@ -69,6 +69,7 @@ async def test_scoped_query_runs_as_reader_and_returns_rows(
             workspace_id=workspace_id,
             allowed_source_ids=source_ids,
             max_rows=5,
+            source_scopes={sid: DISCRIMINATOR for sid in source_ids},
         )
         return int(dict(rows[0])["n"])
 
@@ -86,12 +87,63 @@ async def test_scoped_query_runs_as_reader_and_returns_rows(
             workspace_id=seed.workspace_id,
             allowed_source_ids=[seed.source_id],
             max_rows=5,
+            source_scopes={seed.source_id: DISCRIMINATOR},
         )
         assert [dict(row) for row in docs] == [
             {"content_excerpt": "v2", "document_version_id": seed.new_version_id}
         ]
     finally:
         # Remove the committed observation rows; the API-created source/document stay (the harness resets the stack).
+        async with AsyncSession(committed_engine) as session:
+            for table in ("observations", "source_observations", "ingestion_batches"):
+                await session.execute(
+                    text(f"DELETE FROM {table} WHERE source_id = :id"),  # noqa: S608
+                    {"id": seed.source_id},
+                )
+            await session.commit()
+
+
+async def test_non_matching_scope_discriminator_hides_rows(
+    reader_engine: AsyncEngine,
+    ready_owner_client: AsyncClient,
+    committed_engine: AsyncEngine,
+) -> None:
+    """Rows collected under another scope (config replaced) or without scope stay invisible in both views."""
+    seed = await _seed(ready_owner_client, committed_engine)
+    async with AsyncSession(committed_engine, expire_on_commit=False) as session:
+        await _observation(
+            session,
+            seed,
+            revision=1,
+            observed_at=POINT,
+            accepted_at=POINT,
+            version_id=seed.new_version_id,
+            current=True,
+        )
+        await session.commit()
+
+    async def count(view: str, scopes: dict[UUID, str | None]) -> int:
+        """Count ``view`` rows for the seeded source under the given current-scope mapping."""
+        rows = await _run_sql_as_reader(
+            f"SELECT count(*) AS n FROM {view}",  # noqa: S608  # test-local constant view name
+            app_engine=committed_engine,
+            workspace_id=seed.workspace_id,
+            allowed_source_ids=[seed.source_id],
+            max_rows=5,
+            source_scopes=scopes,
+        )
+        return int(dict(rows[0])["n"])
+
+    try:
+        for view in ("scoped_observations", "scoped_documents"):
+            assert await count(view, {seed.source_id: DISCRIMINATOR}) == 1
+            assert await count(view, {seed.source_id: "another-scope"}) == 0
+            assert await count(view, {seed.source_id: None}) == 0
+            assert await count(view, {}) == 0
+        async with committed_engine.connect() as conn:  # scope rows are removed with the fence
+            left = await conn.scalar(text("SELECT count(*) FROM chat_sql.query_fence_scope"))
+        assert left == 0
+    finally:
         async with AsyncSession(committed_engine) as session:
             for table in ("observations", "source_observations", "ingestion_batches"):
                 await session.execute(

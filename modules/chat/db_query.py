@@ -17,7 +17,16 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from sqlalchemy import TextClause, and_, desc, exists, func, or_, select, text
+from sqlalchemy import (
+    TextClause,
+    and_,
+    desc,
+    exists,
+    func,
+    or_,
+    select,
+    text,
+)
 from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
@@ -26,6 +35,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
+from modules.chat._db_scope import (
+    SourceScopes,
+    document_scope_filter,
+    not_superseded_across_sources,
+    observation_scope_predicates,
+    resolve_source_scopes,
+)
 from modules.chat.schemas import GADGET_SCOPE_KEY, EvidenceItem
 from modules.chat.sql_guard import check_select_policy
 from modules.knowledge.documents.public import (
@@ -52,6 +68,7 @@ _MAX_SCOPE_IDS = (
     32  # gadget/turn source-scope ids honoured; the rest are dropped (flagged scope_truncated)
 )
 _MAX_ALLOWED_SOURCES = 100  # newest allowed sources honoured (flagged sources_truncated)
+_CHAT_READABLE_STATUSES = ("active", "paused")  # archived sources are never read by chat
 _DATA_SEMANTICS_NOTE = (
     "observed_at is UTC business time (the period start for daily/annual series); "
     "is_current=false rows are superseded revisions of the same data point; "
@@ -227,7 +244,8 @@ def build_db_query_tool_spec(*, sql_enabled: bool = True) -> dict[str, Any]:
                 "Supports 'structured' filter/aggregation mode and 'sql' read-only SELECT mode "
                 "against the pre-scoped views `scoped_observations` "
                 "(columns: id, source_id, provider, metric, symbol, region, value, unit, currency, "
-                "observed_at, published_at, quality, is_current, document_id, document_version_id) "
+                "observed_at, published_at, quality, is_current, document_id, document_version_id; "
+                "it contains only current revisions, so is_current is always true) "
                 "and `scoped_documents` "
                 "(columns: id, source_id, provider, title, canonical_url, published_at, observed_at, "
                 "language, content_excerpt, document_version_id). "
@@ -267,7 +285,7 @@ async def active_collected_providers(
     allow_local_only: bool,
     source_scope: list[str] | None = None,
 ) -> list[str]:
-    """Sorted distinct provider ids of the active collected sources this turn may query (bounded to 30).
+    """Sorted distinct provider ids of the active or paused collected sources this turn may query (bounded to 30).
 
     Derived from :func:`_allowed_sources` so the hint can never name a provider outside the turn's scope
     (a gadget turn sees only its bound sources; an empty provided scope yields none). Read-only. Used to
@@ -285,7 +303,7 @@ async def active_collected_providers(
 async def has_collected_datasource(
     session: AsyncSession, *, workspace_id: UUID, allow_local_only: bool
 ) -> bool:
-    """Whether the workspace has at least one active connector-collected source this turn may query.
+    """Whether the workspace has at least one active or paused connector-collected source this turn may query.
 
     This is the grant condition for ``query_collected_data``: the owner either has collected data to
     query or the tool would only waste a round. Read-only, one bounded ``EXISTS`` query; ``local_only``
@@ -293,7 +311,7 @@ async def has_collected_datasource(
     """
     stmt = select(Source.id).where(
         Source.workspace_id == workspace_id,
-        Source.status == "active",
+        Source.status.in_(_CHAT_READABLE_STATUSES),
         Source.provider.is_not(None),
     )
     if not allow_local_only:
@@ -412,7 +430,9 @@ async def _allowed_sources(
     source_scope: list[str] | None,
     allow_local_only: bool,
 ) -> list[tuple[UUID, str | None, str]]:
-    """Return ``(id, provider, name)`` for active workspace sources permitted in this chat turn.
+    """Return ``(id, provider, name)`` for active or paused workspace sources permitted in this chat turn.
+
+    Paused sources stay readable (their already collected data is still the owner's); archived ones are not.
 
     ``source_scope=None`` means no scope (plain chat: the whole workspace). A provided list is a hard
     allow-list that fails closed: an empty list, or one with no parseable UUID, permits no source.
@@ -427,7 +447,7 @@ async def _allowed_sources(
         Source.name,
     ).where(
         Source.workspace_id == workspace_id,
-        Source.status == "active",
+        Source.status.in_(_CHAT_READABLE_STATUSES),
         Source.provider.is_not(None),
     )
     if not allow_local_only:
@@ -474,6 +494,7 @@ async def _register_evidence_for_versions(
     *,
     workspace_id: UUID,
     allowed_source_ids: list[UUID],
+    source_scopes: SourceScopes | None = None,
 ) -> dict[UUID, int]:
     """Load chunk_index=0 for returned document versions and append new ``EvidenceItem``s.
 
@@ -483,16 +504,15 @@ async def _register_evidence_for_versions(
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
         workspace_id: Workspace the turn runs in.
         allowed_source_ids: Sources this turn may read (already local-only filtered by ``_allowed_sources``).
+        source_scopes: When given, only versions matching their source's current scope are registered.
 
-    Authorization invariant: version ids are untrusted (in SQL mode they come from model-written rows, and
-    a literal UUID passes the reader fence), so the chunk lookup itself requires
-    ``Document.workspace_id == workspace_id`` and ``Document.source_id IN allowed_source_ids`` (the source
-    must also belong to the workspace). Unverified pairs are dropped: no evidence, no citation number.
+    Authorization invariant: version ids are untrusted (SQL-mode rows are model-written, and a literal UUID
+    passes the reader fence), so the lookup itself requires the document's workspace and
+    ``source_id IN allowed_source_ids``. Unverified pairs are dropped: no evidence, no citation number.
 
-    New evidence is numbered in ``version_pairs`` order. Every returned version is registered (no cap): the caller bounds rows by ``args.limit`` (<= 50), and
-    an uncited row would make the model drop the citation for the whole list. A version without a chunk 0
-    is silently left out of the map; its row serialises ``citation: null`` and ``CITATION_RULE`` tells the
-    model such rows are usable but carry no number.
+    New evidence is numbered in ``version_pairs`` order and is not capped (the caller bounds rows by
+    ``args.limit`` <= 50; an uncited row would make the model drop citations for the whole list). A version
+    without a chunk 0 is left out of the map and serialises ``citation: null``.
 
     Returns:
         Mapping of ``document_version_id`` to the citation number ``[n]`` the model must use; equal to the
@@ -506,6 +526,7 @@ async def _register_evidence_for_versions(
     if not needed:
         return by_version
 
+    scope_filters = [document_scope_filter(source_scopes)] if source_scopes is not None else []
     rows = (
         await session.execute(
             select(
@@ -532,12 +553,12 @@ async def _register_evidence_for_versions(
                 Document.workspace_id == workspace_id,
                 Source.workspace_id == workspace_id,
                 Document.source_id.in_(allowed_source_ids),
+                *scope_filters,
             )
             .limit(len(needed))
         )
     ).all()
-    # Number in the caller's row order (the SQL return order is arbitrary), so the first listed row is the
-    # lowest new [n]; predictable markers are easier for a small model to copy and the rail matches the list.
+    # Number in the caller's row order (SQL return order is arbitrary) so markers are predictable.
     by_row = {row.document_version_id: row for row in rows}
     for ver_id in dict.fromkeys(needed):
         row = by_row.get(ver_id)
@@ -667,6 +688,11 @@ async def execute_db_query_tool(
     if len(allowed) > _MAX_ALLOWED_SOURCES:
         flags["sources_truncated"] = True
         allowed = allowed[:_MAX_ALLOWED_SOURCES]
+    allowed, source_scopes = await resolve_source_scopes(
+        session, allowed, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if not allowed:
+        return json.dumps({"status": "no_active_sources_in_scope", "rows": []})
     # Fixed fields on every result: the zone date-only bounds were read in, and an injection warning.
     extras: dict[str, Any] = {"timezone": zone.key, "data_notice": DATA_NOTICE, **flags}
 
@@ -676,6 +702,7 @@ async def execute_db_query_tool(
             args,
             workspace_id=scope.workspace_id,
             allowed=allowed,
+            source_scopes=source_scopes,
             date_from=date_from,
             date_to=date_to,
             evidence_list=evidence_list,
@@ -693,6 +720,7 @@ async def _run_query(
     *,
     workspace_id: UUID,
     allowed: list[tuple[UUID, str | None, str]],
+    source_scopes: SourceScopes,
     date_from: datetime | None,
     date_to: datetime | None,
     evidence_list: list[EvidenceItem],
@@ -714,6 +742,7 @@ async def _run_query(
                 args.sql_query,
                 workspace_id=workspace_id,
                 allowed_source_ids=allowed_ids,
+                source_scopes=source_scopes,
                 limit=args.limit,
                 evidence_list=evidence_list,
                 web_numbering=web_numbering,
@@ -724,6 +753,7 @@ async def _run_query(
                 args,
                 workspace_id=workspace_id,
                 allowed_source_ids=allowed_ids,
+                source_scopes=source_scopes,
                 date_from=date_from,
                 date_to=date_to,
                 evidence_list=evidence_list,
@@ -820,6 +850,11 @@ _UPSERT_FENCE = text(
     "source_ids = EXCLUDED.source_ids, expires_at = EXCLUDED.expires_at"
 )
 _DELETE_FENCE = text("DELETE FROM chat_sql.query_fence WHERE backend_pid = :pid")
+_DELETE_FENCE_SCOPE = text("DELETE FROM chat_sql.query_fence_scope WHERE backend_pid = :pid")
+_INSERT_FENCE_SCOPE = text(
+    "INSERT INTO chat_sql.query_fence_scope (backend_pid, source_id, discriminator) "
+    "VALUES (:pid, :sid, :disc)"
+)
 
 
 async def _run_sql_as_reader(
@@ -829,6 +864,7 @@ async def _run_sql_as_reader(
     workspace_id: UUID,
     allowed_source_ids: list[UUID],
     max_rows: int,
+    source_scopes: SourceScopes | None = None,
 ) -> list[Any]:
     """Execute validated model SQL on the dedicated read-only login connection; return fetched row mappings.
 
@@ -842,6 +878,10 @@ async def _run_sql_as_reader(
     the fence row deleted via ``app_engine`` (even on error; the expiry covers a crash). The fence key is the
     reader backend pid, and a reader connection serves one query at a time, so concurrent queries on
     different pooled connections never share a row.
+
+    ``source_scopes`` becomes ``chat_sql.query_fence_scope`` rows written in the SAME committed app transaction
+    as the fence row (replacing any rows left for that pid) and deleted with it in ``finally``; the views
+    only show a row whose source discriminator matches, so ``None`` or an empty mapping shows nothing.
 
     The fence-row delete deliberately stays on its own ``app_engine`` transaction rather than the caller's
     session: that session is inside a read-only-intent savepoint with a 2 s statement timeout and may already be
@@ -857,6 +897,7 @@ async def _run_sql_as_reader(
         isinstance(sid, UUID) for sid in allowed_source_ids
     ):
         raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
+    scope_rows = [{"sid": sid, "disc": disc} for sid, disc in (source_scopes or {}).items()]
     engine = _reader_engine()
     async with AsyncExitStack() as stack:
         try:
@@ -880,6 +921,12 @@ async def _run_sql_as_reader(
                         "ttl": _FENCE_TTL_SECONDS,
                     },
                 )
+                # Same transaction as the fence upsert: the reader never sees a fence without its scope.
+                await app_conn.execute(_DELETE_FENCE_SCOPE, {"pid": pid})
+                if scope_rows:
+                    await app_conn.execute(
+                        _INSERT_FENCE_SCOPE, [{**r, "pid": pid} for r in scope_rows]
+                    )
             await conn.execute(text("SET TRANSACTION READ ONLY"))
             await conn.execute(
                 text(f"SET LOCAL statement_timeout = {_READER_STATEMENT_TIMEOUT_MS}")
@@ -892,6 +939,7 @@ async def _run_sql_as_reader(
             )  # read-only work: discard the transaction so the pooled connection is clean
             if pid is not None:
                 async with app_engine.begin() as app_conn:
+                    await app_conn.execute(_DELETE_FENCE_SCOPE, {"pid": pid})
                     await app_conn.execute(_DELETE_FENCE, {"pid": pid})
 
 
@@ -904,6 +952,7 @@ async def _execute_sql_mode(
     limit: int,
     evidence_list: list[EvidenceItem],
     web_numbering: tuple[int, int] | None = None,
+    source_scopes: SourceScopes | None = None,
 ) -> str:
     """Validate, run (least-privilege, read-only) and serialise a model-written SELECT.
 
@@ -919,6 +968,7 @@ async def _execute_sql_mode(
         workspace_id=workspace_id,
         allowed_source_ids=allowed_source_ids,
         max_rows=min(limit, MAX_DB_QUERY_ROWS) + 1,  # one extra row detects truncation
+        source_scopes=source_scopes,
     )
     truncated = len(mappings) > limit
     mappings = mappings[:limit]
@@ -935,6 +985,7 @@ async def _execute_sql_mode(
         web_numbering,
         workspace_id=workspace_id,
         allowed_source_ids=allowed_source_ids,
+        source_scopes=source_scopes,
     )
 
     serialized_rows: list[dict[str, Any]] = []
@@ -972,6 +1023,7 @@ def _observation_filters(
     allowed_source_ids: list[UUID],
     date_from: datetime | None,
     date_to: datetime | None,
+    source_scopes: SourceScopes | None = None,
 ) -> list[Any]:
     """Build the workspace/source-scoped SQLAlchemy filter list for observation queries.
 
@@ -984,13 +1036,27 @@ def _observation_filters(
     exactly against lower-cased input (the DB CHECK enforces lower-case ids). Metric and symbol are
     compared case-insensitively on both sides because ingestion does not normalise their case;
     ``region`` likewise.
+
+    ``source_scopes`` (current-scope discriminator per source) restricts each source to rows collected under
+    its current configuration. Whenever only current rows are read, cross-source duplicates of one series
+    point are removed (see :func:`not_superseded_across_sources`), so rows and aggregates share one deduped
+    set. With ``current_only=False`` revisions are the point, so that dedup is skipped.
     """
-    obs_filters: list[Any] = [
-        Observation.workspace_id == workspace_id,
-        Observation.source_id.in_(allowed_source_ids),
-    ]
+    obs_filters = observation_scope_predicates(
+        Observation,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
+        source_scopes=source_scopes,
+    )
     if args.current_only or args.aggregation != "none":
         obs_filters.append(Observation.is_current.is_(True))
+        obs_filters.append(
+            not_superseded_across_sources(
+                workspace_id=workspace_id,
+                allowed_source_ids=allowed_source_ids,
+                source_scopes=source_scopes,
+            )
+        )
     if args.providers:
         obs_filters.append(
             Observation.provider.in_([p.strip().lower() for p in args.providers if p.strip()])
@@ -1107,8 +1173,12 @@ def _document_filters(
     allowed_source_ids: list[UUID],
     date_from: datetime | None,
     date_to: datetime | None,
+    source_scopes: SourceScopes | None = None,
 ) -> list[Any]:
     """Build the workspace/source-scoped filter list (incl. full-text) for document queries.
+
+    ``source_scopes`` adds :func:`document_scope_filter` (current version provenance must carry the source's
+    current-scope discriminator).
 
     Pure expression builder; ``date_to`` is an exclusive upper bound on ``coalesce(observed_at, created_at)``; the workspace and allowed-source predicates are always first. ``text_query``
     matches the title (``ILIKE``, short column) or any chunk of the current version through the stored
@@ -1119,6 +1189,8 @@ def _document_filters(
         Document.workspace_id == workspace_id,
         Document.source_id.in_(allowed_source_ids),
     ]
+    if source_scopes is not None:
+        doc_filters.append(document_scope_filter(source_scopes))
     if args.providers:
         doc_filters.append(
             Source.provider.in_([p.strip().lower() for p in args.providers if p.strip()])
@@ -1275,6 +1347,7 @@ async def _collect_observations(
     date_from: datetime | None,
     date_to: datetime | None,
     out: dict[str, Any],
+    source_scopes: SourceScopes | None = None,
 ) -> tuple[list[dict[str, Any]], list[Any], bool]:
     """Fetch the optional aggregates and the observation rows, each trimmed to ``args.limit``.
 
@@ -1296,6 +1369,7 @@ async def _collect_observations(
         allowed_source_ids=allowed_source_ids,
         date_from=obs_from,
         date_to=date_to,
+        source_scopes=source_scopes,
     )
     aggregates: list[dict[str, Any]] = []
     truncated = False
@@ -1330,16 +1404,15 @@ async def _execute_structured_mode(
     redis: Any = None,
     available_providers: list[str] | None = None,
     web_numbering: tuple[int, int] | None = None,
+    source_scopes: SourceScopes | None = None,
 ) -> str:
     """Execute parameterized SQLAlchemy queries for observations and/or documents.
 
-    Documents are queried too whenever a requested provider is not a measurement provider (event and
-    news feeds store documents only). When neither table returns rows, ``available_providers`` lists the
-    active providers so the model can retry with a valid id.
-
-    Query order is fixed: optional observation aggregate, observation rows, document rows, then
-    evidence registration (which appends to ``evidence_list``), then the best-effort Redis
-    hot-cache read. Read-only on ``session``; no commit. Returns the JSON payload string.
+    Documents are queried too when a requested provider is not a measurement provider (news/event feeds
+    store documents only). ``available_providers`` lets the model retry with a valid id. Order: optional
+    aggregate, observation rows, document rows, evidence registration, best-effort Redis hot cache.
+    Read-only, no commit. ``source_scopes`` fences observations, documents and evidence to each source's
+    current scope. Returns the JSON payload string.
     """
     out: dict[str, Any] = {
         "mode": "structured",
@@ -1365,6 +1438,7 @@ async def _execute_structured_mode(
             date_from=date_from,
             date_to=date_to,
             out=out,
+            source_scopes=source_scopes,
         )
         version_pairs.extend(
             (agg["_document_id"], agg["_version_id"])
@@ -1381,6 +1455,7 @@ async def _execute_structured_mode(
             allowed_source_ids=allowed_source_ids,
             date_from=date_from,
             date_to=date_to,
+            source_scopes=source_scopes,
         )
         doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
         truncated = truncated or len(doc_rows_raw) > args.limit
@@ -1394,6 +1469,7 @@ async def _execute_structured_mode(
         web_numbering,
         workspace_id=workspace_id,
         allowed_source_ids=allowed_source_ids,
+        source_scopes=source_scopes,
     )
 
     if args.aggregation != "none" and want_obs:

@@ -534,6 +534,9 @@ from modules.connectors.service.scope import (
     agent_browser_target_in_scope as agent_browser_target_in_scope,
 )
 from modules.connectors.service.scope import (
+    chat_scope_discriminators as chat_scope_discriminators,
+)
+from modules.connectors.service.scope import (
     cii_v8_availability as cii_v8_availability,
 )
 from modules.connectors.service.scope import (

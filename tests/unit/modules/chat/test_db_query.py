@@ -117,7 +117,7 @@ def test_db_query_tool_spec_is_pinned() -> None:
     import json
 
     digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
-    assert digest == "151efe1c8905e0988eec0000ea40a8eb2deaca7523ba54e22cc0549037f35e76"
+    assert digest == "10f246a140c2e85e2b4cb8d5e4612d4acb972be74ad21097cb64adf66a45901f"
 
 
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
@@ -479,7 +479,7 @@ async def test_sql_mode_without_reader_returns_neutral_error(
     """The model sees ``sql_mode_unavailable`` with no env var name."""
     import json
 
-    from modules.chat import db_query
+    from modules.chat import _db_scope, db_query
 
     async def fence(*_a: object, **_k: object) -> str:
         return "f"
@@ -498,7 +498,12 @@ async def test_sql_mode_without_reader_returns_neutral_error(
         begin_nested=lambda: _Nested(), execute=AsyncMock(return_value=None), bind=None
     )
     monkeypatch.setattr(db_query.workspaces, "read_access_fence", fence)
+
+    async def scopes(_session: object, ids: list, **_k: object) -> dict:
+        return {sid: "d" * 64 for sid in ids}
+
     monkeypatch.setattr(db_query, "_allowed_sources", sources)
+    monkeypatch.setattr(_db_scope.connectors, "chat_scope_discriminators", scopes)
     monkeypatch.setattr(
         db_query, "Settings", lambda: SimpleNamespace(chat_sql_reader_database_url=None)
     )

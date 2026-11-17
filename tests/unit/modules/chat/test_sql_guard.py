@@ -223,24 +223,28 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch, conn: _RecordingConn) -> _Fak
 async def test_user_sql_runs_on_reader_after_app_fence_and_read_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Order: reader pid, app upsert+commit, READ ONLY, model SQL, reader rollback, app delete; no set_config."""
+    """Order: reader pid, app fence+scope rows+commit, READ ONLY, model SQL, reader rollback, app delete; no set_config."""
     conn = _RecordingConn()
     app = _patch_engine(monkeypatch, conn)
     user_sql = "SELECT symbol, AVG(value) AS avg_val FROM scoped_observations GROUP BY symbol"
+    source_id = uuid4()
     out = await db_query._execute_sql_mode(
         _NoQuerySession(app),  # type: ignore[arg-type]
         user_sql,
         workspace_id=uuid4(),
-        allowed_source_ids=[uuid4()],
+        allowed_source_ids=[source_id],
         limit=10,
         evidence_list=[],
+        source_scopes={source_id: "d" * 64},
     )
     ev = conn.events
     assert not any("set_config" in e for e in ev)
     steps = [
         "reader:SELECT pg_backend_pid()",
         "app:begin",
-        "app:INSERT",
+        "app:INSERT",  # fence upsert
+        "app:DELETE",  # stale scope rows of this pid
+        "app:INSERT",  # scope rows, same committed transaction
         "app:commit",
         "reader:SET TRANSACTION READ ONLY",
     ]
@@ -248,7 +252,7 @@ async def test_user_sql_runs_on_reader_after_app_fence_and_read_only(
     assert (
         user_sql in ev[len(steps) + 1]
     )  # statement_timeout sits between READ ONLY and the model query
-    assert ev[-4:] == ["reader:rollback", "app:begin", "app:DELETE", "app:commit"]
+    assert ev[-5:] == ["reader:rollback", "app:begin", "app:DELETE", "app:DELETE", "app:commit"]
     assert not any("ROLE" in s for s in conn.statements)
     assert conn.rollbacks == 1
     assert '"avg_val": 1' in out and '"mode": "sql"' in out
@@ -287,11 +291,12 @@ async def test_model_query_error_still_rolls_back_and_reraises(
             max_rows=5,
         )
     assert conn.rollbacks == 1
-    assert conn.events[-3:] == [
+    assert conn.events[-4:] == [
         "app:begin",
         "app:DELETE",
+        "app:DELETE",
         "app:commit",
-    ]  # fence removed even on error
+    ]  # scope rows and fence removed even on error
 
 
 async def test_sql_mode_fails_closed_without_reader_url(monkeypatch: pytest.MonkeyPatch) -> None:

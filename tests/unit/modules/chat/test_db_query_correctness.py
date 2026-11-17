@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError
 
-from modules.chat import db_query
+from modules.chat import _db_scope, db_query
 from modules.chat.db_query import (
     DATA_NOTICE,
     TRUNCATION_HINT,
@@ -91,6 +91,11 @@ async def _call(
     monkeypatch: pytest.MonkeyPatch, session: object, raw: dict[str, object], **kw: object
 ) -> dict[str, object]:
     fence = _patch_fence(monkeypatch)
+
+    async def _scopes(_session: object, ids: list, **_k: object) -> dict:
+        return {sid: "d" * 64 for sid in ids}
+
+    monkeypatch.setattr(_db_scope.connectors, "chat_scope_discriminators", _scopes)
     out = await execute_db_query_tool(
         session,  # type: ignore[arg-type]
         raw,
@@ -162,6 +167,7 @@ async def test_results_carry_timezone_and_data_notice(monkeypatch: pytest.Monkey
         timezone="Asia/Ho_Chi_Minh",
     )
     assert out["timezone"] == "Asia/Ho_Chi_Minh" and out["data_notice"] == DATA_NOTICE
+    assert list(seen["source_scopes"].values()) == ["d" * 64]  # type: ignore[attr-defined]
     assert seen["date_from"] == datetime(2026, 3, 4, 17, 0, tzinfo=UTC)
     assert seen["date_to"] == datetime(2026, 3, 5, 17, 0, tzinfo=UTC)
 
