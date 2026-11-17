@@ -186,3 +186,24 @@ def test_numbers_inside_urls_are_not_checked() -> None:
     known = _known()
     answer = "See https://example.com/a/98765?id=12345 and www.site.org/4567/89."
     assert _unverified(answer, known) == []
+
+
+def test_precise_derivations_of_two_data_values_are_reported_as_derived() -> None:
+    """A difference / % change of two retrieved prices is 'derived', not unverified; vague ints stay unverified."""
+    from modules.chat.grounding import build_known, check_grounding
+
+    known = build_known(['{"rows": [{"value": 67123.45}, {"value": 67500}]}'], [], "")
+    answer = "BTC rose 376,55 USDT (0,56%) to 67.500 [1]. It is 14 hours old."
+    report = check_grounding(answer, [], known, has_citation=True)
+    assert set(report.derived) == {"376,55", "0,56%"}
+    assert report.unverified == ("14",)
+    assert report.summary()["derived"] == 2
+
+
+def test_made_up_precise_number_is_not_derivable() -> None:
+    """A precise figure matching no pair operation stays unverified."""
+    from modules.chat.grounding import build_known, check_grounding
+
+    known = build_known(['{"rows": [{"value": 67123.45}, {"value": 67500}]}'], [], "")
+    report = check_grounding("Change was 412.07 USDT [1].", [], known, has_citation=True)
+    assert report.unverified == ("412.07",) and report.derived == ()

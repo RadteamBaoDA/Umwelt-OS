@@ -4,10 +4,13 @@ No model call and no I/O. The check collects the numbers present in the turn's `
 results, the evidence/web text and the user's own message, then looks for each number the answer text and
 its table/chart widgets state. It only reports: the answer is never rewritten.
 
-Known limits (a number that cannot be matched is reported as unverified even when it is right): values the
-model derived itself (sums, differences, averages, rankings), unit conversions, spelled-out numbers, bare
-integers 0-10 and standalone years are not judged at all, and ambiguous separators ("1.234") match either
-reading.
+A precise number (relative precision 1% or better) that is not in the data but equals the difference, sum,
+mean or percentage change of two data values is reported separately as ``derived``, not as unverified.
+
+Known limits (a number that cannot be matched is reported as unverified even when it is right): other
+derivations (averages of many rows, rankings, rounded or low-precision results), unit conversions,
+spelled-out numbers; bare integers 0-10 and standalone years are not judged at all, and ambiguous
+separators ("1.234") match either reading.
 """
 
 import bisect
@@ -25,6 +28,8 @@ UNVERIFIED_SOURCE = "Unverified figures (not found in retrieved data)"
 MAX_EXAMPLES = 10
 _MAX_KNOWN = 200_000  # bound on remembered values (tool results are already row-capped)
 _MAX_TEXT = 100_000  # bound on one scanned text
+_MAX_DERIVATION_BASE = 60  # numeric tool values tried pairwise for derived figures (60*59/2 pairs)
+_DERIVED_MAX_REL_TOL = 0.01  # only numbers stated to 1% precision or better may count as derived
 _SKIP_KEYS = frozenset(
     {"citation", "citation_rule", "hint", "citations", "id", "url", "canonical_url", "timezone"}
 )
@@ -99,6 +104,7 @@ class GroundingReport:
     unverified: tuple[str, ...]
     partially_uncited: bool
     bad_widgets: frozenset[int]
+    derived: tuple[str, ...] = ()
 
     @property
     def count(self) -> int:
@@ -111,8 +117,8 @@ class GroundingReport:
         return list(dict.fromkeys(self.unverified))[:MAX_EXAMPLES]
 
     def summary(self) -> dict[str, Any]:
-        """``{"count": n, "examples": [...]}`` as stored in message metadata and the done event."""
-        return {"count": self.count, "examples": self.examples}
+        """``{"count", "examples", "derived"}`` as stored in message metadata and the done event."""
+        return {"count": self.count, "examples": self.examples, "derived": len(self.derived)}
 
 
 def _parse_body(body: str) -> list[tuple[float, int]]:
@@ -229,6 +235,7 @@ class KnownNumbers:
         """Start empty."""
         self._values: list[float] = []
         self._sorted = True
+        self._data: list[float] = []  # first numeric tool values, the operands of derived figures
 
     def add_value(self, value: float) -> None:
         """Remember one magnitude (sign ignored); silently bounded by ``_MAX_KNOWN``."""
@@ -262,6 +269,8 @@ class KnownNumbers:
             return
         if isinstance(node, int | float):
             self.add_value(float(node))
+            if len(self._data) < _MAX_DERIVATION_BASE and math.isfinite(node):
+                self._data.append(float(node))
         elif isinstance(node, str):
             self.add_text(_strip(node, prose=False))
         elif isinstance(node, Mapping):
@@ -281,6 +290,26 @@ class KnownNumbers:
             i = bisect.bisect_left(self._values, value - tol * 1.0001)
             if i < len(self._values) and self._values[i] <= value + tol * 1.0001:
                 return True
+        return False
+
+    def derivable(self, number: _Number) -> bool:
+        """True when a precise ``number`` equals |a-b|, a+b, (a+b)/2 or the % change between two data values.
+
+        Pure, bounded (``_MAX_DERIVATION_BASE`` operands). Low-precision numbers ("14", "1.4") never qualify:
+        with many operand pairs a loose tolerance would match nearly anything.
+        """
+        data = self._data
+        for value, tol in number.readings:
+            if value == 0 or tol / value > _DERIVED_MAX_REL_TOL:
+                continue
+            lo, hi = value - tol * 1.0001, value + tol * 1.0001
+            for i, a in enumerate(data):
+                for b in data[i + 1 :]:
+                    diff = abs(a - b)
+                    candidates = [diff, abs(a + b), abs(a + b) / 2]
+                    candidates += [diff / abs(x) * 100 for x in (a, b) if x]
+                    if any(lo <= c <= hi for c in candidates):
+                        return True
         return False
 
     def __len__(self) -> int:
@@ -350,13 +379,19 @@ def check_grounding(
     """Compare the answer's and widgets' numbers with ``known`` (pure).
 
     ``partially_uncited`` needs ``has_citation`` (the answer kept at least one valid citation) and at least
-    one sentence with an unverified number but no ``[n]`` marker. A widget is "bad" when it is non-sample and
+    one sentence with an unverified number but no ``[n]`` marker. Answer numbers explained as a derivation of
+    two data values go to ``derived`` (widget cells must match the data directly). A widget is "bad" when it is non-sample and
     holds at least one unverified value.
     """
     unverified: list[str] = []
+    derived: list[str] = []
     partial = False
     for sentence in _SENTENCES.split(strip_prose(answer)):
-        missing = [n.raw for n in extract_numbers(sentence, prose=False) if not known.contains(n)]
+        missing: list[str] = []
+        for n in extract_numbers(sentence, prose=False):
+            if known.contains(n):
+                continue
+            (derived if known.derivable(n) else missing).append(n.raw)
         unverified.extend(missing)
         partial = partial or bool(missing and not _MARKER.search(sentence))
     bad: set[int] = set()
@@ -366,7 +401,9 @@ def check_grounding(
         if missing:
             bad.add(index)
             unverified.extend(missing)
-    return GroundingReport(tuple(unverified), has_citation and partial, frozenset(bad))
+    return GroundingReport(
+        tuple(unverified), has_citation and partial, frozenset(bad), tuple(derived)
+    )
 
 
 def relabel_widgets(widgets: list[dict[str, Any]], report: GroundingReport) -> list[dict[str, Any]]:
