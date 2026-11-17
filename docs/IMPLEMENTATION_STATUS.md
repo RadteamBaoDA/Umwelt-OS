@@ -11,7 +11,8 @@ Chat answers from collected data through `query_collected_data` (`modules/chat/d
 | Done (later) | Hashable null-safe dedup keys and unordered aggregates with a LATERAL newest-row citation (`modules/chat/_db_aggregates.py`); chat SQL reader pool 2 + 2, so the connection budget is 116 of 120 and the reader role fits two chat-worker replicas |
 | Done (later) | `04d4ac2a` grounding reports precise differences, sums, means and % changes of two data values as `derived` instead of unverified; `b58a69be` prompt asks the model to query before answering and to cite in the same sentence; `aaf93fc0` FRED `attributes.units` for common series; `1222f633`/`b108a218` SQL results with no citable row return a `citation_hint` and the prompt asks for `document_version_id`; `e316aaf0` elapsed durations, year-less dates and day ranges are not checked as data claims |
 | Real-model eval (rerun) | After the prompt, `citation_hint` and grounding date fixes: numbers correct 100%, citation validity 100% (was 81.6%), empty/no-data 6/6, grounded 95.6%, 41/45 cases pass every criterion. The 4 others are expected behaviour the rubric scores strictly: two follow-ups quote the earlier wrong figure while correcting it, and two calendar questions are declined without a tool call because no calendar source exists |
-| Open | Grounding is a deterministic heuristic, not proof; FRED series outside the fixed list carry no physical unit (the observations API does not return one) |
+| Done (later) | `ef357960` FRED series outside `FRED_UNITS` take their physical unit from `fred/series` (one extra gated send before the data send; a metadata failure collects without a unit) |
+| Open | Grounding is a deterministic heuristic, not proof: it flags a stale figure the model quotes while correcting it, and it cannot see a wrong figure that happens to equal a retrieved value |
 
 Grounding is a numeric heuristic: derived values are flagged and near-matches pass.
 
