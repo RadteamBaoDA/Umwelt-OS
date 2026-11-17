@@ -26,7 +26,8 @@ const DEFAULT_INITIAL_HEIGHT = 320;
 
 /**
  * Detects the active Umwelt-OS theme (`'light'` or `'dark'`) from `document.documentElement`
- * when an explicit `theme` prop is not passed.
+ * when an explicit `theme` prop is not passed. The terminal skin (`data-skin="terminal"`) forces `'dark'`, the same
+ * as the `dark` class, because terminal is always dark. The explicit prop wins over detection.
  *
  * @param explicitTheme - Optional theme override prop.
  * @returns Active `SandboxTheme` (`'light'` or `'dark'`).
@@ -34,10 +35,7 @@ const DEFAULT_INITIAL_HEIGHT = 320;
 function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
   const [detectedTheme, setDetectedTheme] = React.useState<SandboxTheme>(() => {
     if (explicitTheme) return explicitTheme;
-    if (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) {
-      return 'dark';
-    }
-    return 'light';
+    return documentIsDark() ? 'dark' : 'light';
   });
 
   React.useEffect(() => {
@@ -48,18 +46,29 @@ function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
       return;
     }
     const updateFromDom = () => {
-      const isDark = document.documentElement.classList.contains('dark') || document.documentElement.getAttribute('data-theme') === 'dark';
-      setDetectedTheme(isDark ? 'dark' : 'light');
+      setDetectedTheme(documentIsDark() ? 'dark' : 'light');
     };
     const observer = new MutationObserver(updateFromDom);
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme'],
+      attributeFilter: ['class', 'data-theme', 'data-skin'],
     });
     return () => observer.disconnect();
   }, [explicitTheme]);
 
   return explicitTheme ?? detectedTheme;
+}
+
+/**
+ * Reports whether the sandbox should render its dark palette for the current document. Dark when the app theme class
+ * or `data-theme` says dark, and always dark under the terminal skin (its palette is dark regardless of theme).
+ *
+ * @returns True when the document is dark or the terminal skin is applied; false on the server.
+ */
+function documentIsDark(): boolean {
+  if (typeof document === 'undefined') return false;
+  const root = document.documentElement;
+  return root.classList.contains('dark') || root.getAttribute('data-theme') === 'dark' || root.getAttribute('data-skin') === 'terminal';
 }
 
 /**

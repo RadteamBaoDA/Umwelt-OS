@@ -1,0 +1,33 @@
+/*
+ * Dashboard header greeting and live-map overview legend. Imported by dashboard-page.tsx.
+ * Colours come from semantic tokens only, so both skins follow the active theme.
+ */
+.dash-greeting {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dash-live-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash-live-legend-item {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.dash-live-legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+}

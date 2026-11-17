@@ -15,6 +15,7 @@ import { DashboardOverview } from './dashboard-overview';
 import { DashboardPanel } from './dashboard-panel';
 import { DashboardCrudDialogs, ManagementDialog, useDashboardCrud } from './dashboard-dialogs';
 import { DashboardHeader, formatRelativeAge } from './dashboard-header';
+import './dashboard-skin.css';
 import { GroupTabs, LayoutNotices, StaleSourcesPanel, TimezoneFooter, TodayHeaderGate } from './dashboard-panels';
 import { FreshnessStrip } from './freshness-strip';
 import { GadgetSettings } from './gadget-settings';
@@ -114,17 +115,25 @@ type PageOps = {
   membership: ReturnType<typeof useGadgetMembership>;
 };
 
-/** Dashboard header wired to the data, layout and CRUD hooks (summary text, edit toggle, switcher actions). */
+/**
+ * Dashboard header wired to the data, layout and CRUD hooks (summary text, edit toggle, switcher actions).
+ * On the Overview group the today greeting (`TodayHeaderGate`) renders under the title; it is the same
+ * strip that used to sit above the canvas, and its own visibility rule still applies.
+ *
+ * @param overview True when the active group is the Overview group.
+ */
 function ConnectedHeader({
   data,
   ops,
   crud,
+  overview,
   onOpenPresets,
   onOpenManagement,
 }: {
   data: PageData;
   ops: PageOps;
   crud: ReturnType<typeof useDashboardCrud>;
+  overview: boolean;
   onOpenPresets: () => void;
   onOpenManagement: () => void;
 }) {
@@ -132,7 +141,7 @@ function ConnectedHeader({
   const { isAdminViewer, isOwner } = useWorkspace();
   const display = useDisplayPreferences();
   const { session, save } = ops;
-  const { activeDashboard, sources } = data;
+  const { activeDashboard, sources, showFirstRun } = data;
   return (
     <DashboardHeader
       dashboards={data.dashboards}
@@ -144,6 +153,7 @@ function ConnectedHeader({
       isEditMode={session.isEditMode}
       canEditLayout={session.canEditLayout}
       summary={buildHeaderSummary(t, sources.lastUpdatedAt, sources.staleSources.length, display.locale)}
+      greeting={overview ? <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} /> : undefined}
       onSwitch={save.requestSwitchDashboard}
       onCreate={() => crud.setCreateOpen(true)}
       onRename={() => {
@@ -363,17 +373,16 @@ interface GroupBodyProps {
   onAdd: () => void;
 }
 
-/** Canvas plus the Overview-only strips (today header, freshness, stale sources, timezone footer) of one group. */
+/** Canvas plus the Overview-only strips (freshness, stale sources, timezone footer) of one group. */
 function DashboardGroupContent(props: GroupBodyProps) {
   const { ops, data, activeGroup, visibleInstances, isTablet } = props;
   const { activeDashboard, sources, showFirstRun } = data;
-  const { isAdminViewer, isOwner } = useWorkspace();
+  const { isAdminViewer } = useWorkspace();
   const display = useDisplayPreferences();
   return (
     <div className="flex flex-col gap-4 pb-4">
       {activeGroup?.is_overview && (
         <>
-          <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
           <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
         </>
       )}
@@ -659,6 +668,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         data={data}
         ops={ops}
         crud={crud}
+        overview={Boolean(activeDashboard?.groups.find((group) => group.id === session.activeGroupId)?.is_overview)}
         onOpenPresets={() => intents.setPresetPickerOpen(true)}
         onOpenManagement={() => management.setOpen(true)}
       />

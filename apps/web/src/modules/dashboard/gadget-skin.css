@@ -1,0 +1,131 @@
+/*
+ * Gadget frame skin: header and title ornaments for the terminal skin, and the data-refresh reveal.
+ * Presentation only. The reveal runs while use-gadget-reveal.ts holds data-reveal on .dashboard-gadget-body;
+ * the renderer root (its single child inside the host) and that root's children are what animate.
+ * Colours come from semantic tokens only.
+ */
+
+/* Terminal: raised header and a "── title ──" pane title. Default skin keeps the card header. */
+html[data-skin='terminal'] .gadget-header {
+  background: var(--raised);
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Header icon buttons sit at 26px on fine pointers; coarse pointers keep the 44px touch target. */
+@media (pointer: fine) {
+  html[data-skin='terminal'] .gadget-header [data-slot='button'][data-size='icon'] {
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    min-height: 26px;
+  }
+}
+
+html[data-skin='terminal'] .gadget-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--strong);
+}
+
+html[data-skin='terminal'] .gadget-title::before {
+  content: '── ' / '';
+  color: var(--control);
+}
+
+html[data-skin='terminal'] .gadget-title::after {
+  content: ' ──' / '';
+  color: var(--control);
+}
+
+@keyframes gadget-reveal-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gadget-reveal-type {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/*
+ * Default skin: fade. Longhands are used so the terminal override below changes only name, duration and
+ * timing, and keeps the stagger delay that --reveal-i supplies.
+ */
+.dashboard-gadget-body[data-reveal] > div:last-child > * > * {
+  animation-name: gadget-reveal-fade;
+  animation-duration: 260ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+  animation-delay: calc(var(--reveal-i, 0) * 45ms);
+}
+
+/* Terminal: each child types in character steps. */
+html[data-skin='terminal'] .dashboard-gadget-body[data-reveal] > div:last-child > * > * {
+  animation-name: gadget-reveal-type;
+  animation-duration: 360ms;
+  animation-timing-function: steps(24, end);
+}
+
+/* Stagger: children reveal top to bottom, 45ms apart, for the first 14. */
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(1) {
+  --reveal-i: 0;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(2) {
+  --reveal-i: 1;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(3) {
+  --reveal-i: 2;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(4) {
+  --reveal-i: 3;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(5) {
+  --reveal-i: 4;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(6) {
+  --reveal-i: 5;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(7) {
+  --reveal-i: 6;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(8) {
+  --reveal-i: 7;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(9) {
+  --reveal-i: 8;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(10) {
+  --reveal-i: 9;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(11) {
+  --reveal-i: 10;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(12) {
+  --reveal-i: 11;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(13) {
+  --reveal-i: 12;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(14) {
+  --reveal-i: 13;
+}
+
+/* Reduced motion: no reveal, whichever skin is active. */
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-gadget-body[data-reveal] > div:last-child > * > * {
+    animation: none !important;
+  }
+}

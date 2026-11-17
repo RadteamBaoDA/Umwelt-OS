@@ -1,0 +1,24 @@
+/*
+ * Terminal skin for settings sections: ruled section headings with a `//` comment prefix.
+ * Imported by components/settings-layout/index.tsx. Scoped under html[data-skin='terminal']; default unchanged.
+ */
+
+html[data-skin='terminal'] section.border-t {
+  border-color: var(--rule);
+}
+
+/* Unlayered so these beat the Tailwind utilities on the section and its heading. */
+html[data-skin='terminal'] section.border-t > div > h2 {
+  font-size: 14px;
+}
+
+html[data-skin='terminal'] section.border-t > div:first-child > p {
+  font-size: 12px;
+}
+
+@media (min-width: 901px) {
+  html[data-skin='terminal'] section.border-t {
+    grid-template-columns: 260px minmax(0, 1fr);
+    padding: 20px 0;
+  }
+}

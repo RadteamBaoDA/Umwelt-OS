@@ -1,0 +1,705 @@
+<style>
+.dash-greet { font-size: 15px; color: var(--strong); padding: 2px 0 12px; }
+.dash-greet .muted { font-size: 13px; }
+.dash-hi { color: var(--strong); font-weight: 600; }
+.dash-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.dash-toolbar .prompt-wrap { flex: 1; min-width: 160px; }
+.dash-globe-wrap { position: relative; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); margin-top: 10px; }
+#globe { display: block; width: 100%; height: 420px; cursor: grab; touch-action: none; }
+#globe:active { cursor: grabbing; }
+.dash-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); padding: 8px 2px 0; }
+.dash-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dash-video { aspect-ratio: 16 / 9; background: var(--bg); border: 1px solid var(--line); display: grid; place-items: center; position: relative; }
+.dash-video .play { width: 52px; height: 52px; border: 1px solid var(--accent); color: var(--accent); display: grid; place-items: center; font-size: 18px; border-radius: var(--radius-pill); }
+.dash-video .cap { position: absolute; left: 10px; bottom: 8px; right: 10px; font-size: 12px; display: flex; justify-content: space-between; color: var(--muted); }
+.dash-task { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.dash-task .due { margin-left: auto; font-size: 12px; }
+.dash-task.done span:first-of-type { text-decoration: line-through; color: var(--muted); }
+.dash-goal { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 6px 0; font-size: 13px; }
+.dash-goal .bar { grid-column: 1 / -1; height: 6px; background: var(--active); border-radius: var(--radius-pill); overflow: hidden; }
+.dash-goal .bar b { display: block; height: 100%; background: var(--accent); }
+.dash-goal .bar-ascii { grid-column: 1 / -1; display: none; }
+html[data-skin='terminal'] .dash-goal .bar { display: none; }
+html[data-skin='terminal'] .dash-goal .bar-ascii { display: block; }
+.dash-article h3 { font-size: 15px; line-height: 1.35; margin-bottom: 6px; }
+.dash-article p { font-size: 13px; color: var(--text); }
+.dash-msg { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.dash-msg .from { color: var(--strong); font-weight: 600; }
+.dash-msg .body { grid-column: 2 / -1; color: var(--muted); font-size: 12px; }
+.dash-brief p { font-size: 13px; }
+.dash-brief p + p { margin-top: 8px; }
+.dash-edit .pane { outline: 1px dashed var(--accent); outline-offset: 3px; position: relative; }
+.dash-edit .pane-title .grip { color: var(--accent); cursor: move; font-size: 14px; }
+.dash-edit .resize { position: absolute; right: 2px; bottom: 0; color: var(--accent); font-size: 12px; cursor: nwse-resize; }
+.dash-addpane { border: 1px dashed var(--control); border-radius: var(--radius); display: grid; place-items: center; min-height: 160px; color: var(--muted); font-size: 13px; background: transparent; cursor: pointer; font-family: inherit; }
+.dash-addpane:hover { color: var(--accent); border-color: var(--accent); }
+.dash-ghost { opacity: .5; }
+.dash-pick { list-style: none; margin: 0; padding: 0; }
+.dash-pick li { display: grid; grid-template-columns: 16ch 1fr; gap: 12px; padding: 7px 10px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
+.dash-pick li:hover { background: var(--active); }
+.dash-pick li[aria-selected='true'] { background: var(--active); color: var(--strong); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-skin='terminal'] .dash-pick li b::before { content: '  '; }
+html[data-skin='terminal'] .dash-pick li[aria-selected='true'] b::before { content: '> '; color: var(--accent); }
+.dash-pick li b { color: var(--strong); font-weight: 600; }
+.dash-pick li span { color: var(--muted); }
+html[data-skin='terminal'] .dash-pick li span::before { content: '— '; }
+.dash-signal { padding: 6px 0; border-bottom: 1px solid var(--rule); font-size: 13px; }
+.dash-signal .small { display: block; }
+
+/* Fit-to-viewport dashboard (desktop): the page never scrolls; only regions inside it do. */
+@media (min-width: 901px) {
+  html:has(.view.on.dash-fit), body:has(.view.on.dash-fit) { height: 100%; overflow: hidden; }
+  body:has(.view.on.dash-fit) .app { height: 100vh; }
+  body:has(.view.on.dash-fit) .main { height: 100vh; min-height: 0; }
+  body:has(.view.on.dash-fit) .content { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 12px; }
+  .view.on.dash-fit { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .dash-fit > .page-head, .dash-fit > .tabs, .dash-fit > .alert { flex: none; }
+  .dash-fit > .grid { flex: 1; min-height: 0; }
+  /* Overview: map column is fixed, right column is the only scroll region. */
+  .dash-ov { grid-template-rows: minmax(0, 1fr); }
+  .dash-ov > * { min-height: 0; }
+  .dash-map { overflow: hidden; }
+  .dash-map > .pane-body { min-height: 0; overflow: hidden; }
+  .dash-map .dash-globe-wrap { flex: 1 1 0; min-height: 96px; height: auto; }
+  .dash-map .dash-ev { flex: 0 1 calc(var(--ev-row) * 8 + var(--ev-head)); min-height: calc(var(--ev-row) * 5 + var(--ev-head)); }
+  .dash-map .dash-evl { max-height: none; flex: 1; }
+  .dash-ov-right { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 4px; }
+  .dash-ov-right:focus-visible { outline-offset: -2px; }
+  /* Other boards: the board scrolls; each gadget has a fixed height and scrolls inside. */
+  .dash-scroll { overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; grid-auto-rows: 300px; align-content: start; padding: 4px 4px 4px 0; }
+  .dash-scroll > * { min-height: 0 !important; }
+  .dash-scroll > .pane { overflow: hidden; }
+  .dash-scroll > .pane > .pane-body { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+}
+/* Thin terminal scrollbars for the inner scroll regions. */
+html[data-skin='terminal'] * { scrollbar-width: thin; scrollbar-color: var(--control) transparent; }
+
+/* Compact live map (overview left column). */
+.dash-map > .pane-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.dash-map .pane-foot { font-size: 10px; }
+.dash-seg { display: inline-flex; border: 1px solid var(--control); border-radius: var(--radius); overflow: hidden; margin-right: 4px; }
+.dash-seg button { font: inherit; font-size: 11px; background: none; border: 0; color: var(--muted); padding: 2px 8px; cursor: pointer; }
+.dash-seg button[aria-pressed='true'] { background: var(--active); color: var(--accent); }
+.dash-ctrl { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; }
+.dash-ctrl .input { height: 28px; padding: 0 8px; font-size: 12px; width: auto; }
+.dash-ctrl .prompt-wrap .input { width: 100%; }
+.dash-map .dash-globe-wrap { position: relative; margin: 0; }
+@media (max-width: 900px) { .dash-map .dash-globe-wrap { height: 300px; } }
+.dash-map #globe { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dash-lg { display: flex; gap: 2px; flex-wrap: nowrap; }
+.dash-lg button { font: inherit; font-size: 11px; color: var(--text); background: none; border: 1px solid transparent; border-radius: var(--radius); padding: 1px 6px; cursor: pointer; }
+.dash-lg button:hover { border-color: var(--control); }
+.dash-lg button[aria-pressed='false'] { color: var(--muted); text-decoration: line-through; }
+.dash-lg button[aria-pressed='false'] i { opacity: .3; }
+.dash-lg i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.dash-ev { --ev-row: 26px; --ev-head: 37px; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); padding-top: 6px; }
+.dash-ev-head { display: flex; align-items: center; gap: 8px; height: 30px; flex: none; }
+.dash-ev-head .label { font-size: 12px; font-weight: 600; }
+.dash-evl { list-style: none; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; min-height: calc(var(--ev-row) * 5); max-height: calc(var(--ev-row) * 8); }
+.dash-evl li { display: grid; grid-template-columns: 5ch 6.5ch minmax(0, 1fr) auto; gap: 8px; align-items: center; height: var(--ev-row); padding: 0 4px; font-size: 12px; border-radius: var(--radius); cursor: pointer; }
+.dash-evl li:hover, .dash-evl li:focus-visible, .dash-evl li[aria-current='true'] { background: var(--active); outline: none; }
+.dash-evl li[aria-current='true'] { box-shadow: inset 2px 0 0 var(--accent); }
+.dash-evl time { color: var(--muted); }
+.dash-evl .k { font-size: 11px; font-weight: 600; }
+.dash-evl .tx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.dash-evl .tag { font-size: 10px; }
+</style>
+
+<!-- ============================================================ 1. WORLD MONITOR -->
+<section class="view dash-fit" id="dashboard" data-group="Dashboard" data-title="World monitor (3D globe)" data-path="dashboard/world" data-rail="dashboard" data-status="updated 9 min ago · 14 sources · 37 live events">
+  <div class="page-head">
+    <div>
+      <h1>World ▾</h1>
+      <p class="meta"><span class="dash-hi">Good evening, Owner</span> · Thu Nov 12, 2026 · 19° Ho Chi Minh City · <a href="#">show local weather</a></p>
+    </div>
+    <div class="actions">
+      <button class="btn">≡ Comfortable</button>
+      <a class="btn" href="#dashboard-edit">✎ Edit layout</a>
+      <button class="btn">Topics</button>
+      <a class="btn" href="#dashboard-add-gadget">+ Add gadget</a>
+    </div>
+  </div>
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true">Overview</button>
+    <button role="tab" aria-selected="false">Markets</button>
+    <button role="tab" aria-selected="false">Energy</button>
+    <button role="tab" aria-selected="false">Personal</button>
+    <button role="tab" aria-selected="false">+ Add tab</button>
+  </div>
+
+  <div class="grid dash-ov">
+    <article class="pane s4 dash-map">
+      <div class="pane-title"><span class="dot"></span><b>live map</b><span>37 events · 7d</span>
+        <span class="act">
+          <span class="dash-seg" role="group" aria-label="Map mode"><button aria-pressed="true">globe</button><button aria-pressed="false">flat</button></span>
+          <button class="btn sm ghost icon-only" aria-label="Configure map">⚙</button>
+          <button class="btn sm ghost icon-only" aria-label="Collapse map">⇤</button>
+        </span></div>
+      <div class="pane-body">
+        <div class="dash-ctrl">
+          <div class="prompt-wrap"><input class="input" placeholder="filter events" aria-label="Filter events"></div>
+          <select class="input" aria-label="Category"><option>all · 37</option><option>disasters · 20</option><option>geo · 9</option><option>weather · 3</option><option>space · 2</option><option>finance · 3</option></select>
+          <select class="input" aria-label="Time range"><option>7d</option><option>24h</option><option>30d</option></select>
+        </div>
+        <div class="dash-globe-wrap"><canvas id="globe" role="img" aria-label="3D globe with 37 live events: wildfires, earthquakes, news and launches"></canvas></div>
+        <div class="dash-ev">
+          <div class="dash-ev-head"><span class="label">live events <span class="muted">37</span></span><span class="dash-lg" role="group" aria-label="Show event types"><button aria-pressed="true" aria-label="Fire, 14 events" title="fire"><i style="background:var(--warning)"></i>14</button><button aria-pressed="true" aria-label="Quake, 6 events" title="quake"><i style="background:var(--danger)"></i>6</button><button aria-pressed="true" aria-label="News, 15 events" title="news"><i style="background:var(--info)"></i>15</button><button aria-pressed="true" aria-label="Launch, 2 events" title="launch"><i style="background:var(--accent)"></i>2</button></span><button class="btn sm ghost icon-only right" aria-label="Pause stream">❚❚</button></div>
+          <ul class="dash-evl" aria-label="Live events">
+            <li tabindex="0" data-ll="-1.5,99.5"><time>13:11</time><span class="lv-err k">QUAKE</span><span class="tx">M5.1 · 84 km SW of Padang, Indonesia · 32 km deep</span><span class="tag">emsc</span></li>
+            <li tabindex="0" data-ll="-1.6,113.9"><time>13:09</time><span class="lv-warn k">FIRE</span><span class="tx">Thermal cluster, Kalimantan Tengah · FRP 412 MW</span><span class="tag">firms</span></li>
+            <li tabindex="0" data-ll="28.5,-80.6"><time>13:04</time><span class="lv-ok k">LAUNCH</span><span class="tx">Falcon 9 · Starlink 12-7 · Cape Canaveral · T-2h</span><span class="tag">ll2</span></li>
+            <li tabindex="0" data-ll="50.8,4.4"><time>12:58</time><span class="lv-info k">NEWS</span><span class="tx">EU agrees interim deal on grid interconnect funding</span><span class="tag">reuters</span></li>
+            <li tabindex="0" data-ll="23.9,121.6"><time>12:51</time><span class="lv-err k">QUAKE</span><span class="tx">M4.6 · Hualien County, Taiwan · 18 km deep</span><span class="tag">usgs</span></li>
+            <li tabindex="0" data-ll="15.2,125.1"><time>12:47</time><span class="lv-info k">STORM</span><span class="tx">Typhoon Man-yi upgraded, landfall Luzon in 36 h</span><span class="tag">jtwc</span></li>
+            <li tabindex="0" data-ll="34.7,-119.6"><time>12:40</time><span class="lv-warn k">FIRE</span><span class="tx">Perimeter contained 62% · Los Padres NF, California</span><span class="tag">firms</span></li>
+            <li tabindex="0" data-ll="10.8,105.2"><time>12:33</time><span class="lv-info k">NEWS</span><span class="tx">Mekong at Tân Châu +0.4 m after upstream release</span><span class="tag">mrc</span></li>
+            <li tabindex="0" data-ll="63.9,-22.4"><time>12:21</time><span class="lv-err k">QUAKE</span><span class="tx">M3.9 swarm · Reykjanes peninsula, Iceland</span><span class="tag">imo</span></li>
+            <li tabindex="0" data-ll="-9.0,-62.0"><time>12:10</time><span class="lv-warn k">FIRE</span><span class="tx">38 new hotspots · Rondônia, Brazil</span><span class="tag">firms</span></li>
+            <li tabindex="0" data-ll="35.7,139.7"><time>11:58</time><span class="lv-info k">NEWS</span><span class="tx">BoJ minutes flag yen weakness as inflation risk</span><span class="tag">nikkei</span></li>
+            <li tabindex="0" data-ll="-33.8,150.3"><time>11:42</time><span class="lv-warn k">FIRE</span><span class="tx">Hazard reduction burn escaped · Blue Mountains NSW</span><span class="tag">rfs</span></li>
+            <li tabindex="0" data-ll="-33.4,-70.6"><time>11:30</time><span class="lv-err k">QUAKE</span><span class="tx">M4.2 · 40 km E of Santiago, Chile</span><span class="tag">csn</span></li>
+            <li tabindex="0" data-ll="19.6,110.9"><time>11:12</time><span class="lv-ok k">LAUNCH</span><span class="tx">Long March 7A · Wenchang · scheduled 18:40 local</span><span class="tag">ll2</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="pane-foot"><span>© OpenFreeMap · OSM · USGS · NASA FIRMS · EMSC</span></div>
+    </article>
+
+    <div class="s8 dash-ov-right" tabindex="0" aria-label="Overview gadgets">
+      <div class="grid">
+        <article class="pane s7">
+          <div class="pane-title"><span class="dot"></span><b>feed: world-news</b><span>tail -f · 3 sources</span>
+            <span class="act"><button class="btn sm">collect now</button></span></div>
+          <div class="pane-body">
+            <ul class="log">
+              <li><time>13:11:58</time><span class="lv-info">INFO</span><a href="#">Mekong river levels rise 0.4 m after upstream dam release</a><span class="tag">vnexpress</span></li>
+              <li><time>13:07:15</time><span class="lv-new">NEW</span><a href="#">Central bank holds policy rate at 4.50% for a fourth meeting</a><span class="tag">reuters</span></li>
+              <li><time>13:02:09</time><span class="lv-warn">WARN</span><a href="#">gdelt: rate limited, retry in 120 s</a><span class="tag">gdelt</span></li>
+              <li><time>12:58:33</time><span class="lv-info">INFO</span><a href="#">Semiconductor exports up 11% year on year in October</a><span class="tag">nikkei</span></li>
+              <li><time>12:51:02</time><span class="lv-err">ERR</span><a href="#">bbc-world: fetch timed out after 20 s</a><span class="tag">bbc</span></li>
+              <li><time>12:44:47</time><span class="lv-info">INFO</span><a href="#">Brazil's central bank signals high bar for rate hikes</a><span class="tag">reuters</span></li>
+            </ul>
+          </div>
+        </article>
+        <article class="pane s5">
+          <div class="pane-title"><span class="dot warn"></span><b>highlights</b><span>rules</span></div>
+          <div class="pane-body">
+            <p class="metric">2 <small>alerting · 5 rules</small></p>
+            <ul class="log" style="margin-top:10px">
+              <li style="grid-template-columns:6ch 1fr"><span class="lv-warn">HIT</span><a href="#">BTC/USD moved &gt; 3% in 1 h</a></li>
+              <li style="grid-template-columns:6ch 1fr"><span class="lv-warn">HIT</span><a href="#">Quake M5+ within 500 km of watch area</a></li>
+              <li style="grid-template-columns:6ch 1fr"><span class="muted">idle</span><span class="muted">Gold below 2,600</span></li>
+            </ul>
+          </div>
+        </article>
+        <article class="pane s4">
+          <div class="pane-title"><span class="dot"></span><b>watchlist</b><span>60 s</span></div>
+          <div class="pane-body" style="padding:4px 4px 8px">
+            <table class="data">
+              <thead><tr><th>Symbol</th><th class="n">Last</th><th class="n">Chg</th></tr></thead>
+              <tbody>
+                <tr><td class="name">BTC/USD</td><td class="n">71,340.20</td><td class="n up">▲ +3.12%</td></tr>
+                <tr><td class="name">ETH/USD</td><td class="n">3,288.10</td><td class="n down">▼ −0.62%</td></tr>
+                <tr><td class="name">VNINDEX</td><td class="n">1,284.55</td><td class="n up">▲ +0.31%</td></tr>
+                <tr><td class="name">XAU/USD</td><td class="n">2,671.80</td><td class="n down">▼ −0.18%</td></tr>
+                <tr><td class="name">BRENT</td><td class="n">73.42</td><td class="n up">▲ +0.94%</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+        <article class="pane s4 chart">
+          <div class="pane-title"><span class="dot"></span><b>chart: BTC/USD</b><span>24h</span></div>
+          <div class="pane-body">
+            <p class="metric" style="font-size:24px">71,340 <small class="up">▲ +3.12%</small></p>
+            <svg viewBox="0 0 300 90" style="height:90px;margin-top:6px" role="img" aria-label="BTC 24 hours, rising from 69.1k to 71.3k">
+              <line class="gl" x1="0" x2="300" y1="20" y2="20"/><line class="gl" x1="0" x2="300" y1="50" y2="50"/><line class="gl" x1="0" x2="300" y1="80" y2="80"/>
+              <polyline fill="none" stroke="var(--chart-1)" stroke-width="2" points="0,72 25,68 50,74 75,62 100,64 125,55 150,58 175,44 200,48 225,34 250,30 275,22 300,16"/>
+              <text class="ax" x="0" y="89">00:00</text><text class="ax" x="262" y="89">now</text>
+            </svg>
+          </div>
+        </article>
+        <article class="pane s4">
+          <div class="pane-title"><span class="dot"></span><b>weather: ho chi minh city</b><span>open-meteo · hourly</span></div>
+          <div class="pane-body">
+            <div><p class="metric">18.5<small>°C</small></p><p class="small muted">low 17° · high 22° · rain 20% · wind 9 km/h NE</p></div>
+            <svg class="grow chart" viewBox="0 0 400 70" style="height:56px;margin-top:8px;width:100%" role="img" aria-label="Temperature next 24 hours, peaking 22 degrees at 14:00">
+              <polyline fill="none" stroke="var(--chart-1)" stroke-width="2" points="0,52 30,54 60,56 90,50 120,40 150,28 180,18 210,14 240,16 270,26 300,36 330,44 360,48 400,50"/>
+              <text class="ax" x="0" y="68">now</text><text class="ax" x="190" y="68">14:00</text><text class="ax" x="370" y="68">+24h</text>
+            </svg>
+          </div>
+        </article>
+        <article class="pane s5">
+          <div class="pane-title"><span class="dot warn"></span><b>tasks</b><span>1 overdue</span><span class="act"><button class="btn sm">+ task</button></span></div>
+          <div class="pane-body">
+            <label class="dash-task"><input type="checkbox" aria-label="Done"><span>Renew NASA FIRMS API key</span><span class="due err">overdue 2d</span></label>
+            <label class="dash-task"><input type="checkbox" aria-label="Done"><span>Review Q4 energy deck slide 7</span><span class="due muted">Fri</span></label>
+            <label class="dash-task"><input type="checkbox" aria-label="Done"><span>Migrate DB 0023 on dev</span><span class="due muted">Mon</span></label>
+          </div>
+        </article>
+        <article class="pane s7">
+          <div class="pane-title"><span class="dot"></span><b>daily brief</b><span>Thu 12 Nov · generated 07:00</span><span class="act"><button class="btn sm">ask AI</button></span></div>
+          <div class="pane-body dash-brief">
+            <p><span class="lv-warn">▸</span> Two M4+ quakes on the Pacific rim overnight; no tsunami advisories.</p>
+            <p><span class="lv-info">▸</span> Mekong at Tân Châu rose 0.4 m after a dam release; crest 3.25 m expected 19 Nov.</p>
+            <p><span class="lv-ok">▸</span> BTC up 3.1% on ETF inflows; your watch rule fired at 09:40.</p>
+          </div>
+        </article>
+        <article class="pane s6">
+          <div class="pane-title"><span class="dot"></span><b>related signals</b><span>last 30 days</span></div>
+          <div class="pane-body">
+            <div class="dash-signal">Mekong level +0.4 m <span class="small muted">↔ dam release upstream · 3 sources</span></div>
+            <div class="dash-signal">Kalimantan fire cluster <span class="small muted">↔ haze PSI 112 in Singapore · 4 sources</span></div>
+          </div>
+        </article>
+        <article class="pane s6">
+          <div class="pane-title"><span class="dot"></span><b>message list</b><span>unread 2</span></div>
+          <div class="pane-body">
+            <div class="dash-msg"><span class="lv-new">●</span><span class="from">ops-alerts</span><span class="small muted">13:08</span><span class="body">Backup job finished on nas-01 · 214 GB · 0 errors</span></div>
+            <div class="dash-msg"><span class="lv-new">●</span><span class="from">GitHub</span><span class="small muted">11:20</span><span class="body">PR #214 review requested: scheduler upsert fix</span></div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 2. ALL GADGET TYPES -->
+<section class="view dash-fit" id="dashboard-gadgets" data-group="Dashboard" data-title="All gadget types" data-path="dashboard/all-gadgets" data-rail="dashboard" data-status="updated 10 min ago · 17 gadgets">
+  <div class="page-head">
+    <div><h1>All gadget types ▾</h1><p class="meta"><span class="dash-hi">Good evening, Owner</span> · Thu Nov 12, 2026 · 19° Ho Chi Minh City · <a href="#">show local weather</a></p></div>
+    <div class="actions"><button class="btn">≡ Compact</button><a class="btn" href="#dashboard-edit">✎ Edit layout</a><button class="btn">Topics</button></div>
+  </div>
+  <div class="tabs" role="tablist"><button role="tab" aria-selected="true">Overview</button><button role="tab" aria-selected="false">+ Add tab</button></div>
+
+  <div class="grid dash-scroll">
+    <!-- feed -->
+    <article class="pane s6">
+      <div class="pane-title"><span class="dot"></span><b>feed</b><span>all sources · 3</span><span class="act"><button class="btn sm ghost" aria-label="List view">☰</button><button class="btn sm ghost" aria-label="Refresh">↻</button></span></div>
+      <div class="pane-body">
+        <div class="chips" style="margin-bottom:8px"><button class="chip" aria-pressed="true" data-single>all</button><button class="chip" aria-pressed="false" data-single>bao-thanh-nien</button><button class="chip" aria-pressed="false" data-single>google-news</button></div>
+        <ul class="log">
+          <li><time>13:10</time><span class="lv-new">NEW</span><a href="#">Chủ tịch Quốc hội Trần Thanh Mẫn hội đàm với Chủ tịch Hội đồng Liên bang Nga</a><span class="tag">thanhnien</span></li>
+          <li><time>12:52</time><span class="lv-info">INFO</span><a href="#">Saudi-led coalition says it shot down missiles aimed at Riyadh</a><span class="tag">reuters</span></li>
+          <li><time>12:31</time><span class="lv-info">INFO</span><a href="#">China's October crude oil imports rise to highest since March</a><span class="tag">reuters</span></li>
+        </ul>
+      </div>
+      <div class="pane-foot"><span>some stories may be incomplete</span><span class="right">updated 2 min ago</span></div>
+    </article>
+
+    <!-- message list -->
+    <article class="pane s6">
+      <div class="pane-title"><span class="dot"></span><b>message list</b><span>telegram · email</span><span class="act"><button class="btn sm ghost">unread only (3)</button></span></div>
+      <div class="pane-body">
+        <div class="dash-msg"><span class="lv-new">●</span><span class="from">ops-alerts</span><span class="small muted">13:08</span><span class="body">Backup job finished on nas-01 · 214 GB · 0 errors</span></div>
+        <div class="dash-msg"><span class="lv-new">●</span><span class="from">Linh Tran</span><span class="small muted">12:44</span><span class="body">Sent the Q4 energy deck, can you check slide 7 numbers?</span></div>
+        <div class="dash-msg"><span class="lv-new">●</span><span class="from">GitHub</span><span class="small muted">11:20</span><span class="body">[umwelt-os] PR #214 review requested: scheduler upsert fix</span></div>
+        <div class="dash-msg"><span class="muted">○</span><span class="from">bank-notify</span><span class="small muted">09:02</span><span class="body">Card ending 4421: 1,250,000 VND at Circle K</span></div>
+      </div>
+    </article>
+
+    <!-- text -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot"></span><b>text</b><span>reuters</span></div>
+      <div class="pane-body dash-article">
+        <h3>COMMENTARY: Gold's short-term volatility contrasts with long-term bullishness</h3>
+        <p>Spot gold swung $60 in two sessions as rate expectations shifted, while central bank buying kept the 12-month trend intact. Analysts expect range trading between 2,600 and 2,750 into year end.</p>
+        <p class="small muted" style="margin-top:8px">Updated 2 hours ago · <a href="#">open source</a></p>
+      </div>
+    </article>
+
+    <!-- table -->
+    <article class="pane s8">
+      <div class="pane-title"><span class="dot"></span><b>table</b><span>google-news · 100 items</span><span class="act"><button class="btn sm ghost">select ▾</button></span></div>
+      <div class="pane-body" style="padding:4px">
+        <table class="data">
+          <thead><tr><th>Title</th><th>Source</th><th class="n">Published</th></tr></thead>
+          <tbody>
+            <tr><td class="name">Saudi-led coalition says it shot down Houthi missiles</td><td>Reuters</td><td class="n">Nov 10 19:20</td></tr>
+            <tr><td class="name">Gold's short-term volatility contrasts with long-term bullishness</td><td>Reuters</td><td class="n">Nov 9 07:14</td></tr>
+            <tr><td class="name">Canada has not decided on lifting Arctic drilling ban</td><td>Reuters</td><td class="n">Nov 9 06:02</td></tr>
+            <tr><td class="name">Poland's Orlen ends long-term QatarEnergy LNG contract</td><td>Reuters</td><td class="n">Nov 8 22:41</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pane-foot"><span>100 items</span><span class="right">updated 2 hours ago</span></div>
+    </article>
+
+    <!-- jobs (empty) -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot mute"></span><b>jobs</b><span>itviec · topcv</span></div>
+      <div class="pane-body"><p class="empty">no records yet.<br>run: <code>collect now</code> or <a href="#">configure sources</a></p></div>
+    </article>
+
+    <!-- video -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot"></span><b>video</b><span>youtube</span></div>
+      <div class="pane-body">
+        <div class="dash-video"><span class="play" aria-hidden="true">▶</span><span class="cap"><span>Fireship · Postgres in 100 seconds</span><span>02:14</span></span></div>
+        <p class="small muted" style="margin-top:6px">3 new videos · channel: fireship</p>
+      </div>
+    </article>
+
+    <!-- chart -->
+    <article class="pane s4 chart">
+      <div class="pane-title"><span class="dot"></span><b>chart: btc</b><span>coingecko</span></div>
+      <div class="pane-body">
+        <p class="metric">$71,340 <small class="up">▲ +3.12%</small></p>
+        <div class="chips" style="margin:8px 0"><button class="chip" aria-pressed="false" data-single>24h</button><button class="chip" aria-pressed="true" data-single>7D</button><button class="chip" aria-pressed="false" data-single>30D</button><button class="chip" aria-pressed="false" data-single>90D</button><button class="chip" aria-pressed="false" data-single>1Y</button><button class="chip" aria-pressed="false" data-single>ALL</button></div>
+        <svg viewBox="0 0 300 120" style="height:120px" role="img" aria-label="BTC 7 days, from 66,900 to 71,340">
+          <line class="gl" x1="30" x2="300" y1="15" y2="15"/><line class="gl" x1="30" x2="300" y1="55" y2="55"/><line class="gl" x1="30" x2="300" y1="95" y2="95"/>
+          <text class="ax" x="0" y="19">72k</text><text class="ax" x="0" y="59">69k</text><text class="ax" x="0" y="99">66k</text>
+          <polyline fill="none" stroke="var(--chart-1)" stroke-width="2" points="30,88 60,80 90,84 120,66 150,72 180,52 210,58 240,40 270,30 300,22"/>
+          <text class="ax" x="30" y="115">Nov 5</text><text class="ax" x="260" y="115">Nov 12</text>
+        </svg>
+      </div>
+      <div class="pane-foot"><span>CoinGecko</span><span class="right">updated 11 min ago</span></div>
+    </article>
+
+    <!-- map flat -->
+    <article class="pane s8">
+      <div class="pane-title"><span class="dot"></span><b>map: flat</b><span>last 30 days</span></div>
+      <div class="pane-body">
+        <svg viewBox="0 0 360 160" style="width:100%;height:200px;background:var(--bg);border:1px solid var(--line)" role="img" aria-label="Flat world map with 23 evidence points, mostly Southeast Asia">
+          <g stroke="var(--rule)" stroke-width="1">
+            <line x1="0" x2="360" y1="40" y2="40"/><line x1="0" x2="360" y1="80" y2="80"/><line x1="0" x2="360" y1="120" y2="120"/>
+            <line x1="60" x2="60" y1="0" y2="160"/><line x1="120" x2="120" y1="0" y2="160"/><line x1="180" x2="180" y1="0" y2="160"/><line x1="240" x2="240" y1="0" y2="160"/><line x1="300" x2="300" y1="0" y2="160"/>
+          </g>
+          <g fill="var(--control)">
+            <ellipse cx="80" cy="45" rx="45" ry="22"/><ellipse cx="120" cy="105" rx="18" ry="28"/><ellipse cx="190" cy="40" rx="18" ry="10"/><ellipse cx="200" cy="85" rx="22" ry="30"/><ellipse cx="265" cy="45" rx="55" ry="20"/><ellipse cx="315" cy="115" rx="20" ry="11"/>
+          </g>
+          <g fill="var(--accent)"><circle cx="286" cy="75" r="3"/><circle cx="289" cy="78" r="3"/><circle cx="284" cy="70" r="2.5"/><circle cx="292" cy="72" r="2.5"/><circle cx="282" cy="80" r="2.5"/></g>
+          <g fill="var(--warning)"><circle cx="300" cy="82" r="3"/><circle cx="62" cy="58" r="3"/></g>
+          <g fill="var(--danger)"><circle cx="279" cy="84" r="3.5"/><circle cx="302" cy="58" r="3"/></g>
+        </svg>
+        <h3 style="margin:10px 0 4px">Evidence points (23)</h3>
+        <ul class="log">
+          <li style="grid-template-columns:1fr auto"><span>Temperature · Open-Meteo <span class="muted small">· Nov 12 22:00</span></span><span class="num">18.7 °C</span></li>
+          <li style="grid-template-columns:1fr auto"><span>Temperature · Open-Meteo <span class="muted small">· Nov 12 21:00</span></span><span class="num">19.1 °C</span></li>
+          <li style="grid-template-columns:1fr auto"><span>Earthquake · EMSC <span class="muted small">· Nov 12 13:11</span></span><span class="num err">M5.1</span></li>
+        </ul>
+      </div>
+      <div class="pane-foot"><span>© OpenFreeMap © OpenStreetMap contributors</span></div>
+    </article>
+
+    <!-- highlights -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot warn"></span><b>highlights</b></div>
+      <div class="pane-body">
+        <p class="metric">2 <small>alerting · 5 rules</small></p>
+        <ul class="log" style="margin-top:8px">
+          <li style="grid-template-columns:6ch 1fr"><span class="lv-warn">HIT</span><span>BTC/USD moved &gt; 3% in 1 h</span></li>
+          <li style="grid-template-columns:6ch 1fr"><span class="lv-warn">HIT</span><span>Mention: "Mekong" in 3+ sources</span></li>
+        </ul>
+        <p style="margin-top:8px"><a href="#" class="small">configure rules</a></p>
+      </div>
+    </article>
+
+    <!-- watchlist (empty) -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot mute"></span><b>watchlist</b></div>
+      <div class="pane-body"><p class="metric">0 <small>alerting · 0 rules</small></p><p class="empty" style="padding:12px 0 0;text-align:left">watchlist empty.<br>run: <code>add rule</code> to start watching for matches.</p></div>
+    </article>
+
+    <!-- tasks -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot"></span><b>tasks</b><span>0 due today · 1 overdue</span><span class="act"><button class="btn sm">+ New task</button></span></div>
+      <div class="pane-body">
+        <label class="dash-task"><input type="checkbox" aria-label="Done"><span>Renew NASA FIRMS API key</span><span class="due err">overdue 2d</span></label>
+        <label class="dash-task"><input type="checkbox" aria-label="Done"><span>Review Q4 energy deck slide 7</span><span class="due muted">Fri</span></label>
+        <label class="dash-task"><input type="checkbox" aria-label="Done"><span>Migrate DB 0023 on dev</span><span class="due muted">Mon</span></label>
+        <label class="dash-task done"><input type="checkbox" checked aria-label="Done"><span>Accept USGS provider terms</span><span class="due muted">done</span></label>
+      </div>
+    </article>
+
+    <!-- goals -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot"></span><b>goals</b><span>2026 · Q4</span><span class="act"><button class="btn sm">+ New goal</button></span></div>
+      <div class="pane-body">
+        <div class="dash-goal"><span>Read 24 books</span><span class="num muted">20 / 24</span><div class="bar"><b style="width:83%"></b></div><span class="bar-ascii">[████████░░] 83%</span></div>
+        <div class="dash-goal"><span>Run 1,000 km</span><span class="num muted">612 / 1000</span><div class="bar"><b style="width:61%"></b></div><span class="bar-ascii">[██████░░░░] 61%</span></div>
+        <div class="dash-goal"><span>Ship Umwelt-OS v1</span><span class="num muted">7 / 10</span><div class="bar"><b style="width:70%"></b></div><span class="bar-ascii">[███████░░░] 70%</span></div>
+      </div>
+    </article>
+
+    <!-- related signals -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot"></span><b>related signals</b><span>last 30 days</span></div>
+      <div class="pane-body">
+        <p class="small muted" style="margin-bottom:6px">happened around the same time · Southeast Asia</p>
+        <div class="dash-signal">Mekong level +0.4 m <span class="small muted">↔ dam release upstream · 14 Nov · 3 sources</span></div>
+        <div class="dash-signal">Rice export price +2.1% <span class="small muted">↔ drought watch Mekong delta · 2 sources</span></div>
+        <div class="dash-signal">Kalimantan fire cluster <span class="small muted">↔ haze PSI 112 in Singapore · 4 sources</span></div>
+      </div>
+    </article>
+
+    <!-- daily brief -->
+    <article class="pane s8">
+      <div class="pane-title"><span class="dot"></span><b>daily brief</b><span>generated 07:00</span></div>
+      <div class="pane-body dash-brief">
+        <div class="row" style="margin-bottom:10px">
+          <button class="btn sm" aria-label="Previous day">‹</button><input class="input" type="date" value="2026-11-12" style="width:auto;height:26px;padding:0 8px" aria-label="Brief date"><button class="btn sm" aria-label="Next day">›</button><button class="btn sm ghost">Today</button>
+          <span class="right row"><button class="btn sm">↻ Generate brief</button><button class="btn sm">Ask AI</button></span>
+        </div>
+        <p><b>Markets.</b> BTC up 3.1% overnight to 71.3k; VN-Index flat at 1,284. Gold eased after two volatile sessions <a class="cite" href="#">[1]</a>.</p>
+        <p><b>World.</b> M5.1 quake off Sumatra, no tsunami warning <a class="cite" href="#">[2]</a>. EU interim deal on grid interconnect funding <a class="cite" href="#">[3]</a>.</p>
+        <p><b>You.</b> 1 overdue task (FIRMS key), 2 meetings, 3 unread messages.</p>
+      </div>
+      <div class="pane-foot"><span>Tasks due 0 · Active goals 3</span><span class="right">refreshed Nov 12 10:48</span></div>
+    </article>
+
+    <!-- metric -->
+    <article class="pane s4">
+      <div class="pane-title"><span class="dot"></span><b>metric</b><span>coingecko · open-meteo</span></div>
+      <div class="pane-body">
+        <div class="row" style="padding:6px 0;border-bottom:1px solid var(--rule)"><span class="grow">btc/usd</span><svg viewBox="0 0 60 20" style="width:60px;height:20px"><polyline fill="none" stroke="var(--chart-1)" stroke-width="1.5" points="0,16 10,14 20,15 30,10 40,8 50,6 60,3"/></svg><span class="num" style="width:9ch;text-align:right">71.3K</span><span class="num up small" style="width:7ch;text-align:right">+3.1%</span></div>
+        <div class="row" style="padding:6px 0"><span class="grow">hcmc temp</span><svg viewBox="0 0 60 20" style="width:60px;height:20px"><polyline fill="none" stroke="var(--chart-2)" stroke-width="1.5" points="0,6 10,8 20,10 30,12 40,11 50,14 60,15"/></svg><span class="num" style="width:9ch;text-align:right">20.5°</span><span class="num down small" style="width:7ch;text-align:right">−1.4%</span></div>
+      </div>
+      <div class="pane-foot"><span>updated 11 min ago</span></div>
+    </article>
+
+    <!-- activity -->
+    <article class="pane s5">
+      <div class="pane-title"><span class="dot"></span><b>activity</b><span>github · umwelt-os</span></div>
+      <div class="pane-body">
+        <ul class="log">
+          <li style="grid-template-columns:8ch 1fr auto"><span class="info">74f98b8</span><span>fix(connectors): dedupe workspace rows in upsert</span><span class="t small">2h</span></li>
+          <li style="grid-template-columns:8ch 1fr auto"><span class="info">8cc0dedf</span><span>test(e2e): read web search copy from locales</span><span class="t small">3h</span></li>
+          <li style="grid-template-columns:8ch 1fr auto"><span class="ok">PR #214</span><span>merged into develop by owner</span><span class="t small">5h</span></li>
+          <li style="grid-template-columns:8ch 1fr auto"><span class="err">CI ✗</span><span>e2e / datasources · 7 failed</span><span class="t small">6h</span></li>
+        </ul>
+      </div>
+    </article>
+
+    <!-- weather error -->
+    <article class="pane s7">
+      <div class="pane-title"><span class="dot err"></span><b>weather: hanoi</b><span>failed</span><span class="act"><button class="btn sm">retry</button></span></div>
+      <div class="pane-body">
+        <div class="alert err"><span class="alert-k"></span><div><b>open-meteo: fetch timed out after 20 s.</b><br><span class="small muted">last good data 2 h ago · next retry 13:20:00 · exit 124 · <a href="#">open source settings</a></span></div></div>
+        <p class="metric dash-ghost" style="margin-top:10px">16.2<small>°C · stale</small></p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ============================================================ 3. EDIT LAYOUT -->
+<section class="view dash-fit" id="dashboard-edit" data-group="Dashboard" data-title="Edit layout" data-path="dashboard/world --edit" data-mode="EDIT" data-rail="dashboard" data-status="editing · 6 gadgets · unsaved changes">
+  <div class="page-head">
+    <div><h1>World ▾</h1><p class="meta"><span class="dash-hi">Good evening, Owner</span> · Thu Nov 12, 2026 · 19° Ho Chi Minh City · <a href="#">show local weather</a></p></div>
+    <div class="actions"><a class="btn" href="#dashboard-add-gadget">+ Add gadget</a><a class="btn" href="#dashboard">Cancel</a><a class="btn primary" href="#dashboard">Save layout</a></div>
+  </div>
+  <div class="alert warn" style="margin-bottom:16px"><span class="alert-k"></span><div>editing layout · drag panes by <b>⠿</b> · resize with <b>◢</b> · <kbd>Esc</kbd> to cancel · <kbd>Ctrl S</kbd> to save</div></div>
+  <div class="grid dash-edit dash-scroll">
+    <article class="pane s5" style="min-height:300px">
+      <div class="pane-title"><span class="grip" aria-label="Drag">⠿</span><b>map: live events</b><span>5 × 8</span><span class="act"><button class="btn sm ghost">⚙ configure</button><button class="btn sm ghost err">✕ remove</button></span></div>
+      <div class="pane-body"><p class="empty">globe paused in edit mode<br><span class="small">37 events · 3D globe</span></p></div>
+      <span class="resize" aria-hidden="true">◢</span>
+    </article>
+    <article class="pane s7">
+      <div class="pane-title"><span class="grip" aria-label="Drag">⠿</span><b>feed: world-news</b><span>7 × 4</span><span class="act"><button class="btn sm ghost">⚙ configure</button><button class="btn sm ghost err">✕ remove</button></span></div>
+      <div class="pane-body"><ul class="log dash-ghost"><li><time>13:11:58</time><span class="lv-info">INFO</span><span>Mekong river levels rise 0.4 m</span><span></span></li><li><time>13:07:15</time><span class="lv-new">NEW</span><span>Central bank holds policy rate at 4.50%</span><span></span></li><li><time>13:02:09</time><span class="lv-warn">WARN</span><span>gdelt: rate limited</span><span></span></li></ul></div>
+      <span class="resize" aria-hidden="true">◢</span>
+    </article>
+    <article class="pane s4">
+      <div class="pane-title"><span class="grip">⠿</span><b>highlights</b><span>4 × 3</span><span class="act"><button class="btn sm ghost">⚙</button><button class="btn sm ghost err">✕</button></span></div>
+      <div class="pane-body dash-ghost"><p class="metric">2 <small>alerting</small></p></div>
+      <span class="resize" aria-hidden="true">◢</span>
+    </article>
+    <article class="pane s4">
+      <div class="pane-title"><span class="grip">⠿</span><b>watchlist</b><span>4 × 3</span><span class="act"><button class="btn sm ghost">⚙</button><button class="btn sm ghost err">✕</button></span></div>
+      <div class="pane-body dash-ghost small">BTC/USD 71,340 ▲ · ETH/USD 3,288 ▼ · VNINDEX 1,284 ▲</div>
+      <span class="resize" aria-hidden="true">◢</span>
+    </article>
+    <a class="dash-addpane s4" href="#dashboard-add-gadget" style="text-decoration:none">+ add gadget</a>
+  </div>
+</section>
+
+<!-- ============================================================ 4. ADD GADGET DIALOG -->
+<section class="view" id="dashboard-add-gadget" data-group="Dashboard" data-title="Add gadget dialog" data-path="dashboard/world" data-base="dashboard" data-mode="INSERT" data-rail="dashboard">
+  <a class="scrim" href="#dashboard" aria-label="Close"></a>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dash-add-title">
+    <div class="dialog-head"><h2 id="dash-add-title">Add gadget</h2><p class="help">Pick what this gadget shows. You choose its sources next.</p></div>
+    <div class="dialog-body">
+      <div class="prompt-wrap" style="margin-bottom:10px"><input class="input" placeholder="filter gadget types" aria-label="Filter gadget types" value=""></div>
+      <ul class="dash-pick" role="listbox" aria-label="Gadget types">
+        <li role="option" aria-selected="true"><b>feed</b><span>stories from news and RSS sources</span></li>
+        <li role="option" aria-selected="false"><b>map</b><span>live events on a globe or flat map</span></li>
+        <li role="option" aria-selected="false"><b>chart</b><span>price or series over time</span></li>
+        <li role="option" aria-selected="false"><b>metric</b><span>one number with change and sparkline</span></li>
+        <li role="option" aria-selected="false"><b>table</b><span>records from any source, sortable</span></li>
+        <li role="option" aria-selected="false"><b>watchlist</b><span>rules that alert on matches</span></li>
+        <li role="option" aria-selected="false"><b>highlights</b><span>what is alerting right now</span></li>
+        <li role="option" aria-selected="false"><b>weather</b><span>current and next 24 h</span></li>
+        <li role="option" aria-selected="false"><b>daily brief</b><span>AI summary of today with citations</span></li>
+        <li role="option" aria-selected="false"><b>tasks</b><span>to-dos with due dates</span></li>
+        <li role="option" aria-selected="false"><b>goals</b><span>progress toward targets</span></li>
+        <li role="option" aria-selected="false"><b>message list</b><span>telegram, email and chat inboxes</span></li>
+        <li role="option" aria-selected="false"><b>video</b><span>latest from youtube channels</span></li>
+        <li role="option" aria-selected="false"><b>activity</b><span>github commits, PRs and CI</span></li>
+      </ul>
+    </div>
+    <div class="dialog-foot"><span class="small muted" style="margin-right:auto">↑↓ move · Enter add · Esc close</span><a class="btn" href="#dashboard">Cancel</a><a class="btn primary" href="#dashboard">Add feed</a></div>
+  </div>
+</section>
+
+<script>
+/* 3D wireframe globe (orthographic). Demo only: real app uses deck.gl + MapLibre. */
+(function () {
+  const cv = document.getElementById('globe');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  const D = Math.PI / 180;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let lon0 = -106, lat0 = 12, zoom = 1, running = false, raf = 0, drag = null, t0 = performance.now(), c = {};
+  // ponytail: continents as ellipse blobs [lat, lon, rLat, rLon]; real coastlines need topojson.
+  const blobs = [[47,-100,18,28],[62,-125,10,28],[22,-100,8,10],[72,-42,8,12],[-12,-58,18,13],[-36,-66,10,6],[50,12,9,20],[62,25,6,14],[6,20,18,18],[-20,26,12,10],[52,90,14,45],[30,78,9,18],[15,102,8,7],[34,112,10,14],[-2,115,5,12],[-25,134,10,15],[36,138,5,4]];
+  const land = [];
+  for (let la = -58; la <= 80; la += 3) for (let lo = -180; lo < 180; lo += 3)
+    if (blobs.some(([a, o, ra, ro]) => ((la - a) / ra) ** 2 + ((lo - o) / ro) ** 2 <= 1)) land.push([la, lo]);
+  const ev = [
+    [-1.4, 99.8, 'danger'], [23.9, 121.6, 'danger'], [38.3, 142.4, 'danger'], [-33.4, -70.6, 'danger'], [36.2, 28.1, 'danger'], [61.2, -150, 'danger'],
+    [-1.6, 113.9, 'warning'], [34.5, -119.6, 'warning'], [-12.5, 131, 'warning'], [9.1, 7.4, 'warning'], [-8.5, -63, 'warning'], [62, 129, 'warning'], [13.4, 104.9, 'warning'],
+    [10.82, 106.63, 'info'], [51.5, -0.1, 'info'], [50.8, 4.4, 'info'], [39.9, 116.4, 'info'], [38.9, -77, 'info'], [-23.5, -46.6, 'info'], [1.35, 103.8, 'info'], [24.7, 46.7, 'info'], [55.7, 37.6, 'info'], [35.7, 139.7, 'info'],
+    [28.5, -80.6, 'accent'], [5.2, -52.8, 'accent']];
+  const arcs = [[[10.82, 106.63], [51.5, -0.1]], [[28.5, -80.6], [-1.4, 99.8]], [[1.35, 103.8], [35.7, 139.7]]];
+
+  function colors() {
+    const s = getComputedStyle(document.documentElement);
+    for (const k of ['bg', 'line', 'control', 'muted', 'accent', 'info', 'warning', 'danger', 'text', 'surface']) c[k] = s.getPropertyValue('--' + k).trim();
+    c.font = getComputedStyle(document.body).fontFamily;
+  }
+  function size() {
+    const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+    cv.width = Math.max(1, r.width * dpr); cv.height = Math.max(1, r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  // Project lat/lon -> [x, y, visible]
+  function P(la, lo, R, cx, cy) {
+    const p = la * D, l = (lo - lon0) * D, p0 = lat0 * D;
+    const cosc = Math.sin(p0) * Math.sin(p) + Math.cos(p0) * Math.cos(p) * Math.cos(l);
+    return [cx + R * Math.cos(p) * Math.sin(l), cy - R * (Math.cos(p0) * Math.sin(p) - Math.sin(p0) * Math.cos(p) * Math.cos(l)), cosc > 0];
+  }
+  function line(pts, R, cx, cy) {
+    let on = false;
+    ctx.beginPath();
+    for (const [la, lo] of pts) {
+      const [x, y, v] = P(la, lo, R, cx, cy);
+      if (v) { on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true; } else on = false;
+    }
+    ctx.stroke();
+  }
+  function gc(a, b, n) { // great-circle interpolation (slerp)
+    const v = ([la, lo]) => [Math.cos(la * D) * Math.cos(lo * D), Math.cos(la * D) * Math.sin(lo * D), Math.sin(la * D)];
+    const A = v(a), B = v(b), w = Math.acos(Math.min(1, A[0] * B[0] + A[1] * B[1] + A[2] * B[2])), out = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, s1 = Math.sin((1 - t) * w) / Math.sin(w), s2 = Math.sin(t * w) / Math.sin(w);
+      const x = s1 * A[0] + s2 * B[0], y = s1 * A[1] + s2 * B[1], z = s1 * A[2] + s2 * B[2];
+      out.push([Math.asin(z) / D, Math.atan2(y, x) / D]);
+    }
+    return out;
+  }
+  const arcPts = arcs.map(([a, b]) => gc(a, b, 64));
+
+  function draw(now) {
+    const w = cv.clientWidth, h = cv.clientHeight, cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.42 * zoom, t = (now - t0) / 1000;
+    ctx.clearRect(0, 0, w, h);
+    if (R <= 0) return;
+    // sphere outline
+    ctx.strokeStyle = c.control; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+    // graticule every 15 deg
+    ctx.strokeStyle = c.line; ctx.lineWidth = 1;
+    for (let lo = -180; lo < 180; lo += 15) { const pts = []; for (let la = -90; la <= 90; la += 3) pts.push([la, lo]); line(pts, R, cx, cy); }
+    for (let la = -75; la <= 75; la += 15) { const pts = []; for (let lo = -180; lo <= 180; lo += 3) pts.push([la, lo]); line(pts, R, cx, cy); }
+    // land dots
+    ctx.fillStyle = c.muted; ctx.globalAlpha = 0.55;
+    for (const [la, lo] of land) { const [x, y, v] = P(la, lo, R, cx, cy); if (v) ctx.fillRect(x - 0.8, y - 0.8, 1.6, 1.6); }
+    ctx.globalAlpha = 1;
+    // arcs with travelling dash
+    ctx.strokeStyle = c.accent; ctx.lineWidth = 1.2; ctx.setLineDash([4, 4]); ctx.lineDashOffset = -t * 12;
+    arcPts.forEach((pts) => line(pts, R, cx, cy));
+    ctx.setLineDash([]);
+    // events with pulse rings
+    for (const [la, lo, k] of ev) {
+      const [x, y, v] = P(la, lo, R, cx, cy); if (!v) continue;
+      ctx.fillStyle = c[k]; ctx.strokeStyle = c[k];
+      ctx.beginPath(); ctx.arc(x, y, 2.6, 0, Math.PI * 2); ctx.fill();
+      const ph = (((t * 0.8 + (la + lo) * 0.01) % 1) + 1) % 1;
+      ctx.globalAlpha = 1 - ph; ctx.beginPath(); ctx.arc(x, y, 3 + ph * 10, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    // focused event (from the live events list): corner brackets + label
+    const F = window.__globeFocus;
+    if (F) {
+      const [fx, fy, fv] = P(F.la, F.lo, R, cx, cy);
+      if (fv) {
+        const q = 9;
+        ctx.strokeStyle = c.accent; ctx.lineWidth = 1.2; ctx.beginPath();
+        for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          ctx.moveTo(fx + sx * q, fy + sy * (q - 4)); ctx.lineTo(fx + sx * q, fy + sy * q); ctx.lineTo(fx + sx * (q - 4), fy + sy * q);
+        }
+        ctx.stroke();
+        ctx.font = '11px ' + c.font; ctx.fillStyle = c.accent; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+        ctx.fillText(F.k, fx + q + 4, fy);
+      }
+    }
+    // crosshair
+    ctx.strokeStyle = c.accent; ctx.globalAlpha = 0.7; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx - 10, cy); ctx.lineTo(cx - 3, cy); ctx.moveTo(cx + 3, cy); ctx.lineTo(cx + 10, cy); ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy - 3); ctx.moveTo(cx, cy + 3); ctx.lineTo(cx, cy + 10); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // HUD
+    ctx.font = '11px ' + c.font; ctx.fillStyle = c.muted; ctx.textBaseline = 'top';
+    const lonN = ((lon0 + 540) % 360) - 180;
+    ctx.fillText(`LAT ${lat0.toFixed(2)}  LON ${lonN.toFixed(2)}`, 10, 10);
+    ctx.fillText(`ZOOM ${zoom.toFixed(1)} · ${ev.length + 12} events`, 10, 26);
+    ctx.textAlign = 'right'; ctx.fillStyle = c.accent;
+    ctx.fillText('● LIVE  ' + new Date().toTimeString().slice(0, 8), w - 10, 10);
+    ctx.fillStyle = c.muted; ctx.fillText(reduce ? 'auto-rotate off' : 'auto-rotate 6°/s', w - 10, 26);
+    ctx.textBaseline = 'bottom'; ctx.fillText('ORTHO · WGS84', w - 10, h - 8);
+    ctx.textAlign = 'left'; ctx.fillText('drag: rotate · wheel: zoom', 10, h - 8);
+  }
+  let last = performance.now();
+  function frame(now) {
+    const T = window.__globeFly;
+    if (T) { lon0 += (T.lo - lon0) * 0.08; lat0 += (T.la - lat0) * 0.08; if (Math.abs(T.lo - lon0) < 0.05 && Math.abs(T.la - lat0) < 0.05) window.__globeFly = null; }
+    else if (!drag && !reduce && !window.__globeFocus) lon0 -= (now - last) * 0.006;
+    last = now; draw(now);
+    if (running) raf = requestAnimationFrame(frame);
+  }
+  function start() { if (running) return; running = true; size(); colors(); last = performance.now(); raf = requestAnimationFrame(frame); }
+  function stop() { running = false; cancelAnimationFrame(raf); }
+  const sync = () => (document.getElementById('dashboard').classList.contains('on') ? start() : stop());
+  document.addEventListener('view:shown', () => setTimeout(sync, 0));
+  document.addEventListener('skin:changed', () => { colors(); if (!running) draw(performance.now()); });
+  addEventListener('resize', () => running && size());
+  new ResizeObserver(() => running && size()).observe(cv);
+  cv.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY, lon0, lat0]; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove', (e) => { if (!drag) return; lon0 = drag[2] - (e.clientX - drag[0]) * 0.4; lat0 = Math.max(-80, Math.min(80, drag[3] + (e.clientY - drag[1]) * 0.4)); if (reduce) draw(performance.now()); });
+  cv.addEventListener('pointerup', () => { drag = null; });
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); zoom = Math.max(0.6, Math.min(2.5, zoom * (e.deltaY < 0 ? 1.1 : 0.9))); }, { passive: false });
+  /* Pick list in the add-gadget dialog: click to select, label on primary button follows. */
+  document.querySelectorAll('.dash-pick li').forEach((li) => li.addEventListener('click', () => {
+    li.parentElement.querySelectorAll('li').forEach((x) => x.setAttribute('aria-selected', String(x === li)));
+    const b = document.querySelector('#dashboard-add-gadget .btn.primary'); if (b) b.textContent = 'Add ' + li.querySelector('b').textContent;
+  }));
+})();
+</script>
+<script>
+/* Live events list drives the globe: hover marks the point, click or Enter flies to it. */
+(function () {
+  const list = document.querySelector('.dash-evl');
+  if (!list) return;
+  const pick = (li) => { const [la, lo] = li.dataset.ll.split(',').map(Number); return { la, lo, k: li.querySelector('.k').textContent }; };
+  list.addEventListener('mouseover', (e) => { const li = e.target.closest('li'); if (li) window.__globeFocus = pick(li); });
+  list.addEventListener('mouseleave', () => { if (!list.querySelector('[aria-current=true]')) window.__globeFocus = null; });
+  const select = (li) => {
+    list.querySelectorAll('li').forEach((x) => x.setAttribute('aria-current', String(x === li)));
+    const f = pick(li); window.__globeFocus = f;
+    window.__globeFly = { la: Math.max(-60, Math.min(60, f.la)), lo: f.lo };
+  };
+  list.addEventListener('click', (e) => { const li = e.target.closest('li'); if (li) select(li); });
+  list.addEventListener('keydown', (e) => { const li = e.target.closest('li'); if (li && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); select(li); } });
+  document.querySelectorAll('.dash-lg button, .dash-seg button').forEach((b) => b.addEventListener('click', () => {
+    if (b.parentElement.classList.contains('dash-seg')) b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    else b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'));
+  }));
+})();
+</script>

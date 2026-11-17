@@ -12,6 +12,7 @@ import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetFilters, GadgetInstance, GadgetScope } from '../api';
 import { liveMapWeatherKey } from '../gadget-editor-model';
+import { LiveEventLegend } from './live-map-legend';
 import { safeLiveLink } from '../live-map-data';
 import { LiveMapConfig } from '../live-map-config';
 import { LIVE_TAG_KEY, LIVE_TAGS, providerMeta } from '../live-feed/sources';
@@ -127,9 +128,16 @@ function EventLinks({ event, separator }: { event: { url?: string | null; source
 /** Rows rendered before "show more": the feed can hold thousands of events and each row carries links and a time. */
 export const EVENT_LIST_INITIAL = 50;
 
+/** One-line event row: a fixed 26px grid of time, title (truncates), source, then links in their own non-shrinking cell. */
+const COMPACT_ROW_CLASS = 'grid h-[26px] grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2 text-xs';
+
 /**
- * Event list: select button, source and time, links, plus `emptyState` when there are no events. Only the first
- * `EVENT_LIST_INITIAL` rows render until expanded; `resetKey` (the active filters) collapses it again.
+ * Event list: time, select button (title), source and links, plus `emptyState` when there are no events.
+ * Only the first `EVENT_LIST_INITIAL` rows render until expanded; `resetKey` (the active filters) collapses it again.
+ * Rows use the one-line layout unless `inDialog` is set, in which case the stacked layout is kept.
+ *
+ * @param props.onSelect Called with the event key when its title button is pressed.
+ * @param props.inDialog Use the stacked row layout (no caller currently sets this).
  */
 function LiveEventList({
   events,
@@ -156,28 +164,31 @@ function LiveEventList({
     });
     return (value: string) => formatter.format(new Date(value));
   }, [display.locale, display.timezone]);
+  // Page rows are one line (time | title | source), 26px high, so the overview list shows at least five rows.
+  const rowClass = inDialog ? 'py-1 text-xs' : COMPACT_ROW_CLASS;
+  const titleClass = inDialog
+    ? 'h-auto w-full justify-start whitespace-normal p-1 text-left'
+    : 'h-6 min-w-0 justify-start truncate p-1 text-left';
   return (
     <div className={inDialog ? 'min-h-0' : 'min-h-0 flex-1 overflow-y-auto'}>
       <ul aria-label={t('liveMap.events')} className="divide-y divide-border">
         {shown.visible.map((event) => (
-          <li key={event.key} className="py-1 text-xs">
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-auto w-full justify-start whitespace-normal p-1 text-left"
-              onClick={() => onSelect(event.key)}
-            >
-              {event.title}
+          <li key={event.key} className={rowClass}>
+            {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
+              <time dateTime={event.observed_at} className="whitespace-nowrap tabular-nums text-muted-foreground">
+                {format(event.observed_at)}
+              </time>
+            ) : (
+              <span className="whitespace-nowrap text-muted-foreground">{t('liveMap.timeUnknown')}</span>
+            )}
+            <Button type="button" variant="ghost" className={titleClass} onClick={() => onSelect(event.key)}>
+              <span className="min-w-0 truncate">{event.title}</span>
             </Button>
-            <span className="text-muted-foreground">
-              {event.source} ·{' '}
-              {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
-                <time dateTime={event.observed_at}>{format(event.observed_at)}</time>
-              ) : (
-                t('liveMap.timeUnknown')
-              )}
+            <span className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">{event.source}</span>
+            {/* Links sit in their own cell so a long title or source truncates before they are pushed out of the row. */}
+            <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-muted-foreground">
+              <EventLinks event={event} separator={inDialog} />
             </span>
-            <EventLinks event={event} separator />
           </li>
         ))}
       </ul>
@@ -496,6 +507,40 @@ function LiveEmptyState({
 }
 
 /**
+ * Overview event block: the "Live events (n)" heading, the category legend counts and the event list.
+ * The block keeps at least five rows visible; the map above takes the remaining height.
+ *
+ * @param props.events Filtered events shown by the list and counted in the heading and legend.
+ * @param props.onSelect Called with an event key when its row is pressed.
+ * @param props.emptyState Shown by the list when there are no events.
+ * @param props.resetKey Filter key; changing it collapses the "show more" expansion.
+ */
+function OverviewEventsPanel({
+  events,
+  onSelect,
+  emptyState,
+  resetKey,
+}: {
+  events: StoredEvent[];
+  onSelect: (key: string) => void;
+  emptyState: ReactNode;
+  resetKey: string;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <div className="flex min-h-[10.5rem] shrink-0 flex-col">
+      <div className="flex shrink-0 items-center gap-3">
+        <h3 className="shrink-0 text-xs font-medium text-muted-foreground">
+          {t('liveMap.events')} ({events.length})
+        </h3>
+        <LiveEventLegend events={events} />
+      </div>
+      <LiveEventList events={events} onSelect={onSelect} emptyState={emptyState} resetKey={resetKey} />
+    </div>
+  );
+}
+
+/**
  * Live map body: toolbar, map, event list and source status. Stays mounted while off-screen.
  * @param visible False while the gadget is off-screen or the tab hidden: feed polling and map interaction pause.
  */
@@ -566,7 +611,7 @@ function LiveMapContent({
         ref={setNode}
         role="group"
         aria-label={t('map.plotLabel')}
-        className={`relative overflow-hidden rounded border border-border ${overview ? 'h-[clamp(11rem,30vh,20rem)] shrink-0' : 'min-h-48 flex-[2]'}`}
+        className={`relative overflow-hidden rounded border border-border ${overview ? 'min-h-24 flex-1 basis-0' : 'min-h-48 flex-[2]'}`}
       >
         {size.width > 0 && size.height > 0 && (
           <div className="absolute inset-0">
@@ -581,10 +626,7 @@ function LiveMapContent({
       <p className="shrink-0 text-xs text-muted-foreground">{t('map.basemapCredit')}</p>
       {overview ? (
         <>
-          <h3 className="shrink-0 text-xs font-medium text-muted-foreground">
-            {t('liveMap.events')} ({filtered.length})
-          </h3>
-          <LiveEventList events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
+          <OverviewEventsPanel events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
           <LiveSourcesDialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
             <LiveSourceStatus providers={providers} config={config} statuses={statuses} inDialog />
           </LiveSourcesDialog>

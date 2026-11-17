@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,30 +39,34 @@ const instance = (over: Partial<GadgetInstance> = {}): GadgetInstance =>
     ...over,
   }) as GadgetInstance;
 
-/** Child that reports freshness, as real gadgets do. */
-function Reporter() {
-  useReportGadgetFreshness('2026-01-01T00:00:00Z', 'attrib');
+/** Child that reports freshness, as real gadgets do. Passing a new `at` simulates a data refresh. */
+function Reporter({ at = '2026-01-01T00:00:00Z' }: { at?: string }) {
+  useReportGadgetFreshness(at, 'attrib');
   return <p>body-content</p>;
 }
 
+/** Builds the providers-wrapped frame tree so tests can render it or rerender it with new children. */
+const frameTree = (props: Partial<GadgetFrameProps> = {}, children: React.ReactNode = <p>body-content</p>) => (
+  <QueryClientProvider client={new QueryClient()}>
+    <NextIntlClientProvider
+      locale="en-US"
+      messages={{
+        dashboard: getCatalog('en-us', 'dashboard'),
+        uiSweep: getCatalog('en-us', 'uiSweep'),
+        gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
+        sources: getCatalog('en-us', 'sources'),
+      }}
+    >
+      <GadgetFrame instance={instance()} isEditMode={false} {...props}>
+        {children}
+      </GadgetFrame>
+    </NextIntlClientProvider>
+  </QueryClientProvider>
+);
+
+/** Renders the frame tree from frameTree and returns the testing-library result. */
 const renderFrame = (props: Partial<GadgetFrameProps> = {}, children: React.ReactNode = <p>body-content</p>) =>
-  render(
-    <QueryClientProvider client={new QueryClient()}>
-      <NextIntlClientProvider
-        locale="en-US"
-        messages={{
-          dashboard: getCatalog('en-us', 'dashboard'),
-          uiSweep: getCatalog('en-us', 'uiSweep'),
-          gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
-          sources: getCatalog('en-us', 'sources'),
-        }}
-      >
-        <GadgetFrame instance={instance()} isEditMode={false} {...props}>
-          {children}
-        </GadgetFrame>
-      </NextIntlClientProvider>
-    </QueryClientProvider>,
-  );
+  render(frameTree(props, children));
 
 beforeEach(() => {
   chat.openDrawer.mockReset();
@@ -135,6 +139,26 @@ describe('GadgetFrame', () => {
   it('renders the provenance footer from renderer-reported freshness', async () => {
     renderFrame({}, <Reporter />);
     expect(await screen.findByTestId('gadget-provenance')).toHaveTextContent(/^attrib · /);
+  });
+
+  it('does not animate the first freshness report but marks the body for a later data refresh', async () => {
+    const view = renderFrame({}, <Reporter />);
+    const body = view.container.querySelector('.dashboard-gadget-body');
+    await screen.findByTestId('gadget-provenance');
+    expect(body?.hasAttribute('data-reveal')).toBe(false);
+    view.rerender(frameTree({}, <Reporter at="2026-01-01T01:00:00Z" />));
+    await waitFor(() => expect(body?.getAttribute('data-reveal')).toBe('true'));
+  });
+
+  it('does not mark the body for reveal while no renderer has reported freshness', () => {
+    const view = renderFrame();
+    expect(view.container.querySelector('.dashboard-gadget-body')?.hasAttribute('data-reveal')).toBe(false);
+  });
+
+  it('gives the header and title their skin hooks without changing their roles or names', () => {
+    const view = renderFrame();
+    expect(view.container.querySelector('header')).toHaveClass('gadget-header');
+    expect(screen.getByRole('heading', { name: 'My gadget' })).toHaveClass('gadget-title');
   });
 
   it('shows severity from the first highlight rule', () => {

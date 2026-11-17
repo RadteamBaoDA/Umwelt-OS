@@ -1,0 +1,74 @@
+/*
+ * Skin option cards for the per-device skin picker (imported by modules/account/skin-picker.tsx).
+ * Colours come from tokens. The terminal preview uses the fixed --skin-preview-terminal-* swatch (globals.css) so it
+ * shows the real terminal look in every skin and theme.
+ */
+
+.skin-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* Unlayered so these beat the Tailwind utilities that the shared Label applies. */
+.skin-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.skin-option:has([data-state='checked']) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+
+.skin-option:focus-within {
+  outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.skin-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skin-preview {
+  grid-column: 2;
+  display: block;
+  height: 54px;
+  padding: 6px 8px;
+  overflow: hidden;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.skin-preview-default {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.skin-preview-terminal {
+  border: 1px solid var(--skin-preview-terminal-bg);
+  background: var(--skin-preview-terminal-bg);
+  color: var(--skin-preview-terminal-text);
+  font-family: var(--font-mono-skin), 'JetBrains Mono', ui-monospace, Consolas, monospace;
+}
+
+.skin-cursor {
+  display: inline-block;
+  width: 0.6em;
+  height: 1em;
+  background: var(--skin-preview-terminal-accent);
+  vertical-align: text-bottom;
+}

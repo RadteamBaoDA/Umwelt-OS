@@ -26,6 +26,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { GadgetInstance } from './api';
 import { getGadgetReadingBodyFloor } from './widget-registry';
+import { useGadgetReveal } from './use-gadget-reveal';
+import './gadget-skin.css';
 
 /** Rule match observation metadata displayed on gadget cards. */
 export interface GadgetRuleMatch {
@@ -176,6 +178,9 @@ function useHeaderMeasurement(headerRef: RefObject<HTMLElement | null>, onHeader
 /**
  * Renderer-reported freshness and attribution for the footer line.
  * Freshness comes only from data the renderer actually loaded; absent means no badge.
+ *
+ * @returns `reportFreshness` (the renderer-facing setter), the footer text and its title, and the raw
+ * `collectedAt` ISO string (null until a renderer reports one) used as the data-refresh reveal key.
  */
 function useGadgetFooter() {
   const t = useTranslations('dashboard');
@@ -191,7 +196,7 @@ function useGadgetFooter() {
   const freshnessLabel = Number.isFinite(collectedMs) ? t('freshness.updated', { time: formatAgo(collectedMs, display.locale) }) : null;
   const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
   const footerText = [attribution, freshnessLabel].filter(Boolean).join(' · ');
-  return { reportFreshness, footerText, freshnessTitle };
+  return { reportFreshness, footerText, freshnessTitle, collectedAt };
 }
 
 /** Highlight severity badge: critical is destructive, info is muted. */
@@ -553,14 +558,14 @@ function GadgetHeader(p: {
   return (
     <header
       ref={headerRef}
-      className={`@container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}
+      className={`gadget-header @container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}
     >
       <div
         className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
         onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
       >
         {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
-        <h3 id={titleId} className="min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
+        <h3 id={titleId} className="gadget-title min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
           {displayTitle}
         </h3>
       </div>
@@ -615,7 +620,9 @@ export function GadgetFrame({
   const bodyFloor = getGadgetReadingBodyFloor(definition.renderer);
   const { rendererHost, attachExpandedHost } = useRendererHost(isExpanded, { inlineHostRef, inlineScrollRef, expandedHostRef });
   useHeaderMeasurement(headerRef, onHeaderMeasured);
-  const { reportFreshness, footerText, freshnessTitle } = useGadgetFooter();
+  const { reportFreshness, footerText, freshnessTitle, collectedAt } = useGadgetFooter();
+  // Each new collectedAt replays the data-refresh reveal on the body; the element itself is never remounted.
+  useGadgetReveal(inlineScrollRef, collectedAt);
   const displayTitle = useDisplayTitle(instance);
 
   /** Toggles expanded fullscreen modal view without modifying underlying grid layout. */

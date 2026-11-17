@@ -93,5 +93,8 @@
   "permissions.mcpTitle": "Công cụ bên ngoài (MCP)",
   "permissions.mcpBody": "Kết nối công cụ bên ngoài và chọn công cụ nào được đọc dữ liệu của bạn, trong trò chuyện hoặc khi thu thập dữ liệu.",
   "globalSettings": "Cài đặt toàn hệ thống",
-  "sourcesNavigation": "Các mục nguồn dữ liệu"
+  "sourcesNavigation": "Các mục nguồn dữ liệu",
+  "statusline.label": "Dòng trạng thái",
+  "statusline.modeNormal": "NORMAL",
+  "statusline.modeInsert": "INSERT"
 }

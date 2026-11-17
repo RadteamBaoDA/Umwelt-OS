@@ -37,6 +37,7 @@ import Link from 'next/link';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
+import './chat-skin.css';
 
 /** Fixed-height placeholder shown while a widget chunk loads, so the transcript does not jump when it resolves. */
 function WidgetSkeleton() {

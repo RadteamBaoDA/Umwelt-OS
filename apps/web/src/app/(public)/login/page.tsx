@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { LegalLinks } from '@/modules/legal';
+import './public-skin.css';
 import { AppearanceControl } from '@/modules/account';
 import { useDisplayPreferences } from '@/core/query-provider';
 

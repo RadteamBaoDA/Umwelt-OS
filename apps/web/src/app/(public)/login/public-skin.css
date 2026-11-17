@@ -1,0 +1,47 @@
+/*
+ * Terminal skin for the public login and setup card: a terminal window around the auth panel.
+ * Imported by login/page.tsx; setup uses the same .auth-panel card. Scoped under html[data-skin='terminal'].
+ */
+
+/* Public pages: the page is the terminal background; the header and footer bars are transparent. */
+html[data-skin='terminal'] .min-h-dvh.bg-secondary {
+  background: var(--bg);
+}
+
+html[data-skin='terminal'] .min-h-dvh.bg-secondary > header,
+html[data-skin='terminal'] .min-h-dvh.bg-secondary > footer {
+  background: transparent;
+}
+
+html[data-skin='terminal'] .auth-panel {
+  width: min(440px, 100%);
+  padding: 0 0 20px;
+  border: 1px solid var(--control);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Title bar: `$ umwelt` drawn as a pseudo-element over a raised strip. */
+html[data-skin='terminal'] .auth-panel::before {
+  content: '$ umwelt' / '';
+  display: block;
+  padding: 6px 12px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+html[data-skin='terminal'] .auth-panel > * {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+html[data-skin='terminal'] .auth-panel > :first-child {
+  padding-top: 8px;
+}
+
+html[data-skin='terminal'] .auth-panel h1::before {
+  content: '> ' / '';
+  color: var(--accent);
+}

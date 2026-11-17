@@ -11,6 +11,8 @@ vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale
 const request = vi.hoisted(() => vi.fn());
 vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, apiRequest: request, ApiError: class extends Error {} }));
 import { LiveMapGadget } from './live-map-gadget';
+import { LiveEventLegend } from './live-map-legend';
+import type { StoredEvent } from '../live-feed/store';
 
 describe('live map visibility', () => {
   afterEach(() => {
@@ -313,5 +315,29 @@ describe('live map owner gate, event cap and selection', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Event 1' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Close event details' }));
     expect(screen.queryByRole('button', { name: 'Close event details' })).toBeNull();
+  });
+});
+
+describe('live map overview legend', () => {
+  /** Renders the legend for events carrying the given tag lists, with the dashboard catalog. */
+  const renderLegend = (tagLists: string[][]) =>
+    render(
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+        <LiveEventLegend events={tagLists.map((tags) => ({ tags }) as StoredEvent)} />
+      </NextIntlClientProvider>,
+    );
+
+  it('counts events per category and shows only categories that have events', () => {
+    renderLegend([['disaster', 'geo'], ['disaster'], ['space']]);
+    const legend = screen.getByTestId('live-legend');
+    expect(legend).toHaveTextContent('Disasters 2');
+    expect(legend).toHaveTextContent('Geo 1');
+    expect(legend).toHaveTextContent('Space 1');
+    expect(legend).not.toHaveTextContent('Finance');
+  });
+
+  it('renders nothing when there are no events', () => {
+    renderLegend([]);
+    expect(screen.queryByTestId('live-legend')).toBeNull();
   });
 });

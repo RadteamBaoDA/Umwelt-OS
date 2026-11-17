@@ -36,9 +36,13 @@ export type WorldMapProps = WeatherProps & {
 const STYLE_LIGHT = 'https://tiles.openfreemap.org/styles/positron';
 const STYLE_DARK = 'https://tiles.openfreemap.org/styles/dark';
 
-/** True when the app theme class on <html> is dark (next-themes toggles it for light, dark and system). */
+/**
+ * True when the map should use its dark style: the app theme class on <html> is `dark` (next-themes toggles it for
+ * light, dark and system), or the terminal skin is applied (it always renders on its own dark palette).
+ */
 function isDarkTheme(): boolean {
-  return typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+  if (typeof document === 'undefined') return false;
+  return document.documentElement.classList.contains('dark') || document.documentElement.getAttribute('data-skin') === 'terminal';
 }
 
 /** Convert the active semantic CSS token to deck.gl's numeric colour contract (hex tokens only; fallback is the accent green). */
@@ -116,7 +120,10 @@ function readPointColors(revision: number) {
   };
 }
 
-/** Tracks the app theme class on <html> (next-themes): `dark` flag and a revision counter bumped on every flip. */
+/**
+ * Tracks the app theme class on <html> (next-themes): `dark` flag and a revision counter bumped on every flip.
+ * The terminal skin (`data-skin="terminal"`) counts as dark, matching isDarkTheme, so the map follows the forced-dark skin.
+ */
 function useThemeState() {
   const [dark, setDark] = useState(isDarkTheme);
   const [themeRevision, setThemeRevision] = useState(0);
@@ -125,7 +132,7 @@ function useThemeState() {
       setDark(isDarkTheme());
       setThemeRevision((value) => value + 1);
     });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-skin'] });
     return () => observer.disconnect();
   }, []);
   return { dark, themeRevision };

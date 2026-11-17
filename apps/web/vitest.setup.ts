@@ -13,4 +13,7 @@ Element.prototype.scrollIntoView ??= () => undefined;
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 
 // next/font/google needs the Next compiler; tests only need the loader to return a class name and CSS variable.
-vi.mock('next/font/google', () => ({ Inter: () => ({ className: 'font-inter', variable: '--font-inter' }) }));
+vi.mock('next/font/google', () => ({
+  Inter: () => ({ className: 'font-inter', variable: '--font-inter' }),
+  JetBrains_Mono: () => ({ className: 'font-jetbrains-mono', variable: '--font-mono-skin' }),
+}));

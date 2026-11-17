@@ -79,6 +79,16 @@ Persisted theme preference: **`light | dark | system`**, default `system`. Effec
 - Apply `color-scheme` so native controls match. Chart axes/grid/tooltip, maps, generated component portals and chat source content must remain readable in both themes.
 - Reuse current preference persistence if it exists. Current checked-in CSS uses `body[data-theme='dark']` and legacy token names; the implementation must migrate callers to one authority. Temporary aliases can bridge existing screens, but do not keep two independent theme states.
 
+### Skins
+
+Two skins share one token set and one component library. The skin is a per-device choice (`localStorage` key `umwelt-skin`, `data-skin` on `<html>`), applied before first paint like density.
+
+- **Default** (`data-skin` absent): the light and dark themes above, with the owner accent.
+- **Terminal** (`data-skin="terminal"`): always dark, with its own palette. Theme and accent do not apply to it. Its tokens live in the Terminal skin block in `apps/web/src/app/globals.css`, scoped under `html[data-skin='terminal']`, and are mirrored in `docs/design-system/tokens.json` under `skins.terminal`. They are not in `color.tokens`, so the GenUI parity check does not read them.
+- Terminal ornaments are CSS pseudo-elements only (`[`, `]`, `●`, `*`, `# `). They add no DOM text and no roles, so screen readers and tests see the same markup in both skins.
+- New Terminal rules go under the `html[data-skin='terminal']` prefix. The default skin must stay pixel-identical, so no skin rule may lose that prefix.
+- Terminal adds no motion of its own, and inherited transitions go near-instant under `prefers-reduced-motion`.
+
 ## 5. Internationalization contract
 
 The owner requested two choices. Keep these app preference identifiers and normalize at the library boundary:
