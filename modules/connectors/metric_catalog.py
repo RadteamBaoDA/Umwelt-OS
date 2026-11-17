@@ -185,6 +185,21 @@ _CATALOG: Mapping[str, ProviderMetrics] = MappingProxyType(
             cadence_days=HOURLY,
             default_lookback_days=3,
         ),  # keyed.map_openaq: region = "location <id>" (owner-configured)
+        # Security/hazard event feeds: one row per CVE or event, so they are points, not series.
+        # cisa_kev emits a listing (value NULL); nvd emits each CVE's CVSS base score keyed by CVE id.
+        "cisa_kev": ProviderMetrics(
+            _m(("known_exploited_vulnerability", "listing")), True, charts_as_series=False
+        ),  # security.map_cisa_kev: symbol = CVE id
+        "nvd": ProviderMetrics(
+            _m(("cve_base_score", "cvss")), True, charts_as_series=False
+        ),  # security.map_nvd: symbol = CVE id
+        # EONET unit is the event's own magnitude unit (kts, acres, ...) or "event" when absent: varies.
+        "nasa_eonet": ProviderMetrics(
+            _m(("natural_event", None)), False, charts_as_series=False
+        ),  # hazards.map_nasa_eonet: region = event description
+        "ioda": ProviderMetrics(
+            _m(("internet_outage_event", "ioda_score")), False, charts_as_series=False
+        ),  # security.map_ioda: region = country/region name, one row per outage signal
     }
 )
 
