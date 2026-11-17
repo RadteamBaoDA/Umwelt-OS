@@ -69,7 +69,7 @@ _COMMON_SKIPS = [
         r"\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]m)?",
         # Day-first before month-first so "16 November 2026" goes whole instead of leaving "16";
         # an optional leading day range takes "1–14 November" whole too.
-        rf"\b(?:\d{{1,2}}\s*[–\-]\s*)?\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:\s+\d{{4}})?",
+        rf"\b(?:\d{{1,2}}\s*(?:[–\-]|and|or|to)\s*)?\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:\s+\d{{4}})?",
         # "Nov 16, 2026" / "November 2026": (?!\d) stops a 4-digit year splitting into day "20" + "26".
         rf"\b{_MONTHS}\s+(?:\d{{1,2}}(?!\d)(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{4}})",
         r"(?:ngày|tháng|năm|quý)\s+\d{1,4}(?:\s*[/-]\s*\d{1,4})?",

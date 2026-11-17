@@ -715,7 +715,8 @@ def _provider_hint(providers: Sequence[str]) -> str:
         f"{MAX_SKILL_CALLS_PER_ROUND} tool calls per round (extra calls get no data): "
         "query every needed provider in your first call. When the question names something these feeds may "
         "hold (a CVE id, ticker, place, title or person), query before answering, even if you already know "
-        "an answer. Put each row's citation marker in the same sentence as every figure taken from it."
+        "an answer. Put each row's citation marker in the same sentence as every figure taken from it. "
+        "In sql mode select document_version_id with every row, or rows come back without a citation."
         + _metric_catalog_hint(providers)
     )
 
