@@ -9,7 +9,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 
-from core import media_proxy
+from core import media_proxy, metrics
 from modules.chat._worker.base import (
     _next_event_seq,
 )
@@ -38,6 +38,13 @@ from modules.chat.generative_ui import (
     finalize_generative_ui,
 )
 from modules.chat.generative_ui.tool_specs import TOOL_ANSWER
+from modules.chat.grounding import (
+    GroundingReport,
+    build_known,
+    check_grounding,
+    query_result_contents,
+    relabel_widgets,
+)
 from modules.chat.models import (
     Conversation,
     Message,
@@ -359,11 +366,16 @@ def _assistant_metadata(
     generative_uis: list[dict[str, Any]],
     route_decision: dict[str, Any] | None,
     uncited: bool = False,
+    grounding: GroundingReport | None = None,
 ) -> dict[str, Any]:
-    """Message ``metadata_json`` kwargs: reasoning, UI parts, the ``uncited`` flag and the router audit trail (pure).
+    """Message ``metadata_json`` kwargs: reasoning, UI parts, ``uncited``, grounding flags and the router audit trail (pure).
 
-    Returns ``{}`` when there is nothing to store so the column keeps its default.
+    ``grounding`` (None when the check did not run) adds ``unverified_numbers`` (count and examples) when any
+    number was unmatched and ``partially_uncited`` when set. Returns ``{}`` when there is nothing to store so
+    the column keeps its default.
     """
+    unverified = grounding is not None and grounding.count > 0
+    partial = grounding is not None and grounding.partially_uncited
     generative_ui = (
         generative_uis[0] if generative_uis else None
     )  # first part, kept for older clients
@@ -372,6 +384,8 @@ def _assistant_metadata(
         and route_decision is None
         and not st.accumulated_reasoning
         and not uncited
+        and not unverified
+        and not partial
     ):
         return {}
     return {
@@ -390,6 +404,8 @@ def _assistant_metadata(
                 else {}
             ),
             **({"uncited": True} if uncited else {}),
+            **({"unverified_numbers": grounding.summary()} if grounding and unverified else {}),
+            **({"partially_uncited": True} if partial else {}),
             # Audit trail of the external router's choice (category + renderer only, no content).
             **(
                 {
@@ -403,6 +419,38 @@ def _assistant_metadata(
             ),
         }
     }
+
+
+def _grounding_for(
+    env: _ToolEnv,
+    final_answer: str,
+    valid_citations: list[dict[str, Any]],
+    generative_uis: list[dict[str, Any]],
+) -> tuple[GroundingReport | None, list[dict[str, Any]]]:
+    """Run the numeric grounding check and return ``(report, widgets)`` (pure apart from a metric increment).
+
+    Runs only for a turn that called ``query_collected_data`` or had evidence/web results; otherwise
+    ``(None, generative_uis)`` unchanged. Known numbers come from this turn's query results, the evidence and
+    web snippets and the user's message. Non-sample table/chart parts holding an unmatched number come back
+    relabelled with the "unverified" source; the answer text is never altered. Any failure of the check
+    itself is swallowed (it must not fail a completed answer) and reported as "not run".
+    """
+    try:
+        ts, turn = env.ts, env.turn
+        results = query_result_contents(ts.messages_payload)
+        evidence = [e.content for e in cast(AnswerContext, turn.answer_context).evidence]
+        web = turn.web_run
+        web_texts = [f"{r.title} {r.snippet}" for r in web.results] if web is not None else []
+        if not (results or evidence or web_texts):
+            return None, generative_uis
+        known = build_known(results, [*evidence, *web_texts], turn.user_prompt)
+        report = check_grounding(
+            final_answer, generative_uis, known, has_citation=bool(valid_citations)
+        )
+        metrics.record_unverified_numbers(report.count)
+        return report, relabel_widgets(generative_uis, report)
+    except Exception:  # noqa: BLE001 - an advisory check must never fail a finished answer
+        return None, generative_uis
 
 
 async def _persist_final(
@@ -423,6 +471,7 @@ async def _persist_final(
         The id of the persisted assistant message (for the post-answer title/suggestions step).
     """
     c, turn, setup = env.c, env.turn, env.setup
+    grounding, generative_uis = _grounding_for(env, final_answer, valid_citations, generative_uis)
     async with c.session_factory() as session:
         outcome, live_run = await _fence_live_run(session, c, check_evidence=False)
         if outcome is not _FenceOutcome.LIVE:
@@ -441,7 +490,7 @@ async def _persist_final(
             citations=valid_citations,
             response_id=c.response_id,
             revision_of_message_id=turn.revision_of_message_id,
-            **_assistant_metadata(st, generative_uis, env.ts.route_decision, uncited),
+            **_assistant_metadata(st, generative_uis, env.ts.route_decision, uncited, grounding),
         )
         session.add(assistant_msg)
         await session.flush()
@@ -476,6 +525,9 @@ async def _persist_final(
             "status": "completed",
             "uncited": uncited,
         }
+        if grounding is not None:
+            done_payload["unverified_numbers"] = grounding.summary()
+            done_payload["partially_uncited"] = grounding.partially_uncited
         if generative_uis:
             done_payload["generative_ui"] = generative_uis[0]
             done_payload["generative_ui_parts"] = generative_uis

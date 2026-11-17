@@ -142,6 +142,24 @@ CHAT_TTFT = Histogram(
     buckets=_TTFT_BUCKETS,
     registry=REGISTRY,
 )
+CHAT_DATA_QUERIES = Counter(
+    "umwelt_chat_data_queries_total",
+    "query_collected_data calls by mode (structured/sql) and outcome.",
+    ("mode", "outcome"),
+    registry=REGISTRY,
+)
+CHAT_DATA_QUERY_DURATION = Histogram(
+    "umwelt_chat_data_query_duration_seconds",
+    "query_collected_data tool latency by mode.",
+    ("mode",),
+    buckets=_HTTP_BUCKETS,
+    registry=REGISTRY,
+)
+CHAT_UNVERIFIED_NUMBERS = Counter(
+    "umwelt_chat_unverified_numbers_total",
+    "Numbers in chat answers/widgets not found in the turn's tool results or evidence.",
+    registry=REGISTRY,
+)
 SAMPLE_ERRORS = Counter(
     "umwelt_metrics_sample_errors_total",
     "Failed periodic metric samples.",
@@ -227,6 +245,24 @@ def record_cron(job: str, seconds: float, ok: bool) -> None:
 def record_first_token(capability: str, seconds: float) -> None:
     """Observe a streamed model call's time to first token."""
     _isolated(lambda: CHAT_TTFT.labels(safe_label(capability)).observe(max(seconds, 0.0)))
+
+
+def record_data_query(mode: str, outcome: str, seconds: float) -> None:
+    """Record one ``query_collected_data`` call: count by mode/outcome and latency by mode."""
+
+    def work() -> None:
+        """Update data-query series."""
+        m = safe_label(mode)
+        CHAT_DATA_QUERIES.labels(m, safe_label(outcome)).inc()
+        CHAT_DATA_QUERY_DURATION.labels(m).observe(max(seconds, 0.0))
+
+    _isolated(work)
+
+
+def record_unverified_numbers(count: int) -> None:
+    """Add ``count`` answer/widget numbers that could not be matched to the turn's data."""
+    if count > 0:
+        _isolated(lambda: CHAT_UNVERIFIED_NUMBERS.inc(count))
 
 
 def record_breaker_open(provider: str, remaining_seconds: float, *, rejected: bool = True) -> None:

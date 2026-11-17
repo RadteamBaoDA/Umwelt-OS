@@ -308,6 +308,23 @@ def _query_rounds_used(ts: _TurnState) -> int:
     )
 
 
+def _query_budget_spent(ts: _TurnState, rc: _RoundCalls) -> bool:
+    """True when this round carries a real ``query_collected_data`` call but the query budget is already used (pure).
+
+    Widget calls and over-cap or invalid calls are not data calls; only a handled call that would have run
+    counts, whether or not the round also rendered widgets.
+    """
+    return (
+        any(
+            x["name"] == TOOL_QUERY_COLLECTED_DATA
+            and id(x) not in rc.part_of
+            and id(x) not in rc.invalid_of
+            for x in rc.handled
+        )
+        and _query_rounds_used(ts) >= MAX_DATA_QUERY_ROUNDS
+    )
+
+
 def _bounded_continue(ts: _TurnState, rc: _RoundCalls, run_id: UUID) -> bool:
     """Apply the widget, query and data round caps; False means stop without another model round.
 
@@ -324,10 +341,9 @@ def _bounded_continue(ts: _TurnState, rc: _RoundCalls, run_id: UUID) -> bool:
         and _TOOL_HANDLERS[x["name"]].data_round
     ]
     query_ok = True
-    if any(x["name"] == TOOL_QUERY_COLLECTED_DATA for x in data_calls):
-        if _query_rounds_used(ts) >= MAX_DATA_QUERY_ROUNDS:
-            logger.warning("Query round limit reached for run %s", run_id)
-            query_ok = False
+    if _query_budget_spent(ts, rc):
+        logger.warning("Query round limit reached for run %s", run_id)
+        query_ok = False
     if rc.round_parts or rc.invalid_of:
         ts.ui_parts.extend(rc.round_parts)
         ts.ui_rounds += 1
@@ -457,10 +473,11 @@ async def _finish_round(env: _ToolEnv, st: _StreamState, rs: _RoundState) -> boo
         # _bounded_continue is skipped on this path, so keep this round's rendered widgets like it does.
         ts.ui_parts.extend(rc.round_parts)
     if ceiling or not _bounded_continue(ts, rc, c.response_id):
-        if rc.round_parts or rc.invalid_of or ts.synth_done:
+        widgets_done = bool(rc.round_parts or rc.invalid_of) and not _query_budget_spent(ts, rc)
+        if widgets_done or ts.synth_done:
             return False  # widget cap, or the synthesis round itself asked for tools again
-        # Data-tool budget spent: close the turn with one no-tools round instead of dropping the calls
-        # (which used to leave only the "let me search" narration as the persisted answer).
+        # Data-tool budget spent (also in a round that rendered widgets): close the turn with one no-tools
+        # round instead of dropping the calls (which left only the "let me search" narration as the answer).
         ts.synth_done = True
         await _answer_tool_calls(env, st, rs, rc, budget_exhausted=True)
         ts.stream_iter = env.setup.open_stream(
