@@ -1,0 +1,18 @@
+{
+  "count": 1,
+  "next": "https://gutendex.com/books/?page=2&page_size=32&languages=en&topic=science+fiction&copyright=true",
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "title": "The Example Book",
+      "authors": [{"name": "Example Author", "birth_year": 1850, "death_year": 1910}],
+      "subjects": ["Science fiction", "Adventure stories"],
+      "bookshelves": ["Science Fiction"],
+      "languages": ["en"],
+      "copyright": false,
+      "media_type": "Text",
+      "formats": {"text/html": "https://www.gutenberg.org/ebooks/1.html.images"}
+    }
+  ]
+}

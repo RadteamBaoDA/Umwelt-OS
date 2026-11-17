@@ -85,6 +85,7 @@ export type ConnectorConfig = {
   timezone: string;
   schedule_interval_minutes: 15 | 30 | 60 | 360 | 1440;
   youtube_channel_id?: string;
+  youtube_channels?: string[];
   youtube_handles?: string[];
   youtube_playlist_ids?: string[];
   youtube_filter?: 'all' | 'long_form' | 'shorts';

@@ -27,6 +27,30 @@ below have not been accepted against live services in this implementation pass.
 - **Security:** `cisa_kev`, `ioda`, `nvd`. CVE identifiers, provider timestamps and provenance are
   preserved by the registered mappers.
 - **Space:** `launch_library`, `satnogs_observations`, `noaa_kp`, `iss_position`.
+- **Media:** `anilist_anime` and `anilist_manga` collect up to ten keyless, 50-item AniList GraphQL pages per
+  sync. Accepted pages and the next-page cursor commit together; updated mode uses a rolling 24-hour
+  `updatedAt_greater` overlap and stable ID order, while trending uses its upstream ranking. Anime airing mode
+  emits stable episode records whose next airing is within 14 days. `media_ids` is an optional scope target;
+  genres, tags, formats, country, season/year, status and rating are pushed upstream and post-filtered.
+  Adult results require explicit opt-in. Both share a conservative 60-request/minute durable cap and
+  2.1-second in-process pacing. Live network and provider quota behavior remain unverified. `livechart_episodes`
+  collects the official episode RSS with conditional requests and bounded
+  anime metadata. `tvmaze_schedule` collects the current day's country or web schedule, with TVMaze
+  attribution and source filters. Followed-show collection is not implemented. `openlibrary_books` collects
+  subject, search, or recent-change work metadata from the official API, with a 100-item/4 MiB response
+  bound, a 360-minute poll floor, CC0 attribution, and paginated recent-change cursors. Recent mode is
+  capped at ten change rows plus ten work lookups per run, locally paced at three requests per second,
+  and protected by a durable provider quota of two calls per second.
+  `gutendex_books` collects public-domain ebook metadata from the official Gutendex API, requesting up to
+  32 results per page and one page per sync. Language, topic, search, copyright, MIME type and author-year
+  ranges are pushed upstream; normalized genres and media fields are post-filtered. The bounded same-host
+  `next` URL is committed with accepted records, and the next request is rebuilt from the persisted scope.
+  Local pacing is 1.1 seconds with durable one-per-second and 60-per-minute pilot caps. ANN news and encyclopedia,
+  MangaUpdates releases, and MangaDex chapter releases use bounded official responses and preserve source attribution.
+  Apple Books charts and Podcast RSS provide books and episode records; podcast inputs accept exactly one HTTPS feed
+  or iTunes catalog ID. Wikidata and iTunes movie searches plus Letterboxd public RSS add keyless movie snapshots.
+  These additions use the shared send gate, provider quotas, bounded parsing and atomic checkpoint/validator receipts.
+  Terms-gated providers remain unavailable until required operator review; live acceptance remains open.
 - **Technology and research:** `reddit`, `bluesky`, `openalex`, `hn_top`, `lobsters`, `github_trending`, `wwr_jobs`, `vietnamworks_jobs`, `itviec_jobs`,
   `wikipedia_mostread`, `wikipedia_top_views`, `disease_sh`.
 - **Other and account connectors:** generic `rss`, `web`, `rest`, and `mcp`; GitHub App and public
@@ -87,6 +111,20 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 
 | ID | Availability | Eligibility | Execution | Code registered | Runtime verified | Default interval (min) | Terms checked |
 |---|---|---|---|---|---|---|---|
+| `livechart_episodes` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
+| `tvmaze_schedule` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `anilist_anime` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `anilist_manga` | `implemented` | noncommercial | supported | yes | no | 60 | 2026-10-07 |
+| `openlibrary_books` | `implemented` | open | supported | yes | no | 360 | 2026-10-07 |
+| `gutendex_books` | `implemented` | review | supported | yes | no | 1440 | 2026-10-07 |
+| `ann_news` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `mangaupdates_releases` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `mangadex_releases` | `implemented` | noncommercial | supported | yes | no | 60 | 2026-11-17 |
+| `apple_books_rss` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `podcast_rss` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `wikidata_movies` | `implemented` | open | supported | yes | no | 360 | 2026-11-17 |
+| `itunes_movies` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `letterboxd_rss` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
 | `rss` | `available` | unknown | - | yes | no | - | - |
 | `web` | `available` | unknown | - | yes | no | - | - |
 | `rest` | `available` | unknown | - | yes | no | - | - |

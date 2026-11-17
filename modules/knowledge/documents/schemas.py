@@ -190,7 +190,7 @@ _FEED_FIELDS = {
 }
 _MEDIA_FIELDS = _FEED_FIELDS | {
     "media_type", "artwork_aspect", "country", "language", "genres", "format", "content_rating",
-    "release_status", "release_date", "release_year", "release_season", "rating", "creator",
+    "release_status", "release_date", "release_year", "release_season", "rating", "creator", "tags",
     "season", "episode", "chapter", "volume", "duration_seconds", "page_count", "external_ids",
     "trailer_url", "attribution",
 }

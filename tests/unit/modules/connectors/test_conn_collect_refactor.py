@@ -76,6 +76,49 @@ async def test_handler_returning_none_skips_generic_accept_and_rollback(monkeypa
     accept.assert_not_awaited()
 
 
+async def test_youtube_native_accepts_records_with_validator_cursor_atomically(monkeypatch):
+    """YouTube records and their conditional validators share one native receipt."""
+    from modules.connectors._collection import native
+
+    source = SimpleNamespace(
+        id=uuid4(),
+        provider="youtube",
+        configuration={"youtube_channel_id": "UC" + "a" * 22},
+    )
+    run = _run("youtube", AsyncMock())
+    run.attempt.source = source
+    validators = {
+        "https://www.youtube.com/feeds/videos.xml?channel_id=" + "UC" + "a" * 22: {
+            "etag": '"v2"'
+        }
+    }
+    records = (object(),)
+    page = SimpleNamespace(
+        records=records,
+        coverage="returned_snapshot",
+        validators=validators,
+        next_eligible_at=None,
+    )
+    monkeypatch.setattr(native, "_accept_native", AsyncMock())
+    monkeypatch.setattr(
+        "modules.connectors.providers.feed_catalog.collect_youtube_snapshot",
+        AsyncMock(return_value=page),
+    )
+
+    await native._native_feed(
+        SimpleNamespace(
+            run=run,
+            lease=SimpleNamespace(cursor_before=None),
+            collected_at=datetime.now(UTC),
+        )
+    )
+
+    accepted = native._accept_native.await_args
+    assert accepted.args[2] == records
+    assert accepted.kwargs["cursor_after"]
+    assert run.extras["native_fp"]
+
+
 async def test_provider_backoff_page_sets_next_eligible_and_rate_limits(monkeypatch):
     """A page carrying ``next_eligible_at`` raises ``ProviderRateLimited`` before any accept."""
     when = datetime.now(UTC) + timedelta(minutes=5)

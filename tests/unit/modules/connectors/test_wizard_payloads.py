@@ -55,6 +55,11 @@ MINIMAL_SCOPE: dict[str, dict[str, Any]] = {
     },
     "notion": {"notion_page_ids": ["a1234567-b123-c123-d123-e123456789ab"]},
     "slack": {"slack_channel_ids": ["C012ABCDEF"]},
+    "openlibrary_books": {"openlibrary_mode": "subject", "openlibrary_subject": "fiction"},
+    "apple_books_rss": {"country": "US", "kind": "books", "chart": "top-free"},
+    "podcast_rss": {"feed_url": "https://example.com/podcast.xml"},
+    "itunes_movies": {"search_terms": "science fiction", "country": "US"},
+    "letterboxd_rss": {"letterboxd_username": "example"},
 }
 # open_meteo is omitted from SCOPED: the editor preselects 0/0 coordinates, UTC and a metric, so its default already validates.
 SCOPED = frozenset(MINIMAL_SCOPE)

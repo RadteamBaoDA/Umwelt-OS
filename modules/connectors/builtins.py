@@ -35,6 +35,8 @@ from modules.connectors.provider_options import (
     MAX_MEDIA_GENRES,
     MAX_MEDIA_LANGUAGES,
     MAX_VN_SYMBOLS,
+    AniListMangaCountry,
+    AniListMode,
     AnimeSeason,
     CoinId,
     ContentRating,
@@ -55,6 +57,8 @@ from modules.connectors.provider_options import (
     MediaFormat,
     MediaGenre,
     MediaLanguage,
+    MediaStatus,
+    MediaTag,
     NvdSeverity,
     NwsArea,
     NwsSeverity,
@@ -216,16 +220,37 @@ class BuiltinEnableRequest(BaseModel):
     media_languages: tuple[MediaLanguage, ...] | None = Field(
         default=None, min_length=1, max_length=MAX_MEDIA_LANGUAGES
     )
+    # Open Library's scoped query fields are retained for built-in update compatibility.
+    openlibrary_mode: Literal["subject", "search", "recent"] | None = None
+    openlibrary_subject: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _-]+$")
+    openlibrary_query: str | None = Field(default=None, min_length=1, max_length=200)
+    ebooks_only: StrictBool | None = None
+    gutendex_topic: str | None = Field(default=None, min_length=1, max_length=120)
+    gutendex_search: str | None = Field(default=None, min_length=1, max_length=200)
+    gutendex_copyright: StrictBool | None = None
+    gutendex_mime_type: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$")
+    gutendex_author_year_start: StrictInt | None = Field(default=None, ge=0, le=2100)
+    gutendex_author_year_end: StrictInt | None = Field(default=None, ge=0, le=2100)
     media_formats: tuple[MediaFormat, ...] | None = Field(
         default=None, min_length=1, max_length=MAX_MEDIA_FORMATS
     )
     release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
     anime_season: AnimeSeason | None = None
+    anilist_mode: AniListMode | None = None
+    country_of_origin: AniListMangaCountry | None = None
+    media_tags: tuple[MediaTag, ...] | None = Field(default=None, min_length=1, max_length=16)
+    media_statuses: tuple[MediaStatus, ...] | None = Field(default=None, min_length=1, max_length=5)
     content_ratings: tuple[ContentRating, ...] | None = Field(
         default=None, min_length=1, max_length=MAX_CONTENT_RATINGS
     )
     min_rating: float | None = Field(default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True)
     exclude_adult: StrictBool | None = None
+    tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
+    ann_mode: Literal["news", "encyclopedia"] | None = None
+    ann_media_type: Literal["anime", "manga"] | None = None
+    ann_category: Literal["news", "review", "feature", "interview", "press-release", "all"] | None = None
+    ann_edition: Literal["us", "w"] | None = None
+    tvmaze_global: StrictBool | None = None
 
 
 _DEFAULT_ENABLE = BuiltinEnableRequest()  # body is optional; the model is never mutated
@@ -631,12 +656,14 @@ def _desired_configuration(
             status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes"
         )
     try:
-        config = ConnectorConfig(
-            timeout_seconds=30,
-            history_mode="returned_snapshot",
-            schedule_interval_minutes=interval,
-            realtime_mode=pick("realtime_mode"),
-            **options,
+        config = ConnectorConfig.model_validate(
+            {
+                "timeout_seconds": 30,
+                "history_mode": "returned_snapshot",
+                "schedule_interval_minutes": interval,
+                "realtime_mode": pick("realtime_mode"),
+                **options,
+            }
         )
         source_configuration = serialize_source_configuration(source, config)
         registry.validate(source.model_copy(update={"configuration": source_configuration}))

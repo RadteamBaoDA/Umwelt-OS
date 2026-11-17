@@ -56,6 +56,7 @@ MEDIA_ATTRIBUTIONS: dict[str, str] = {
     "mangadex_releases": "Metadata via MangaDex",
     "mangaupdates_releases": "Data via MangaUpdates",
     "openlibrary_books": "Data via Open Library (CC0 1.0)",
+    "gutendex_books": "Data via Project Gutenberg / Gutendex",
     "listenbrainz_releases": "Data via ListenBrainz / MusicBrainz (CC0 1.0)",
     "tmdb_movies": "Metadata by TMDB",
     "tmdb_tv": "Metadata by TMDB",

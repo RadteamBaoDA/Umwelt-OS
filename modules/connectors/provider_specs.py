@@ -147,6 +147,20 @@ DISPATCHABLE = frozenset(
         "cisa_kev",
         "sec_edgar",
         "openalex",
+        "tvmaze_schedule",
+        "livechart_episodes",
+        "anilist_anime",
+        "anilist_manga",
+        "openlibrary_books",
+        "gutendex_books",
+        "ann_news",
+        "mangaupdates_releases",
+        "mangadex_releases",
+        "apple_books_rss",
+        "podcast_rss",
+        "wikidata_movies",
+        "itunes_movies",
+        "letterboxd_rss",
         "bluesky",
         # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
         "aljazeera_world",
@@ -240,6 +254,7 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
             "openweathermap",
             "openaq",
             "finnhub_news",
+            "tvmaze_schedule",
         ),
         60,
     ),
@@ -355,6 +370,144 @@ def _spec(
 
 
 _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
+    _spec(
+        "anilist_anime", "AniList anime", "media", ("graphql.anilist.co",),
+        "event", 30, "https://anilist.co/terms", "noncommercial",
+        "Data via AniList; link the original AniList entry.", ("/",), (
+            QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 60),
+            _unknown(),
+        ),
+    ),
+    _spec(
+        "anilist_manga", "AniList manga", "media", ("graphql.anilist.co",),
+        "event", 60, "https://anilist.co/terms", "noncommercial",
+        "Data via AniList; link the original AniList entry.", ("/",), (
+            QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 60),
+            _unknown(),
+        ),
+    ),
+    _spec(
+        "livechart_episodes", "LiveChart anime episodes", "media", ("www.livechart.me",),
+        "event", 30, "https://www.livechart.me/terms", "review",
+        "Data via LiveChart.me; link the original episode.", ("/feeds/episodes",), (_day(48), _unknown()),
+    ),
+    replace(
+        _spec(
+            "tvmaze_schedule", "TVMaze schedule", "media", ("api.tvmaze.com",),
+            "event", 60, "https://www.tvmaze.com/api#licensing", "review",
+            "TVMaze (CC BY-SA 4.0); link the original TVMaze episode and disclose processing.",
+            ("/schedule", "/schedule/web"), (
+                _day(48),
+                QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 1),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    _spec(
+        "openlibrary_books", "Open Library books", "media", ("openlibrary.org", "covers.openlibrary.org"),
+        "event", 360, "https://openlibrary.org/developers/api", "open",
+        "Data via Open Library (CC0 1.0); link the work record.", ("/search.json", "/subjects", "/recentchanges.json", "/works"), (
+            _day(48),
+            QuotaWindowPolicy("openlibrary_calls_utc_second", "provider", "second", "http_calls", 2),
+            QuotaWindowPolicy("openlibrary_calls_utc_minute", "provider", "minute", "http_calls", 150),
+            _unknown(),
+        ),
+    ),
+    _spec(
+        "gutendex_books", "Gutendex public domain books", "media", ("gutendex.com",),
+        "event", 1440, "https://gutendex.com/", "review",
+        "Project Gutenberg public domain ebook metadata; link the original Gutenberg record.",
+        ("/books/",), (
+            _day(48),
+            QuotaWindowPolicy("gutendex_calls_utc_second", "provider", "second", "http_calls", 1),
+            QuotaWindowPolicy("gutendex_calls_utc_minute", "provider", "minute", "http_calls", 60),
+            _unknown(),
+        ),
+    ),
+    replace(
+        _spec(
+            "ann_news", "Anime News Network", "media", ("www.animenewsnetwork.com", "cdn.animenewsnetwork.com"),
+            "event", 60, "https://www.animenewsnetwork.com/encyclopedia/api", "review",
+            "Data via Anime News Network; link the original entry.", ("/news/atom.xml", "/encyclopedia/reports.xml"), (
+                QuotaWindowPolicy("ann_calls_utc_second", "provider", "second", "http_calls", 1),
+                QuotaWindowPolicy("ann_calls_utc_minute", "provider", "minute", "http_calls", 60),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "mangaupdates_releases", "MangaUpdates releases", "media", ("api.mangaupdates.com",),
+            "event", 60, "https://api.mangaupdates.com/", "review",
+            "Data via MangaUpdates; attribution required and link the original series.", ("/v1/releases/search",), (
+                QuotaWindowPolicy("mangaupdates_calls_utc_second", "provider", "second", "http_calls", 1),
+                QuotaWindowPolicy("mangaupdates_calls_utc_minute", "provider", "minute", "http_calls", 60),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "mangadex_releases", "MangaDex releases", "media", ("api.mangadex.org", "uploads.mangadex.org"),
+            "event", 60, "https://mangadex.org/compliance", "noncommercial",
+            "Data via MangaDex; attribution required, link original chapters and proxy cover images.", ("/manga", "/chapter"), (
+                QuotaWindowPolicy("mangadex_calls_utc_second", "provider", "second", "http_calls", 5),
+                QuotaWindowPolicy("mangadex_calls_utc_minute", "provider", "minute", "http_calls", 300),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "apple_books_rss", "Apple Books charts", "media", ("rss.marketingtools.apple.com",),
+            "event", 360, "https://www.apple.com/legal/internet-services/itunes/", "review",
+            "Data via Apple Books; link the original storefront entry.", ("/api/v2/{country}/books/", "/api/v2/{country}/audio-books/"), (
+                QuotaWindowPolicy("apple_media_calls_utc_minute", "provider", "minute", "http_calls", 20),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "podcast_rss", "Podcast RSS", "media", ("owner-configured HTTPS feed host", "itunes.apple.com"),
+            "event", 60, "https://podcastindex.org/terms", "review",
+            "Podcast publisher attribution and original episode links are preserved.", ("owner-configured / RSS", "/lookup"), (
+                QuotaWindowPolicy("podcast_calls_utc_minute", "provider", "minute", "http_calls", 2),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "wikidata_movies", "Wikidata movies", "media", ("query.wikidata.org",),
+            "event", 360, "https://www.wikidata.org/wiki/Wikidata:Licensing", "open",
+            "Wikidata is CC0; identify the source and link each item.", ("/sparql",), (
+                QuotaWindowPolicy("wikidata_calls_utc_minute", "provider", "minute", "http_calls", 1),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "itunes_movies", "iTunes movie search", "media", ("itunes.apple.com",),
+            "event", 360, "https://www.apple.com/legal/internet-services/itunes/", "review",
+            "Data via Apple iTunes; link the original storefront entry.", ("/search",), (
+                QuotaWindowPolicy("itunes_media_calls_utc_minute", "provider", "minute", "http_calls", 20),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "letterboxd_rss", "Letterboxd diary RSS", "media", ("letterboxd.com",),
+            "event", 360, "https://letterboxd.com/legal/terms-of-use/", "review",
+            "Data via Letterboxd; link the original film entry.", ("/{username}/rss/",), (
+                QuotaWindowPolicy("letterboxd_calls_utc_minute", "provider", "minute", "http_calls", 1),
+                _unknown(),
+            ),
+        ), checked_on="2026-11-17",
+    ),
     _spec(
         "bbc_world",
         "BBC World News",

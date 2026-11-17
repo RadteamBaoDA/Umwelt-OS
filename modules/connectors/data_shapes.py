@@ -31,6 +31,19 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
     {
         "telegram": frozenset({"messages"}),
         "youtube": frozenset({"video", "media"}),
+        "tvmaze_schedule": frozenset({"media"}),
+        "livechart_episodes": frozenset({"media"}),
+        "gutendex_books": frozenset({"media"}),
+        "ann_news": frozenset({"media"}),
+        "mangaupdates_releases": frozenset({"media"}),
+        "mangadex_releases": frozenset({"media"}),
+        "apple_books_rss": frozenset({"media"}),
+        "podcast_rss": frozenset({"media"}),
+        "wikidata_movies": frozenset({"media"}),
+        "itunes_movies": frozenset({"media"}),
+        "letterboxd_rss": frozenset({"media"}),
+        "anilist_anime": frozenset({"media"}),
+        "anilist_manga": frozenset({"media"}),
         "github": frozenset({"project_activity"}),
         "open_meteo": frozenset(
             {"measurement", "weather", "located"}

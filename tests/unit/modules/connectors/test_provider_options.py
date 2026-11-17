@@ -401,6 +401,17 @@ def test_media_option_validation_and_iso_countries():
     )
 
 
+def test_tvmaze_global_mode_requires_web_schedule_without_country():
+    for config in (
+        {"tvmaze_global": True},
+        {"tvmaze_mode": "schedule_country", "tvmaze_global": True},
+        {"tvmaze_mode": "schedule_web", "tvmaze_global": True, "media_country": "GB"},
+    ):
+        with pytest.raises(ValueError, match="Global channels"):
+            po.validate_options("tvmaze_schedule", config)
+    po.validate_options("tvmaze_schedule", {"tvmaze_mode": "schedule_web", "tvmaze_global": True})
+
+
 def test_filter_media_records_across_all_dimensions():
     def rec(rid: str, sf: dict) -> IngestionRecord:
         return IngestionRecord(

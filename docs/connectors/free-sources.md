@@ -1,6 +1,6 @@
 # Free data sources
 
-Catalog facts for the 50 free-provider presets, taken from `modules/connectors/provider_specs.py` (original 21 checked on 2026-10-07, the built-in expansion on 2026-10-21; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
+Catalog facts for the free-provider presets, taken from `modules/connectors/provider_specs.py` (original 21 checked on 2026-10-07, the built-in expansion on 2026-10-21; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists.
 Endpoint availability, implemented code, legal eligibility and live acceptance are separate facts: a row here is **not** a license grant and **no** provider is runtime-verified. Evidence and quotes live in `docs/free-data-provider-policy.md`.
 
 ## Rules
@@ -12,13 +12,27 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 - Quota is a durable PostgreSQL ledger (`connector_quota_windows`, `connector_provider_sends`, `connector_quota_debits`) shared by scheduled and manual collection and by both backends. One physical send debits every applicable window atomically before transmission; exhaustion defers with no provider I/O. Unknown official caps are recorded as counted windows with no enforced limit (never treated as unlimited). Local pilot ceilings are configurable internal choices, not provider promises.
 
 - **Built-in toggle (single-user instance).** Fixed-scope, keyless presets with an adapter are listed under **Settings → Data sources → Built-in sources** and are enabled with one switch. The first enable creates the source lazily (no seed migration) and, in one idempotent sequence, records the owner's terms acknowledgement and declared use, then activates it; later toggles only pause or resume the same source. For `review` providers the owner is also the instance operator, so the same enable records operator review evidence (`evidence_ref = builtin-toggle:<provider>:<terms_url>@<terms_version>`) and clears the collection block. Only the bootstrap operator may enable a `review` preset; anyone else gets `403 operator_required`. A declared use the class does not admit still returns `409 provider_terms_ineligible`. Scoped and keyed presets are never built-in: they stay in the manual flow with an in-app guide.
-- **Category** groups the catalog and the built-in list: `news`, `economy`, `hazards`, `space`, `security`, `tech`.
+- **Category** groups the catalog and the built-in list: `news`, `economy`, `hazards`, `space`, `security`, `tech`, `media`.
 - **Keyed presets** store the owner key in `connector_rest_credentials`; `header_name` records where it travels: a header name, `query:<param>` or `path:<token>`. The request is built server-side, redacted from `repr`, and a missing key fails closed before the lease and the send.
 
 ## Catalog
 
 | ID | Host | Kind | Interval (min) | Eligibility | Key | Execution | Code | Terms | Category |
 |---|---|---|---|---|---|---|---|---|---|
+| `livechart_episodes` | www.livechart.me | event | 30 | review | none | supported | registered | [terms](https://www.livechart.me/terms) | media |
+| `tvmaze_schedule` | api.tvmaze.com | event | 60 | review | none | supported | registered | [terms](https://www.tvmaze.com/api#licensing) | media |
+| `anilist_anime` | graphql.anilist.co | event | 30 | noncommercial | 60 requests/minute | supported | registered | [terms](https://anilist.co/terms) | media |
+| `anilist_manga` | graphql.anilist.co | event | 60 | noncommercial | 60 requests/minute | supported | registered | [terms](https://anilist.co/terms) | media |
+| `gutendex_books` | gutendex.com | event | 1440 | review | 60 requests/minute | supported | registered | [terms](https://gutendex.com/) | media |
+| `openlibrary_books` | openlibrary.org, covers.openlibrary.org | event | 360 | open | 2 requests/second, 150/minute | supported | registered | [terms](https://openlibrary.org/developers/api) | media |
+| `ann_news` | www.animenewsnetwork.com, cdn.animenewsnetwork.com | event | 60 | review | 1 request/second, 60/minute | supported | registered | [terms](https://www.animenewsnetwork.com/encyclopedia/api) | media |
+| `mangaupdates_releases` | api.mangaupdates.com | event | 60 | review | 1 request/second, 60/minute | supported | registered | [terms](https://api.mangaupdates.com/) | media |
+| `mangadex_releases` | api.mangadex.org, uploads.mangadex.org | event | 60 | noncommercial | 5 requests/second, 300/minute | supported | registered | [terms](https://mangadex.org/compliance) | media |
+| `apple_books_rss` | rss.marketingtools.apple.com | event | 360 | review | 20 requests/minute | supported | registered | [terms](https://www.apple.com/legal/internet-services/itunes/) | media |
+| `podcast_rss` | owner-configured HTTPS RSS host, itunes.apple.com | event | 60 | review | 2 requests/minute | supported | registered | [terms](https://podcastindex.org/terms) | media |
+| `wikidata_movies` | query.wikidata.org | event | 360 | open | 1 request/minute | supported | registered | [terms](https://www.wikidata.org/wiki/Wikidata:Licensing) | media |
+| `itunes_movies` | itunes.apple.com | event | 360 | review | 20 requests/minute | supported | registered | [terms](https://www.apple.com/legal/internet-services/itunes/) | media |
+| `letterboxd_rss` | letterboxd.com | event | 360 | review | 1 request/minute | supported | registered | [terms](https://letterboxd.com/legal/terms-of-use/) | media |
 | `bbc_world` | feeds.bbci.co.uk | news | 30 | review | none | supported | registered | [terms](https://www.bbc.co.uk/usingthebbc/terms/) | news |
 | `vnexpress_business` | vnexpress.net | news | 30 | noncommercial | none | supported | registered | [terms](https://vnexpress.net/rss) | news |
 | `tuoitre_news` | tuoitre.vn | news | 30 | noncommercial | none | supported | registered | [terms](https://tuoitre.vn/rss.htm) | news |
