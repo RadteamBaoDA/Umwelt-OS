@@ -289,8 +289,12 @@ async def test_structured_mode_flags_truncation_and_trims_rows(
     async def _register(*_a: object, **_k: object) -> dict[object, int]:
         return {}
 
+    async def _attrs(*_a: object, **_k: object) -> dict[object, dict[str, object]]:
+        return {ver: {"depth": 10.0}}
+
     monkeypatch.setattr(db_query, "_collect_observations", _collect)
     monkeypatch.setattr(db_query, "_register_evidence_for_versions", _register)
+    monkeypatch.setattr(db_query, "fetch_attributes", _attrs)
     out = json.loads(
         await db_query._execute_structured_mode(
             None,  # type: ignore[arg-type]
@@ -304,6 +308,8 @@ async def test_structured_mode_flags_truncation_and_trims_rows(
     )
     assert out["truncated"] is True and out["hint"] == TRUNCATION_HINT
     assert len(out["observations"]) == 2
+    assert out["observations"][0]["attributes"] == {"depth": 10.0}
+    assert out["observations"][0]["latitude"] is None
 
 
 @pytest.mark.asyncio

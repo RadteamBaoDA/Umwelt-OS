@@ -1,0 +1,58 @@
+"""Static checks of revision 0025 (no database): view column order, fence, secrets filter, index DDL."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import ModuleType
+
+ROOT = Path(__file__).resolve().parents[2]
+VERSIONS = ROOT / "infrastructure" / "postgres" / "migrations" / "versions"
+
+
+def _load(name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, VERSIONS / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+m25 = _load("0025_chat_attributes_unaccent")
+m24 = _load("0024_chat_sql_scope_fence")
+
+
+def test_revision_chain_and_downgrade_restores_0024_bodies() -> None:
+    """0025 follows 0024 and its downgrade views equal the 0024 upgrade views (same columns and fence)."""
+    assert m25.down_revision == m24.revision
+    obs_0024 = (
+        f"{m24._OBSERVATIONS_COLUMNS}\n{m24._FENCE_JOIN}\n{m24._SCOPE_JOIN.format(alias='o')}\n"
+        "WHERE o.workspace_id = f.workspace_id AND o.source_id = ANY(f.source_ids) "
+        "AND o.is_current AND o.provider_scope_discriminator IS NOT DISTINCT FROM fs.discriminator"
+    )
+    assert m25._observations_view("") == m24._view("scoped_observations", obs_0024)
+    doc_0024 = (
+        f"{m24._DOCUMENTS_COLUMNS}\n{m24._FENCE_JOIN}\n{m24._SCOPE_JOIN.format(alias='d')}\n"
+        "WHERE d.workspace_id = f.workspace_id AND d.source_id = ANY(f.source_ids) "
+        f"AND {m24._DOC_DISCRIMINATOR} IS NOT DISTINCT FROM fs.discriminator"
+    )
+    assert m25._documents_view("") == m24._view("scoped_documents", doc_0024)
+
+
+def test_new_views_append_columns_and_strip_secrets() -> None:
+    """New columns come last; attributes reads both provenance paths and drops credential-like keys."""
+    obs = m25._observations_view(
+        f", o.latitude, o.longitude, {m25._attributes('o.document_version_id')}"
+    )
+    head, tail = obs.split("FROM public.observations o")
+    assert (
+        head.index("o.document_version_id") < head.index("o.latitude") < head.index("AS attributes")
+    )
+    assert (
+        "provider_record,source_fields" in obs
+        and "provider_record,world_data,provider_fields" in obs
+    )
+    assert "!~* '(token|secret|password|key)'" in obs
+    assert "chat_sql.query_fence_scope fs" in tail
+    doc = m25._documents_view(f", {m25._attributes('dv.id')}")
+    assert doc.index("dv.id AS document_version_id") < doc.index("AS attributes")

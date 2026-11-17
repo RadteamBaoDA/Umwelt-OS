@@ -117,7 +117,7 @@ def test_db_query_tool_spec_is_pinned() -> None:
     import json
 
     digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
-    assert digest == "10f246a140c2e85e2b4cb8d5e4612d4acb972be74ad21097cb64adf66a45901f"
+    assert digest == "68c27124346e964b56f15fbf75a5b09a48df389b4d0ad4ed2ba98f3f51d401a4"
 
 
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
@@ -777,3 +777,18 @@ async def test_ceiling_round_keeps_its_widgets_and_over_cap_payload_is_distinct(
     assert ts.ui_parts == [part]
     assert json.loads(stream._PER_ROUND_CAP_EXCEEDED) == {"error": "per_round_cap_exceeded"}
     assert "instruction" not in json.loads(stream._TOOL_BUDGET_EXHAUSTED)
+
+
+def test_provider_hint_lists_bounded_metric_ids() -> None:
+    """Measurement providers get their catalog metric ids (open ones marked), bounded; news feeds add none."""
+    from modules.chat._worker.setup import _metric_catalog_hint, _provider_hint
+    from modules.connectors.public import metric_catalog
+
+    cat = list(metric_catalog())
+    assert _metric_catalog_hint(["thanhnien_news"]) == ""
+    hint = _metric_catalog_hint(cat)
+    assert hint.startswith(" Metric ids per measurement provider: ") and len(hint) <= 600
+    assert hint.count(": ") <= 16
+    assert cat[0] in _provider_hint([cat[0]])
+    open_p = next(p for p, v in metric_catalog().items() if v.metrics_open)
+    assert "(open)" in _metric_catalog_hint([open_p])

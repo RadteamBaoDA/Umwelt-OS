@@ -21,9 +21,7 @@ from sqlalchemy import (
     TextClause,
     and_,
     desc,
-    exists,
     func,
-    or_,
     select,
     text,
 )
@@ -35,6 +33,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
+from modules.chat._db_attributes import (
+    available_series,
+    evidence_pairs,
+    fetch_attributes,
+    serialize_documents,
+    serialize_observations,
+    text_match_filter,
+)
+from modules.chat._db_attributes import (
+    hot_cache_snapshots as _hot_cache_snapshots,
+)
 from modules.chat._db_scope import (
     SourceScopes,
     document_scope_filter,
@@ -145,7 +154,7 @@ def _db_query_base_properties() -> dict[str, Any]:
         "target": {
             "type": "string",
             "enum": ["observations", "documents", "both"],
-            "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider.",
+            "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider. Each row carries `attributes` (provider facts such as quake depth, CVE vendor, score, season/episode, OHLC), and observations carry `latitude`/`longitude`. An empty observation result lists `available_series` to retry with valid provider/metric/symbol/region.",
         },
         "providers": {
             "type": "array",
@@ -168,7 +177,7 @@ def _db_query_base_properties() -> dict[str, Any]:
         },
         "text_query": {
             "type": "string",
-            "description": "Optional keyword match against document headline/body text only; it does not match provider or topic names (event feeds hold region, magnitude and depth, not the word 'earthquake'). Prefer providers=[...] to select a feed.",
+            "description": "Optional keyword match against document headline/body text only, ignoring Vietnamese accents ('gia vang' matches 'giá vàng'); it does not match provider or topic names (event feeds hold region, magnitude and depth, not the word 'earthquake'). Prefer providers=[...] to select a feed.",
         },
         "date_from": {
             "type": "string",
@@ -1181,8 +1190,8 @@ def _document_filters(
     current-scope discriminator).
 
     Pure expression builder; ``date_to`` is an exclusive upper bound on ``coalesce(observed_at, created_at)``; the workspace and allowed-source predicates are always first. ``text_query``
-    matches the title (``ILIKE``, short column) or any chunk of the current version through the stored
-    ``document_chunks.content_tsv`` GIN column (no per-row ``to_tsvector`` and no ``ILIKE`` over full content).
+    is accent-insensitive (see :func:`text_match_filter`): title or any chunk of the current version, served
+    by the ``f_unaccent`` GIN index on ``document_chunks`` (no ``ILIKE`` over full content).
     Provider ids are stored lower-case, so the input is lower-cased and compared exactly.
     """
     doc_filters: list[Any] = [
@@ -1200,13 +1209,7 @@ def _document_filters(
     if date_to is not None:
         doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) < date_to)
     if args.text_query and args.text_query.strip():
-        q = args.text_query.strip()
-        ts_query = func.websearch_to_tsquery("simple", q)
-        chunk_match = exists().where(
-            DocumentChunk.document_version_id == DocumentVersion.id,
-            DocumentChunk.content_tsv.op("@@")(ts_query),
-        )
-        doc_filters.append(or_(chunk_match, Document.title.ilike(f"%{q}%")))
+        doc_filters.append(text_match_filter(args.text_query.strip(), DocumentVersion.id))
     return doc_filters
 
 
@@ -1263,81 +1266,6 @@ async def _select_structured_documents(
     return list((await session.execute(stmt)).all())
 
 
-async def _hot_cache_snapshots(
-    redis: Any, workspace_id: UUID, allowed_source_ids: list[UUID]
-) -> list[dict[str, Any]]:
-    """Read up to 8 connector snapshot metadata entries from Redis with one ``MGET``; failure yields nothing.
-
-    The snapshots are a best-effort enrichment, so every error is suppressed (never raises).
-    """
-    hot_snapshots: list[dict[str, Any]] = []
-    keys = [f"connector:snapshot:{workspace_id}:{sid}" for sid in allowed_source_ids[:8]]
-    if not keys:
-        return hot_snapshots
-    with suppress(Exception):
-        for raw_snap in await redis.mget(keys):
-            if raw_snap:
-                snap = json.loads(
-                    raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap)
-                )
-                if isinstance(snap, dict):
-                    hot_snapshots.append(
-                        {
-                            "provider": snap.get("provider"),
-                            "realtime_tier": snap.get("realtime_tier"),
-                            "collected_at": snap.get("collected_at"),
-                            "record_count": snap.get("record_count"),
-                        }
-                    )
-    return hot_snapshots
-
-
-def _serialize_observations(obs_rows: Any, citation_map: dict[UUID, int]) -> list[dict[str, Any]]:
-    """Serialise observation rows, attaching ``[n]`` citation markers from ``citation_map``."""
-    return [
-        {
-            "provider": obs.provider,
-            "metric": obs.metric,
-            "symbol": obs.symbol,
-            "region": obs.region,
-            "value": obs.value,
-            "unit": obs.unit,
-            "currency": obs.currency,
-            "observed_at": obs.observed_at.isoformat(),
-            "is_current": obs.is_current,
-            "citation": (
-                f"[{citation_map[obs.document_version_id]}]"
-                if obs.document_version_id in citation_map
-                else None
-            ),
-        }
-        for obs in obs_rows
-    ]
-
-
-def _serialize_documents(
-    doc_rows: list[Any], citation_map: dict[UUID, int]
-) -> list[dict[str, Any]]:
-    """Serialise structured document rows, attaching ``[n]`` citation markers from ``citation_map``."""
-    return [
-        {
-            "provider": d.provider,
-            "source_name": d.source_name,
-            "title": d.title,
-            "url": d.url,
-            "published_at": d.published_at.isoformat() if d.published_at else None,
-            "observed_at": d.observed_at.isoformat() if d.observed_at else None,
-            "excerpt": d.excerpt,
-            "citation": (
-                f"[{citation_map[d.document_version_id]}]"
-                if d.document_version_id in citation_map
-                else None
-            ),
-        }
-        for d in doc_rows
-    ]
-
-
 async def _collect_observations(
     session: AsyncSession,
     args: QueryCollectedDataArgs,
@@ -1392,6 +1320,50 @@ async def _collect_observations(
     return aggregates, obs_rows[: args.limit], truncated or len(obs_rows) > args.limit
 
 
+async def _collect_documents(
+    session: AsyncSession,
+    args: QueryCollectedDataArgs,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    date_from: datetime | None,
+    date_to: datetime | None,
+    source_scopes: SourceScopes | None,
+) -> tuple[list[Any], bool]:
+    """Fetch the scoped structured document rows trimmed to ``args.limit``; returns ``(rows, truncated)``."""
+    doc_filters = _document_filters(
+        args,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
+        date_from=date_from,
+        date_to=date_to,
+        source_scopes=source_scopes,
+    )
+    rows = await _select_structured_documents(session, doc_filters, args.limit)
+    return rows[: args.limit], len(rows) > args.limit
+
+
+async def _finish_structured_payload(
+    out: dict[str, Any],
+    *,
+    truncated: bool,
+    available_providers: list[str] | None,
+    redis: Any,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+) -> str:
+    """Add the truncation hint, provider ids and best-effort Redis snapshots to ``out``; return its JSON."""
+    if truncated:
+        out.update(truncated=True, hint=TRUNCATION_HINT)
+    if available_providers:
+        out["available_providers"] = available_providers
+    if redis is not None and callable(getattr(redis, "mget", None)):
+        hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)
+        if hot_snapshots:
+            out["hot_cache_snapshots"] = hot_snapshots
+    return json.dumps(out, ensure_ascii=False, default=str)
+
+
 async def _execute_structured_mode(
     session: AsyncSession,
     args: QueryCollectedDataArgs,
@@ -1440,16 +1412,12 @@ async def _execute_structured_mode(
             out=out,
             source_scopes=source_scopes,
         )
-        version_pairs.extend(
-            (agg["_document_id"], agg["_version_id"])
-            for agg in aggregates
-            if agg["_document_id"] is not None and agg["_version_id"] is not None
-        )
-        version_pairs.extend((obs.document_id, obs.document_version_id) for obs in obs_rows)
+        version_pairs.extend(evidence_pairs(aggregates, obs_rows))
 
     doc_rows_raw: list[Any] = []
     if want_docs:
-        doc_filters = _document_filters(
+        doc_rows_raw, docs_truncated = await _collect_documents(
+            session,
             args,
             workspace_id=workspace_id,
             allowed_source_ids=allowed_source_ids,
@@ -1457,11 +1425,8 @@ async def _execute_structured_mode(
             date_to=date_to,
             source_scopes=source_scopes,
         )
-        doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
-        truncated = truncated or len(doc_rows_raw) > args.limit
-        doc_rows_raw = doc_rows_raw[: args.limit]
+        truncated = truncated or docs_truncated
         version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)
-
     citation_map = await _register_evidence_for_versions(
         session,
         version_pairs,
@@ -1472,22 +1437,29 @@ async def _execute_structured_mode(
         source_scopes=source_scopes,
     )
 
+    attributes = await fetch_attributes(
+        session,
+        [o.document_version_id for o in obs_rows] + [d.document_version_id for d in doc_rows_raw],
+    )
     if args.aggregation != "none" and want_obs:
         _apply_aggregate_citations(aggregates, citation_map)
         out["observation_aggregates"] = aggregates
     if want_obs:
-        out["observations"] = _serialize_observations(obs_rows, citation_map)
+        out["observations"] = serialize_observations(obs_rows, citation_map, attributes)
+        if not obs_rows and not aggregates:
+            out["available_series"] = await available_series(
+                session,
+                workspace_id=workspace_id,
+                allowed_source_ids=allowed_source_ids,
+                source_scopes=source_scopes,
+            )
     if want_docs:
-        out["documents"] = _serialize_documents(doc_rows_raw, citation_map)
-    if truncated:
-        out.update(truncated=True, hint=TRUNCATION_HINT)
-
-    if available_providers:
-        out["available_providers"] = available_providers
-
-    if redis is not None and callable(getattr(redis, "mget", None)):
-        hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)
-        if hot_snapshots:
-            out["hot_cache_snapshots"] = hot_snapshots
-
-    return json.dumps(out, ensure_ascii=False, default=str)
+        out["documents"] = serialize_documents(doc_rows_raw, citation_map, attributes)
+    return await _finish_structured_payload(
+        out,
+        truncated=truncated,
+        available_providers=available_providers,
+        redis=redis,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
+    )

@@ -336,3 +336,41 @@ async def test_legacy_reader_role_absent_and_app_group_holds_grants(
             )
         ).one()
     assert tuple(row) == (False, False, False)
+
+
+async def test_views_expose_attributes_coordinates_and_unaccent_search(
+    reader_engine: AsyncEngine,
+    ready_owner_client: AsyncClient,
+    committed_engine: AsyncEngine,
+) -> None:
+    """Migration 0025: new view columns exist and ``attributes`` is a jsonb object; the unaccent index works."""
+    seed = await _seed(ready_owner_client, committed_engine)
+    columns = await _run_sql_as_reader(
+        "SELECT latitude, longitude, attributes FROM scoped_observations",
+        app_engine=committed_engine,
+        workspace_id=seed.workspace_id,
+        allowed_source_ids=[seed.source_id],
+        max_rows=5,
+        source_scopes={seed.source_id: DISCRIMINATOR},
+    )
+    assert isinstance(columns, list)
+    docs = await _run_sql_as_reader(
+        "SELECT attributes FROM scoped_documents",
+        app_engine=committed_engine,
+        workspace_id=seed.workspace_id,
+        allowed_source_ids=[seed.source_id],
+        max_rows=5,
+        source_scopes={seed.source_id: DISCRIMINATOR},
+    )
+    assert all(isinstance(dict(row)["attributes"], dict) for row in docs)
+    async with committed_engine.connect() as conn:
+        assert (
+            await conn.scalar(text("SELECT public.f_unaccent('giá vàng') = 'gia vang'"))
+        ) is True
+        index = await conn.scalar(
+            text(
+                "SELECT indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE c.relname = 'ix_document_chunks_content_unaccent_tsv'"
+            )
+        )
+        assert index is True

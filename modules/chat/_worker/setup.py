@@ -671,11 +671,40 @@ _FOLLOWUP_DATA_NOTE = (
 )
 
 
+_MAX_METRIC_HINT_PROVIDERS = 15
+_MAX_METRIC_HINT_CHARS = 600
+
+
+def _metric_catalog_hint(providers: Sequence[str]) -> str:
+    """Prompt sentence listing catalog metric ids for in-scope measurement providers (pure, bounded).
+
+    At most 15 providers and about 600 characters; providers with an open-ended metric set are marked
+    ``open`` (the listed ids are only common ones). Non-measurement providers are skipped; empty when none.
+    """
+    from modules.connectors import public as connectors
+
+    parts: list[str] = []
+    for provider in providers:
+        entry = connectors.provider_metrics(provider)
+        if entry is None:
+            continue
+        ids = ",".join(m.id for m in entry.metrics)
+        parts.append(f"{provider}: {ids}{' (open)' if entry.metrics_open else ''}")
+        if len(parts) >= _MAX_METRIC_HINT_PROVIDERS:
+            break
+    if not parts:
+        return ""
+    return (" Metric ids per measurement provider: " + "; ".join(parts) + ".")[
+        :_MAX_METRIC_HINT_CHARS
+    ]
+
+
 def _provider_hint(providers: Sequence[str]) -> str:
     """Prompt sentence naming exact provider ids, the text_query limits and the query-round budget (pure).
 
     The round and per-round call counts come from ``MAX_DATA_QUERY_ROUNDS`` and ``MAX_SKILL_CALLS_PER_ROUND``
-    so the prompt cannot drift from the enforced limits. Empty when no provider is in scope.
+    so the prompt cannot drift from the enforced limits. Appends the metric catalog hint
+    (:func:`_metric_catalog_hint`). Empty when no provider is in scope.
     """
     if not providers:
         return ""
@@ -684,7 +713,7 @@ def _provider_hint(providers: Sequence[str]) -> str:
         "text_query matches headline/body text only, not provider or topic names. "
         f"You have at most {MAX_DATA_QUERY_ROUNDS} rounds that query collected data and at most "
         f"{MAX_SKILL_CALLS_PER_ROUND} tool calls per round (extra calls get no data): "
-        "query every needed provider in your first call."
+        "query every needed provider in your first call." + _metric_catalog_hint(providers)
     )
 
 
