@@ -7,8 +7,10 @@ import { CheckboxField } from '@/components/settings-layout';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MEDIA_FILTER_SPECS, MEDIA_PROVIDER_FIELDS, OPTION_SPECS } from './builtin-option-specs';
+import { TypedOption } from './builtin-options';
 import type { ConnectorConfig } from './api';
-import { CoinGeckoPicker, LocationButton, ScopeField, ScopeHint, useIdListText } from './scope-fields';
+import { CoinGeckoPicker, LocationButton, ScopeField, ScopeHint, MediaFilterFields, useIdListText } from './scope-fields';
 
 export { ProviderGuide, ProviderTerms } from './provider-guide';
 export { ScopeHint } from './scope-fields';
@@ -35,7 +37,8 @@ export type NativeProvider =
   | 'openaq'
   | 'nasa_firms'
   | 'notion'
-  | 'slack';
+  | 'slack'
+  | keyof typeof MEDIA_PROVIDER_FIELDS;
 
 type ScopeChange = <K extends keyof ConnectorConfig>(key: K, value: ConnectorConfig[K]) => void;
 
@@ -241,19 +244,160 @@ function NasaFirmsScope({ configuration, disabled, onChange }: ScopeSectionProps
   );
 }
 
-/** YouTube scope: channel id. */
-function YoutubeScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+/**
+ * Preserves legacy channel scopes and selects exactly one bounded target list (IDs, handles, or playlists).
+ * Target-mode changes clear other identifiers explicitly; filter selection leaves target identity untouched.
+ */
+function YoutubeScope({ configuration, disabled, resetEpoch, onChange }: ScopeSectionProps) {
   const t = useTranslations('sources');
+  const mode =
+    configuration.youtube_channels != null
+      ? 'youtube_channels'
+      : configuration.youtube_handles != null
+        ? 'youtube_handles'
+        : configuration.youtube_playlist_ids != null
+          ? 'youtube_playlist_ids'
+          : 'youtube_channel_id';
+  const channels = useIdListText(configuration.youtube_channels ?? [], resetEpoch);
+  const handles = useIdListText(configuration.youtube_handles ?? [], resetEpoch);
+  const playlists = useIdListText(configuration.youtube_playlist_ids ?? [], resetEpoch);
+  const lists = { youtube_channels: channels, youtube_handles: handles, youtube_playlist_ids: playlists };
+  const targetLabels = {
+    youtube_channel_id: 'youtube.channelId',
+    youtube_channels: 'youtube.channels',
+    youtube_handles: 'youtube.handles',
+    youtube_playlist_ids: 'youtube.playlists',
+  } as const;
   return (
-    <ScopeField
-      name="youtube_channel_id"
-      label={t('youtube.channelId')}
-      value={configuration.youtube_channel_id ?? ''}
-      onValue={(value) => onChange('youtube_channel_id', value)}
-      disabled={disabled}
-      maxLength={24}
-      pattern="UC[A-Za-z0-9_-]{22}"
-    />
+    <>
+      <div className="field">
+        <Label htmlFor="youtube-target-mode">{t('youtube.targetMode')}</Label>
+        <Select
+          value={mode}
+          disabled={disabled}
+          onValueChange={(next) => {
+            // The backend accepts exactly one target family, including legacy single-channel configurations.
+            for (const key of Object.keys(targetLabels) as (keyof typeof targetLabels)[]) {
+              onChange(key, (key === next ? (key === 'youtube_channel_id' ? '' : []) : null) as never);
+            }
+          }}
+        >
+          <SelectTrigger id="youtube-target-mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(targetLabels) as (keyof typeof targetLabels)[]).map((key) => (
+              <SelectItem key={key} value={key}>
+                {t(targetLabels[key])}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {mode === 'youtube_channel_id' ? (
+        <ScopeField
+          name={mode}
+          label={t('youtube.channelId')}
+          value={configuration.youtube_channel_id ?? ''}
+          onValue={(value) => onChange(mode, value)}
+          disabled={disabled}
+          maxLength={24}
+          pattern="UC[A-Za-z0-9_-]{22}"
+        />
+      ) : (
+        <ScopeField
+          name={mode}
+          label={t(targetLabels[mode])}
+          value={lists[mode].value}
+          disabled={disabled}
+          maxLength={mode === 'youtube_channels' ? 208 : mode === 'youtube_handles' ? 264 : 528}
+          onValue={(value) => onChange(mode, lists[mode].edit(value))}
+        />
+      )}
+      <div className="field">
+        <Label htmlFor="youtube-filter">{t('youtube.filter')}</Label>
+        <Select
+          value={configuration.youtube_filter ?? 'all'}
+          disabled={disabled}
+          onValueChange={(next) => onChange('youtube_filter', next as ConnectorConfig['youtube_filter'])}
+        >
+          <SelectTrigger id="youtube-filter">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('youtube.all')}</SelectItem>
+            <SelectItem value="long_form">{t('youtube.longForm')}</SelectItem>
+            <SelectItem value="shorts">{t('youtube.shorts')}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    </>
+  );
+}
+
+/**
+ * Renders Phase 2 identifying scopes and accepted provider options, followed by optional shared media filters.
+ * Mode changes clear incompatible fields before saving so Open Library, ANN and TVMaze keep server-valid drafts.
+ */
+function MediaScope(props: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  const { provider, configuration, disabled, resetEpoch, onChange } = props;
+  const fields: readonly string[] = MEDIA_PROVIDER_FIELDS[provider as keyof typeof MEDIA_PROVIDER_FIELDS];
+  const filters = MEDIA_FILTER_SPECS.map((spec) => spec.key);
+  const mode = configuration.openlibrary_mode ?? 'subject';
+  const accepted = fields.filter((key) => {
+    if (provider === 'openlibrary_books') {
+      if (key === 'openlibrary_subject') return mode === 'subject';
+      if (key === 'openlibrary_query' || key === 'media_languages') return mode === 'search';
+      if (key === 'ebooks_only') return mode !== 'recent';
+    }
+    if (key === 'ann_media_type') return configuration.ann_mode === 'encyclopedia';
+    if (key === 'tvmaze_global') return configuration.tvmaze_mode === 'schedule_web';
+    if (provider === 'tvmaze_schedule' && (key === 'media_country' || key === 'media_countries')) return !configuration.tvmaze_global;
+    return true;
+  });
+  return (
+    <>
+      {provider === 'podcast_rss' && (
+        <ScopeField
+          name="feed_url"
+          label={t('media.podcastFeed')}
+          value={configuration.feed_url ?? ''}
+          required={!configuration.itunes_podcast_id}
+          maxLength={2048}
+          disabled={disabled}
+          onValue={(next) => {
+            onChange('feed_url', (next || null) as never);
+            if (next) onChange('itunes_podcast_id', null as never);
+          }}
+        />
+      )}
+      {OPTION_SPECS.filter((spec) => accepted.includes(spec.key) && !filters.includes(spec.key)).map((spec) => (
+        <TypedOption
+          key={`${resetEpoch}-${spec.key}`}
+          spec={spec}
+          value={configuration[spec.key]}
+          disabled={disabled}
+          onValue={(next) => {
+            onChange(spec.key, (next === undefined || (Array.isArray(next) && next.length === 0) ? null : next) as never);
+            if (spec.key === 'itunes_podcast_id' && next) onChange('feed_url', null as never);
+            if (spec.key === 'openlibrary_mode') {
+              onChange('openlibrary_subject', null as never);
+              onChange('openlibrary_query', null as never);
+              onChange('media_languages', null as never);
+              onChange('ebooks_only', null as never);
+            }
+            if (spec.key === 'ann_mode' && next !== 'encyclopedia') onChange('ann_media_type', null as never);
+            if (spec.key === 'tvmaze_mode') onChange('tvmaze_global', null as never);
+            if (spec.key === 'tvmaze_global' && next === true) {
+              onChange('media_country', null as never);
+              onChange('media_countries', null as never);
+            }
+          }}
+        />
+      ))}
+      <MediaFilterFields {...props} fields={accepted} />
+    </>
   );
 }
 
@@ -656,6 +800,20 @@ function IdListScope({
  * `NativeProvider`); `ProviderScope` itself does not change.
  */
 const SCOPE_SECTIONS: Record<NativeProvider, ComponentType<ScopeSectionProps>> = {
+  anilist_anime: MediaScope,
+  anilist_manga: MediaScope,
+  livechart_episodes: MediaScope,
+  tvmaze_schedule: MediaScope,
+  openlibrary_books: MediaScope,
+  gutendex_books: MediaScope,
+  ann_news: MediaScope,
+  mangaupdates_releases: MediaScope,
+  mangadex_releases: MediaScope,
+  apple_books_rss: MediaScope,
+  podcast_rss: MediaScope,
+  wikidata_movies: MediaScope,
+  itunes_movies: MediaScope,
+  letterboxd_rss: MediaScope,
   sec_edgar: SecEdgarScope,
   google_news: GoogleNewsScope,
   openalex: OpenAlexScope,

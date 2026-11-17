@@ -202,3 +202,16 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `openweathermap` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `openaq` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `nasa_firms` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
+
+
+## Media source configuration
+
+The source editor exposes the keyless media providers' identifying fields and supported optional filters.
+Open Library requires a subject or query for its selected mode, podcasts require one HTTPS feed URL or iTunes ID,
+and YouTube accepts one target family with up to eight channel IDs, handles, or playlist IDs. Existing single-channel
+YouTube configurations stay editable. YouTube format choices are all videos, long-form videos, or Shorts.
+
+Media filters use the same canonical values as the Dashboard media editor. Leaving a filter empty uses the provider
+default. Configure sends explicit null when a saved option is cleared, while the built-in wizard omits empty options.
+The optional Media starter pack uses the existing LiveChart and TVMaze built-in contracts. These UI controls have
+unit-test coverage. Live collection and authenticated browser acceptance remain separate verification gates.

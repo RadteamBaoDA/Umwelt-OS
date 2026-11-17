@@ -4,6 +4,21 @@
  * is added to `locales/<locale>/sources.json` under `provider.*`.
  */
 export const PROVIDER_LABEL_KEY = {
+  anilist_anime: 'provider.anilistAnime',
+  anilist_manga: 'provider.anilistManga',
+  livechart_episodes: 'provider.livechartEpisodes',
+  ann_news: 'provider.annNews',
+  mangaupdates_releases: 'provider.mangaupdatesReleases',
+  mangadex_releases: 'provider.mangadexReleases',
+  openlibrary_books: 'provider.openlibraryBooks',
+  gutendex_books: 'provider.gutendexBooks',
+  apple_books_rss: 'provider.appleBooksRss',
+  wikidata_movies: 'provider.wikidataMovies',
+  itunes_movies: 'provider.itunesMovies',
+  letterboxd_rss: 'provider.letterboxdRss',
+  podcast_rss: 'provider.podcastRss',
+  tvmaze_schedule: 'provider.tvmazeSchedule',
+
   vn_stock: 'provider.vnStock',
   github_trending: 'provider.githubTrending',
   wwr_jobs: 'provider.wwrJobs',

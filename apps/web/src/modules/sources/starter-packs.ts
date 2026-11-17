@@ -20,10 +20,10 @@ export type ScopedPackItem = {
   edit?: ItemEdit;
 };
 export type PackItem = BuiltinPackItem | ScopedPackItem;
-export type StarterPackId = 'developer' | 'jobs' | 'crypto' | 'finance' | 'weather' | 'news';
+export type StarterPackId = 'developer' | 'jobs' | 'crypto' | 'finance' | 'weather' | 'news' | 'media';
 export type StarterPack = {
   id: StarterPackId;
-  labelKey: `starter.pack${'Developer' | 'Jobs' | 'Crypto' | 'Finance' | 'Weather' | 'News'}`;
+  labelKey: `starter.pack${'Developer' | 'Jobs' | 'Crypto' | 'Finance' | 'Weather' | 'News' | 'Media'}`;
   items: PackItem[];
   guide?: 'linkedin';
 };
@@ -33,6 +33,14 @@ export type StarterPack = {
  * list are hidden by the wizard, so entries for providers that are not deployed yet are harmless.
  */
 export const STARTER_PACKS: StarterPack[] = [
+  {
+    id: 'media',
+    labelKey: 'starter.packMedia',
+    items: [
+      { id: 'livechart_episodes', kind: 'builtin', provider: 'livechart_episodes' },
+      { id: 'tvmaze_schedule', kind: 'builtin', provider: 'tvmaze_schedule' },
+    ],
+  },
   {
     id: 'developer',
     labelKey: 'starter.packDeveloper',

@@ -59,12 +59,26 @@ export function connectGate(input: ConnectGateInput): boolean {
   return needsKey(provider, entry, input.backendChoice) ? hasKey : true;
 }
 
-/** True when every required scope field is filled and the either-or scopes (X, Mastodon) have exactly one side set. */
+/** Requires identifying scopes and exactly one alternative target for YouTube, podcasts, X and Mastodon; optional filters never gate progression. */
 export function scopeGate(provider: string, configuration: ConnectorConfig): boolean {
   const required = (REQUIRED_SCOPE[provider] ?? []).every((key) => scopeFilled(configuration[key]));
   const xOk = provider !== 'x' || scopeFilled(configuration.x_account) !== scopeFilled(configuration.x_query);
   const mastodonOk = provider !== 'mastodon' || scopeFilled(configuration.mastodon_account) !== scopeFilled(configuration.mastodon_hashtag);
-  return required && xOk && mastodonOk;
+  const youtubeOk =
+    provider !== 'youtube' ||
+    [
+      configuration.youtube_channel_id,
+      configuration.youtube_channels,
+      configuration.youtube_handles,
+      configuration.youtube_playlist_ids,
+    ].filter(scopeFilled).length === 1;
+  const podcastOk = provider !== 'podcast_rss' || scopeFilled(configuration.feed_url) !== scopeFilled(configuration.itunes_podcast_id);
+  const libraryMode = configuration.openlibrary_mode ?? 'subject';
+  const libraryOk =
+    provider !== 'openlibrary_books' ||
+    libraryMode === 'recent' ||
+    scopeFilled(libraryMode === 'search' ? configuration.openlibrary_query : configuration.openlibrary_subject);
+  return required && xOk && mastodonOk && youtubeOk && podcastOk && libraryOk;
 }
 
 /** True when the provider's URL field (feed URL, page URL) is filled; other providers have none. */
