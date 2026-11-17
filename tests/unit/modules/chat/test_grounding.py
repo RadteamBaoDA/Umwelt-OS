@@ -173,6 +173,9 @@ def test_summary_caps_examples() -> None:
         "Vào ngày 16 tháng 11 năm 2026 nó đổi",
         "Ngày 16/11/2026 nó đổi",
         "Trong tháng 11/2026 nó đổi",
+        "Hiện tại là 21:34 ngày 17/11/2026, nên",
+        "(21:35 ngày 17/11), từ 14/11 hoặc từ 17/11",
+        "No prices for 1–14 November",
     ],
 )
 def test_date_forms_leave_no_stray_numbers(text: str) -> None:

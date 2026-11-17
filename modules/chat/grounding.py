@@ -65,25 +65,25 @@ _COMMON_SKIPS = [
         r"\[\d+(?:\s*[,\-–]\s*\d+)*\]",  # citation markers
         r"\d{4}-\d{1,2}-\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?",
         r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}",
+        r"\b\d{1,2}/\d{1,2}(?![\d/])",  # day/month without a year: "17/11"
         r"\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]m)?",
-        # Day-first before month-first so "16 November 2026" goes whole instead of leaving "16".
-        rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:\s+\d{{4}})?",
+        # Day-first before month-first so "16 November 2026" goes whole instead of leaving "16";
+        # an optional leading day range takes "1–14 November" whole too.
+        rf"\b(?:\d{{1,2}}\s*[–\-]\s*)?\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:\s+\d{{4}})?",
         # "Nov 16, 2026" / "November 2026": (?!\d) stops a 4-digit year splitting into day "20" + "26".
         rf"\b{_MONTHS}\s+(?:\d{{1,2}}(?!\d)(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{4}})",
         r"(?:ngày|tháng|năm|quý)\s+\d{1,4}(?:\s*[/-]\s*\d{1,4})?",
         r"\b\d+(?:st|nd|rd|th)\b",
+        # Last, after the time/date forms ("21:34 ngày 17/11" must not lose "34 ngày"): elapsed spans such
+        # as "35 hours old" or "90 ngày" are worked out from timestamps or the query window, not read from
+        # a row. ponytail: also skips a duration that IS a data value.
+        r"\b\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
     )
 ]
 _PROSE_SKIPS = [
     re.compile(r"```.*?(?:```|$)", re.DOTALL),  # fenced code
     re.compile(r"`[^`\n]*`"),  # inline code
     re.compile(r"^[ \t]*\d+[.)][ \t]", re.MULTILINE),  # ordered-list markers
-    # "35 hours old" / "last 90 days" / "90 ngày": elapsed spans the model works out from timestamps or the
-    # query window, not values read from a row. ponytail: also skips a duration that IS a data value.
-    re.compile(
-        r"\b\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
-        re.IGNORECASE,
-    ),
 ]
 # "10.82,106.63" / "10,82,106,63": a latitude,longitude label, which _NUM_RE reads as one unparseable token.
 _COORD_RE = re.compile(r"(?<![\w.,])(-?\d{1,3}[.,]\d+)\s*,\s*(-?\d{1,3}[.,]\d+)(?![\w.,])")
