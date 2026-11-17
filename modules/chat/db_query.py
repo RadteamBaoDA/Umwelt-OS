@@ -513,8 +513,7 @@ async def _register_evidence_for_versions(
 
     Args:
         session: Active asynchronous database session.
-        version_pairs: Pairs of ``(document_id, document_version_id)`` from query rows; only the version id
-            is used (the document is looked up), so the document id may be None.
+        version_pairs: ``(document_id, document_version_id)`` per row; only the version id is used (may be None id).
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
         workspace_id: Workspace the turn runs in.
         allowed_source_ids: Sources this turn may read (already local-only filtered by ``_allowed_sources``).
@@ -1337,15 +1336,12 @@ async def _execute_structured_mode(
     source_scopes: SourceScopes | None = None,
     source_names: dict[UUID, str] | None = None,
 ) -> str:
-    """Execute parameterized SQLAlchemy queries for observations and/or documents.
+    """Execute read-only parameterized queries for observations and/or documents; return the JSON payload.
 
-    Documents are queried too when a requested provider is not a measurement provider (news/event feeds
-    store documents only). ``available_providers`` lets the model retry with a valid id. Order: optional
-    aggregate, observation rows, document rows, evidence registration, best-effort Redis hot cache.
-    Read-only, no commit. ``source_scopes`` fences observations, documents and evidence to each source's
-    current scope. ``source_names`` labels observation rows with their source's name. Returns the JSON
-    payload string.
-    """
+    Documents are added when a requested provider is not a measurement provider (feeds store documents
+    only); ``available_providers`` lets the model retry with a valid id. Order: aggregate, observation rows,
+    document rows, evidence, best-effort Redis hot cache. ``source_scopes`` fences rows and evidence to each
+    source's current scope; ``source_names`` labels observation rows. No commit."""
     out: dict[str, Any] = {
         "mode": "structured",
         "aggregation": args.aggregation,
