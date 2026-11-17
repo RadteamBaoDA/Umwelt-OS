@@ -673,3 +673,57 @@ export function HighlightRulesField({ rules, onChange }: { rules: HighlightRule[
     </div>
   );
 }
+
+/** Bounded media selector with removable chips; country codes may be supplied beyond the suggestions. */
+export function MediaMultiChipPicker<T extends string>({
+  value,
+  options,
+  label,
+  onChange,
+  labelId,
+  country = false,
+}: {
+  value: T[];
+  options: readonly T[];
+  label: (value: T) => string;
+  onChange: (next: T[]) => void;
+  labelId: string;
+  country?: boolean;
+}) {
+  const t = useTranslations('gadgetSettings');
+  return (
+    <div className="space-y-2">
+      <ul className="flex flex-wrap gap-1.5">
+        {value.map((item) => (
+          <li key={item}>
+            <Badge variant="outline" className="gap-1">
+              {label(item)}
+              <BareButton
+                type="button"
+                aria-label={t('media.remove', { name: label(item) })}
+                onClick={() => onChange(value.filter((entry) => entry !== item))}
+              >
+                <Trash2 className="size-3" aria-hidden="true" />
+              </BareButton>
+            </Badge>
+          </li>
+        ))}
+      </ul>
+      <SearchableSelect
+        value=""
+        options={options.filter((item) => !value.includes(item)).map(label)}
+        allowCustom={country}
+        aria-labelledby={labelId}
+        placeholder={t('media.select')}
+        searchLabel={t('media.search')}
+        emptyLabel={t('media.empty')}
+        disabled={value.length >= 32}
+        onValueChange={(raw) => {
+          const next = (options.find((item) => label(item) === raw) ?? (country ? raw.trim().toUpperCase() : raw)) as T;
+          if (value.length < 32 && !value.includes(next) && (country ? /^[A-Z]{2}$/.test(next) : options.includes(next)))
+            onChange([...value, next]);
+        }}
+      />
+    </div>
+  );
+}

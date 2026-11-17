@@ -1076,3 +1076,73 @@ describe('mergeCatalogEntries', () => {
     expect([merged.symbol_keyed, merged.seed_symbol, merged.default_lookback_days]).toEqual([true, false, 365]);
   });
 });
+
+describe('media gadget editor', () => {
+  /** Uses the real media snapshots while simulating renderer activation by the rendering task. */
+  function prepareMediaEditor() {
+    api.listGadgetRenderers.mockResolvedValue([{ ...backendRenderer('media_calendar'), runtime_state: 'available' }]);
+    api.listGadgetTemplates.mockResolvedValue([backendTemplate('release_calendar')]);
+    api.listGadgetSources.mockResolvedValue({ items: [source('a1', 'Anime releases', 'anilist_anime', ['media'])], next_cursor: null });
+    return {
+      id: 'm1',
+      name: 'Releases',
+      renderer: 'media_calendar',
+      source_ids: ['a1'],
+      revision: 1,
+      scope: {
+        countries: ['JP'],
+        genres: ['action' as const],
+        languages: ['ja' as const],
+        formats: ['tv' as const],
+        content_ratings: ['safe' as const],
+        min_rating: 80,
+        release_year: 2026,
+        release_window_days: 14,
+      },
+      filters: { limit: 25, release_status: 'upcoming' as const },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available' as const,
+    };
+  }
+
+  it('edits and clears media chips and persists bounded numeric defaults', async () => {
+    const definition = prepareMediaEditor();
+    api.patchGadgetDefinition.mockResolvedValue({ ...definition, revision: 2 });
+    wrap({ definition });
+    await userEvent.click(await screen.findByText('Advanced'));
+    for (const name of ['Countries', 'Genres', 'Languages', 'Formats', 'Content ratings'])
+      expect(screen.getByRole('combobox', { name })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Remove Action' }));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Genres' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Science fiction' }));
+    await userEvent.clear(screen.getByLabelText('Minimum rating'));
+    await userEvent.type(screen.getByLabelText('Minimum rating'), '90');
+    await userEvent.clear(screen.getByLabelText('Release year'));
+    await userEvent.type(screen.getByLabelText('Release year'), '2027');
+    await userEvent.clear(screen.getByLabelText('Release window (days)'));
+    await userEvent.type(screen.getByLabelText('Release window (days)'), '30');
+    await userEvent.click(screen.getByRole('button', { name: 'Save to library' }));
+    await waitFor(() => expect(api.patchGadgetDefinition).toHaveBeenCalled());
+    expect(api.patchGadgetDefinition.mock.calls[0][1]).toMatchObject({
+      scope: { genres: ['sci_fi'], min_rating: 90, release_year: 2027, release_window_days: 30 },
+      filters: { release_status: 'upcoming' },
+    });
+  });
+
+  it('blocks invalid media numbers and opens Advanced for field-tagged 422 failures', async () => {
+    const definition = prepareMediaEditor();
+    api.patchGadgetDefinition.mockRejectedValue(
+      new ApiError(422, 'bad', { details: [{ loc: ['body', 'scope', 'countries'], msg: 'invalid country' }] }),
+    );
+    const { container } = wrap({ definition });
+    const save = await screen.findByRole('button', { name: 'Save to library' });
+    await waitFor(() => expect(save).not.toBeDisabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(container.querySelector('details')?.open).toBe(true));
+    expect(container.querySelector('[data-field="countries"] [role="alert"]')).toBeTruthy();
+    await userEvent.clear(screen.getByLabelText('Release year'));
+    await userEvent.type(screen.getByLabelText('Release year'), '1799');
+    expect(save).toBeDisabled();
+  });
+});

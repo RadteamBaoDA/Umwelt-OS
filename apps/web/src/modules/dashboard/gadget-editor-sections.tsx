@@ -27,6 +27,7 @@ import {
 } from './gadget-editor-model';
 import { CoinGeckoSymbolPicker, HighlightRulesField, MetricPicker, SymbolPicker } from './gadget-editor-pickers';
 import { GadgetTemplateSample } from './gadget-template-sample';
+import { MediaFiltersSection } from './gadget-editor-media';
 import { LiveMapConfig } from './live-map-config';
 import { sourcesLinkFor } from './sources-link';
 
@@ -52,6 +53,7 @@ export interface SectionFacts {
   coinAssets: CoinGeckoCoin[] | null;
   limitValid: boolean;
   lookbackValid: boolean;
+  mediaValid: boolean;
   /** Localized server error for one field name, or null. */
   fieldError: (field: string) => string | null;
   /** Base DOM id from which every field id is derived. */
@@ -602,6 +604,7 @@ export const AdvancedSection = React.forwardRef<HTMLDetailsElement, DraftAccess 
       <div className="mt-3 space-y-3">
         {fields.has('keywords') && <KeywordFields draft={draft} set={set} nameId={nameId} />}
         <LimitAndLookbackFields draft={draft} set={set} facts={facts} />
+        {fields.has('mediaScope') && <MediaFiltersSection draft={draft} set={set} facts={facts} />}
         {(fields.has('map') || fields.has('cii')) && <ScopeSection draft={draft} set={set} facts={facts} />}
         {fields.has('channels') && (
           <div className="space-y-1.5">
