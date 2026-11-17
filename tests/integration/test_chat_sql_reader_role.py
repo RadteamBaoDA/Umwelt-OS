@@ -21,7 +21,12 @@ from modules.chat import db_query
 from modules.chat.db_query import CHAT_SQL_LOGIN_ROLE, _run_sql_as_reader
 from tests.integration.test_observation_history import DISCRIMINATOR, POINT, _observation, _seed
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
+    ),
+]
 
 _APP_ROLE = "bbd_test"
 
