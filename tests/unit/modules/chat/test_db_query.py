@@ -347,13 +347,30 @@ async def test_structured_documents_rank_per_source() -> None:
 
 def test_gadget_note_lists_provider_ids_and_round_budget() -> None:
     """The prompt note names exact provider ids, the headline-only text_query rule and the 2-round budget."""
+    from modules.chat._worker.base import MAX_DATA_QUERY_ROUNDS, MAX_SKILL_CALLS_PER_ROUND
     from modules.chat._worker.setup import _gadget_note
 
     note = _gadget_note({}, True, ["emsc_quakes", "thanhnien_news"])
     assert "emsc_quakes, thanhnien_news" in note
-    assert "at most 2 tool rounds" in note and "headline/body text only" in note
+    assert f"at most {MAX_DATA_QUERY_ROUNDS} rounds" in note
+    assert f"at most {MAX_SKILL_CALLS_PER_ROUND} tool calls per round" in note
+    assert "headline/body text only" in note
     assert "Active providers" not in _gadget_note({}, True)
     assert _gadget_note({}, False, ["emsc_quakes"]) == ""
+
+
+def test_gadget_note_asks_follow_ups_to_requery_collected_data() -> None:
+    """Both the gadget and the plain db-tool note tell the model to re-query for follow-up questions."""
+    from modules.chat._worker.setup import _gadget_note
+
+    sentence = (
+        "For follow-up questions about collected data, query again: numbers in earlier answers "
+        "may be outdated or incomplete."
+    )
+    assert sentence in _gadget_note({}, True, ["usgs"])
+    assert sentence in _gadget_note({}, True, ["usgs"], sql_on=False)
+    gadget = {"_gadget_scope": {"title": "Quakes", "renderer": "table", "scope": {}}}
+    assert sentence in _gadget_note(gadget, False, ["usgs"])
 
 
 @pytest.mark.asyncio

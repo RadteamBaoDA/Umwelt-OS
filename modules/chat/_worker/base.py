@@ -110,6 +110,10 @@ MAX_SKILL_ROUNDS = 2
 
 MAX_SKILL_CALLS_PER_ROUND = 2
 
+# Continuing rounds in one turn that may carry a query_collected_data call, widget rounds included. Kept apart
+# from MAX_SKILL_ROUNDS so read_skill or other local data tools cannot spend the database query budget.
+MAX_DATA_QUERY_ROUNDS = 2
+
 
 # Absolute ceiling on continuing tool rounds in one turn, independent of the per-category caps. Sum of the
 # defaults is ~8 (3 widget rounds + 2 data rounds + 2 user-input requests + 1 synthesis), so normal turns never hit it.

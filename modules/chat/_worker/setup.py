@@ -33,6 +33,8 @@ from core.workspaces.schemas import InternalJobScope
 from modules.chat import web_search as web
 from modules.chat._worker.base import (
     _CHAT_ROLE,
+    MAX_DATA_QUERY_ROUNDS,
+    MAX_SKILL_CALLS_PER_ROUND,
     WEB_SEARCH_NO_RESULTS_PROMPT,
     WEB_SEARCH_UNAVAILABLE_PROMPT,
     ResponseNoLongerActive,
@@ -663,14 +665,25 @@ def _compose_system_text(
     return system_text + _web_prompt_suffix(turn.web_run, len(answer_context.evidence), images)
 
 
+_FOLLOWUP_DATA_NOTE = (
+    " For follow-up questions about collected data, query again: numbers in earlier answers may be outdated "
+    "or incomplete."
+)
+
+
 def _provider_hint(providers: Sequence[str]) -> str:
-    """Prompt sentence naming exact provider ids, the text_query limits and the 2-round budget (pure)."""
+    """Prompt sentence naming exact provider ids, the text_query limits and the query-round budget (pure).
+
+    The round and per-round call counts come from ``MAX_DATA_QUERY_ROUNDS`` and ``MAX_SKILL_CALLS_PER_ROUND``
+    so the prompt cannot drift from the enforced limits. Empty when no provider is in scope.
+    """
     if not providers:
         return ""
     return (
         f" Active providers: {', '.join(providers)}. Filter with providers=[...] using these exact ids; "
         "text_query matches headline/body text only, not provider or topic names. "
-        "You have at most 2 tool rounds and at most 2 tool calls per round (extra calls get no data): "
+        f"You have at most {MAX_DATA_QUERY_ROUNDS} rounds that query collected data and at most "
+        f"{MAX_SKILL_CALLS_PER_ROUND} tool calls per round (extra calls get no data): "
         "query every needed provider in your first call."
     )
 
@@ -699,7 +712,8 @@ def _gadget_note(
     """Prompt note about the Dashboard gadget scope or the enabled database query tool (pure).
 
     ``providers`` are the in-scope provider ids appended to the tool note so round 1 can use exact ids.
-    ``sql_on`` False drops the ``mode='sql'`` advice (the reader DSN is not configured).
+    ``sql_on`` False drops the ``mode='sql'`` advice (the reader DSN is not configured). Both tool-note
+    variants end with the follow-up rule: earlier answers about collected data may be stale, so re-query.
     """
     gadget_meta = (
         req_params.get("_gadget_scope")
@@ -711,7 +725,9 @@ def _gadget_note(
             f"\n\nThe user opened this chat from Dashboard gadget {str(gadget_meta.get('title') or '')[:200]!r} "
             f"(renderer={str(gadget_meta.get('renderer') or '')[:64]!r}, scope={_bounded_scope_json(gadget_meta.get('scope'))}). "
             f"Call `{TOOL_QUERY_COLLECTED_DATA}` when you need current or historical observations/records "
-            f"from the gadget's bound data sources." + _provider_hint(providers)
+            f"from the gadget's bound data sources."
+            + _provider_hint(providers)
+            + _FOLLOWUP_DATA_NOTE
         )
     if db_query_on:
         return (
@@ -724,6 +740,7 @@ def _gadget_note(
             )
             + "(a null url does not make a row uncitable)."
             + _provider_hint(providers)
+            + _FOLLOWUP_DATA_NOTE
         )
     return ""
 
