@@ -12,6 +12,7 @@ reading.
 
 import bisect
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -24,7 +25,11 @@ UNVERIFIED_SOURCE = "Unverified figures (not found in retrieved data)"
 MAX_EXAMPLES = 10
 _MAX_KNOWN = 200_000  # bound on remembered values (tool results are already row-capped)
 _MAX_TEXT = 100_000  # bound on one scanned text
-_SKIP_KEYS = frozenset({"citation", "citation_rule", "hint", "citations"})
+_SKIP_KEYS = frozenset(
+    {"citation", "citation_rule", "hint", "citations", "id", "url", "canonical_url", "timezone"}
+)
+_SKIP_KEY_SUFFIXES = ("_id", "_at")  # identifiers and timestamps: their digits are not data claims
+_MAX_ZEROS = 15  # caps 10**zeros so a long digit run cannot overflow float pow
 _SUFFIX = {
     "%": 1.0,
     "k": 1e3,
@@ -135,11 +140,12 @@ def _parse_body(body: str) -> list[tuple[float, int]]:
 
 
 def _readings(body: str, suffix: str | None) -> tuple[tuple[float, float], ...]:
-    """All ``(value, tolerance)`` readings of a number token.
+    """All finite ``(value, tolerance)`` readings of a number token.
 
     Tolerance is half a unit of the last shown digit (integers with trailing zeros are treated as rounded,
     capped at 5% of the value) with a 0.1% relative floor. A magnitude suffix adds the multiplied reading
-    next to the raw one; ``%`` adds the fraction reading (25.4% may be stored as 0.254).
+    next to the raw one; ``%`` adds the fraction reading (25.4% may be stored as 0.254). Readings that
+    overflow to inf/nan are dropped, so an absurd digit run yields no reading instead of raising.
     """
     out: list[tuple[float, float]] = []
     for value, decimals in _parse_body(body):
@@ -147,16 +153,26 @@ def _readings(body: str, suffix: str | None) -> tuple[tuple[float, float], ...]:
             half = 0.5 * 10.0**-decimals
         else:
             digits = re.sub(r"\D", "", body)
-            zeros = len(digits) - len(digits.rstrip("0")) if len(digits) > 1 else 0
+            # Zeros are capped: 10**zeros overflows for very long digit runs (the cap only widens tolerance).
+            zeros = min(len(digits) - len(digits.rstrip("0")), _MAX_ZEROS) if len(digits) > 1 else 0
             half = min(0.5 * 10.0**zeros, 0.05 * value) if zeros else 0.5
         tol = max(half, 1e-3 * value)
+        if not _finite(value, tol):
+            continue
         out.append((value, tol))
         mult = _SUFFIX.get((suffix or "").lower())
         if suffix == "%":
             out.append((value / 100, tol / 100))
         elif mult:
-            out.append((value * mult, max(half * mult, 1e-3 * value * mult)))
+            scaled = (value * mult, max(half * mult, 1e-3 * value * mult))
+            if _finite(*scaled):
+                out.append(scaled)
     return tuple(out)
+
+
+def _finite(*values: float) -> bool:
+    """True when every float is finite (``inf``/``nan`` readings are never matchable)."""
+    return all(math.isfinite(v) for v in values)
 
 
 def strip_prose(text: str) -> str:
@@ -194,6 +210,13 @@ def extract_numbers(text: str, *, prose: bool = True) -> list[_Number]:
     return found
 
 
+def _is_skipped_key(key: Any) -> bool:
+    """True for mapping keys whose values are never data claims (citation, identifier, timestamp, URL)."""
+    if not isinstance(key, str):
+        return False
+    return key in _SKIP_KEYS or key.endswith(_SKIP_KEY_SUFFIXES)
+
+
 class KnownNumbers:
     """Sorted set of magnitudes seen in the turn's data; ``contains`` is a tolerance lookup."""
 
@@ -217,8 +240,10 @@ class KnownNumbers:
     def add_json(self, node: Any, *, depth: int = 0) -> None:
         """Remember numeric leaves and numbers inside string leaves of a decoded tool result.
 
-        Citation bookkeeping keys (``citation``, ``citation_rule``, ``hint``) are skipped so "[3]" or the
-        rule prose cannot make a made-up 3 look verified.
+        Keys that hold identifiers, timestamps, URLs or citation bookkeeping (``_SKIP_KEYS``, ``*_id``,
+        ``*_at``) are skipped entirely, so a UUID tail like ``...-000000000047`` or a ``10:30`` time cannot
+        make a made-up 47 or 30 look verified. Other string leaves get the same date/time/code stripping as
+        prose before their numbers are read.
         """
         if depth > 8:
             return
@@ -227,10 +252,10 @@ class KnownNumbers:
         if isinstance(node, int | float):
             self.add_value(float(node))
         elif isinstance(node, str):
-            self.add_text(node)
+            self.add_text(_strip(node, prose=False))
         elif isinstance(node, Mapping):
             for key, child in node.items():
-                if key not in _SKIP_KEYS:
+                if not _is_skipped_key(key):
                     self.add_json(child, depth=depth + 1)
         elif isinstance(node, list):
             for child in node:

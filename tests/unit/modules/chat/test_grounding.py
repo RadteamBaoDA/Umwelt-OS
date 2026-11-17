@@ -128,6 +128,31 @@ def test_query_result_contents_pairs_tool_calls_with_results() -> None:
     assert g.query_result_contents(messages) == ['{"rows": [1]}']
 
 
+def test_absurd_digit_run_does_not_raise_or_yield_infinity() -> None:
+    # A 401-digit run overflows float pow and float(); the check must skip it, not crash the turn.
+    assert g.extract_numbers("1" + "0" * 400) == []
+    nums = g.extract_numbers(f"Total {'9' * 400} and 47 units")
+    assert [n.raw for n in nums] == ["47"]
+    report = g.check_grounding("Total 47 units", [], g.KnownNumbers(), has_citation=False)
+    assert report.unverified == ("47",)
+
+
+def test_identifiers_timestamps_and_urls_are_not_known_numbers() -> None:
+    known = _known(
+        {
+            "id": "0190f3a2-7c1d-7e00-8a4b-000000000047",
+            "observed_at": "2026-11-17T10:30:00Z",
+            "value": 2999.5,
+        }
+    )
+    assert _unverified("gold 47 and 30 and 2,999.5", known) == ["47", "30"]
+
+
+def test_time_and_url_strings_in_other_fields_are_not_known_numbers() -> None:
+    known = _known({"note": "updated 10:30:00", "url": "https://example.com/item/47"})
+    assert _unverified("it was 30 and item 47", known) == ["30", "47"]
+
+
 def test_summary_caps_examples() -> None:
     report = g.GroundingReport(tuple(str(1000 + i) for i in range(25)), False, frozenset())
     assert report.summary()["count"] == 25
