@@ -21,6 +21,7 @@ import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
 import { formatDate } from '@/core/format';
+import type { AppLocaleId } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useLocalPref } from '@/core/use-local-pref';
 import {
@@ -740,6 +741,12 @@ interface MediaCollectionProps {
   groupItems?: (items: GadgetDocumentProjection[], timezone: string) => MediaGroup[];
 }
 
+/** Revision-scoped collection inputs keep the display preference in the stable outer owner. */
+interface MediaCollectionBodyProps extends MediaCollectionProps {
+  view: FeedView;
+  setView: (view: FeedView) => void;
+}
+
 /** Owns source/privacy reads and opaque server cursors; conflicting type selectors cannot widen scope. */
 function useMediaQuery(instance: GadgetInstance, state: MediaFilterState, calendar: boolean, isOwner: boolean) {
   const t = useTranslations('dashboard');
@@ -812,13 +819,23 @@ function filterMediaItems(
     .slice(0, definition.filters.limit ?? 200);
 }
 
-/** Groups the loaded shelf by its saved mode or delegates to the timezone-aware calendar buckets. */
+/** Builds a stable display-local date key from calendar fields instead of the provider's offset or UTC prefix. */
+function mediaDateKey(item: GadgetDocumentProjection, timezone: string): string {
+  if (!item.media?.release_date || !Number.isFinite(Date.parse(item.media.release_date))) return '';
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(
+    new Date(item.media.release_date),
+  );
+  return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type)?.value).join('-');
+}
+
+/** Groups the loaded shelf using display-local dates and localized headings, or delegates to calendar buckets. */
 function groupMediaItems(
   items: GadgetDocumentProjection[],
   groupBy: GadgetDefinition['filters']['group_by'],
   sources: { id: string; name: string }[],
   label: ReturnType<typeof useMediaLabel>,
   timezone: string,
+  locale: AppLocaleId,
   groupItems: MediaCollectionProps['groupItems'],
 ): MediaGroup[] {
   return groupItems
@@ -826,15 +843,16 @@ function groupMediaItems(
     : groupBy && groupBy !== 'none'
       ? Object.entries(
           Object.groupBy(items, (item) =>
-            groupBy === 'source'
-              ? item.source_id
-              : groupBy === 'media_type'
-                ? item.media!.media_type
-                : (item.media?.release_date?.slice(0, 10) ?? ''),
+            groupBy === 'source' ? item.source_id : groupBy === 'media_type' ? item.media!.media_type : mediaDateKey(item, timezone),
           ),
         ).map(([key, rows]) => ({
           key,
-          label: groupBy === 'source' ? (sources.find((source) => source.id === key)?.name ?? key) : label(key),
+          label:
+            groupBy === 'source'
+              ? (sources.find((source) => source.id === key)?.name ?? key)
+              : groupBy === 'date' && key && rows?.[0]?.media?.release_date
+                ? formatDate(rows[0].media.release_date, locale, timezone)
+                : label(key),
           items: rows ?? [],
         }))
       : [{ key: 'all', label: '', items }];
@@ -906,37 +924,53 @@ function useMediaFreshness(documents: GadgetDocumentProjection[]) {
   useReportGadgetFreshness(at, attribution || (documents.length ? t('gadget.itemCount', { count: documents.length }) : null));
 }
 
-/** Projection feedback and cursor retry controls surround the loaded records without owning their state. */
+/** Projection feedback and cursor controls surround loaded records. Disabled query scopes expose no pagination. */
 function MediaResults({
   sourceCount,
   query,
   itemCount,
   limit,
   children,
+  paginationAllowed,
+  remoteMediaDisabled,
 }: {
   sourceCount: number;
   query: ReturnType<typeof useMediaQuery>['query'];
   itemCount: number;
   limit: number;
   children: React.ReactNode;
+  paginationAllowed: boolean;
+  remoteMediaDisabled: boolean;
 }) {
   const t = useTranslations('dashboard');
   return (
     <>
+      {remoteMediaDisabled && (
+        <Link
+          href="/settings/models#ai-widget-media"
+          className="rounded-md border border-line p-2 text-xs text-muted-foreground hover:underline"
+        >
+          {t('media.remoteNotice')}
+        </Link>
+      )}
       {!sourceCount && <GadgetNotice kind="setup" message={t('media.sourcesRequired')} />}
       {!!sourceCount && query.isLoading && <GadgetSkeleton variant="list" label={t('gadget.dataLoading')} />}
       {query.isError && <GadgetNotice kind="error" message={t('gadget.dataLoadFailed')} />}
       {!!sourceCount && !query.isLoading && !query.isError && !itemCount && <GadgetNotice kind="empty" message={t('media.empty')} />}
       {children}
-      {query.isFetchNextPageError && (
-        <p role="alert" className="text-xs text-destructive">
-          {t('feed.loadMoreError')}
-        </p>
-      )}
-      {query.hasNextPage && itemCount < limit && (
-        <Button type="button" variant="outline" size="sm" disabled={query.isFetchingNextPage} onClick={() => query.fetchNextPage()}>
-          {query.isFetchingNextPage ? t('feed.loadingMore') : t('feed.loadMore')}
-        </Button>
+      {paginationAllowed && (
+        <>
+          {query.isFetchNextPageError && (
+            <p role="alert" className="text-xs text-destructive">
+              {t('feed.loadMoreError')}
+            </p>
+          )}
+          {query.hasNextPage && itemCount < limit && (
+            <Button type="button" variant="outline" size="sm" disabled={query.isFetchingNextPage} onClick={() => query.fetchNextPage()}>
+              {query.isFetchingNextPage ? t('feed.loadingMore') : t('feed.loadMore')}
+            </Button>
+          )}
+        </>
       )}
     </>
   );
@@ -955,8 +989,15 @@ function mediaStateDefaults(definition: GadgetDefinition): MediaFilterState {
   };
 }
 
-/** Shared source-aware query and moderation owner; thin renderers choose shelf or chronological sections. */
-export function MediaCollection({ instance, calendar = false, groupItems }: MediaCollectionProps) {
+/** Rebases definition-owned reading state and selections on identity/revision changes while retaining the view preference. */
+export function MediaCollection(props: MediaCollectionProps) {
+  const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.mediaView.${props.instance.id}`, 'cards', FEED_VIEWS);
+  const definition = props.instance.definition;
+  return <MediaCollectionBody key={`${definition.id}:${definition.revision}`} {...props} view={view} setView={setView} />;
+}
+
+/** Owns one definition revision's filters, source choice, selection and moderation inside the frame's stable host. */
+function MediaCollectionBody({ instance, calendar = false, groupItems, view, setView }: MediaCollectionBodyProps) {
   const t = useTranslations('dashboard');
   const label = useMediaLabel();
   const display = useDisplayPreferences();
@@ -965,7 +1006,6 @@ export function MediaCollection({ instance, calendar = false, groupItems }: Medi
   const definition = instance.definition;
   const defaults = mediaStateDefaults(definition);
   const [state, setState] = useState(defaults);
-  const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.mediaView.${instance.id}`, 'cards', FEED_VIEWS);
   const [selected, setSelected] = useState<Record<string, SelectedTelegramIdentity>>({});
   const rootRef = useRef<HTMLDivElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
@@ -983,7 +1023,7 @@ export function MediaCollection({ instance, calendar = false, groupItems }: Medi
       },
     });
   const activeSelected = items.filter((item) => selected[item.document_version_id]).map(mediaIdentity);
-  const groups = groupMediaItems(items, definition.filters.group_by, sources, label, display.timezone, groupItems);
+  const groups = groupMediaItems(items, definition.filters.group_by, sources, label, display.timezone, display.locale, groupItems);
   return (
     <div
       ref={rootRef}
@@ -1009,14 +1049,6 @@ export function MediaCollection({ instance, calendar = false, groupItems }: Medi
         value={state.source}
         onChange={(source) => setState({ ...state, source })}
       />
-      {privacy.data?.privacy.allow_widget_remote_media === false && (
-        <Link
-          href="/settings/models#ai-widget-media"
-          className="rounded-md border border-line p-2 text-xs text-muted-foreground hover:underline"
-        >
-          {t('media.remoteNotice')}
-        </Link>
-      )}
       {activeSelected.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => ask(activeSelected)}>
@@ -1040,7 +1072,14 @@ export function MediaCollection({ instance, calendar = false, groupItems }: Medi
           {t('media.interactionFailed')}
         </p>
       )}
-      <MediaResults sourceCount={sourceIds.length} query={query} itemCount={items.length} limit={definition.filters.limit ?? 200}>
+      <MediaResults
+        sourceCount={sourceIds.length}
+        query={query}
+        itemCount={items.length}
+        limit={definition.filters.limit ?? 200}
+        paginationAllowed={activeSources.length > 0 && !typeConflict}
+        remoteMediaDisabled={privacy.data?.privacy.allow_widget_remote_media === false}
+      >
         <MediaGroups
           groups={groups}
           calendar={calendar}

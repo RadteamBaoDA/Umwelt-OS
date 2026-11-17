@@ -73,26 +73,28 @@ export function mediaInstance(overrides: Partial<GadgetInstance['definition']> =
   } as GadgetInstance;
 }
 
-/** Mounts the real renderer with catalog/query owners; callers can seed the shared privacy cache. */
+/** Keeps catalog/query owners stable across renderer rerenders and permits seeding the shared privacy cache. */
 export function renderMedia(children: ReactNode, remote: boolean | undefined = true, locale: 'en-us' | 'vi-vi' = 'en-us') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   if (remote !== undefined) client.setQueryData(['ai-settings'], { privacy: { allow_widget_remote_media: remote } });
   return {
-    ...render(
-      <QueryClientProvider client={client}>
-        <NextIntlClientProvider
-          locale={locale === 'vi-vi' ? 'vi-VN' : 'en-US'}
-          messages={{
-            dashboard: getCatalog(locale, 'dashboard'),
-            gadgetSettings: getCatalog(locale, 'gadgetSettings'),
-            uiSweep: getCatalog(locale, 'uiSweep'),
-            sources: getCatalog(locale, 'sources'),
-          }}
-        >
-          {children}
-        </NextIntlClientProvider>
-      </QueryClientProvider>,
-    ),
+    ...render(children, {
+      wrapper: ({ children: content }) => (
+        <QueryClientProvider client={client}>
+          <NextIntlClientProvider
+            locale={locale === 'vi-vi' ? 'vi-VN' : 'en-US'}
+            messages={{
+              dashboard: getCatalog(locale, 'dashboard'),
+              gadgetSettings: getCatalog(locale, 'gadgetSettings'),
+              uiSweep: getCatalog(locale, 'uiSweep'),
+              sources: getCatalog(locale, 'sources'),
+            }}
+          >
+            {content}
+          </NextIntlClientProvider>
+        </QueryClientProvider>
+      ),
+    }),
     client,
   };
 }

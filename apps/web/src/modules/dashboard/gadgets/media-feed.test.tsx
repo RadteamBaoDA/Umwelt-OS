@@ -7,7 +7,15 @@ import { mediaInstance, mediaItem, renderMedia } from './media-test-support';
 import { GadgetFrame } from '../gadget-frame';
 import { FeedImage } from '@/components/feed-image';
 
-const mocks = vi.hoisted(() => ({ list: vi.fn(), interaction: vi.fn(), openDrawer: vi.fn(), owner: true, privacy: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  list: vi.fn(),
+  interaction: vi.fn(),
+  openDrawer: vi.fn(),
+  owner: true,
+  privacy: vi.fn(),
+  locale: 'en-us',
+  timezone: 'UTC',
+}));
 vi.mock('@/modules/knowledge/public-api', () => ({ documentKeys: { all: ['documents'] }, listGadgetDocumentProjections: mocks.list }));
 vi.mock('@/modules/knowledge', () => ({ documentKeys: { all: ['documents'] }, setGadgetDocumentInteraction: mocks.interaction }));
 vi.mock('../api', async (importOriginal) => ({
@@ -23,19 +31,116 @@ vi.mock('@/core/api', async (importOriginal) => ({ ...(await importOriginal<type
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: mocks.owner }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: mocks.openDrawer }) }));
-vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
+vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: mocks.locale, timezone: mocks.timezone }) }));
 vi.mock('@/modules/sources/use-source-actions', () => ({ collectAndWait: vi.fn() }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   mocks.owner = true;
+  mocks.locale = 'en-us';
+  mocks.timezone = 'UTC';
   mocks.list.mockResolvedValue({ items: [mediaItem()], next_cursor: null });
   mocks.interaction.mockResolvedValue({});
   mocks.privacy.mockResolvedValue({ privacy: { allow_widget_remote_media: true } });
 });
 
 describe('MediaFeedGadget', () => {
+  it.each(['revision', 'identity'])('rebases controls and selection on definition %s while keeping the view', async (change) => {
+    mocks.list.mockImplementation(async (sources: string[]) => ({
+      items: sources.map((source) => mediaItem(source, { source_id: source })),
+      next_cursor: null,
+    }));
+    const instance = mediaInstance({ scope: { countries: ['JP'] } });
+    const { rerender } = renderMedia(
+      <GadgetFrame instance={instance} isEditMode={false}>
+        <MediaFeedGadget instance={instance} />
+      </GadgetFrame>,
+    );
+    await screen.findByText('Title s1');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Title s1 for Ask AI' }));
+    await userEvent.click(screen.getByRole('tab', { name: 'Second' }));
+    await screen.findByText('Title s2');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select Title s2 for Ask AI' }));
+    await userEvent.click(screen.getByRole('button', { name: 'List' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Unread only' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Filter (1)' }));
+    await userEvent.type(screen.getByRole('searchbox'), 'Title');
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand gadget' }));
+    await screen.findByRole('dialog');
+    const next: typeof instance = {
+      ...instance,
+      definition: {
+        ...instance.definition,
+        id: change === 'identity' ? 'new-definition' : instance.definition.id,
+        revision: change === 'revision' ? 2 : 1,
+        source_ids: ['s1'],
+        scope: { countries: ['VN'], min_rating: 0 },
+        filters: { media_type: 'anime', release_status: 'airing' },
+      },
+    };
+    rerender(
+      <GadgetFrame instance={next} isEditMode={false}>
+        <MediaFeedGadget instance={next} />
+      </GadgetFrame>,
+    );
+    await waitFor(() =>
+      expect(mocks.list).toHaveBeenLastCalledWith(
+        ['s1'],
+        [],
+        undefined,
+        expect.objectContaining({ countries: ['VN'], min_rating: 0, media_types: ['anime'], release_statuses: ['airing'] }),
+      ),
+    );
+    expect(await screen.findByText('Title s1')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Ask AI about selection' })).toBeNull();
+    expect(screen.getByRole('checkbox', { name: 'Select Title s1 for Ask AI' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Unread only' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('combobox', { name: 'Media type' })).toHaveTextContent('Anime');
+    expect(screen.getByRole('combobox', { name: 'Release status' })).toHaveTextContent('Airing');
+    await userEvent.click(screen.getByRole('button', { name: 'Filter (4)' }));
+    expect(screen.getByRole('searchbox')).toHaveValue('');
+  });
+
+  it('suppresses cached cursor pagination when interactive selectors conflict', async () => {
+    mocks.list.mockResolvedValue({ items: [mediaItem()], next_cursor: 'movie-cursor' });
+    renderMedia(
+      <MediaFeedGadget instance={mediaInstance({ scope: { media_types: ['movie', 'anime'] }, filters: { media_type: 'movie' } })} />,
+    );
+    await screen.findByRole('button', { name: 'Load more' });
+    await userEvent.click(screen.getAllByRole('button', { name: 'Remove filter: Movie' })[0]);
+    expect(await screen.findByText('No media matches these filters.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('groups shelf dates by display-local days and formats Vietnamese headings', async () => {
+    mocks.locale = 'vi-vi';
+    mocks.timezone = 'Asia/Ho_Chi_Minh';
+    mocks.list.mockResolvedValue({
+      items: [
+        ['utc-next-day', '2026-11-17T19:00:00Z'],
+        ['offset-next-day', '2026-11-18T01:00:00+07:00'],
+        ['previous-day', '2026-11-17T14:00:00Z'],
+      ].map(([id, date]) => {
+        const item = mediaItem(id);
+        return { ...item, media: { ...item.media!, release_date: date } };
+      }),
+      next_cursor: null,
+    });
+    renderMedia(<MediaFeedGadget instance={mediaInstance({ filters: { group_by: 'date' } })} />, true, 'vi-vi');
+    const nextHeading = await screen.findByRole('heading', {
+      name: new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium', timeZone: mocks.timezone }).format(new Date('2026-11-17T19:00:00Z')),
+    });
+    const nextSection = within(nextHeading.closest('section')!);
+    expect(nextSection.getByText('Title utc-next-day')).toBeInTheDocument();
+    expect(nextSection.getByText('Title offset-next-day')).toBeInTheDocument();
+    expect(nextSection.queryByText('Title previous-day')).toBeNull();
+    expect(screen.getAllByRole('heading')).toHaveLength(5);
+  });
   it('preserves legacy FeedImage defaults, missing-image collapse and failure behavior', () => {
     const { container, rerender } = renderMedia(<FeedImage src="/image" className="mb-2" />);
     expect(container.firstChild).toHaveClass('aspect-video', 'w-full', 'overflow-hidden', 'rounded-md', 'bg-muted', 'mb-2');
