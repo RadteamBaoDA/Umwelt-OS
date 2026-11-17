@@ -1,0 +1,760 @@
+"""Data transfer objects and validation schemas for chat retrieval, context assembly, and citations."""
+
+from datetime import date, datetime
+from typing import Annotated, Any, Literal
+from uuid import UUID
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+from modules.chat.web_search import sanitize_url
+from modules.knowledge.documents.public import GadgetDocumentSelectionFence
+
+MAX_RETRIEVAL_LIMIT = 50
+MAX_SOURCE_SCOPE = 100
+MAX_ENTITY_SCOPE = 100
+MAX_SELECTED_REFS = 100
+MAX_QUERY_LENGTH = 1000
+MAX_QUOTE_LENGTH = 1000
+DEFAULT_CONTEXT_BUDGET_BYTES = 32_000
+MAX_CONTEXT_BUDGET_BYTES = 64_000
+# ResponseRun.retrieval_context keys: the route writes WEB_SEARCH_KEY, only the worker writes the outcome.
+WEB_SEARCH_KEY = "_web_search"
+WEB_SEARCH_OUTCOME_KEY = "_web_search_outcome"
+DB_QUERY_KEY = "_db_query"
+GADGET_SCOPE_KEY = "_gadget_scope"
+# Per-send chat model override {"provider_id", "model"}; written by the route after validation, read by the worker.
+MODEL_OVERRIDE_KEY = "_model_override"
+# Conversation.metadata_json key: "user" once the owner renamed the conversation, "auto" once the worker titled it.
+TITLE_SOURCE_KEY = "title_source"
+# Message.metadata_json key holding the 2-3 follow-up question suggestions of an assistant answer.
+SUGGESTIONS_KEY = "suggestions"
+
+
+class SelectedEvidenceRef(BaseModel):
+    """Reference to a specific versioned chunk explicitly selected by client context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_version_id: UUID
+    chunk_id: UUID
+    document_id: UUID | None = None
+    source_id: UUID | None = None
+
+
+class SelectedDocumentVersion(BaseModel):
+    """Identify one exact current document version selected by an owner gadget."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    source_id: UUID = Field(alias="sourceId")
+    document_id: UUID = Field(alias="documentId")
+    document_version_id: UUID = Field(alias="documentVersionId")
+    chunk_id: UUID | None = Field(default=None, alias="chunkId")
+
+
+class Citation(BaseModel):
+    """Exact evidence citation reference grounded in retrieved revision chunks.
+
+    Adheres to the canonical JSON schema shape:
+    {"sourceType":"document","sourceId":"uuid","documentId":"uuid","documentVersionId":"uuid","chunkId":"uuid","title":"Note","url":null,"observedAt":"2026-09-25T03:00:00Z","quote":"Evidence"}
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    sourceType: Literal["document"] = Field(default="document", alias="source_type")
+    sourceId: UUID = Field(alias="source_id")
+    documentId: UUID = Field(alias="document_id")
+    documentVersionId: UUID = Field(alias="document_version_id")
+    chunkId: UUID = Field(alias="chunk_id")
+    title: str = Field(min_length=1, max_length=500)
+    url: str | None = None
+    observedAt: datetime | None = Field(default=None, alias="observed_at")
+    quote: str = Field(min_length=1, max_length=MAX_QUOTE_LENGTH)
+
+
+class WebCitation(BaseModel):
+    """Server-built citation for a cited public web search result (no Source, no evidence fence).
+
+    Canonical shape: {"sourceType":"web","url":"https://…","title":"…","quote":"…","provider":"tavily",
+    "retrievedAt":"2026-10-07T00:00:00Z"}. The model only supplies a number; the server fills the rest.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    sourceType: Literal["web"] = "web"
+    url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=500)
+    quote: str = Field(default="", max_length=MAX_QUOTE_LENGTH)
+    provider: str = Field(min_length=1, max_length=32)
+    retrievedAt: datetime
+
+    @field_validator("url")
+    @classmethod
+    def _http_url(cls, value: str) -> str:
+        """Readers drop a stored web citation whose URL is not a clean http(s) URL (W3 review P3-1)."""
+        if sanitize_url(value) is None:
+            raise ValueError("Web citation URL must be http(s) without credentials")
+        return value
+
+
+class WebSearchOutcomeRead(BaseModel):
+    """Truthful, URL-free outcome of an opted-in web search, shared by MessageRead and the SSE event."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["used", "unavailable", "skipped"]
+    reason: str | None = Field(default=None, max_length=64)
+    result_count: int = Field(default=0, ge=0, le=100)
+    # The query actually sent to the provider (LLM-rewritten or literal); absent on outcomes persisted earlier.
+    query: str | None = Field(default=None, max_length=200)
+    # Provider that answered (searxng/tavily/brave/omniroute) and whether it was not target #1; set only when
+    # results were found, so older and empty outcomes stay byte-identical.
+    provider: str | None = Field(default=None, max_length=32)
+    fallback: bool | None = None
+
+
+class EvidenceItem(BaseModel):
+    """Detached evidence representation with full chunk content and source policy snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: UUID
+    source_type: str = "document"
+    source_generation: int
+    local_only: bool
+    document_id: UUID
+    document_version_id: UUID
+    version_number: int
+    chunk_id: UUID
+    chunk_index: int = 0
+    content: str
+    title: str
+    canonical_url: str | None = None
+    observed_at: datetime | None = None
+    published_at: datetime | None = None
+    metadata_is_version_snapshot: bool = False
+    score: float = 0.0
+
+
+class EntityContextItem(BaseModel):
+    """Safe projection of an entity and its supporting references for grounded context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: UUID
+    name: str | None = None
+    canonical_name: str | None = None
+    entity_type: str
+    description: str | None = None
+    backing_refs: list[Citation] = Field(default_factory=list)
+    neighbors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TemporalContextItem(BaseModel):
+    """Safe projection of a timeline event and its supporting references for grounded context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: UUID
+    title: str
+    event_type: str | None = None
+    timestamp: datetime | None = None
+    summary: str | None = None
+    backing_refs: list[Citation] = Field(default_factory=list)
+
+
+class AnswerContextRequest(BaseModel):
+    """Input parameters for bounded grounded context retrieval."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=MAX_QUERY_LENGTH)
+    source_scope: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCE_SCOPE)
+    # True on gadget turns: ``source_scope`` is then a hard allow-list, so an empty one means "no sources"
+    # (search is skipped) instead of the plain-chat meaning "no filter".
+    source_scope_enforced: bool = False
+    entity_ids: list[UUID] = Field(default_factory=list, max_length=MAX_ENTITY_SCOPE)
+    date_context: datetime | date | str | None = None
+    timezone: str | None = None
+    selected_refs: list[SelectedEvidenceRef] = Field(
+        default_factory=list, max_length=MAX_SELECTED_REFS
+    )
+    selected_only: bool = False
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(
+        default_factory=list, max_length=32
+    )
+    limit: int = Field(default=20, ge=1, le=MAX_RETRIEVAL_LIMIT)
+    context_budget_bytes: int = Field(
+        default=DEFAULT_CONTEXT_BUDGET_BYTES, ge=1000, le=MAX_CONTEXT_BUDGET_BYTES
+    )
+    mode: Literal["lexical", "hybrid"] = "hybrid"
+    allow_hybrid: bool = True
+
+
+class AnswerContext(BaseModel):
+    """Assembled grounded retrieval context bounded by privacy fences and context budgets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    source_scope: list[UUID] = Field(default_factory=list)
+    entity_ids: list[UUID] = Field(default_factory=list)
+    date_context: str | None = None
+    timezone: str | None = None
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    entity_summaries: list[EntityContextItem] = Field(default_factory=list)
+    temporal_summaries: list[TemporalContextItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    rerank_status: Literal["applied", "unavailable", "skipped"] = "skipped"
+    has_sufficient_evidence: bool = False
+    total_evidence_bytes: int = 0
+    fence_snapshot: dict[str, Any] = Field(default_factory=dict)
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(
+        default_factory=list, max_length=32
+    )
+    policy: dict[str, Any] | None = None
+
+
+class CitationValidationResult(BaseModel):
+    """Result of pure citation validation against the retrieved evidence set."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_valid: bool
+    valid_citations: list[Citation] = Field(default_factory=list)
+    rejected_citations: list[dict[str, Any]] = Field(default_factory=list)
+    rejection_reasons: list[str] = Field(default_factory=list)
+
+
+class ValidatedAnswer(BaseModel):
+    """Grounded answer with verified citations and sufficiency indicator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str
+    citations: list[Citation] = Field(default_factory=list)
+    has_sufficient_evidence: bool = True
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ConversationCreate(BaseModel):
+    """Payload for creating a new chat conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=255)
+    context_kind: str | None = Field(default=None, max_length=32)
+    context_resource_id: UUID | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationPatch(BaseModel):
+    """Payload for updating conversation metadata or pinned/archived state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=255)
+    pinned: bool | None = None
+    archived: bool | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class ConversationRead(BaseModel):
+    """Public representation of a chat conversation header."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    title: str
+    context_kind: str | None = None
+    context_resource_id: UUID | None = None
+    pinned: bool = False
+    archived: bool = False
+    created_at: datetime
+    updated_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    has_active_run: bool = Field(
+        default=False,
+        description=(
+            "True while a response run (pending / streaming / awaiting input) is active. Filled by the "
+            "conversation list only; always false on the single-conversation detail."
+        ),
+    )
+
+
+class _GenerativeUIBase(BaseModel):
+    """Fields shared by every persisted Generative UI widget; unknown legacy keys are ignored on read."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    part_id: str | None = Field(
+        default=None, max_length=64
+    )  # stable id of this widget within its assistant turn
+    status: Literal["streaming", "completed"] = "completed"
+    visualization: str | None = None
+    renderer: str | None = None
+    title: str = Field(default="", max_length=512)
+    local_only: bool = False
+    sandbox: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    table: dict[str, Any] | None = None
+    chart: dict[str, Any] | None = None
+    form: dict[str, Any] | None = None
+
+
+class SandboxedUIPayload(_GenerativeUIBase):
+    """Sandboxed HTML/CSS/JS widget; `sandbox` is required and must carry non-empty `html`."""
+
+    kind: Literal["sandboxed_ui"]
+    sandbox: dict[str, Any]
+
+    @field_validator("sandbox")
+    @classmethod
+    def _html_required(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Reject a completed sandbox without markup (the renderer cannot display it)."""
+        if not isinstance(value.get("html"), str) or not value["html"].strip():
+            raise ValueError("sandbox.html is required")
+        return value
+
+
+class TableUIPayload(_GenerativeUIBase):
+    """Native table widget; `table` is required."""
+
+    kind: Literal["table"]
+    table: dict[str, Any]
+
+
+class ChartUIPayload(_GenerativeUIBase):
+    """Native chart widget; `chart.chart_type` (bar/pie/line/scatter/distribution) selects the rendering, `kind` stays bar/pie for compatibility."""
+
+    kind: Literal["bar_chart", "pie_chart"]
+    chart: dict[str, Any]
+
+
+class PlanUIPayload(_GenerativeUIBase):
+    """Native plan/checklist widget; `plan` is required."""
+
+    kind: Literal["plan"]
+    plan: dict[str, Any]
+
+
+class TimePickerUIPayload(_GenerativeUIBase):
+    """Meeting time picker widget; `form` is required."""
+
+    kind: Literal["meeting_time_picker"]
+    form: dict[str, Any]
+
+
+class FormUIPayload(_GenerativeUIBase):
+    """Generic input form widget (`render_form`); `form` is required."""
+
+    kind: Literal["form"]
+    form: dict[str, Any]
+
+
+class AnswerUIPayload(_GenerativeUIBase):
+    """Rich web-evidence answer (`render_answer`); `answer` = {title, blocks[]} with resolved images."""
+
+    kind: Literal["answer"]
+    answer: dict[str, Any]
+
+
+GenerativeUIPayload = Annotated[
+    SandboxedUIPayload
+    | TableUIPayload
+    | ChartUIPayload
+    | PlanUIPayload
+    | TimePickerUIPayload
+    | FormUIPayload
+    | AnswerUIPayload,
+    Field(discriminator="kind"),
+]
+_GENERATIVE_UI_ADAPTER: TypeAdapter[GenerativeUIPayload] = TypeAdapter(GenerativeUIPayload)
+
+
+def parse_generative_ui(raw: Any) -> GenerativeUIPayload | None:
+    """Validate a stored `metadata_json["generative_ui"]` value; anything invalid or absent becomes None.
+
+    Args:
+        raw: The raw stored value (any JSON type).
+
+    Returns:
+        The typed payload, or None so one corrupt widget never breaks reading a conversation.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return _GENERATIVE_UI_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
+def parse_generative_ui_parts(metadata: Any) -> list[GenerativeUIPayload]:
+    """Return every valid widget part of a message's ``metadata_json`` in order.
+
+    Reads ``generative_ui_parts`` and falls back to the legacy single ``generative_ui`` slot for rows written
+    before multi-widget turns. Invalid entries are skipped individually so one corrupt part never hides the rest.
+    """
+    if not isinstance(metadata, dict):
+        return []
+    raw = metadata.get("generative_ui_parts")
+    if not isinstance(raw, list):
+        raw = [metadata.get("generative_ui")]
+    return [part for part in (parse_generative_ui(item) for item in raw) if part is not None]
+
+
+class MessageRead(BaseModel):
+    """Public representation of a chat message within a conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    conversation_id: UUID
+    role: str
+    content: str
+    client_request_id: str | None = None
+    model_identity: str | None = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    response_id: UUID | None = None
+    revision_of_message_id: UUID | None = None
+    created_at: datetime
+    web_search: WebSearchOutcomeRead | None = None
+    generative_ui: GenerativeUIPayload | None = None  # first part, kept for older clients
+    generative_ui_parts: list[GenerativeUIPayload] = Field(default_factory=list)
+    reasoning: str | None = None  # model "thinking" text kept from the stream, capped at write time
+    # Follow-up question suggestions written by the post-answer step; empty until (or unless) generated.
+    suggestions: list[str] = Field(default_factory=list)
+    # True when the stored answer carries no verified citation; the text is kept as streamed and the UI
+    # shows a "not based on your documents" label instead of a prefix inside the content.
+    uncited: bool = False
+
+
+class ChatExportCitation(BaseModel):
+    """Carry one citation only while its exact owner-visible evidence still exists."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_type: Literal["document"] = "document"
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    title: str = Field(min_length=1, max_length=500)
+    url: str | None = Field(default=None, max_length=2048)
+    observed_at: datetime | None = None
+    quote: str = Field(min_length=1, max_length=MAX_QUOTE_LENGTH)
+    current_source_generation: int = Field(ge=0)
+
+
+class ChatExportWebCitation(BaseModel):
+    """Export shape of a cited web result; the URL is query-stripped and there is no evidence fence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_type: Literal["web"] = "web"
+    url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=500)
+    quote: str = Field(default="", max_length=MAX_QUOTE_LENGTH)
+    provider: str = Field(min_length=1, max_length=32)
+    retrieved_at: datetime
+
+
+class ChatExportConversationRead(BaseModel):
+    """Expose only owner-visible conversation fields needed for a portable transcript."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["conversation"] = "conversation"
+    id: UUID
+    title: str = Field(max_length=255)
+    context_kind: str | None = Field(default=None, max_length=32)
+    context_resource_id: UUID | None = None
+    pinned: bool
+    archived: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatExportMessageRead(BaseModel):
+    """Expose one retained transcript revision without internal request or run payloads."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    record_kind: Literal["message"] = "message"
+    id: UUID
+    conversation_id: UUID
+    role: Literal["user", "assistant", "system"]
+    content: str
+    response_id: UUID | None = None
+    revision_of_message_id: UUID | None = None
+    citations: list[
+        Annotated[ChatExportCitation | ChatExportWebCitation, Field(discriminator="source_type")]
+    ] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    omitted_citation_count: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("content")
+    @classmethod
+    def bounded_export_content(cls, value: str) -> str:
+        """Keep one transcript payload within the portable export record bound."""
+        if len(value.encode("utf-8")) > 1_048_576:
+            raise ValueError("Chat message exceeds the export content bound")
+        return value
+
+
+class ChatExportCitationFence(BaseModel):
+    """Bind an exported citation to its retained exact evidence and live source generation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    current_source_generation: int = Field(ge=0)
+
+
+class ChatExportFence(BaseModel):
+    """Bind one conversation or message record to its current owner-visible revisions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: UUID
+    conversation_created_at: datetime
+    conversation_updated_at: datetime
+    message_id: UUID | None = None
+    message_created_at: datetime | None = None
+    message_updated_at: datetime | None = None
+    citations: list[ChatExportCitationFence] = Field(default_factory=list, max_length=100)
+
+
+class ChatExportPage(BaseModel):
+    """Return a bounded typed owner export page and its consistency fences."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    owner_id: int = Field(ge=1)
+    record_kind: Literal["conversations", "messages"]
+    snapshot_at: datetime
+    snapshot_count: int = Field(ge=0)
+    items: list[ChatExportConversationRead | ChatExportMessageRead] = Field(max_length=100)
+    fences: list[ChatExportFence] = Field(max_length=100)
+    payload_bytes: int = Field(ge=0, le=16_777_216)
+    max_payload_bytes: int = Field(default=16_777_216, ge=1, le=16_777_216)
+    next_cursor: str | None = None
+    available: bool
+    omission_reason: Literal["conversation_history_disabled"] | None = None
+    privacy_persisted: bool
+    privacy_updated_at: datetime | None = None
+    history_enabled: bool
+
+    @model_validator(mode="after")
+    def validate_privacy_fence(self) -> "ChatExportPage":
+        """Require a persisted privacy row to have an aware timestamp fence."""
+        if self.privacy_persisted != (self.privacy_updated_at is not None):
+            raise ValueError("Chat export privacy persistence marker is inconsistent")
+        if self.privacy_updated_at is not None and (
+            self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None
+        ):
+            raise ValueError("Chat export privacy timestamp must be timezone-aware")
+        return self
+
+
+class ChatExportFenceValidation(BaseModel):
+    """Report whether captured chat export fences remain current at finalization."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    reason: Literal[
+        "valid",
+        "owner_unavailable",
+        "conversation_history_disabled",
+        "privacy_changed",
+        "snapshot_count_changed",
+        "record_changed",
+        "citation_unavailable",
+        "source_generation_changed",
+    ]
+    observed_snapshot_count: int = Field(ge=0)
+    privacy_persisted: bool
+    privacy_updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_privacy_fence(self) -> "ChatExportFenceValidation":
+        """Require a persisted privacy row to have an aware timestamp fence."""
+        if self.privacy_persisted != (self.privacy_updated_at is not None):
+            raise ValueError("Chat export privacy persistence marker is inconsistent")
+        if self.privacy_updated_at is not None and (
+            self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None
+        ):
+            raise ValueError("Chat export privacy timestamp must be timezone-aware")
+        return self
+
+
+class ChatMemoryExportOrigin(BaseModel):
+    """Prove a memory's exact retained transcript origin without returning transcript text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: UUID
+    message_id: UUID
+    conversation_created_at: datetime
+    conversation_updated_at: datetime
+    message_created_at: datetime
+    message_updated_at: datetime
+    content_citation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    privacy_persisted: bool
+    privacy_updated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_privacy_marker(self) -> "ChatMemoryExportOrigin":
+        """Require a persisted privacy row to have an aware timestamp fence."""
+        if self.privacy_persisted != (self.privacy_updated_at is not None):
+            raise ValueError("Chat memory export privacy marker is inconsistent")
+        if self.privacy_updated_at is not None and (
+            self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None
+        ):
+            raise ValueError("Chat memory export privacy timestamp must be timezone-aware")
+        return self
+
+
+class ConversationDetailRead(ConversationRead):
+    """Full conversation projection including ordered messages and any active response handle."""
+
+    messages: list[MessageRead] = Field(default_factory=list)
+    active_response_id: UUID | None = None
+
+
+class SendMessageRequest(BaseModel):
+    """Payload for sending a user message within an existing conversation.
+
+    ``db_query`` is deprecated and ignored: the server grants ``query_collected_data`` whenever the owner
+    has an active collected datasource. The field is still accepted until clients stop sending it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=20000)
+    client_request_id: str | None = Field(default=None, max_length=128)
+    context: dict[str, Any] | None = None
+    web_search: bool = False
+    db_query: bool = False
+    # Optional per-chat model override; omitted keeps the owner's `chat` role default.
+    provider_id: str | None = Field(default=None, min_length=1, max_length=64)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _override_is_pair(self) -> "SendMessageRequest":
+        """Require provider_id and model together so an override always names one exact configured model."""
+        if (self.provider_id is None) != (self.model is None):
+            raise ValueError("provider_id and model must be provided together")
+        return self
+
+
+class MessageMutationRequest(BaseModel):
+    """Append an edited user prompt or regenerate an answer with its original context.
+
+    ``db_query`` is deprecated and ignored (see ``SendMessageRequest``); it is accepted for old clients.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["edit", "regenerate"]
+    base_content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    client_request_id: str = Field(min_length=1, max_length=128)
+    content: str | None = Field(default=None, min_length=1, max_length=20_000)
+    web_search: bool = False
+    db_query: bool = False
+    # Optional explicit model choice; omitted carries the original run's model forward.
+    provider_id: str | None = Field(default=None, min_length=1, max_length=64)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def _override_is_pair(self) -> "MessageMutationRequest":
+        """Require provider_id and model together so an override always names one exact configured model."""
+        if (self.provider_id is None) != (self.model is None):
+            raise ValueError("provider_id and model must be provided together")
+        return self
+
+
+class SendMessageResponse(BaseModel):
+    """Response acknowledging message reception and dispatching response run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: UUID
+    response_id: UUID
+    status: str
+
+
+class ResponseRunRead(BaseModel):
+    """Status and metadata of an active or completed response run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    conversation_id: UUID
+    user_message_id: UUID
+    assistant_message_id: UUID | None = None
+    client_request_id: str | None = None
+    status: str
+    model_alias: str | None = None
+    model_name: str | None = None
+    provider: str | None = None
+    error_code: str | None = None
+    token_usage: dict[str, Any] = Field(default_factory=dict)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
+class AgentActivityRead(BaseModel):
+    """Expose only bounded identifiers and status/tool names linked to an owned conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+    conversation_id: UUID
+    agent_run_id: UUID
+    activities: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+    updated_at: datetime
+
+
+class SubmitInputRequest(BaseModel):
+    """Body of ``POST /api/v1/responses/{id}/input``: the user's answer to one pending input request."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    request_id: str = Field(min_length=1, max_length=64)
+    answer: str = Field(min_length=1, max_length=2000)
+
+
+class SubmitInputResponse(BaseModel):
+    """Acknowledgement that the parked run was resumed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response_id: UUID
+    request_id: str
+    status: Literal["streaming"] = "streaming"
+
+
+class CancelResponse(BaseModel):
+    """Outcome of a response run cancellation request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response_id: UUID
+    status: str

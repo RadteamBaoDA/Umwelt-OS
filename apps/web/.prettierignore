@@ -1,0 +1,4 @@
+.next
+node_modules
+public/vendor
+src/core/api-types.gen.ts

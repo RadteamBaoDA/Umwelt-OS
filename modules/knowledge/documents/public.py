@@ -1,314 +1,508 @@
-import base64
-import binascii
-import hashlib
-from uuid import UUID
+"""Stable public facade for the Documents module.
 
-from fastapi import HTTPException
-from sqlalchemy import delete, desc, select, tuple_
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+Implementation lives in the private ``_*`` sibling modules; this module re-exports every
+public name (and the historical private helpers other code reaches through it) so imports
+and attribute access via ``modules.knowledge.documents.public`` keep working unchanged.
+"""
 
-from core.pagination import decode_cursor, encode_cursor
-from core.chunking import chunk_text
-from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
-from modules.knowledge.documents.schemas import DocumentCreate, DocumentPatch
+# Hoisted first: DTO contracts must be bound before heavy imports so cyclic importers see them.
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): knowledge.documents owns
+# Document, DocumentChunk, DocumentVersion, NormalizedVersionProvenance; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.knowledge.documents.models import Document as DocumentReadProjection
+from modules.knowledge.documents.models import DocumentChunk as DocumentChunkReadProjection
+from modules.knowledge.documents.models import DocumentVersion as DocumentVersionReadProjection
+from modules.knowledge.documents.models import (
+    NormalizedVersionProvenance as NormalizedVersionProvenanceReadProjection,
+)
+
+# isort: split
+from modules.knowledge.documents.schemas import (
+    BUILTIN_FEED_PROVIDER_IDS,
+    KEYED_FEED_PROVIDER_IDS,
+    MAX_CONTENT_BYTES,
+    MAX_METADATA_BYTES,
+    MEASUREMENT_PROVIDER_FIELDS,
+    MEASUREMENT_PROVIDER_IDS,
+    NEWS_PROVIDER_IDS,
+    PROVIDER_IDS,
+    CitationTargetRead,
+    ContentUpdate,
+    DocumentCleanupJobIdentity,
+    DocumentCleanupPreparationLimitError,
+    DocumentCreate,
+    DocumentDeletionRead,
+    DocumentExportFence,
+    DocumentExportFenceValidation,
+    DocumentExportPage,
+    DocumentExportProvenance,
+    DocumentExportRead,
+    DocumentList,
+    DocumentPatch,
+    DocumentRead,
+    DocumentVersionExportRead,
+    EvidenceReferenceRead,
+    GadgetDocumentInteractionPatch,
+    GadgetDocumentInteractionRead,
+    GadgetDocumentProjectionList,
+    GadgetDocumentProjectionRead,
+    GadgetDocumentSelectionFence,
+    GadgetHighlightProjectionPage,
+    GadgetProviderMetadataRead,
+    GadgetTelegramMediaRead,
+    GadgetTelegramRecordRead,
+    MemberDocumentList,
+    MemberDocumentRead,
+    NormalizedDocumentInput,
+    NormalizedDocumentKeyState,
+    NormalizedDocumentPreparation,
+    NormalizedDocumentResult,
+    ObservationExportEvidenceCandidate,
+    ObservationExportEvidenceRead,
+    ProviderDocumentSnapshotList,
+    ProviderDocumentSnapshotRead,
+    ProviderRecordMetadata,
+    ProviderSnapshotRequest,
+    ProviderTelegramMedia,
+    ProviderTelegramMetadata,
+    TelegramDocumentOrder,
+    TimelineExportEvidenceCandidate,
+    TimelineExportEvidenceRead,
+    VersionList,
+    VersionRead,
+    WorldDataMeasurement,
+)
+
+# isort: split
+from core.workspaces import public as workspaces
+from modules.knowledge.documents._chat_evidence import (
+    ChatEvidenceChunk,
+    ChatEvidenceLockState,
+    lock_chat_evidence_chunks,
+    lock_chat_evidence_state,
+    read_chat_evidence_chunks,
+)
+from modules.knowledge.documents._chunks import (
+    _superseded_version_hooks,
+    add_content_chunks,
+    backfill_current_chunks,
+    register_version_superseded_hook,
+)
+from modules.knowledge.documents._cleanup import (
+    _CLEANUP_IDENTITY_COLUMNS,
+    DocumentCleanupEvidenceIdentity,
+    DocumentCleanupEvidenceScope,
+    SourceCleanupProgress,
+    SourceCleanupWakeup,
+    _cleanup_identity,
+    capture_document_cleanup_evidence,
+    cleanup_authority_error,
+    get_document_cleanup_operation,
+    list_document_cleanup_evidence_scope,
+    pending_document_agent_cleanup_ids,
+    pending_document_copied_stage_cleanup_ids,
+    pending_document_memory_cleanup_ids,
+    publish_source_cleanup_wakeup,
+    raw_uri_is_referenced_for_cleanup,
+    raw_uris,
+    read_document_cleanup_job_identity,
+    resolve_document_cleanup_job_identity,
+    source_cleanup_progress,
+    source_cleanup_wakeup_hint,
+)
+from modules.knowledge.documents._deletion import (
+    _CLEANUP_LIMIT,
+    _apply_graph_cleanup,
+    _bounded_ids,
+    _capture_source_document_cleanup,
+    _CleanupClosure,
+    _lock_cleanup_closure,
+    _prepare_cleanup_closure,
+    _require_cleanup_authority,
+    delete_document,
+    delete_source_documents_in_uow,
+    lock_source_documents_for_purge_in_uow,
+)
+from modules.knowledge.documents._documents import (
+    _assert_new_document_key,
+    _decode_document_owner_cursor,
+    _encode_document_owner_cursor,
+    append_content,
+    count_source_documents,
+    create_document,
+    document_metadata,
+    existing_document_ids,
+    get_document,
+    list_documents,
+    list_indexable_workspace_ids,
+    list_ready_document_workspace_ids,
+    observability_quality_summary,
+    purge_expired_document_versions,
+    read_document_access_projection,
+    update_document,
+)
+from modules.knowledge.documents._evidence import (
+    ReviewEvidenceRef,
+    _list_evidence_ref_keys,
+    _read_evidence_ref_rows,
+    lock_review_version_evidence,
+    read_evidence_refs,
+)
+from modules.knowledge.documents._export import (
+    EXPORT_PAGE_MAX_BYTES,
+    ObservationEvidenceCandidate,
+    _decode_document_export_cursor,
+    _document_export_count,
+    _document_export_scope,
+    _encode_document_export_cursor,
+    _export_item_bytes,
+    _export_payload_bytes,
+    _require_document_export_owner,
+    _safe_export_url,
+    current_observation_evidence_versions,
+    export_observation_evidence,
+    export_page,
+    export_timeline_evidence,
+    validate_export_fences,
+)
+from modules.knowledge.documents._extraction import (
+    EXTRACTION_CHUNK_LIMIT,
+    EXTRACTION_INPUT_BYTES,
+    ExtractionChunk,
+    ExtractionEvidenceRef,
+    ExtractionInput,
+    ExtractionInputLimitError,
+    _extraction_document,
+    get_first_chunk_id,
+    lock_document_for_extraction,
+    read_extraction_evidence_refs,
+    read_extraction_input,
+    save_extraction,
+    set_extraction_status,
+)
+from modules.knowledge.documents._hashing import (
+    _INLINE_HASH_MAX_CHARS,
+    content_hash,
+    content_hash_async,
+)
+from modules.knowledge.documents._identity import (
+    NormalizedDocumentValidationRejected,
+    _normalized_key_states,
+    _normalized_source_proof,
+    _normalized_target,
+    find_document_identity,
+    has_document_identity,
+    lock_raw_uri_identity,
+    prepare_normalized_document_keys,
+)
+from modules.knowledge.documents._language import (
+    FEED_LANGUAGES,
+    _provenance_language,
+    normalize_document_language,
+)
+from modules.knowledge.documents._news import (
+    FEED_MAX_WINDOW,
+    NewsChunkProjection,
+    NewsDocumentProjection,
+    NewsProjectionStatus,
+    _as_gadget_document_projection,
+    _current_document_components,
+    _decode_news_projection_cursor,
+    _encode_news_projection_cursor,
+    _news_projection_cursor_fingerprint,
+    _validate_gadget_document_selection_fences_admitted,
+    get_news_document_projection,
+    list_gadget_document_projections,
+    list_gadget_highlight_projection_page,
+    list_news_document_projections,
+    news_current_scope_status,
+    news_projection_scope_unavailable,
+    news_retained_observation_allowed,
+    set_gadget_document_interaction,
+    validate_gadget_document_selection_fences,
+)
+from modules.knowledge.documents._normalize import (
+    _apply_normalized_document,
+    _select_world_document_version,
+    ensure_demo_article,
+    normalized_observation_version_matches_in_uow,
+    select_current_world_document_version,
+    select_current_world_document_version_in_uow,
+    upsert_normalized_document,
+    upsert_normalized_document_in_uow,
+)
+from modules.knowledge.documents._providers import (
+    _decode_provider_cursor,
+    _encode_provider_cursor,
+    _provider_snapshot,
+    list_provider_snapshots,
+    read_provider_snapshots,
+)
+from modules.knowledge.documents._ready import (
+    _publish_document_ready,
+    _publish_extraction_ready,
+)
+from modules.knowledge.documents._scope import (
+    _admit_document_scope,
+    _document_scope,
+    _read_document_source_id,
+    _require_document_owner,
+)
+from modules.knowledge.documents._tools import (
+    ToolDocumentPage,
+    ToolDocumentRead,
+    get_tool_document,
+    list_tool_documents,
+    revalidate_tool_document_fences,
+)
+from modules.knowledge.documents._upload import (
+    _assert_upload_absence,
+    _upload_document_state,
+    add_uploaded_document,
+    prepare_uploaded_document_in_uow,
+)
+from modules.knowledge.documents._versions import (
+    ReadyVersionRef,
+    ReviewVersionFence,
+    cleanup_evidence_version_document,
+    decode_version_cursor,
+    encode_version_cursor,
+    get_ready_version_ref,
+    get_version,
+    list_ready_version_refs,
+    list_versions,
+    lock_document_ids,
+    review_version_fences,
+    review_version_locator,
+)
+
+# Schema/DTO contract re-exports so other modules can import them from this facade.
 from modules.sources import public as sources
-from modules.sources.models import Source
 
-
-def content_hash(content: str) -> str:
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-
-async def add_content_chunks(session: AsyncSession, version: DocumentVersion) -> None:
-    await session.flush()
-    for index, draft in enumerate(chunk_text(version.content)):
-        session.add(DocumentChunk(
-            document_version_id=version.id, chunk_index=index, content=draft.content,
-            content_hash=content_hash(draft.content), token_count=draft.token_count,
-            metadata_json=draft.metadata,
-        ))
-
-
-async def backfill_current_chunks(session: AsyncSession, limit: int = 2) -> int:
-    """Fill legacy manual revisions created before chunking was enabled."""
-    versions = list((await session.scalars(
-        select(DocumentVersion)
-        .join(Document, Document.id == DocumentVersion.document_id)
-        .join(Source, Source.id == Document.source_id)
-        .where(
-            Document.current_version == DocumentVersion.version_number,
-            Document.extraction_status.in_(("ready", "succeeded")),
-            Source.status == "active",
-            DocumentVersion.content != "",
-            ~select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
-        )
-        .order_by(DocumentVersion.id).limit(limit)
-    )).all())
-    for version in versions:
-        await add_content_chunks(session, version)
-    if versions:
-        await session.commit()
-    return len(versions)
-
-
-async def create_document(session: AsyncSession, payload: DocumentCreate) -> Document:
-    await sources.lock_source_for_document(session, payload.source_id)
-    digest = content_hash(payload.content)
-    document = Document(
-        source_id=payload.source_id,
-        external_id=payload.external_id,
-        title=payload.title,
-        metadata_json=payload.metadata,
-        current_version=1,
-        content_hash=digest,
-    )
-    session.add(document)
-    try:
-        await session.flush()
-        version = DocumentVersion(
-                document_id=document.id,
-                version_number=1,
-                content=payload.content,
-                content_hash=digest,
-            )
-        session.add(version)
-        await add_content_chunks(session, version)
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        raise
-    await session.refresh(document)
-    return document
-
-
-async def get_document(session: AsyncSession, document_id: UUID) -> Document | None:
-    return await session.get(Document, document_id)
-
-
-async def has_document_identity(session: AsyncSession, source_id: UUID, external_id: str) -> bool:
-    return bool(
-        await session.scalar(
-            select(Document.id).where(Document.source_id == source_id, Document.external_id == external_id)
-        )
-    )
-
-
-async def add_uploaded_document(
-    session: AsyncSession,
-    source_id: UUID,
-    title: str,
-    mime_type: str,
-    raw_uri: str,
-    metadata: dict[str, object],
-    external_id: str,
-    document_id: UUID,
-) -> Document:
-    document = Document(
-        id=document_id,
-        source_id=source_id,
-        external_id=external_id,
-        title=title,
-        content_type="file",
-        mime_type=mime_type,
-        raw_uri=raw_uri,
-        metadata_json=metadata,
-        current_version=1,
-        content_hash=content_hash(""),
-        extraction_status="queued",
-    )
-    session.add(document)
-    await session.flush()
-    session.add(DocumentVersion(document_id=document.id, version_number=1, content="", content_hash=content_hash("")))
-    await session.flush()
-    return document
-
-
-async def save_extraction(
-    session: AsyncSession,
-    document_id: UUID,
-    text: str,
-    chunks: list[dict[str, object]],
-    extraction_status: str,
-) -> Document | None:
-    document = await session.scalar(select(Document).where(Document.id == document_id).with_for_update())
-    if document is None:
-        return None
-    current = await session.scalar(
-        select(DocumentVersion).where(
-            DocumentVersion.document_id == document_id,
-            DocumentVersion.version_number == document.current_version,
-        )
-    )
-    if current is None:
-        raise RuntimeError("Current document version is missing")
-    if current.content != text:
-        digest = content_hash(text)
-        current = DocumentVersion(
-            document_id=document.id,
-            version_number=document.current_version + 1,
-            content=text,
-            content_hash=digest,
-        )
-        session.add(current)
-        document.current_version += 1
-        document.content_hash = digest
-        await session.flush()
-    document.extraction_status = extraction_status
-    existing = await session.scalar(
-        select(DocumentChunk.id).where(DocumentChunk.document_version_id == current.id).limit(1)
-    )
-    if existing is None:
-        for index, chunk in enumerate(chunks):
-            content = str(chunk["content"])
-            session.add(
-                DocumentChunk(
-                    document_version_id=current.id,
-                    chunk_index=index,
-                    content=content,
-                    content_hash=content_hash(content),
-                    token_count=int(chunk["token_count"]),
-                    metadata_json=dict(chunk.get("metadata", {})),
-                )
-            )
-    await session.flush()
-    return document
-
-
-async def list_documents(
-    session: AsyncSession, limit: int, cursor: str | None, source_id: UUID | None
-) -> tuple[list[Document], str | None]:
-    statement = select(Document)
-    if source_id is not None:
-        statement = statement.where(Document.source_id == source_id)
-    statement = statement.order_by(desc(Document.created_at), desc(Document.id))
-    if cursor is not None:
-        timestamp, identifier = decode_cursor(cursor)
-        statement = statement.where(
-            tuple_(Document.created_at, Document.id) < (timestamp, identifier)
-        )
-    rows = list((await session.scalars(statement.limit(limit + 1))).all())
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-    next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more and rows else None
-    return rows, next_cursor
-
-
-async def update_document(
-    session: AsyncSession, document: Document, payload: DocumentPatch
-) -> Document:
-    if "title" in payload.model_fields_set:
-        document.title = payload.title or ""
-    if "metadata" in payload.model_fields_set:
-        document.metadata_json = payload.metadata or {}
-    await session.commit()
-    await session.refresh(document)
-    return document
-
-
-async def delete_document(session: AsyncSession, document_id: UUID) -> bool:
-    identity = await session.execute(select(Document.source_id).where(Document.id == document_id))
-    source_id = identity.scalar_one_or_none()
-    if source_id is None:
-        return False
-    await sources.lock_source(session, source_id)
-    result = await session.scalars(
-        delete(Document)
-        .where(Document.id == document_id, Document.source_id == source_id)
-        .returning(Document.id)
-    )
-    await session.commit()
-    return result.first() is not None
-
-
-async def delete_source_documents(session: AsyncSession, source_id: UUID) -> None:
-    """Delete owned data inside the caller's source-locked transaction; do not commit."""
-    await session.execute(delete(Document).where(Document.source_id == source_id))
-
-
-async def append_content(
-    session: AsyncSession, document_id: UUID, expected_version: int, content: str
-) -> Document | None:
-    document = await session.scalar(
-        select(Document).where(Document.id == document_id).with_for_update()
-    )
-    if document is None:
-        return None
-    current = await session.scalar(
-        select(DocumentVersion).where(
-            DocumentVersion.document_id == document_id,
-            DocumentVersion.version_number == document.current_version,
-        )
-    )
-    if current is None:
-        raise RuntimeError("Current document version is missing")
-    if current.content == content:
-        return document
-    if document.current_version != expected_version:
-        raise ValueError("Document revision is stale")
-    next_version = document.current_version + 1
-    digest = content_hash(content)
-    version = DocumentVersion(
-            document_id=document_id,
-            version_number=next_version,
-            content=content,
-            content_hash=digest,
-        )
-    session.add(version)
-    await add_content_chunks(session, version)
-    document.current_version = next_version
-    document.content_hash = digest
-    await session.commit()
-    await session.refresh(document)
-    return document
-
-
-def encode_version_cursor(version_number: int) -> str:
-    return base64.urlsafe_b64encode(str(version_number).encode()).decode().rstrip("=")
-
-
-def decode_version_cursor(cursor: str) -> int:
-    try:
-        if "=" in cursor:
-            raise ValueError("Cursor must be unpadded")
-        raw = base64.b64decode(
-            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
-        )
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
-            raise ValueError("Cursor is not canonical URL-safe base64")
-        version_number = int(raw)
-    except (ValueError, TypeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Invalid cursor") from exc
-    if not 1 <= version_number <= 2147483647:
-        raise HTTPException(status_code=422, detail="Invalid cursor")
-    return version_number
-
-
-async def list_versions(
-    session: AsyncSession, document_id: UUID, limit: int, cursor: str | None
-) -> tuple[list[DocumentVersion] | None, str | None]:
-    after_version = decode_version_cursor(cursor) if cursor is not None else None
-    if await session.get(Document, document_id) is None:
-        return None, None
-    statement = select(DocumentVersion).where(DocumentVersion.document_id == document_id)
-    if after_version is not None:
-        statement = statement.where(DocumentVersion.version_number > after_version)
-    result = await session.scalars(
-        statement.order_by(DocumentVersion.version_number).limit(limit + 1)
-    )
-    rows = list(result.all())
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-    next_cursor = encode_version_cursor(rows[-1].version_number) if has_more and rows else None
-    return rows, next_cursor
-
-
-async def get_version(
-    session: AsyncSession, document_id: UUID, number: int
-) -> DocumentVersion | None:
-    return await session.scalar(
-        select(DocumentVersion).where(
-            DocumentVersion.document_id == document_id,
-            DocumentVersion.version_number == number,
-        )
-    )
+# Explicit re-export surface (mypy strict forbids implicit re-exports; private helpers are kept
+# because other modules and tests reach them through this facade).
+__all__ = [
+    "BUILTIN_FEED_PROVIDER_IDS",
+    "EXPORT_PAGE_MAX_BYTES",
+    "EXTRACTION_CHUNK_LIMIT",
+    "EXTRACTION_INPUT_BYTES",
+    "FEED_LANGUAGES",
+    "FEED_MAX_WINDOW",
+    "KEYED_FEED_PROVIDER_IDS",
+    "MAX_CONTENT_BYTES",
+    "MAX_METADATA_BYTES",
+    "MEASUREMENT_PROVIDER_FIELDS",
+    "MEASUREMENT_PROVIDER_IDS",
+    "NEWS_PROVIDER_IDS",
+    "PROVIDER_IDS",
+    "_CLEANUP_IDENTITY_COLUMNS",
+    "_CLEANUP_LIMIT",
+    "_INLINE_HASH_MAX_CHARS",
+    "ChatEvidenceChunk",
+    "ChatEvidenceLockState",
+    "CitationTargetRead",
+    "ContentUpdate",
+    "DocumentChunkReadProjection",
+    "DocumentCleanupEvidenceIdentity",
+    "DocumentCleanupEvidenceScope",
+    "DocumentCleanupJobIdentity",
+    "DocumentCleanupPreparationLimitError",
+    "DocumentCreate",
+    "DocumentDeletionRead",
+    "DocumentExportFence",
+    "DocumentExportFenceValidation",
+    "DocumentExportPage",
+    "DocumentExportProvenance",
+    "DocumentExportRead",
+    "DocumentList",
+    "DocumentPatch",
+    "DocumentRead",
+    "DocumentReadProjection",
+    "DocumentVersionExportRead",
+    "DocumentVersionReadProjection",
+    "EvidenceReferenceRead",
+    "ExtractionChunk",
+    "ExtractionEvidenceRef",
+    "ExtractionInput",
+    "ExtractionInputLimitError",
+    "GadgetDocumentInteractionPatch",
+    "GadgetDocumentInteractionRead",
+    "GadgetDocumentProjectionList",
+    "GadgetDocumentProjectionRead",
+    "GadgetDocumentSelectionFence",
+    "GadgetHighlightProjectionPage",
+    "GadgetProviderMetadataRead",
+    "GadgetTelegramMediaRead",
+    "GadgetTelegramRecordRead",
+    "MemberDocumentList",
+    "MemberDocumentRead",
+    "NewsChunkProjection",
+    "NewsDocumentProjection",
+    "NewsProjectionStatus",
+    "NormalizedDocumentInput",
+    "NormalizedDocumentKeyState",
+    "NormalizedDocumentPreparation",
+    "NormalizedDocumentResult",
+    "NormalizedDocumentValidationRejected",
+    "NormalizedVersionProvenanceReadProjection",
+    "ObservationEvidenceCandidate",
+    "ObservationExportEvidenceCandidate",
+    "ObservationExportEvidenceRead",
+    "ProviderDocumentSnapshotList",
+    "ProviderDocumentSnapshotRead",
+    "ProviderRecordMetadata",
+    "ProviderSnapshotRequest",
+    "ProviderTelegramMedia",
+    "ProviderTelegramMetadata",
+    "ReadyVersionRef",
+    "ReviewEvidenceRef",
+    "ReviewVersionFence",
+    "SourceCleanupProgress",
+    "SourceCleanupWakeup",
+    "TelegramDocumentOrder",
+    "TimelineExportEvidenceCandidate",
+    "TimelineExportEvidenceRead",
+    "ToolDocumentPage",
+    "ToolDocumentRead",
+    "VersionList",
+    "VersionRead",
+    "WorldDataMeasurement",
+    "_CleanupClosure",
+    "_admit_document_scope",
+    "_apply_graph_cleanup",
+    "_apply_normalized_document",
+    "_as_gadget_document_projection",
+    "_assert_new_document_key",
+    "_assert_upload_absence",
+    "_bounded_ids",
+    "_capture_source_document_cleanup",
+    "_cleanup_identity",
+    "_current_document_components",
+    "_decode_document_export_cursor",
+    "_decode_document_owner_cursor",
+    "_decode_news_projection_cursor",
+    "_decode_provider_cursor",
+    "_document_export_count",
+    "_document_export_scope",
+    "_document_scope",
+    "_encode_document_export_cursor",
+    "_encode_document_owner_cursor",
+    "_encode_news_projection_cursor",
+    "_encode_provider_cursor",
+    "_export_item_bytes",
+    "_export_payload_bytes",
+    "_extraction_document",
+    "_list_evidence_ref_keys",
+    "_lock_cleanup_closure",
+    "_news_projection_cursor_fingerprint",
+    "_normalized_key_states",
+    "_normalized_source_proof",
+    "_normalized_target",
+    "_prepare_cleanup_closure",
+    "_provenance_language",
+    "_provider_snapshot",
+    "_publish_document_ready",
+    "_publish_extraction_ready",
+    "_read_document_source_id",
+    "_read_evidence_ref_rows",
+    "_require_cleanup_authority",
+    "_require_document_export_owner",
+    "_require_document_owner",
+    "_safe_export_url",
+    "_select_world_document_version",
+    "_superseded_version_hooks",
+    "_upload_document_state",
+    "_validate_gadget_document_selection_fences_admitted",
+    "add_content_chunks",
+    "add_uploaded_document",
+    "append_content",
+    "backfill_current_chunks",
+    "capture_document_cleanup_evidence",
+    "cleanup_authority_error",
+    "cleanup_evidence_version_document",
+    "content_hash",
+    "content_hash_async",
+    "count_source_documents",
+    "create_document",
+    "current_observation_evidence_versions",
+    "decode_version_cursor",
+    "delete_document",
+    "delete_source_documents_in_uow",
+    "document_metadata",
+    "encode_version_cursor",
+    "ensure_demo_article",
+    "existing_document_ids",
+    "export_observation_evidence",
+    "export_page",
+    "export_timeline_evidence",
+    "find_document_identity",
+    "get_document",
+    "get_document_cleanup_operation",
+    "get_first_chunk_id",
+    "get_news_document_projection",
+    "get_ready_version_ref",
+    "get_tool_document",
+    "get_version",
+    "has_document_identity",
+    "list_document_cleanup_evidence_scope",
+    "list_documents",
+    "list_gadget_document_projections",
+    "list_gadget_highlight_projection_page",
+    "list_indexable_workspace_ids",
+    "list_news_document_projections",
+    "list_provider_snapshots",
+    "list_ready_document_workspace_ids",
+    "list_ready_version_refs",
+    "list_tool_documents",
+    "list_versions",
+    "lock_chat_evidence_chunks",
+    "lock_chat_evidence_state",
+    "lock_document_for_extraction",
+    "lock_document_ids",
+    "lock_raw_uri_identity",
+    "lock_review_version_evidence",
+    "lock_source_documents_for_purge_in_uow",
+    "news_current_scope_status",
+    "news_projection_scope_unavailable",
+    "news_retained_observation_allowed",
+    "normalize_document_language",
+    "normalized_observation_version_matches_in_uow",
+    "observability_quality_summary",
+    "pending_document_agent_cleanup_ids",
+    "pending_document_copied_stage_cleanup_ids",
+    "pending_document_memory_cleanup_ids",
+    "prepare_normalized_document_keys",
+    "prepare_uploaded_document_in_uow",
+    "publish_source_cleanup_wakeup",
+    "purge_expired_document_versions",
+    "raw_uri_is_referenced_for_cleanup",
+    "raw_uris",
+    "read_chat_evidence_chunks",
+    "read_document_access_projection",
+    "read_document_cleanup_job_identity",
+    "read_evidence_refs",
+    "read_extraction_evidence_refs",
+    "read_extraction_input",
+    "read_provider_snapshots",
+    "register_version_superseded_hook",
+    "resolve_document_cleanup_job_identity",
+    "revalidate_tool_document_fences",
+    "review_version_fences",
+    "review_version_locator",
+    "save_extraction",
+    "select_current_world_document_version",
+    "select_current_world_document_version_in_uow",
+    "set_extraction_status",
+    "set_gadget_document_interaction",
+    "source_cleanup_progress",
+    "source_cleanup_wakeup_hint",
+    "sources",
+    "update_document",
+    "upsert_normalized_document",
+    "upsert_normalized_document_in_uow",
+    "validate_export_fences",
+    "validate_gadget_document_selection_fences",
+    "workspaces",
+]

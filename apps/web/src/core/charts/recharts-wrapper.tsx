@@ -1,0 +1,681 @@
+'use client';
+
+import { useTranslations } from 'next-intl';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { BarChart3 } from 'lucide-react';
+import { formatDateWith, formatNumber } from '@/core/format';
+import { type AppLocaleId } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { formatChartValue, type ChartDataPoint, type ChartSeries, type ChartValueFormatOptions } from './chart-format';
+
+export { formatChartValue, type ChartDataPoint, type ChartSeries, type ChartValueFormatOptions };
+
+/** Props for the SSR-safe RechartsContainer. */
+export interface RechartsContainerProps {
+  /** Height in pixels or CSS units (defaults to 100%). */
+  height?: number | string;
+  /** Minimum height in pixels to prevent SVG collapses before container measurement. */
+  minHeight?: number;
+  /** Optional container class name. */
+  className?: string;
+  /** Chart element tree. */
+  children: React.ReactNode;
+}
+
+/** Props for the clean zero-data empty state card. */
+export interface ChartEmptyStateProps {
+  /** Headline title for the empty state. */
+  title?: string;
+  /** Explanation or reason for absent data. */
+  message?: string;
+  /** Optional class name. */
+  className?: string;
+}
+
+/** Theme-derived color palette for charts in light and dark modes. */
+export interface ChartThemeColors {
+  primary: string;
+  secondary: string;
+  accent: string;
+  danger: string;
+  grid: string;
+  axisText: string;
+  tooltipBg: string;
+  tooltipBorder: string;
+  tooltipText: string;
+  series: string[];
+}
+
+/**
+ * Returns theme-aware CSS colors for SVG charts based on dark/light mode.
+ *
+ * @returns Set of color tokens compatible with SVG fills and strokes.
+ */
+export function getChartColors(): ChartThemeColors {
+  // CSS variables resolve per theme in the browser, so no literal colors or dark/light branch is needed.
+  return {
+    primary: 'var(--chart-1)',
+    secondary: 'var(--chart-2)',
+    accent: 'var(--chart-4)',
+    danger: 'var(--danger)',
+    grid: 'var(--line)',
+    axisText: 'var(--muted)',
+    tooltipBg: 'var(--surface)',
+    tooltipBorder: 'var(--line)',
+    tooltipText: 'var(--text)',
+    series: ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'],
+  };
+}
+
+/** Fixed Y-axis width (px): fits compact labels such as "-77.2K" at 11px so ticks never wrap or clip. */
+const Y_AXIS_WIDTH = 52;
+
+/**
+ * Computes a Y domain padded around the plotted values so a series far from zero (e.g. a 77,194 price) is not
+ * flattened by a zero-based axis. Flat series get a padding proportional to their magnitude (or 1 at zero).
+ *
+ * @param data Chart rows.
+ * @param series Series whose dataKeys are plotted.
+ * @returns [min, max] with 10% range padding, or ['auto','auto'] when no finite value exists.
+ */
+export function paddedYDomain(data: ChartDataPoint[], series: ChartSeries[]): [number | 'auto', number | 'auto'] {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const row of data) {
+    for (const s of series) {
+      const v = Number(row[s.dataKey] ?? row.value);
+      if (Number.isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+  }
+  if (min === Infinity) return ['auto', 'auto'];
+  const pad = max > min ? (max - min) * 0.1 : Math.abs(max) * 0.01 || 1;
+  // Snap to a 1/2/5 x 10^n step so ticks are round and distinct when formatted.
+  const step = niceStep((max - min + 2 * pad) / 4);
+  return [Math.floor((min - pad) / step) * step, Math.ceil((max + pad) / step) * step];
+}
+
+/**
+ * Rounds a raw step up to the next 1, 2 or 5 times a power of ten.
+ *
+ * @param raw Positive raw step.
+ * @returns Nice step >= raw.
+ */
+function niceStep(raw: number): number {
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const f = raw / pow;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * pow;
+}
+
+/**
+ * Builds explicit Y ticks at the nice step used by {@link paddedYDomain}.
+ *
+ * @param domain Snapped domain.
+ * @returns Tick values, or undefined when the domain is not numeric.
+ */
+export function yTicks(domain: [number | 'auto', number | 'auto']): number[] | undefined {
+  const [lo, hi] = domain;
+  if (typeof lo !== 'number' || typeof hi !== 'number' || hi <= lo) return undefined;
+  // 5.01 keeps a 5-step snapped domain on its own step instead of rounding up to double it.
+  const step = niceStep((hi - lo) / 5.01);
+  const out: number[] = [];
+  // Rounding to 12 significant digits avoids float drift such as 0.30000000000000004.
+  for (let v = lo; v <= hi + step / 1e6; v += step) out.push(Number(v.toPrecision(12)));
+  return out;
+}
+
+/** Assumed upper bound of ticks across the Y domain; a conservative (smaller) step yields more digits. */
+const Y_TICK_COUNT = 5;
+
+/**
+ * Formats a Y tick compactly without unit or currency (the header already shows them) so it stays on one line.
+ * When the plotted domain span is known, fraction digits follow the tick step (in the compact unit) so adjacent
+ * ticks over a narrow range never collapse to the same label (e.g. "77.5K" repeated).
+ *
+ * @param value Tick value.
+ * @param locale Application locale.
+ * @param span Optional numeric Y-domain span (max - min); omit to use one compact fraction digit.
+ * @returns Compact localized number, e.g. "77.2K" or "77.37K" for a narrow span.
+ */
+export function formatYTick(value: number, locale: AppLocaleId, span?: number): string {
+  if (!span || !Number.isFinite(span) || span <= 0 || !Number.isFinite(value)) {
+    return formatChartValue(value, { locale, precision: 2, compact: true });
+  }
+  const abs = Math.abs(value);
+  const scale = abs >= 1e9 ? 1e9 : abs >= 1e6 ? 1e6 : abs >= 1e3 ? 1e3 : 1;
+  const step = span / Y_TICK_COUNT / scale;
+  const digits = Math.min(4, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
+  return formatNumber(value, locale, {
+    ...(abs >= 1000 ? { notation: 'compact' as const } : {}),
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
+/**
+ * Returns the numeric span of a padded Y domain.
+ *
+ * @param domain Domain from {@link paddedYDomain}.
+ * @returns max - min, or undefined when the domain is not numeric.
+ */
+function domainSpan(domain: [number | 'auto', number | 'auto']): number | undefined {
+  return typeof domain[0] === 'number' && typeof domain[1] === 'number' ? domain[1] - domain[0] : undefined;
+}
+
+/**
+ * Formats a timestamp into an abbreviated label suitable for chart axes or tooltips.
+ *
+ * @param timestamp ISO timestamp string, number ms, or Date object.
+ * @param locale Current application locale.
+ * @param timezone Target timezone identifier.
+ * @param formatStyle Abbreviation style ('compact' for axis, 'full' for tooltip).
+ * @returns Localized date-time string.
+ */
+export function formatChartTimestamp(
+  timestamp: string | number,
+  locale: AppLocaleId = 'en-us',
+  timezone = 'UTC',
+  formatStyle: 'compact' | 'full' = 'compact',
+): string {
+  try {
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) return String(timestamp);
+
+    if (formatStyle === 'compact') {
+      return formatDateWith(date, locale, {
+        month: 'short',
+        day: 'numeric',
+        timeZone: timezone,
+      });
+    }
+
+    return formatDateWith(date, locale, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: timezone,
+    });
+  } catch {
+    return String(timestamp);
+  }
+}
+
+/**
+ * Build an x-axis tick formatter for a chart: time-of-day labels when the data spans under 48h (day labels
+ * would repeat), day labels otherwise, and an empty string for a label identical to the previous tick so
+ * the axis never prints the same text twice. Stateful per call; create one per render (ticks arrive in order).
+ *
+ * @param data Chart points; only `timestamp` is read.
+ * @param locale Current application locale.
+ * @param timezone Target timezone identifier.
+ * @returns Formatter suitable for recharts `tickFormatter`.
+ */
+export function makeXTickFormatter(data: ChartDataPoint[], locale: AppLocaleId, timezone: string): (val: string | number) => string {
+  const times = data.map((p) => new Date(p.timestamp).getTime()).filter((n) => !isNaN(n));
+  const intraday = times.length > 1 && Math.max(...times) - Math.min(...times) < 48 * 3_600_000;
+  let last = '';
+  return (val) => {
+    const date = new Date(val);
+    const label =
+      intraday && !isNaN(date.getTime())
+        ? formatDateWith(date, locale, { hour: 'numeric', minute: '2-digit', timeZone: timezone })
+        : formatChartTimestamp(val, locale, timezone, 'compact');
+    if (label === last) return '';
+    last = label;
+    return label;
+  };
+}
+
+/**
+ * Muted note shown under a time-series chart when its points span under an hour (or fewer than two distinct
+ * times), so a flat or single-point line is not read as a trend. The chart itself stays visible.
+ *
+ * @param props Chart points; only `timestamp` is read.
+ * @returns The note, or null when there is enough history.
+ */
+export function ChartHistoryNote({ data }: { data: ChartDataPoint[] }) {
+  const t = useTranslations('dashboard');
+  const times = data.map((p) => new Date(p.timestamp).getTime()).filter((n) => !isNaN(n));
+  const span = times.length > 1 ? Math.max(...times) - Math.min(...times) : 0;
+  if (span >= 3_600_000) return null;
+  return <p className="mt-1 text-[11px] text-muted-foreground">{t('chart.historyShort')}</p>;
+}
+
+/**
+ * Clean zero-data empty state component for charts.
+ *
+ * @param props Title, message, and layout classes.
+ * @returns Accessible empty state container.
+ */
+export function ChartEmptyState({ title, message, className = '' }: ChartEmptyStateProps) {
+  const ts = useTranslations('uiSweep');
+  title ??= ts('ch.noData');
+  message ??= ts('ch.noDataMsg');
+  return (
+    <div
+      role="status"
+      aria-label={title}
+      className={`flex flex-col items-center justify-center h-full min-h-[160px] p-6 text-center text-muted-foreground ${className}`}
+    >
+      <div className="w-10 h-10 rounded-full bg-muted/20 flex items-center justify-center mb-2">
+        <BarChart3 className="w-5 h-5 text-muted-foreground/70" />
+      </div>
+      <p className="text-xs font-semibold text-foreground mb-1">{title}</p>
+      <p className="text-[11px] max-w-xs leading-relaxed text-muted-foreground">{message}</p>
+    </div>
+  );
+}
+
+/**
+ * Custom tooltip renderer for Recharts time-series charts.
+ * Presents formatted timestamp, value, units, currency, and provider delay metadata.
+ *
+ * @param props Tooltip active state, payload values, labels, currency, unit, and locale.
+ * @returns Accessible tooltip element.
+ */
+export function ChartCustomTooltip({
+  active,
+  payload,
+  label,
+  currency,
+  unit,
+  providerDelay,
+  locale = 'en-us',
+  timezone = 'UTC',
+}: {
+  active?: boolean;
+  payload?: Array<{ name?: string; value?: number; color?: string; dataKey?: string }>;
+  label?: string | number;
+  currency?: string;
+  unit?: string;
+  providerDelay?: string | null;
+  locale?: AppLocaleId;
+  timezone?: string;
+}) {
+  const ts = useTranslations('uiSweep');
+  if (!active || !payload || payload.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-popover)] text-card-foreground text-xs min-w-[140px] z-50">
+      {label !== undefined && (
+        <div className="text-[11px] text-muted-foreground mb-1.5 tabular-nums">{formatChartTimestamp(label, locale, timezone, 'full')}</div>
+      )}
+      <div className="space-y-1">
+        {payload.map((item, idx) => (
+          <div key={idx} className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="w-2 rounded-full shrink-0 h-2" style={{ backgroundColor: item.color }} />
+              <span className="text-muted-foreground truncate">{item.name || item.dataKey}</span>
+            </div>
+            <span className="font-semibold tabular-nums text-foreground">
+              {typeof item.value === 'number' ? formatChartValue(item.value, { currency, unit, locale }) : String(item.value ?? '—')}
+            </span>
+          </div>
+        ))}
+      </div>
+      {providerDelay && (
+        <div className="mt-2 pt-1.5 border-t border-border/60 text-xs text-muted-foreground flex items-center justify-between">
+          <span>{ts('ch.freshness')}</span>
+          <span className="tabular-nums">{providerDelay}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Screen-reader accessible alternative table for chart data points.
+ * Ensures charts are not color-only or visual-only per AGENTS.md guidelines.
+ *
+ * @param props Series data points, series descriptions, and optional title.
+ * @returns Screen-reader accessible table element.
+ */
+export function ChartAccessibleTable({ data, series, title }: { data: ChartDataPoint[]; series: ChartSeries[]; title?: string }) {
+  const ts = useTranslations('uiSweep');
+  return (
+    <div className="sr-only">
+      <h4>{title || ts('ch.summary')}</h4>
+      <table>
+        <caption>{ts('ch.table')}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{ts('ch.timestamp')}</th>
+            {series.map((s) => (
+              <th key={s.dataKey} scope="col">
+                {s.name} ({s.currency || s.unit || ts('ch.value')})
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.slice(0, 50).map((row, index) => (
+            <tr key={index}>
+              <td>{String(row.timestamp)}</td>
+              {series.map((s) => (
+                <td key={s.dataKey}>{String(row[s.dataKey] ?? row.value)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Recharts wrapper isolating SSR and browser measurement.
+ * Mounts only after client hydration and guards against SVG zero-size crashes.
+ *
+ * @param props Container configuration and children.
+ * @returns Fully responsive, client-safe chart container.
+ */
+export function RechartsContainer({ height = '100%', minHeight = 140, className = '', children }: RechartsContainerProps) {
+  const ts = useTranslations('uiSweep');
+  const [isMounted, setIsMounted] = useState<boolean>(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
+    setIsMounted(true);
+  }, []);
+
+  if (!isMounted) {
+    return (
+      <div
+        className={`w-full flex items-center justify-center bg-rule motion-safe:animate-pulse rounded-lg ${className}`}
+        style={{ height, minHeight }}
+      >
+        <span className="sr-only">{ts('ch.loading')}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`w-full relative ${className}`} style={{ height, minHeight }}>
+      <ResponsiveContainer width="100%" height="100%" minHeight={minHeight}>
+        {children as React.ReactElement}
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Props for the BaseAreaChart component. */
+export interface BaseAreaChartProps {
+  data: ChartDataPoint[];
+  series?: ChartSeries[];
+  height?: number | string;
+  currency?: string;
+  unit?: string;
+  providerDelay?: string | null;
+  emptyTitle?: string;
+  emptyMessage?: string;
+  showGrid?: boolean;
+}
+
+/**
+ * Theme-aware area chart with a flat low-opacity fill (no gradient), padded Y domain and localized formatting.
+ *
+ * @param props Data points, series configuration, currency/unit, and styling.
+ * @returns Accessible area chart component.
+ */
+export function BaseAreaChart({
+  data,
+  series = [{ dataKey: 'value', name: 'Value' }],
+  height = 200,
+  currency,
+  unit,
+  providerDelay,
+  emptyTitle,
+  emptyMessage,
+  showGrid = true,
+}: BaseAreaChartProps) {
+  const display = useDisplayPreferences();
+
+  const colors = useMemo(() => getChartColors(), []);
+  const yDomain = useMemo(() => paddedYDomain(data, series), [data, series]);
+
+  if (!data || data.length === 0) {
+    return <ChartEmptyState title={emptyTitle} message={emptyMessage} />;
+  }
+
+  return (
+    <>
+      <ChartAccessibleTable data={data} series={series} />
+      <RechartsContainer height={height}>
+        <AreaChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
+          {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />}
+          <XAxis
+            dataKey="timestamp"
+            stroke={colors.axisText}
+            fontSize={11}
+            tickLine={false}
+            axisLine={{ stroke: colors.grid }}
+            tickFormatter={makeXTickFormatter(data, display.locale, display.timezone)}
+          />
+          <YAxis
+            stroke={colors.axisText}
+            fontSize={11}
+            tickLine={false}
+            axisLine={false}
+            width={Y_AXIS_WIDTH}
+            domain={yDomain}
+            ticks={yTicks(yDomain)}
+            tickFormatter={(val) => formatYTick(val, display.locale, domainSpan(yDomain))}
+          />
+          <Tooltip
+            content={
+              <ChartCustomTooltip
+                currency={currency}
+                unit={unit}
+                providerDelay={providerDelay}
+                locale={display.locale}
+                timezone={display.timezone}
+              />
+            }
+          />
+          {series.map((s, idx) => {
+            const color = s.color || colors.series[idx % colors.series.length];
+            return (
+              <Area
+                key={s.dataKey}
+                type="monotone"
+                dataKey={s.dataKey}
+                name={s.name}
+                stroke={color}
+                strokeWidth={2}
+                // Fifth series reuses hue 1 at wrap-around; dashing keeps it distinguishable.
+                strokeDasharray={idx % colors.series.length === 4 ? '5 3' : undefined}
+                fill={color}
+                fillOpacity={0.12}
+                isAnimationActive={false}
+              />
+            );
+          })}
+        </AreaChart>
+      </RechartsContainer>
+    </>
+  );
+}
+
+/** Props for the BaseLineChart component. */
+export interface BaseLineChartProps {
+  data: ChartDataPoint[];
+  series?: ChartSeries[];
+  height?: number | string;
+  currency?: string;
+  unit?: string;
+  providerDelay?: string | null;
+  emptyTitle?: string;
+  emptyMessage?: string;
+  showGrid?: boolean;
+  /** Join points across null buckets (sparse sampling); default leaves a gap. */
+  connectNulls?: boolean;
+}
+
+/**
+ * Theme-aware multi-line chart with accessible tooltips and customizable series strokes.
+ *
+ * @param props Data points, series configuration, currency/unit, and styling.
+ * @returns Accessible line chart component.
+ */
+export function BaseLineChart({
+  data,
+  series = [{ dataKey: 'value', name: 'Value' }],
+  height = 200,
+  currency,
+  unit,
+  providerDelay,
+  emptyTitle,
+  emptyMessage,
+  showGrid = true,
+  connectNulls = false,
+}: BaseLineChartProps) {
+  const display = useDisplayPreferences();
+  const colors = useMemo(() => getChartColors(), []);
+  const yDomain = useMemo(() => paddedYDomain(data, series), [data, series]);
+
+  if (!data || data.length === 0) {
+    return <ChartEmptyState title={emptyTitle} message={emptyMessage} />;
+  }
+
+  return (
+    <>
+      <ChartAccessibleTable data={data} series={series} />
+      <RechartsContainer height={height}>
+        <LineChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
+          {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />}
+          <XAxis
+            dataKey="timestamp"
+            stroke={colors.axisText}
+            fontSize={11}
+            tickLine={false}
+            axisLine={{ stroke: colors.grid }}
+            tickFormatter={makeXTickFormatter(data, display.locale, display.timezone)}
+          />
+          <YAxis
+            stroke={colors.axisText}
+            fontSize={11}
+            tickLine={false}
+            axisLine={false}
+            width={Y_AXIS_WIDTH}
+            domain={yDomain}
+            ticks={yTicks(yDomain)}
+            tickFormatter={(val) => formatYTick(val, display.locale, domainSpan(yDomain))}
+          />
+          <Tooltip
+            content={
+              <ChartCustomTooltip
+                currency={currency}
+                unit={unit}
+                providerDelay={providerDelay}
+                locale={display.locale}
+                timezone={display.timezone}
+              />
+            }
+          />
+          {series.map((s, idx) => {
+            const color = s.color || colors.series[idx % colors.series.length];
+            return (
+              <Line
+                key={s.dataKey}
+                type="monotone"
+                dataKey={s.dataKey}
+                name={s.name}
+                stroke={color}
+                strokeWidth={2}
+                // Fifth series reuses hue 1 at wrap-around; dashing keeps it distinguishable.
+                strokeDasharray={idx % colors.series.length === 4 ? '5 3' : undefined}
+                dot={false}
+                activeDot={{ r: 4, strokeWidth: 1 }}
+                isAnimationActive={false}
+                connectNulls={connectNulls}
+              />
+            );
+          })}
+        </LineChart>
+      </RechartsContainer>
+    </>
+  );
+}
+
+/** Props for the BaseBarChart component. */
+export interface BaseBarChartProps {
+  data: ChartDataPoint[];
+  series?: ChartSeries[];
+  height?: number | string;
+  currency?: string;
+  unit?: string;
+  providerDelay?: string | null;
+  emptyTitle?: string;
+  emptyMessage?: string;
+  showGrid?: boolean;
+}
+
+/**
+ * Theme-aware bar chart with rounded edges and localized value formatting.
+ *
+ * @param props Data points, series configuration, currency/unit, and styling.
+ * @returns Accessible bar chart component.
+ */
+export function BaseBarChart({
+  data,
+  series = [{ dataKey: 'value', name: 'Value' }],
+  height = 200,
+  currency,
+  unit,
+  providerDelay,
+  emptyTitle,
+  emptyMessage,
+  showGrid = true,
+}: BaseBarChartProps) {
+  const display = useDisplayPreferences();
+  const colors = useMemo(() => getChartColors(), []);
+
+  if (!data || data.length === 0) {
+    return <ChartEmptyState title={emptyTitle} message={emptyMessage} />;
+  }
+
+  return (
+    <>
+      <ChartAccessibleTable data={data} series={series} />
+      <RechartsContainer height={height}>
+        <BarChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
+          {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />}
+          <XAxis
+            dataKey="timestamp"
+            stroke={colors.axisText}
+            fontSize={11}
+            tickLine={false}
+            axisLine={{ stroke: colors.grid }}
+            tickFormatter={makeXTickFormatter(data, display.locale, display.timezone)}
+          />
+          <YAxis
+            stroke={colors.axisText}
+            fontSize={11}
+            tickLine={false}
+            axisLine={false}
+            width={Y_AXIS_WIDTH}
+            domain={[0, 'auto']}
+            tickFormatter={(val) => formatYTick(val, display.locale)}
+          />
+          <Tooltip
+            content={
+              <ChartCustomTooltip
+                currency={currency}
+                unit={unit}
+                providerDelay={providerDelay}
+                locale={display.locale}
+                timezone={display.timezone}
+              />
+            }
+          />
+          {series.map((s, idx) => {
+            const color = s.color || colors.series[idx % colors.series.length];
+            return <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={color} radius={[4, 4, 0, 0]} isAnimationActive={false} />;
+          })}
+        </BarChart>
+      </RechartsContainer>
+    </>
+  );
+}

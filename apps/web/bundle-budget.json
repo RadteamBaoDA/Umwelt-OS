@@ -1,0 +1,17 @@
+{
+  "maxRouteFirstLoadKb": 800,
+  "totalClientKb": 2313,
+  "routes": {
+    "/(workspace)/chat/[[...id]]/page": 785,
+    "/(public)/login/page": 350,
+    "/(public)/setup/page": 350,
+    "/(public)/invite/page": 310,
+    "/(public)/invitations/accept/page": 310,
+    "/(public)/account-deletion/page": 295,
+    "/(public)/pick/page": 255,
+    "/(public)/privacy/page": 245,
+    "/(public)/refunds/page": 245,
+    "/(public)/terms/page": 245,
+    "/(public)/page": 245
+  }
+}

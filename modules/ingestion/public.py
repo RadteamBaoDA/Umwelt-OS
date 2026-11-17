@@ -1,402 +1,326 @@
-import hashlib
-import json
-import secrets
-from datetime import UTC, datetime
-from uuid import UUID, uuid4
+"""Workspace-bound ingestion contracts; caller-held helpers never reacquire admission locks.
 
-from fastapi import HTTPException
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+Standalone collection wrappers own their existing commits. Retained jobs derive their
+principal from durable owner rows, and every publication carries the original epoch.
 
-from core.events import DomainEvent
-from modules.ingestion.models import (
-    COLLECTION_LEASE,
-    CollectorCredential,
-    EventOutbox,
-    IngestionBatch,
-    IngestionRun,
-    IngestionStage,
-    SourceIngestionState,
-    SourceObservation,
+This module is the stable facade: implementations live in the private ``_*`` submodules of this
+package and are re-exported here under their original names.
+"""
+
+# Hoisted first: DTO contracts must be bound before heavy imports so cyclic importers see them.
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): ingestion owns
+# SourceIngestionState; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.ingestion.models import SourceIngestionState as SourceIngestionStateReadProjection
+
+# isort: split
+from modules.ingestion.github_proof import (
+    GITHUB_RESOURCES,
+    MAX_GITHUB_PAGE_BYTES,
+    GitHubBindingFence,
+    GitHubHintClaimProof,
+    GitHubResource,
+    GitHubSegmentProof,
 )
-from modules.ingestion.schemas import ReceiveBatch
-from modules.knowledge.documents import public as documents
-from modules.sources import public as sources
-from modules.sources.models import Source
+from modules.ingestion.schemas import (
+    ChatAttachmentRead,
+    CollectionState,
+    CollectionStateUpdate,
+    CollectorCredentialRead,
+    ConnectorCollectionLease,
+    CrawlReceipt,
+    EventDelivery,
+    IngestionRecord,
+    NativeCollectionBatch,
+    NativeCollectionReceipt,
+    Receipt,
+    ReceiveBatch,
+    RetryRunRequest,
+    RunRead,
+    SourceIngestionRead,
+    StageRead,
+    TelegramCursor,
+    TelegramDeliveryProof,
+    TelegramPageDelivery,
+    TelegramProbeClassification,
+    TelegramRawDelivery,
+    classify_telegram_probe,
+)
 
-def _digest(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+# isort: split
+from modules.ingestion._batches import (
+    _NO_EXPECTED_CURSOR,
+    accept_collection_no_changes,
+    queue_connector_crawl,
+    receive_batch,
+    receive_connector_batch,
+    receive_file,
+)
+from modules.ingestion._collection import (
+    COLLECTION_STATS_MAX_BYTES,
+    _apply_state_update,
+    _authorize_collection,
+    _bounded_stats,
+    _decode_telegram_cursor,
+    _encode_telegram_cursor,
+    _lock_source_projection,
+    _settle_request,
+    acquire_connector_collection,
+    get_collection_state,
+    get_source_cursor,
+    read_telegram_collection_state,
+    release_connector_collection,
+    reset_native_collection_cursor,
+    validate_connector_collection_in_uow,
+)
+from modules.ingestion._credentials import (
+    collector_can_ingest,
+    create_collector_credential,
+    create_collector_credential_in_uow,
+    lock_source_credentials_in_uow,
+    revoke_collector_credential,
+    revoke_source_credentials,
+)
+from modules.ingestion._event_handlers import (
+    OUTBOX_RUNTIME,
+    DocumentCleanupEventHandler,
+    DocumentReadyEventHandler,
+    IngestionStageEventHandler,
+    SourcePurgeEventHandler,
+)
+from modules.ingestion._event_publisher import (
+    _READY_EVENT_PRODUCERS,
+    NORMALIZATION_VERSION,
+    _ready_document_payload,
+    publish_event,
+)
+from modules.ingestion._native.collection import (
+    accept_native_collection,
+    accept_native_collection_with_params,
+)
+from modules.ingestion._native.records import (
+    drop_seen_records,
+    native_record_key,
+    record_key,
+    seen_provider_ids,
+    seen_record_keys,
+    validate_telegram_record_delivery,
+)
+from modules.ingestion._native.verifiers import (
+    NativeProofVerifier,
+    NativeProviderParams,
+    native_verifier_for,
+    register_native_verifier,
+)
+from modules.ingestion._outbox import (
+    NewsDocumentReadyEvent,
+    ReadyDocumentProvenance,
+    _event_delivery,
+    fail_news_document_ready_event,
+    get_document_cleanup_event,
+    get_event_delivery,
+    list_ready_events_after,
+    lock_document_cleanup_event_in_uow,
+    lock_news_document_ready_event,
+    lock_source_purge_event_in_uow,
+    mark_event_delivered,
+    mark_news_document_ready_event_delivered,
+    prepare_document_materializations_in_uow,
+    read_document_cleanup_event_operation_id,
+    resolve_ready_event_provenance,
+    schedule_normalization,
+    set_event_delivery,
+    settle_document_cleanup_event_in_uow,
+    tombstone_document_materializations,
+)
+from modules.ingestion._purge import (
+    _PURGEABLE_OUTBOX_TYPES,
+    OUTBOX_GENERAL_RETENTION_DAYS,
+    OUTBOX_RETENTION,
+    _lock_ingestion_purge_identities,
+    _source_ingestion_purge_lineage,
+    _validate_source_ingestion_purge_in_uow,
+    cancel_and_purge_source_ingestion,
+    prepare_source_ingestion_purge_in_uow,
+    purge_delivered_outbox,
+    purge_expired_collection_receipts,
+    purge_expired_datasource_data,
+)
+from modules.ingestion._runs import (
+    _RUN_RETRY_ORDER,
+    _cursor_binding,
+    _decode_history_cursor,
+    _encode_history_cursor,
+    _read_stages,
+    get_run,
+    get_run_meta_by_id,
+    list_run_meta,
+    list_source_runs,
+    list_terminal_runs_after,
+    observability_quality_summary,
+    observability_queue_summary,
+    retry_run,
+)
+from modules.ingestion._scope import (
+    _SOURCE_PURGE_PRODUCERS,
+    _actor_id,
+    _admit_ingestion_scope,
+    _cleanup_event_scope,
+    _digest,
+    _document_cleanup_operation_id,
+    _event_scope,
+    _lease_access_fence,
+    _lease_scope,
+    _materialization_scope,
+    _resolve_document_cleanup_event_scope,
+    _retained_scope,
+    _run_scope,
+    _source_in_scope,
+    _source_purge_event_subject,
+    resolve_collector_job_scope,
+    resolve_ingestion_event_scope,
+    resolve_ingestion_run_scope,
+)
 
-
-async def create_collector_credential(session: AsyncSession, source_id: UUID) -> str:
-    source = await session.scalar(select(Source).where(Source.id == source_id).with_for_update())
-    if source is None or source.status == "archived":
-        raise LookupError("Source not found")
-    now = datetime.now(UTC)
-    credentials = list(
-        (
-            await session.scalars(
-                select(CollectorCredential)
-                .where(CollectorCredential.source_id == source_id, CollectorCredential.revoked_at.is_(None))
-                .with_for_update()
-            )
-        ).all()
-    )
-    for credential in credentials:
-        credential.revoked_at = now
-    token = secrets.token_urlsafe(32)
-    session.add(CollectorCredential(token_hash=hashlib.sha256(token.encode()).hexdigest(), source_id=source_id))
-    await session.commit()
-    return token
-
-
-async def revoke_collector_credential(session: AsyncSession, token: str) -> None:
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    row = await session.get(CollectorCredential, token_hash)
-    if row is not None:
-        row.revoked_at = datetime.now(UTC)
-        await session.commit()
-
-
-async def collector_can_ingest(session: AsyncSession, source_id: UUID, token: str) -> bool:
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    return bool(
-        await session.scalar(
-            select(CollectorCredential.token_hash)
-            .join(Source, Source.id == CollectorCredential.source_id)
-            .where(
-                CollectorCredential.token_hash == token_hash,
-                CollectorCredential.source_id == source_id,
-                CollectorCredential.scope == "ingestion:write",
-                CollectorCredential.revoked_at.is_(None),
-                Source.status == "active",
-            )
-        )
-    )
-
-
-async def receive_batch(session: AsyncSession, payload: ReceiveBatch) -> tuple[IngestionBatch, IngestionRun]:
-    source = await session.scalar(
-        select(Source).where(Source.id == payload.source_id).with_for_update()
-    )
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
-    if source.status != "active":
-        raise HTTPException(status_code=409, detail="Source is not active")
-
-    payload_hash = _digest(payload.model_dump(mode="json"))
-    existing = await session.scalar(
-        select(IngestionBatch).where(
-            IngestionBatch.source_id == payload.source_id,
-            IngestionBatch.batch_key == payload.batch_key,
-        )
-    )
-    if existing is not None:
-        if existing.payload_hash != payload_hash:
-            raise HTTPException(status_code=409, detail="Batch key was already used with different content")
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
-        if run is None:
-            raise RuntimeError("Ingestion batch has no run")
-        return existing, run
-
-    state = await session.get(SourceIngestionState, payload.source_id, with_for_update=True)
-    if state is None:
-        state = SourceIngestionState(source_id=payload.source_id, cursor=None)
-        session.add(state)
-        await session.flush()
-    now = datetime.now(UTC)
-    source.last_sync_at = now
-    source.collected_at = now
-    if state.lease_expires_at is not None and state.lease_expires_at > now:
-        raise HTTPException(status_code=409, detail="Source already has an active collection run")
-    if state.cursor != payload.cursor_before:
-        raise HTTPException(status_code=409, detail="Collection cursor is stale")
-
-    batch = IngestionBatch(source_id=payload.source_id, batch_key=payload.batch_key, payload_hash=payload_hash)
-    session.add(batch)
-    await session.flush()
-    run = IngestionRun(batch_id=batch.id, source_id=payload.source_id, status="queued")
-    session.add(run)
-    await session.flush()
-    stage = IngestionStage(run_id=run.id, stage_key="receive", status="pending")
-    session.add(stage)
-    await session.flush()
-    event = DomainEvent(
-        id=uuid4(),
-        type="ingestion.stage.requested",
-        version=1,
-        occurred_at=now,
-        producer="modules.ingestion",
-        payload={"run_id": str(run.id), "stage_id": str(stage.id), "source_generation": source.generation},
-    )
-    session.add(
-        EventOutbox(
-            id=event.id,
-            type=event.type,
-            version=event.version,
-            occurred_at=event.occurred_at,
-            producer=event.producer,
-            payload=event.payload,
-            status="pending",
-        )
-    )
-    # Keep every distinct provider/content observation in the accepted batch.
-    seen: set[tuple[str, str, datetime]] = set()
-    for record in payload.records:
-        data = record.model_dump(mode="json")
-        record_hash = _digest({"version": record.version, "content": record.content, "metadata": record.metadata})
-        identity = (record.provider_id, record_hash, record.observed_at)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        session.add(
-            SourceObservation(
-                source_id=payload.source_id,
-                batch_id=batch.id,
-                provider_id=record.provider_id,
-                record_hash=record_hash,
-                payload=data,
-                observed_at=record.observed_at,
-            )
-        )
-    result = await session.execute(
-        update(SourceIngestionState)
-        .where(
-            SourceIngestionState.source_id == payload.source_id,
-            SourceIngestionState.cursor.is_not_distinct_from(payload.cursor_before),
-        )
-        .values(cursor=payload.cursor_after, lease_run_id=run.id, lease_expires_at=now + COLLECTION_LEASE)
-    )
-    if result.rowcount != 1:
-        raise HTTPException(status_code=409, detail="Collection cursor changed")
-    await session.commit()
-    await session.refresh(batch)
-    await session.refresh(run)
-    return batch, run
-
-
-async def queue_connector_crawl(
-    session: AsyncSession,
-    source_id: UUID,
-    cursor_before: str | None,
-    configuration: dict[str, object],
-) -> IngestionRun:
-    source = await session.scalar(select(Source).where(Source.id == source_id).with_for_update())
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
-    if source.status != "active":
-        raise HTTPException(status_code=409, detail="Source is not active")
-    state = await session.get(SourceIngestionState, source_id, with_for_update=True)
-    if state is None:
-        state = SourceIngestionState(source_id=source_id, cursor=None)
-        session.add(state)
-        await session.flush()
-    if state.cursor != cursor_before:
-        raise HTTPException(status_code=409, detail="Collection cursor is stale")
-
-    now = datetime.now(UTC)
-    source.last_sync_at = now
-    source.collected_at = now
-    minute = now.replace(second=0, microsecond=0).isoformat()
-    key = "crawl:" + _digest({"source_id": str(source_id), "cursor": cursor_before, "config": configuration, "minute": minute})
-    existing = await session.scalar(
-        select(IngestionBatch).where(IngestionBatch.source_id == source_id, IngestionBatch.batch_key == key)
-    )
-    if existing is not None:
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
-        if run is None:
-            raise RuntimeError("Crawl batch has no run")
-        return run
-    if state.lease_expires_at is not None and state.lease_expires_at > now:
-        raise HTTPException(status_code=409, detail="Source already has an active collection run")
-
-    batch = IngestionBatch(source_id=source_id, batch_key=key, payload_hash=_digest(configuration))
-    session.add(batch)
-    await session.flush()
-    run = IngestionRun(batch_id=batch.id, source_id=source_id, status="queued")
-    session.add(run)
-    await session.flush()
-    stage = IngestionStage(run_id=run.id, stage_key="collect_web", status="pending")
-    session.add(stage)
-    await session.flush()
-    event = DomainEvent(
-        id=uuid4(),
-        type="connector.crawl.requested",
-        version=1,
-        occurred_at=now,
-        producer="modules.connectors",
-        payload={
-            "source_id": str(source_id),
-            "source_generation": source.generation,
-            "run_id": str(run.id),
-            "stage_id": str(stage.id),
-            "cursor_before": cursor_before,
-            "configuration": configuration,
-        },
-    )
-    session.add(
-        EventOutbox(
-            id=event.id,
-            type=event.type,
-            version=event.version,
-            occurred_at=event.occurred_at,
-            producer=event.producer,
-            payload=event.payload,
-            status="pending",
-        )
-    )
-    state.lease_run_id = run.id
-    state.lease_expires_at = now + COLLECTION_LEASE
-    await session.commit()
-    await session.refresh(run)
-    return run
-
-
-async def receive_file(
-    session: AsyncSession,
-    source_id: UUID,
-    document_id: UUID,
-    filename: str,
-    mime_type: str,
-    raw_uri: str,
-    size: int,
-    digest: str,
-) -> tuple[IngestionRun, bool]:
-    await sources.lock_source_for_document(session, source_id)
-    source = await session.get(Source, source_id)
-    if source is None or source.status != "active":
-        raise HTTPException(status_code=409, detail="Source is not active")
-    batch_key = f"file:{digest}"
-    existing = await session.scalar(
-        select(IngestionBatch).where(IngestionBatch.source_id == source_id, IngestionBatch.batch_key == batch_key)
-    )
-    if existing is not None:
-        if existing.payload_hash != digest:
-            raise HTTPException(status_code=409, detail="Upload identity conflicts with stored content")
-        if not await documents.has_document_identity(session, source_id, f"file:{digest}"):
-            raise HTTPException(status_code=409, detail="This file was previously ingested and its document was deleted")
-        run = await session.scalar(select(IngestionRun).where(IngestionRun.batch_id == existing.id))
-        if run is None:
-            raise RuntimeError("Ingestion batch has no run")
-        await session.commit()
-        return run, False
-
-    now = datetime.now(UTC)
-    source.last_sync_at = now
-    source.collected_at = now
-    batch = IngestionBatch(source_id=source_id, batch_key=batch_key, payload_hash=digest)
-    session.add(batch)
-    await session.flush()
-    run = IngestionRun(batch_id=batch.id, source_id=source_id, status="queued")
-    session.add(run)
-    await session.flush()
-    stage = IngestionStage(run_id=run.id, stage_key="parse_file", status="pending")
-    session.add(stage)
-    await session.flush()
-    metadata = {"filename": filename, "raw_sha256": digest, "raw_size": size, "format": mime_type}
-    document = await documents.add_uploaded_document(
-        session, source_id, filename[:500] or "Uploaded file", mime_type, raw_uri, metadata, f"file:{digest}", document_id
-    )
-    event = DomainEvent(
-        id=uuid4(),
-        type="document.file.uploaded",
-        version=1,
-        occurred_at=now,
-        producer="modules.ingestion",
-        payload={"run_id": str(run.id), "stage_id": str(stage.id), "document_id": str(document.id), "raw_uri": raw_uri, "mime_type": mime_type, "source_generation": source.generation},
-    )
-    session.add(EventOutbox(
-        id=event.id,
-        type=event.type,
-        version=event.version,
-        occurred_at=event.occurred_at,
-        producer=event.producer,
-        payload=event.payload,
-        status="pending",
-    ))
-    await session.commit()
-    await session.refresh(run)
-    return run, True
-
-
-async def get_run(session: AsyncSession, run_id: UUID) -> tuple[IngestionRun, list[IngestionStage]] | None:
-    run = await session.get(IngestionRun, run_id)
-    if run is None:
-        return None
-    stages = list(
-        (
-            await session.scalars(
-                select(IngestionStage).where(IngestionStage.run_id == run_id).order_by(IngestionStage.stage_key)
-            )
-        ).all()
-    )
-    return run, stages
-
-
-async def retry_run(session: AsyncSession, run_id: UUID) -> IngestionRun | None:
-    run_hint = await session.get(IngestionRun, run_id)
-    if run_hint is None:
-        return None
-    # Match source archive and workers: source, run, then stage.
-    source = await session.scalar(select(Source).where(Source.id == run_hint.source_id).with_for_update())
-    if source is None or source.status != "active":
-        raise HTTPException(status_code=409, detail="Source is not active")
-    run = await session.scalar(
-        select(IngestionRun).where(IngestionRun.id == run_id, IngestionRun.source_id == source.id).with_for_update()
-    )
-    if run is None:
-        return None
-    stage = await session.scalar(
-        select(IngestionStage).where(IngestionStage.run_id == run_id).with_for_update()
-    )
-    if stage is None:
-        raise RuntimeError("Ingestion run has no stage")
-    if stage.status in {"pending", "queued", "running", "retrying"}:
-        return run
-    if stage.status == "succeeded":
-        return run
-    stage.status = "pending"
-    stage.attempts = 0
-    stage.error_code = None
-    stage.next_attempt_at = datetime.now(UTC)
-    stage.lease_expires_at = None
-    run.status = "queued"
-    run.error_code = None
-    prior_event = await session.scalar(
-        select(EventOutbox)
-        .where(EventOutbox.payload["stage_id"].astext == str(stage.id))
-        .order_by(EventOutbox.created_at.desc())
-        .limit(1)
-    )
-    event = DomainEvent(
-        id=uuid4(),
-        type=prior_event.type if prior_event is not None else "ingestion.stage.requested",
-        version=1,
-        occurred_at=datetime.now(UTC),
-        producer="modules.ingestion",
-        payload={
-            **(prior_event.payload if prior_event is not None else {"run_id": str(run.id), "stage_id": str(stage.id)}),
-            "source_generation": source.generation,
-        },
-    )
-    session.add(
-        EventOutbox(
-            id=event.id,
-            type=event.type,
-            version=1,
-            occurred_at=event.occurred_at,
-            producer=event.producer,
-            payload=event.payload,
-        )
-    )
-    state = await session.get(SourceIngestionState, run.source_id, with_for_update=True)
-    if state is not None:
-        now = datetime.now(UTC)
-        if state.lease_run_id not in (None, run.id) and state.lease_expires_at and state.lease_expires_at > now:
-            raise HTTPException(status_code=409, detail="Source already has an active collection run")
-        state.lease_run_id = run.id
-        state.lease_expires_at = now + COLLECTION_LEASE
-    await session.commit()
-    await session.refresh(run)
-    return run
+__all__ = [
+    "GITHUB_RESOURCES",
+    "MAX_GITHUB_PAGE_BYTES",
+    "GitHubBindingFence",
+    "GitHubHintClaimProof",
+    "GitHubResource",
+    "GitHubSegmentProof",
+    "COLLECTION_STATS_MAX_BYTES",
+    "NORMALIZATION_VERSION",
+    "OUTBOX_GENERAL_RETENTION_DAYS",
+    "OUTBOX_RETENTION",
+    "OUTBOX_RUNTIME",
+    "_NO_EXPECTED_CURSOR",
+    "_PURGEABLE_OUTBOX_TYPES",
+    "_READY_EVENT_PRODUCERS",
+    "_RUN_RETRY_ORDER",
+    "_SOURCE_PURGE_PRODUCERS",
+    "ChatAttachmentRead",
+    "CollectionState",
+    "CollectionStateUpdate",
+    "CollectorCredentialRead",
+    "ConnectorCollectionLease",
+    "CrawlReceipt",
+    "DocumentCleanupEventHandler",
+    "DocumentReadyEventHandler",
+    "EventDelivery",
+    "IngestionRecord",
+    "IngestionStageEventHandler",
+    "NativeCollectionBatch",
+    "NativeCollectionReceipt",
+    "NativeProofVerifier",
+    "NativeProviderParams",
+    "NewsDocumentReadyEvent",
+    "ReadyDocumentProvenance",
+    "Receipt",
+    "ReceiveBatch",
+    "RetryRunRequest",
+    "RunRead",
+    "SourceIngestionRead",
+    "SourcePurgeEventHandler",
+    "SourceIngestionStateReadProjection",
+    "StageRead",
+    "TelegramCursor",
+    "TelegramDeliveryProof",
+    "TelegramPageDelivery",
+    "TelegramProbeClassification",
+    "TelegramRawDelivery",
+    "_actor_id",
+    "_admit_ingestion_scope",
+    "_apply_state_update",
+    "_authorize_collection",
+    "_bounded_stats",
+    "_cleanup_event_scope",
+    "_cursor_binding",
+    "_decode_history_cursor",
+    "_decode_telegram_cursor",
+    "_digest",
+    "_document_cleanup_operation_id",
+    "_encode_history_cursor",
+    "_encode_telegram_cursor",
+    "_event_delivery",
+    "_event_scope",
+    "_lease_access_fence",
+    "_lease_scope",
+    "_lock_ingestion_purge_identities",
+    "_lock_source_projection",
+    "_materialization_scope",
+    "_read_stages",
+    "_ready_document_payload",
+    "_resolve_document_cleanup_event_scope",
+    "_retained_scope",
+    "_run_scope",
+    "_settle_request",
+    "_source_in_scope",
+    "_source_ingestion_purge_lineage",
+    "_source_purge_event_subject",
+    "_validate_source_ingestion_purge_in_uow",
+    "accept_collection_no_changes",
+    "accept_native_collection",
+    "accept_native_collection_with_params",
+    "acquire_connector_collection",
+    "cancel_and_purge_source_ingestion",
+    "classify_telegram_probe",
+    "collector_can_ingest",
+    "create_collector_credential",
+    "create_collector_credential_in_uow",
+    "drop_seen_records",
+    "fail_news_document_ready_event",
+    "get_collection_state",
+    "get_document_cleanup_event",
+    "get_event_delivery",
+    "get_run",
+    "get_run_meta_by_id",
+    "get_source_cursor",
+    "list_ready_events_after",
+    "list_run_meta",
+    "list_source_runs",
+    "list_terminal_runs_after",
+    "lock_document_cleanup_event_in_uow",
+    "lock_news_document_ready_event",
+    "lock_source_credentials_in_uow",
+    "lock_source_purge_event_in_uow",
+    "mark_event_delivered",
+    "mark_news_document_ready_event_delivered",
+    "native_record_key",
+    "native_verifier_for",
+    "observability_quality_summary",
+    "observability_queue_summary",
+    "prepare_document_materializations_in_uow",
+    "prepare_source_ingestion_purge_in_uow",
+    "publish_event",
+    "purge_delivered_outbox",
+    "purge_expired_collection_receipts",
+    "purge_expired_datasource_data",
+    "queue_connector_crawl",
+    "read_document_cleanup_event_operation_id",
+    "read_telegram_collection_state",
+    "receive_batch",
+    "receive_connector_batch",
+    "receive_file",
+    "record_key",
+    "register_native_verifier",
+    "release_connector_collection",
+    "reset_native_collection_cursor",
+    "resolve_collector_job_scope",
+    "resolve_ingestion_event_scope",
+    "resolve_ingestion_run_scope",
+    "resolve_ready_event_provenance",
+    "retry_run",
+    "revoke_collector_credential",
+    "revoke_source_credentials",
+    "schedule_normalization",
+    "seen_provider_ids",
+    "seen_record_keys",
+    "set_event_delivery",
+    "settle_document_cleanup_event_in_uow",
+    "tombstone_document_materializations",
+    "validate_connector_collection_in_uow",
+    "validate_telegram_record_delivery",
+]

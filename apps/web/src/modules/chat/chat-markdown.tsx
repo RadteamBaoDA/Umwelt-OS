@@ -1,0 +1,371 @@
+'use client';
+
+import * as React from 'react';
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
+import DOMPurify from 'dompurify';
+import type { Citation } from './api';
+import { safeHttpUrl } from '@/core/safe-url';
+import type { AppLocaleId } from '@/core/i18n';
+import { genUiCopy } from './generative-ui/copy';
+import { webHost } from './citation-panel';
+import { fenceLanguage, highlightFence, loadHighlighter } from './code-highlight';
+import './chat-gaps.css';
+
+// The markdown-it renderer and safe link/code boundaries adapt AnythingLLM's
+// frontend/src/utils/chat/markdown.js; the source slices and local repairs are recorded in docs/anythingllm-port.md.
+
+const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+const MARKDOWN_TAGS = [
+  'a',
+  'blockquote',
+  'br',
+  'code',
+  'del',
+  'em',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'li',
+  'ol',
+  'p',
+  'pre',
+  'span',
+  'strong',
+  'table',
+  'tbody',
+  'td',
+  'th',
+  'thead',
+  'tr',
+  'ul',
+];
+
+/** Accepts web/email and same-origin relative links while rejecting active or ambiguous schemes. */
+function isSafeMarkdownLink(href: string): boolean {
+  if (!href || /[\u0000-\u001f\\]/.test(href) || href.startsWith('//')) return false;
+  try {
+    return SAFE_LINK_PROTOCOLS.has(new URL(href, 'https://umwelt.invalid').protocol);
+  } catch {
+    return false;
+  }
+}
+
+/** Escapes plain markdown image alt text because remote images are intentionally not fetched. */
+function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character] ?? character,
+  );
+}
+
+const CODE_BLOCK_CLASS = 'my-2 max-w-full overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs';
+
+/** Class tokens a `span` may keep: highlight.js scopes (`hljs`, `hljs-*`, `function_`, `class_`, `language_`) and the language label. */
+const SPAN_CLASS_TOKEN = /^(hljs[\w-]*|(function|class|language)_|chat-code-lang)$/;
+
+/** Creates the customized upstream-derived renderer with HTML, active schemes, and remote images disabled. */
+function createMarkdownRenderer(): MarkdownItInstance {
+  const markdown = new MarkdownIt({
+    html: false,
+    linkify: false,
+    typographer: true,
+    breaks: true,
+  });
+  markdown.validateLink = isSafeMarkdownLink;
+  markdown.renderer.rules.link_open = (tokens, index) => {
+    const href = String(tokens[index].attrGet('href') ?? '');
+    return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`;
+  };
+  markdown.renderer.rules.link_close = () => '</a>';
+  markdown.renderer.rules.image = (tokens, index) => escapeHtml(String(tokens[index].content));
+  markdown.renderer.rules.fence = (tokens, index) => {
+    const token = tokens[index];
+    const language = fenceLanguage(token.info);
+    const highlighted = highlightFence(token.content, language);
+    // The label is a span so the sanitizer's span-class filter (see getPurifier) applies to it too.
+    const label = language ? `<span class="chat-code-lang">${escapeHtml(language)}</span>` : '';
+    return `<pre class="${CODE_BLOCK_CLASS}">${label}<code class="hljs">${highlighted ?? escapeHtml(token.content)}</code></pre>`;
+  };
+  markdown.renderer.rules.code_block = (tokens, index) =>
+    `<pre class="${CODE_BLOCK_CLASS}"><code>${escapeHtml(tokens[index].content)}</code></pre>`;
+  markdown.renderer.rules.bullet_list_open = () => '<ul class="my-2 list-disc space-y-1 pl-6">';
+  markdown.renderer.rules.ordered_list_open = () => '<ol class="my-2 list-decimal space-y-1 pl-6">';
+  markdown.renderer.rules.blockquote_open = () => '<blockquote class="my-2 border-l-2 border-primary pl-3 text-muted-foreground">';
+  return markdown;
+}
+
+const markdownRenderer = createMarkdownRenderer();
+
+let cachedPurifier: ReturnType<typeof DOMPurify> | null = null;
+
+/**
+ * Returns the browser-bound DOMPurify singleton, initializing it lazily on first client call
+ * so SSR never touches `window` and repeated renders reuse the same sanitizer instance.
+ *
+ * @returns Configured DOMPurify instance bound to the active browser window.
+ */
+function getPurifier(): ReturnType<typeof DOMPurify> {
+  if (!cachedPurifier) {
+    cachedPurifier = DOMPurify(window);
+    // Spans exist only for highlight.js output: strip any other class so authored markup cannot style arbitrary UI.
+    cachedPurifier.addHook('uponSanitizeAttribute', (node, data) => {
+      if (data.attrName !== 'class' || node.nodeName !== 'SPAN') return;
+      const kept = data.attrValue.split(/\s+/).filter((token) => SPAN_CLASS_TOKEN.test(token));
+      data.attrValue = kept.join(' ');
+      data.keepAttr = kept.length > 0;
+    });
+  }
+  return cachedPurifier;
+}
+
+/**
+ * Turns `[n]` markers in rendered HTML text into `.cite` chips that link to the n-th citation's exact item.
+ * Preformatted code blocks, inline code spans, and HTML tags are left untouched; markers without a matching citation stay as plain text.
+ *
+ * @param html - Rendered HTML string produced by markdown-it prior to sanitization.
+ * @param citations - Optional 1-indexed list of grounded citations for the message.
+ * @returns HTML string with plain-text `[n]` markers replaced by `.cite` links.
+ */
+function linkCitations(html: string, citations?: Citation[]): string {
+  if (!citations?.length) return html;
+  // Odd split indices capture <pre>...</pre>, <code>...</code>, or HTML tags and must remain untouched.
+  return html
+    .split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>|<[^>]+>)/)
+    .map((part, index) => {
+      if (index % 2) return part;
+      return part.replace(/\[(\d{1,2})\]/g, (marker, num: string) => {
+        const citation = citations[Number(num) - 1];
+        if (!citation) return marker;
+        if (citation.sourceType === 'web') {
+          const href = safeHttpUrl(citation.url);
+          return href
+            ? `<a class="cite" data-cite="${num}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${num}</a>`
+            : marker;
+        }
+        const query = new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId });
+        return `<a class="cite" data-cite="${num}" href="${escapeHtml(`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${query}#cited-chunk`)}">${num}</a>`;
+      });
+    })
+    .join('');
+}
+
+/**
+ * Renders adapted AnythingLLM markdown only after the browser sanitizer can initialize safely;
+ * optional `citations` turn `[n]` markers outside code spans into linked cite chips.
+ *
+ * @param props - Markdown content string and optional grounded citations.
+ * @returns Sanitized markdown container element.
+ */
+export function ChatMarkdown({
+  content,
+  citations,
+  locale,
+  onSelectCitation,
+}: {
+  content: string;
+  citations?: Citation[];
+  locale?: AppLocaleId;
+  /** Called when an inline citation chip is plainly clicked; omit to keep the chip as an ordinary link. */
+  onSelectCitation?: (citation: Citation) => void;
+}) {
+  const [safeHtml, setSafeHtml] = React.useState('');
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [highlighterReady, setHighlighterReady] = React.useState(false);
+  const hasFence = /^ {0,3}(`{3,}|~{3,})/m.test(content);
+
+  React.useEffect(() => {
+    // Load highlight.js on the first fenced block; the effect below re-renders once it resolves.
+    if (!hasFence || highlighterReady) return;
+    let live = true;
+    // A failed chunk load leaves fences as plain text; it must not surface as an unhandled rejection.
+    void loadHighlighter()
+      .then(() => {
+        if (live) setHighlighterReady(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [hasFence, highlighterReady]);
+
+  React.useEffect(() => {
+    // DOMPurify needs the live browser window; lazy singleton creation avoids touching it during SSR.
+    const purifier = getPurifier();
+    const rendered = linkCitations(markdownRenderer.render(content), citations);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sanitizer needs the live window, so state is set after mount
+    setSafeHtml(
+      purifier.sanitize(rendered, {
+        ALLOWED_TAGS: MARKDOWN_TAGS,
+        ALLOWED_ATTR: ['class', 'href', 'rel', 'target', 'data-cite'],
+        ALLOW_DATA_ATTR: false,
+        ALLOW_ARIA_ATTR: false,
+        FORBID_TAGS: ['img', 'iframe', 'object', 'script', 'style', 'svg', 'math'],
+      }),
+    );
+  }, [content, citations, highlighterReady]);
+
+  React.useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !safeHtml) return;
+    // Attach copy buttons after DOMPurify runs so the HTML sanitizer allowlist never needs <button>.
+    const labels = genUiCopy(locale);
+    const preBlocks = root.querySelectorAll('pre');
+    preBlocks.forEach((pre) => {
+      if (pre.querySelector('[data-code-copy="true"]')) return;
+      pre.classList.add('relative', 'group');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-code-copy', 'true');
+      btn.setAttribute('aria-label', labels.markdown.copyCode);
+      btn.textContent = labels.markdown.copy;
+      btn.className =
+        'absolute right-2 top-2 rounded border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground opacity-0 [@media(hover:none)]:opacity-100 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:text-foreground';
+      btn.addEventListener('click', () => {
+        const codeEl = pre.querySelector('code');
+        const rawCode = codeEl?.textContent ?? pre.textContent ?? '';
+        void navigator.clipboard?.writeText(rawCode).then(() => {
+          btn.textContent = labels.markdown.copied;
+          window.setTimeout(() => {
+            btn.textContent = labels.markdown.copy;
+          }, 1500);
+        });
+      });
+      pre.appendChild(btn);
+    });
+  }, [safeHtml, locale]);
+
+  const tip = useCitationTooltip(containerRef, citations);
+  useCitationClick(containerRef, citations, onSelectCitation);
+
+  return (
+    <>
+      <div
+        ref={containerRef}
+        className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-2 [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[15px] [&_h3]:font-semibold [&>:first-child]:mt-0 [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
+        dangerouslySetInnerHTML={{ __html: safeHtml }}
+      />
+      {tip && <CitationTooltip tip={tip} />}
+    </>
+  );
+}
+
+/**
+ * Routes a plain left click on an inline `.cite` chip to `onSelectCitation` instead of navigating. Modified clicks
+ * (ctrl/cmd/shift/alt) and middle clicks (which never fire `click`) keep the link's normal open-in-tab behavior.
+ *
+ * @param containerRef - Markdown container holding the chips (delegation target, as the chips are injected HTML).
+ * @param citations - 1-indexed citations the chips refer to.
+ * @param onSelectCitation - Selection callback; the hook is inert without it.
+ */
+function useCitationClick(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  citations: Citation[] | undefined,
+  onSelectCitation: ((citation: Citation) => void) | undefined,
+): void {
+  React.useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !citations?.length || !onSelectCitation) return;
+    /** Resolves the chip under the click and hands its citation to the callback. */
+    const handleClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const chip = (event.target as Element | null)?.closest?.('a.cite[data-cite]');
+      if (!chip || !root.contains(chip)) return;
+      const citation = citations[Number(chip.getAttribute('data-cite')) - 1];
+      if (!citation) return;
+      event.preventDefault();
+      onSelectCitation(citation);
+    };
+    root.addEventListener('click', handleClick);
+    return () => root.removeEventListener('click', handleClick);
+  }, [containerRef, citations, onSelectCitation]);
+}
+
+/** Anchor-relative position and source of the open inline-citation tooltip. */
+interface CitationTip {
+  citation: Citation;
+  index: number;
+  left: number;
+  top: number;
+}
+
+/**
+ * Opens an overview tooltip when an inline `.cite` chip is hovered or keyboard-focused. Uses event delegation on the
+ * rendered markdown container because the chips are injected as sanitized HTML.
+ *
+ * @param containerRef - Markdown container holding the `.cite` links.
+ * @param citations - 1-indexed citations the chips refer to.
+ * @returns The tooltip to render, or null when none is open.
+ */
+function useCitationTooltip(containerRef: React.RefObject<HTMLDivElement | null>, citations?: Citation[]): CitationTip | null {
+  const [tip, setTip] = React.useState<CitationTip | null>(null);
+  React.useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !citations?.length) return;
+    /** Resolves the chip under an event target and opens its tooltip below the chip. */
+    const open = (event: Event) => {
+      const chip = (event.target as Element | null)?.closest?.('a.cite[data-cite]');
+      if (!chip || !root.contains(chip)) return;
+      const index = Number(chip.getAttribute('data-cite'));
+      const citation = citations[index - 1];
+      if (!citation) return;
+      const rect = chip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.left + rect.width / 2 - 140, window.innerWidth - 288));
+      setTip({ citation, index, left, top: rect.bottom + 6 });
+    };
+    /** Closes the tooltip when the pointer or focus leaves a chip. */
+    const close = (event: Event) => {
+      if ((event.target as Element | null)?.closest?.('a.cite')) setTip(null);
+    };
+    const dismiss = () => setTip(null);
+    root.addEventListener('mouseover', open);
+    root.addEventListener('focusin', open);
+    root.addEventListener('mouseout', close);
+    root.addEventListener('focusout', close);
+    // Fixed positioning would drift from the chip while scrolling.
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      root.removeEventListener('mouseover', open);
+      root.removeEventListener('focusin', open);
+      root.removeEventListener('mouseout', close);
+      root.removeEventListener('focusout', close);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  }, [containerRef, citations]);
+  return tip;
+}
+
+/**
+ * Overview card for one citation: title, origin and a clamped quote, all rendered as plain text because titles and
+ * quotes can come from untrusted web pages.
+ *
+ * @param props - The open tooltip descriptor.
+ */
+function CitationTooltip({ tip }: { tip: CitationTip }) {
+  const { citation, index, left, top } = tip;
+  const origin = citation.sourceType === 'web' ? webHost(citation.url) : citation.url ? webHost(citation.url) : '';
+  return (
+    <div
+      role="tooltip"
+      data-testid="citation-tooltip"
+      style={{ position: 'fixed', left, top, width: 280 }}
+      className="pointer-events-none z-50 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md"
+    >
+      <p className="font-semibold">
+        [{index}] {citation.title}
+      </p>
+      {origin && <p className="mt-0.5 text-muted-foreground">{origin}</p>}
+      {citation.quote && <p className="mt-1.5 line-clamp-4 text-muted-foreground">{citation.quote}</p>}
+    </div>
+  );
+}

@@ -1,0 +1,9 @@
+# P05 implementation and activation boundary
+
+P05 starts after P04 production code/build/review and phase integration complete. Preserve the full Graphiti/FalkorDB adapter, temporal synchronization, deletion/provenance and timeline scope; a placeholder or alternative backend does not satisfy the plan.
+
+The owner's explicit all-code/build-first instruction governs the execution stage. Production preparation may resolve and pin dependencies from official artifact/source evidence, produce the actual lock, implement consumed controlled-client/owner contracts, and run prescribed builds. Metadata and image construction are not observed client/server compatibility, privacy, restart or target-capacity proof. Record the exact chosen releases, extras, licenses/notices, maintenance tradeoffs and unresolved evidence; do not silently change ARQ/queue Redis or deploy another graph backend.
+
+Keep the optional graph runtime profile disabled and activation acceptance open until the deferred compatibility probe passes. Do not start graph services, perform provider probes or run tests during production implementation. The later validation stage must exercise the real adapter and client/server pair, deletion/retry/corrections/privacy and resource behavior before activation; missing hardware evidence remains explicit. This defers execution of acceptance, not implementation of required behavior or the final completion audit.
+
+Existing P05-T1.1 explicitly requires recording unresolved compatibility/resource gates; its deferred acceptance requires the probe before enabling the runtime profile. Canonical 162/166 integration/resource claims must retain that distinction. Future code/build task receipts may mark only production delivery complete and must not mark compatibility/resource acceptance passed without observed evidence.

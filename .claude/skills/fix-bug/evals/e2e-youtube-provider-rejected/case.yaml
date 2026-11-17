@@ -1,0 +1,6 @@
+schema_version: "1.1"
+name: e2e-youtube-provider-rejected
+expected_outcome: |
+  Recognizes provider_rejected / upstream HTTP 404 as a likely upstream YouTube RSS outage, probes or
+  explains how to probe the feed URL directly, separates app bug from upstream cause, notes any existing
+  skip helper (skipIfYoutubeOutage in sources-helpers.ts), and does not change production code.

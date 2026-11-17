@@ -1,0 +1,226 @@
+import { describe, expect, it, vi } from 'vitest';
+import { LIVE_FEED_ORIGINS, buildAppCsp } from '@/core/csp';
+import { FIXTURES } from './fixtures';
+import { fetchSource, initialDelayMs, nextDelayMs, refreshable, REFRESH_MIN_GAP_MS } from './runner';
+import { BROWSER_SOURCES, BROWSER_SOURCE_BY_ID, MAX_ITEMS, snapshotScope, toIso } from './sources';
+import { filterEvents, pruneKeys, staleKeys, toStored, type StoredEvent } from './store';
+
+describe('browser source parsers', () => {
+  it.each(BROWSER_SOURCES.map((source) => source.id))('%s parses its fixture into safe events', (id) => {
+    const events = BROWSER_SOURCE_BY_ID[id].parse(FIXTURES[id]);
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect(event.title.length).toBeLessThanOrEqual(500);
+      expect(event.tags?.length).toBeGreaterThan(0);
+      expect(event.url === null || /^https?:/.test(event.url)).toBe(true);
+    }
+  });
+  it('keeps coordinates in lon/lat order and adds native types as tags', () => {
+    const [quake] = BROWSER_SOURCE_BY_ID.usgs.parse(FIXTURES.usgs);
+    expect(quake).toMatchObject({ id: 'us7000txqr', latitude: -59.03, longitude: -26.03 });
+    expect(quake.tags).toContain('earthquake');
+    expect(BROWSER_SOURCE_BY_ID.gdacs.parse(FIXTURES.gdacs)[0].tags).toEqual(['geo', 'disaster', 'eq', 'green']);
+    expect(BROWSER_SOURCE_BY_ID.launches.parse(FIXTURES.launches)[0]).toMatchObject({
+      latitude: 40.960482,
+      longitude: 100.298059,
+      url: 'https://spacelaunchnow.app/launch/long-march-2d-cas-pathfinder-1/',
+    });
+  });
+  it('drops unsafe source links and uses the latest EONET point', () => {
+    const [eonet] = BROWSER_SOURCE_BY_ID.eonet.parse(FIXTURES.eonet);
+    expect(eonet.sources).toHaveLength(1);
+    expect(eonet).toMatchObject({ longitude: 52.3, observed_at: '2026-11-08T00:00:00.000Z' });
+    expect(eonet.tags).toContain('severestorms');
+  });
+  it('places NWS alerts at the polygon centroid and treats zone-less dates as UTC', () => {
+    const [alert] = BROWSER_SOURCE_BY_ID.nws_alerts.parse(FIXTURES.nws_alerts);
+    expect(alert.latitude).toBeGreaterThan(36.9);
+    expect(toIso('2026-11-12T03:45:56')).toBe('2026-11-12T03:45:56.000Z');
+    expect(toIso('2026-11-10')).toBe('2026-11-10T00:00:00.000Z');
+    expect(toIso('2026-11-10 13:29:13')).toBe('2026-11-10T13:29:13.000Z');
+    expect(toIso('nope')).toBeNull();
+  });
+  it('returns nothing for malformed bodies and caps item count and title length', () => {
+    for (const source of BROWSER_SOURCES.filter((source) => !source.snapshot)) expect(source.parse({ unexpected: true })).toEqual([]);
+    const hits = Array.from({ length: 500 }, (_, i) => ({ objectID: String(i), title: 'x'.repeat(900), url: 'https://e.com' }));
+    const parsed = BROWSER_SOURCE_BY_ID.hackernews.parse({ hits });
+    expect(parsed).toHaveLength(MAX_ITEMS);
+    expect(parsed[0].title).toHaveLength(500);
+  });
+  it('throws on a structurally invalid snapshot payload instead of reading it as an empty set', () => {
+    expect(() => BROWSER_SOURCE_BY_ID.nws_alerts.parse({ unexpected: true })).toThrow('payload_shape');
+    expect(() => BROWSER_SOURCE_BY_ID.launches.parse({ unexpected: true })).toThrow('payload_shape');
+    expect(() => BROWSER_SOURCE_BY_ID.gamerpower.parse({ unexpected: true })).toThrow('payload_shape');
+    expect(BROWSER_SOURCE_BY_ID.nws_alerts.parse({ features: [] })).toEqual([]);
+    expect(BROWSER_SOURCE_BY_ID.launches.parse({ results: [] })).toEqual([]);
+    expect(BROWSER_SOURCE_BY_ID.gamerpower.parse([])).toEqual([]);
+  });
+  it('treats a non-empty snapshot list with no valid item as drift, but keeps partially valid lists', () => {
+    // Every item fails the schema (renamed field): must throw so the worker keeps stored rows, not prune them.
+    expect(() => BROWSER_SOURCE_BY_ID.nws_alerts.parse({ features: [{ properties: {} }, { nope: 1 }] })).toThrow('payload_shape');
+    // A genuinely empty list is still an authoritative empty current set.
+    expect(BROWSER_SOURCE_BY_ID.nws_alerts.parse({ features: [] })).toEqual([]);
+    // One valid item among bad ones: the bad ones are dropped, the valid one is kept.
+    const mixed = BROWSER_SOURCE_BY_ID.nws_alerts.parse({
+      features: [{ properties: {} }, { properties: { id: 'a1', event: 'Flood Warning' } }],
+    });
+    expect(mixed.map((event) => event.id)).toEqual(['a1']);
+  });
+  it('requires a safe GitHub scope', () => {
+    const github = BROWSER_SOURCE_BY_ID.github_releases;
+    expect(github.url({}, 0)).toBeNull();
+    expect(github.url({ live_map_github_owner: '../x', live_map_github_repo: 'r' }, 0)).toBeNull();
+    expect(github.url({ live_map_github_owner: 'vercel', live_map_github_repo: 'next.js' }, 0)).toContain('/repos/vercel/next.js/releases');
+  });
+});
+
+describe('csp', () => {
+  it('allows exactly the origins of the browser sources', () => {
+    const origins = new Set(
+      BROWSER_SOURCES.map((source) => new URL(source.url({ live_map_github_owner: 'a', live_map_github_repo: 'b' }, 0)!).origin),
+    );
+    expect([...origins].sort()).toEqual([...LIVE_FEED_ORIGINS].sort());
+    expect(buildAppCsp('n', false)).toContain(`connect-src 'self' ${LIVE_FEED_ORIGINS.join(' ')}`);
+  });
+});
+
+describe('store helpers', () => {
+  const now = Date.parse('2026-11-12T00:00:00Z');
+  const row = (key: string, observed_at: string | null, tags = ['geo'], provider = 'usgs'): StoredEvent => ({
+    ...toStored(
+      provider,
+      tags,
+      {
+        id: key,
+        category: 'geo',
+        title: `Quake ${key}`,
+        observed_at,
+        latitude: null,
+        longitude: null,
+        url: null,
+        source: 'USGS',
+        summary: null,
+      },
+      new Date(now).toISOString(),
+    ),
+    key,
+  });
+  it('prunes rows past retention and beyond the cap, oldest first', () => {
+    const rows = [row('a', '2026-11-11T00:00:00Z'), row('b', '2026-11-10T00:00:00Z'), row('old', '2026-09-01T00:00:00Z')];
+    expect(pruneKeys(rows, now, 1).sort()).toEqual(['b', 'old']);
+  });
+  it('filters by provider, period, any-of tags and text, newest first', () => {
+    const rows = [
+      row('a', '2026-11-11T00:00:00Z', ['geo']),
+      row('b', '2026-11-11T12:00:00Z', ['weather']),
+      row('c', '2026-10-01T00:00:00Z', ['geo']),
+      row('d', null, ['geo'], 'hackernews'),
+    ];
+    const base = { tags: [], days: 7, query: '', providers: ['usgs'] };
+    expect(filterEvents(rows, base, now).map((r) => r.key)).toEqual(['b', 'a']);
+    expect(filterEvents(rows, { ...base, tags: ['weather'] }, now).map((r) => r.key)).toEqual(['b']);
+    expect(filterEvents(rows, { ...base, query: 'QUAKE b' }, now).map((r) => r.key)).toEqual(['b']);
+    expect(filterEvents(rows, { ...base, query: 'nothing' }, now)).toEqual([]);
+    expect(filterEvents(rows, { ...base, providers: ['hackernews'] }, now).map((r) => r.key)).toEqual(['d']);
+  });
+});
+
+describe('stale rows and ordering', () => {
+  it('lists stored keys of a provider that the new snapshot omits', () => {
+    expect(staleKeys(['usgs:a', 'usgs:b', 'usgs:c'], ['usgs:b'])).toEqual(['usgs:a', 'usgs:c']);
+    expect(staleKeys([], ['usgs:b'])).toEqual([]);
+  });
+  it('deletes nothing when the new batch is empty (a 200 that parses to [] must not wipe history)', () => {
+    expect(staleKeys(['nws_alerts:a', 'nws_alerts:b'], [])).toEqual([]);
+  });
+  it('deletes every stored key when a verified empty snapshot is allowed', () => {
+    expect(staleKeys(['nws_alerts:a', 'nws_alerts:b'], [], true)).toEqual(['nws_alerts:a', 'nws_alerts:b']);
+    expect(staleKeys(['nws_alerts:a'], ['nws_alerts:a'], true)).toEqual([]);
+  });
+  it('routes deletes only to sources flagged as complete snapshots', () => {
+    expect(
+      BROWSER_SOURCES.filter((source) => source.snapshot)
+        .map((source) => source.id)
+        .sort(),
+    ).toEqual(['gamerpower', 'launches', 'nws_alerts']);
+    expect(snapshotScope('nws_alerts')).toEqual(['nws_alerts']);
+    expect(snapshotScope('usgs')).toEqual([]);
+    expect(snapshotScope('not_a_source')).toEqual([]);
+  });
+  it('ranks future-dated rows as now instead of above everything', () => {
+    const now = Date.parse('2026-11-12T00:00:00Z');
+    const mk = (id: string, observed_at: string) => ({
+      id,
+      category: 'geo',
+      title: id,
+      observed_at,
+      latitude: null,
+      longitude: null,
+      url: null,
+      source: 's',
+      summary: null,
+      provider: 'usgs',
+      tags: [] as string[],
+    });
+    const rows = [mk('launch', '2026-12-25T00:00:00Z'), mk('recent', '2026-11-11T23:00:00Z'), mk('now', '2026-11-12T00:00:00Z')];
+    const filters = { tags: [], days: 60, query: '', providers: ['usgs'] };
+    // The future launch clamps to now, so it ties with a row observed now (stable order) and never outranks it.
+    expect(filterEvents([rows[2], rows[0], rows[1]], filters, now).map((r) => r.id)).toEqual(['now', 'launch', 'recent']);
+    expect(filterEvents(rows, filters, now).map((r) => r.id)).toEqual(['launch', 'now', 'recent']);
+  });
+});
+
+describe('runner', () => {
+  it('delays a restart by the remainder of the interval since the last run', () => {
+    expect(initialDelayMs(600_000, undefined, 1_000_000)).toBe(0);
+    expect(initialDelayMs(600_000, 1_000_000 - 100_000, 1_000_000)).toBe(500_000);
+    expect(initialDelayMs(600_000, 1_000_000 - 700_000, 1_000_000)).toBe(0);
+  });
+  it('backs off exponentially up to one hour', () => {
+    expect(nextDelayMs(60_000, 0)).toBe(60_000);
+    expect(nextDelayMs(60_000, 3)).toBe(480_000);
+    expect(nextDelayMs(60_000, 20)).toBe(3_600_000);
+  });
+  it('fetches anonymously and reports failures as short codes', async () => {
+    const as = (fn: unknown) => fn as typeof fetch;
+    const ok = vi.fn(async () => new Response(JSON.stringify(FIXTURES.hackernews)));
+    expect(await fetchSource('hackernews', {}, 0, as(ok))).toHaveLength(2);
+    expect(ok).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ credentials: 'omit', referrerPolicy: 'no-referrer' }));
+    await expect(
+      fetchSource(
+        'hackernews',
+        {},
+        0,
+        as(async () => new Response('', { status: 429 })),
+      ),
+    ).rejects.toThrow('http_429');
+    await expect(fetchSource('github_releases', {}, 0, as(ok))).rejects.toThrow('scope');
+    await expect(
+      fetchSource(
+        'hackernews',
+        {},
+        0,
+        as(async () => new Response('<html>')),
+      ),
+    ).rejects.toThrow('parse');
+    await expect(
+      fetchSource(
+        'hackernews',
+        {},
+        0,
+        as(async () => new Response('x', { headers: { 'content-length': String(6 * 1024 * 1024) } })),
+      ),
+    ).rejects.toThrow('too_large');
+  });
+});
+
+describe('manual refresh', () => {
+  it('skips providers in flight or fetched within the minimum gap', () => {
+    const now = 1_000_000;
+    const lastRun = new Map([
+      ['usgs', now - 1_000],
+      ['eonet', now - REFRESH_MIN_GAP_MS],
+    ]);
+    expect(refreshable(['usgs', 'eonet', 'gdacs', 'nvd'], new Set(['nvd']), lastRun, now)).toEqual(['eonet', 'gdacs']);
+  });
+});

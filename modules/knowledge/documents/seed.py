@@ -2,16 +2,35 @@
 
 import asyncio
 from dataclasses import dataclass
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from core.auth.public import get_active_account, get_demo_owner_id
 from core.config import Settings
+from core.demo_seed import (
+    P08_DEMO_NAMESPACE,
+    P10_DEMO_NAMESPACE,
+    P12_DEMO_NAMESPACE,
+    claim_demo_seed,
+    record_demo_seed_receipt,
+)
+from core.modules import register_modules
+from core.workspaces.public import resolve_workspace_owner_context
+from core.workspaces.schemas import InternalJobScope
+from modules.automations.public import ensure_demo_automations
+from modules.chat.public import ensure_demo_conversation
+from modules.goals.public import ensure_demo_goals
+from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import Document, DocumentVersion
 from modules.knowledge.documents.public import content_hash
-from modules.sources.models import Source
+from modules.knowledge.entities.public import ensure_demo_entities
+from modules.knowledge.relationships.public import ensure_demo_relationships
+from modules.news.public import ensure_demo_topics
+from modules.sources import public as sources
+from modules.tasks.public import ensure_demo_tasks
+from modules.timeline.public import ensure_demo_events
 
 DEMO_NAMESPACE = "bbd-os.demo.phase-1"
 SOURCE_ID = uuid5(NAMESPACE_URL, f"{DEMO_NAMESPACE}/source")
@@ -31,69 +50,278 @@ NOTES = (
 
 @dataclass(frozen=True)
 class SeedReport:
+    """Report fictional seed counts and whether this invocation initialized owner-scoped fixtures."""
+
     created: int
     existing: int
+    p08_seeded: bool
+    p12_seeded: bool
+    skipped: int
+
+
+async def _resolve_seed_scope(
+    session: AsyncSession, settings: Settings
+) -> tuple[int, InternalJobScope]:
+    """Resolve the configured demo owner and their default workspace as an internal job scope.
+
+    Reads only (inside the caller's transaction). Raises ``RuntimeError`` when the owner has no
+    active account or the resolved workspace is not owned by that user; no workspace epoch is
+    inferred, the membership revision comes from the resolved owner context.
+    """
+    owner_id = await get_demo_owner_id(session)
+    account = await get_active_account(
+        session,
+        owner_id,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
+    )
+    if account is None:
+        raise RuntimeError("Demo seeding requires an active owner account")
+    workspace_owner = await resolve_workspace_owner_context(
+        session,
+        account.default_workspace_id,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
+    )
+    if workspace_owner is None or workspace_owner.user_id != owner_id:
+        raise RuntimeError("Demo seeding requires the configured owner's default workspace")
+    return owner_id, InternalJobScope(
+        workspace_id=account.default_workspace_id,
+        actor_user_id=workspace_owner.user_id,
+        membership_revision=workspace_owner.membership_revision,
+    )
+
+
+async def _seed_p08(
+    session: AsyncSession,
+    owner_id: int,
+    scope: InternalJobScope,
+    settings: Settings,
+) -> tuple[bool, int, int]:
+    """Seed P08 goals/tasks/topics once per workspace; return ``(seeded, created, existing)``.
+
+    The per-workspace claim gates the fixtures and the receipt is recorded in the same
+    transaction, so deleted or edited fixtures are never resurrected.
+    """
+    seeded = await claim_demo_seed(
+        session,
+        owner_id,
+        P08_DEMO_NAMESPACE,
+        workspace_id=scope.workspace_id,
+    )
+    created = 0
+    existing = 0
+    if seeded:
+        flag = settings.multi_workspace_enabled
+        goals_created, goals_existing = await ensure_demo_goals(
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        tasks_created, tasks_existing = await ensure_demo_tasks(
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        topics_created, topics_existing = await ensure_demo_topics(
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        created = goals_created + tasks_created + topics_created
+        existing = goals_existing + tasks_existing + topics_existing
+        await record_demo_seed_receipt(
+            session,
+            owner_id,
+            P08_DEMO_NAMESPACE,
+            workspace_id=scope.workspace_id,
+        )
+    return seeded, created, existing
+
+
+async def _seed_p10(
+    session: AsyncSession,
+    owner_id: int,
+    scope: InternalJobScope,
+    settings: Settings,
+) -> int:
+    """Seed the disabled P10 automation examples once per workspace; return the created count."""
+    created = 0
+    if await claim_demo_seed(
+        session, owner_id, P10_DEMO_NAMESPACE, workspace_id=scope.workspace_id
+    ):
+        # Disabled fictional automation examples; the receipt stops edited/deleted ones returning.
+        created = await ensure_demo_automations(
+            session,
+            register_modules(),
+            settings,
+            scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
+        await record_demo_seed_receipt(
+            session,
+            owner_id,
+            P10_DEMO_NAMESPACE,
+            workspace_id=scope.workspace_id,
+        )
+    return created
+
+
+async def _seed_p12(
+    session: AsyncSession,
+    owner_id: int,
+    scope: InternalJobScope,
+    settings: Settings,
+) -> tuple[bool, int, int, int]:
+    """Seed P12 entities/relationships/events/article/chat once; return ``(seeded, created, existing, skipped)``.
+
+    The owner helpers flush only; the receipt commits with every fixture and prevents later
+    resurrection of hard-deleted owner rows. Chat history is added only when current Memory
+    consent permits durable storage (reported through ``skipped``).
+    """
+    flag = settings.multi_workspace_enabled
+    seeded = await claim_demo_seed(
+        session,
+        owner_id,
+        P12_DEMO_NAMESPACE,
+        workspace_id=scope.workspace_id,
+    )
+    created = 0
+    existing = 0
+    skipped = 0
+    if seeded:
+        for helper in (
+            ensure_demo_entities,
+            ensure_demo_relationships,
+            ensure_demo_events,
+        ):
+            helper_created, helper_existing = await helper(
+                session,
+                scope=scope,
+                multi_workspace_enabled=flag,
+            )
+            created += helper_created
+            existing += helper_existing
+        article_created, article_existing, article_skipped = await documents.ensure_demo_article(
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        (
+            conversation_created,
+            conversation_existing,
+            conversation_skipped,
+        ) = await ensure_demo_conversation(
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        created += article_created + conversation_created
+        existing += article_existing + conversation_existing
+        skipped += article_skipped + conversation_skipped
+        await record_demo_seed_receipt(
+            session,
+            owner_id,
+            P12_DEMO_NAMESPACE,
+            workspace_id=scope.workspace_id,
+        )
+    return seeded, created, existing, skipped
+
+
+def _add_demo_notes(
+    session: AsyncSession,
+    scope: InternalJobScope,
+    document_ids: tuple[UUID, ...],
+) -> None:
+    """Stage the fictional Phase 1 note documents and their first versions (no flush/commit)."""
+    for (key, title, content), document_id in zip(NOTES, document_ids, strict=True):
+        digest = content_hash(content)
+        session.add(
+            Document(
+                id=document_id,
+                workspace_id=scope.workspace_id,
+                source_id=SOURCE_ID,
+                external_id=f"{DEMO_NAMESPACE}/{key}",
+                title=title,
+                metadata_json={"demo_namespace": DEMO_NAMESPACE},
+                current_version=1,
+                content_hash=digest,
+            )
+        )
+        session.add(
+            DocumentVersion(
+                id=uuid5(NAMESPACE_URL, f"{DEMO_NAMESPACE}/{key}/version-1"),
+                document_id=document_id,
+                version_number=1,
+                content=content,
+                content_hash=digest,
+            )
+        )
 
 
 async def seed_demo(session: AsyncSession) -> SeedReport:
-    """Create the Phase 1 fixture once; preserve subsequent edits and deletions."""
+    """Create Phase 1, P08/P10, and P12 fictional fixtures without replaying edits or deletions.
+
+    Each phase has an independent per-workspace receipt and transaction lock, so the original source
+    sentinel cannot suppress new fixtures. The P12 owner helpers flush only; its receipt commits
+    with every fixture and prevents later resurrection of hard-deleted owner rows. Chat history is
+    added only when current Memory consent permits durable storage. The configured demo account's
+    active default workspace is resolved explicitly; no workspace epoch is inferred by a module helper.
+    Phase order inside the single transaction is scope, P08, P10, P12, source sentinel, notes.
+    """
     document_ids = tuple(uuid5(NAMESPACE_URL, f"{DEMO_NAMESPACE}/{key}") for key, _, _ in NOTES)
+    settings = Settings()
     async with session.begin():
-        inserted = await session.scalar(
-            insert(Source)
-            .values(
-                id=SOURCE_ID,
-                type="manual",
-                name="Demo: fictional notes",
-                local_only=True,
-                configuration={"demo_namespace": DEMO_NAMESPACE},
-            )
-            .on_conflict_do_nothing(index_elements=[Source.id])
-            .returning(Source.id)
+        owner_id, scope = await _resolve_seed_scope(session, settings)
+        p08_seeded, p08_created, p08_existing = await _seed_p08(session, owner_id, scope, settings)
+        p08_created += await _seed_p10(session, owner_id, scope, settings)
+        p12_seeded, p12_created, p12_existing, p12_skipped = await _seed_p12(
+            session,
+            owner_id,
+            scope,
+            settings,
         )
-        if inserted is None:
-            source = await session.get(Source, SOURCE_ID)
-            if source is None or source.configuration.get("demo_namespace") != DEMO_NAMESPACE:
-                raise RuntimeError("Demo source identity is occupied by another source")
+        inserted = await sources.ensure_demo_source(
+            session,
+            SOURCE_ID,
+            DEMO_NAMESPACE,
+            scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
+        if not inserted:
             document_count = await session.scalar(
                 select(func.count())
                 .select_from(Document)
                 .where(Document.source_id == SOURCE_ID, Document.id.in_(document_ids))
             )
-            return SeedReport(created=0, existing=1 + (document_count or 0))
+            return SeedReport(
+                created=p08_created + p12_created,
+                existing=1 + (document_count or 0) + p08_existing + p12_existing,
+                p08_seeded=p08_seeded,
+                p12_seeded=p12_seeded,
+                skipped=p12_skipped,
+            )
 
-        for (key, title, content), document_id in zip(NOTES, document_ids, strict=True):
-            digest = content_hash(content)
-            session.add(
-                Document(
-                    id=document_id,
-                    source_id=SOURCE_ID,
-                    external_id=f"{DEMO_NAMESPACE}/{key}",
-                    title=title,
-                    metadata_json={"demo_namespace": DEMO_NAMESPACE},
-                    current_version=1,
-                    content_hash=digest,
-                )
-            )
-            session.add(
-                DocumentVersion(
-                    id=uuid5(NAMESPACE_URL, f"{DEMO_NAMESPACE}/{key}/version-1"),
-                    document_id=document_id,
-                    version_number=1,
-                    content=content,
-                    content_hash=digest,
-                )
-            )
-    return SeedReport(created=1 + len(NOTES), existing=0)
+        _add_demo_notes(session, scope, document_ids)
+    return SeedReport(
+        created=1 + len(NOTES) + p08_created + p12_created,
+        existing=p08_existing + p12_existing,
+        p08_seeded=p08_seeded,
+        p12_seeded=p12_seeded,
+        skipped=p12_skipped,
+    )
 
 
 async def _run_seed() -> None:
-    engine = create_async_engine(Settings().database_url, pool_pre_ping=True)
+    """Run explicit demo seeding in a database session and dispose the engine."""
+    engine = create_async_engine(Settings().admin_database_url, pool_pre_ping=True)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         async with factory() as session:
             report = await seed_demo(session)
-        print(f"Demo seed: created={report.created}, existing={report.existing}")
+        print(
+            f"Demo seed: created={report.created}, existing={report.existing}, "
+            f"p08_seeded={report.p08_seeded}"
+            f", p12_seeded={report.p12_seeded}, skipped={report.skipped}"
+        )
     finally:
         await engine.dispose()
 

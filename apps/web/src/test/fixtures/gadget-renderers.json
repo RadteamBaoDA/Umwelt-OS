@@ -1,0 +1,211 @@
+[
+  {
+    "accepted_shapes": ["event", "news"],
+    "capability_keys": ["news", "documents"],
+    "config_version": 1,
+    "id": "news_feed",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["messages"],
+    "capability_keys": ["telegram_messages"],
+    "config_version": 1,
+    "id": "telegram_feed",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["news"],
+    "capability_keys": ["documents"],
+    "config_version": 1,
+    "id": "text_panel",
+    "max_sources": null,
+    "minimum_height": 3,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["event", "measurement", "news"],
+    "capability_keys": ["documents"],
+    "config_version": 1,
+    "id": "table_panel",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 6,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["job"],
+    "capability_keys": ["documents"],
+    "config_version": 1,
+    "id": "job_list",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 6,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["video"],
+    "capability_keys": ["video"],
+    "config_version": 1,
+    "id": "video_panel",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 6,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["series"],
+    "capability_keys": ["market_series", "world_observations"],
+    "config_version": 1,
+    "id": "finance_chart",
+    "max_sources": 5,
+    "minimum_height": 4,
+    "minimum_width": 6,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["personal_context"],
+    "config_version": 1,
+    "id": "personal_context",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 4,
+    "runtime_state": "planned",
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": ["located"],
+    "capability_keys": ["map_layers", "world_observations"],
+    "config_version": 1,
+    "id": "map",
+    "max_sources": null,
+    "minimum_height": 6,
+    "minimum_width": 8,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["located"],
+    "capability_keys": ["cross_stream_correlation", "cii_v8_availability"],
+    "config_version": 1,
+    "id": "intelligence_panel",
+    "max_sources": null,
+    "minimum_height": 6,
+    "minimum_width": 8,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["highlights"],
+    "config_version": 1,
+    "id": "highlights",
+    "max_sources": null,
+    "minimum_height": 3,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["watch_rules"],
+    "config_version": 1,
+    "id": "watch_rules",
+    "max_sources": null,
+    "minimum_height": 3,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["tasks"],
+    "config_version": 1,
+    "id": "tasks",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["goals"],
+    "config_version": 1,
+    "id": "goals",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["daily_brief"],
+    "config_version": 1,
+    "id": "daily_brief",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 6,
+    "runtime_state": "available",
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": ["weather"],
+    "capability_keys": ["weather", "world_observations"],
+    "config_version": 1,
+    "id": "weather",
+    "max_sources": 5,
+    "minimum_height": 3,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": ["measurement"],
+    "capability_keys": ["world_observations"],
+    "config_version": 1,
+    "id": "provider_observation",
+    "max_sources": 5,
+    "minimum_height": 3,
+    "minimum_width": 4,
+    "runtime_state": "available",
+    "source_mode": "multi"
+  },
+  {
+    "accepted_shapes": null,
+    "capability_keys": ["research"],
+    "config_version": 1,
+    "id": "research",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 4,
+    "runtime_state": "planned",
+    "source_mode": "none"
+  },
+  {
+    "accepted_shapes": ["project_activity"],
+    "capability_keys": ["github_project"],
+    "config_version": 1,
+    "id": "github_project",
+    "max_sources": null,
+    "minimum_height": 4,
+    "minimum_width": 6,
+    "runtime_state": "available",
+    "source_mode": "single"
+  }
+]

@@ -1,12 +1,23 @@
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import type { DataShape } from '@/core/data-shapes';
+import type { ApiResponse } from '@/core/api-contract';
+import type { components } from '@/core/api-types.gen';
 
-export type Source = {
+/** The two owner switches a source carries; both default to on so existing behavior is unchanged. */
+export type SourceAiOptions = { graph_enabled: boolean; rag_index_enabled: boolean };
+
+export type RealtimeMode = 'realtime' | 'near_realtime';
+
+/** Source row; `blocked_error_code` (why collection stopped) and `failure_count` come from the generated `SourceRead`. */
+export type Source = Pick<components['schemas']['SourceRead'], 'blocked_error_code' | 'failure_count'> & {
   id: string;
   type: string;
   name: string;
   provider: string | null;
   status: 'active' | 'paused' | 'archived';
   local_only: boolean;
+  graph_enabled: boolean;
+  rag_index_enabled: boolean;
   last_sync_at: string | null;
   last_success_at: string | null;
   last_error_at: string | null;
@@ -14,6 +25,9 @@ export type Source = {
   collected_at: string | null;
   indexed_at: string | null;
   collection_error_code: string | null;
+  next_due_at?: string | null;
+  retry_at?: string | null;
+  realtime_mode?: RealtimeMode | null;
   processing_error_code: string | null;
   generation: number;
   retired_at: string | null;
@@ -25,60 +39,1057 @@ export type IngestionRun = {
   run_id: string;
   source_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'needs_ocr' | 'failed';
-  stages: { stage_key: string; status: string; attempts: number; error_code: string | null; result_count: number | null; updated_at: string }[];
+  stages: {
+    stage_key: string;
+    status: string;
+    attempts: number;
+    error_code: string | null;
+    result_count: number | null;
+    normalized_count: number;
+    duplicate_count: number;
+    selected_current_count: number;
+    skipped_count: number;
+    failed_count: number;
+    pending_count: number;
+    updated_at: string;
+  }[];
   error_code: string | null;
   created_at: string;
   updated_at: string;
+  /** Per-run collection telemetry; absent for runs without an acceptance receipt. `gap` is [from, to] ISO times. */
+  collection_stats?: CollectionStats | null;
 };
-export type PurgeOperation = { operation_id: string; source_id: string; status: string; error_code: string | null; created_at: string; updated_at: string };
-export const sourceKeys = { all: ['sources'] as const, list: ['sources', 'list'] as const };
+export type CollectionStats = {
+  new?: number;
+  backlog?: number | null;
+  caught_up?: boolean;
+  gap?: [string, string] | null;
+  duplicates?: number;
+  failed_sections?: string[];
+  truncated?: boolean;
+  failed_calls?: number;
+};
+export type IngestionRunStatus = IngestionRun['status'];
+export type ConnectorConfig = {
+  url?: string;
+  feed_url?: string;
+  js_render?: boolean;
+  max_pages?: number;
+  max_depth?: number;
+  timeout_seconds: number;
+  items_path?: string;
+  id_field?: string;
+  title_field?: string;
+  content_field?: string;
+  updated_field?: string;
+  timezone: string;
+  schedule_interval_minutes: 15 | 30 | 60 | 360 | 1440;
+  youtube_channel_id?: string;
+  bluesky_actor?: string;
+  mastodon_instance_url?: string;
+  mastodon_account?: string;
+  mastodon_hashtag?: string;
+  reddit_subreddit?: string;
+  x_account?: string;
+  x_query?: string;
+  google_mail_label_ids?: string[];
+  google_calendar_ids?: string[];
+  google_drive_ids?: string[];
+  notion_page_ids?: string[];
+  slack_channel_ids?: string[];
+  fhir_base_url?: string;
+  fhir_patient_id?: string;
+  ha_base_url?: string;
+  ha_entity_ids?: string[];
+  arxiv_category?: string;
+  huggingface_author?: string;
+  github_owner?: string;
+  github_repository?: string;
+  include_issues?: boolean;
+  include_pulls?: boolean;
+  include_commits?: boolean;
+  include_releases?: boolean;
+  github_history_days?: number;
+  telegram_chat_ids?: string[];
+  market_symbols?: string[];
+  coingecko_assets?: CoinGeckoCoin[];
+  market_currency?: string;
+  market_exchange_timezone?: string;
+  weather_latitude?: number;
+  weather_longitude?: number;
+  weather_timezone?: string;
+  weather_metrics?: string[];
+  news_query?: string;
+  scholarly_query?: string;
+  fred_series_id?: string;
+  owm_latitude?: number;
+  owm_longitude?: number;
+  openaq_location_id?: number;
+  firms_country?: string;
+  news_site?: 'any' | 'reuters.com' | 'apnews.com' | 'bbc.com' | 'vnexpress.net';
+  news_locale?: 'vi-VN' | 'en-US';
+  sec_cik?: string;
+  sec_contact_email?: string;
+  history_mode?: 'returned_snapshot' | 'pending_updates';
+  realtime_mode?: RealtimeMode;
+  max_items?: number | null;
+  include_keywords?: string[] | null;
+  exclude_keywords?: string[] | null;
+  max_age_days?: number | null;
+  feed_sections?: string[] | null;
+  connection_id?: string;
+  calls?: { grant_id: string; arguments: Record<string, unknown> }[];
+} & BuiltinTypeOptions;
+/** Wave D per-type built-in options (server-validated enums/bounds; each is accepted only by its own provider, see `applicable_options`). */
+export type BuiltinTypeOptions = {
+  hn_list?: 'top' | 'new' | 'best' | 'ask' | 'show';
+  gdelt_query?: string;
+  gdelt_timespan?: '1h' | '6h' | '24h' | '3d' | '7d';
+  gdelt_source_lang?: 'english' | 'vietnamese' | 'chinese' | 'japanese' | 'korean' | 'french' | 'german' | 'spanish';
+  gdelt_source_country?: 'US' | 'VN' | 'CN' | 'JP' | 'GB' | 'DE' | 'FR' | 'IN' | 'KR' | 'SG' | 'AU' | 'RU' | 'BR' | 'CA';
+  usgs_min_magnitude?: 'significant' | '4.5' | '2.5' | '1.0' | 'all';
+  usgs_period?: 'hour' | 'day' | 'week';
+  min_magnitude?: number;
+  eonet_categories?: (
+    | 'drought'
+    | 'dustHaze'
+    | 'earthquakes'
+    | 'floods'
+    | 'landslides'
+    | 'manmade'
+    | 'seaLakeIce'
+    | 'severeStorms'
+    | 'snow'
+    | 'tempExtremes'
+    | 'volcanoes'
+    | 'waterColor'
+    | 'wildfires'
+  )[];
+  eonet_status?: 'open' | 'all';
+  eonet_days?: number;
+  gdacs_event_types?: ('EQ' | 'TC' | 'FL' | 'VO' | 'WF' | 'DR')[];
+  gdacs_alert_levels?: ('Green' | 'Orange' | 'Red')[];
+  nws_severity?: ('Extreme' | 'Severe' | 'Moderate' | 'Minor')[];
+  nws_area?: string;
+  nvd_severity?: ('LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL')[];
+  nvd_window_days?: number;
+  nvd_keyword?: string;
+  kev_ransomware_only?: boolean;
+  ioda_country?: string;
+  region?:
+    | 'world'
+    | 'southeast_asia'
+    | 'vietnam'
+    | 'east_asia'
+    | 'south_asia'
+    | 'europe'
+    | 'north_america'
+    | 'south_america'
+    | 'africa'
+    | 'oceania'
+    | 'middle_east';
+  // Wave F per-type options (curated server-side lists; the server rejects anything else with 422).
+  wiki_language?: 'en' | 'vi' | 'ja' | 'zh' | 'fr' | 'de' | 'es' | 'ko';
+  satnogs_status?: 'good' | 'bad' | 'unknown';
+  disease_country?: string;
+  wb_country?: string;
+  wb_indicator?: 'gdp' | 'gdp_growth' | 'inflation_cpi' | 'unemployment' | 'population' | 'fdi';
+  fx_base?: string;
+  fx_quotes?: string[];
+  oecd_countries?: string[];
+  crypto_symbols?: string[];
+  /** Vietnam stock/index tickers (`vn_stock`), 1-20 upper-case codes. */
+  vn_symbols?: string[];
+  /** Job-board filters (`vietnamworks_jobs`, `itviec_jobs`): 1-5 search keywords, city / level subsets and a USD salary floor. */
+  job_keywords?: string[];
+  job_cities?: ('ho_chi_minh' | 'ha_noi' | 'da_nang')[];
+  job_levels?: ('intern' | 'fresher' | 'experienced' | 'manager' | 'director')[];
+  job_min_salary_usd?: number;
+  coin_ids?: string[];
+  kp_min?: number;
+  advisory_min_level?: 1 | 2 | 3 | 4;
+};
+export type CoinGeckoCoin = { id: string; symbol: string; name: string; series_symbol?: string };
+export type ConnectorSettings = {
+  expected_revision: number;
+  configuration: ConnectorConfig;
+  auth_method: 'none' | 'http_header' | 'telegram_bot_token';
+  auth_header_name?: string;
+};
+export type DraftValidationRequest = ConnectorSettings & {
+  expected_source_generation: number;
+  secret_action?: 'keep' | 'replace';
+  secret?: string;
+};
+/** Activation state of a connector; derived from the backend OpenAPI schema (generated types). */
+export type ConnectorActivation = ApiResponse<'/api/v1/connectors/{source_id}/activation'>;
+export type ExecutionBackend = 'native' | 'n8n';
+export type CollectionStatus = 'queued' | 'running' | 'succeeded' | 'no_changes' | 'failed' | 'cancelled';
+export type CollectionRequest = {
+  request_id: string;
+  source_id: string;
+  status: CollectionStatus;
+  ingestion_run_id: string | null;
+  error_code: string | null;
+};
+export type ManualSyncResult = { run_id: string | null; batch_id: string | null; status: string; request_id: string | null };
+export type ConnectorConfiguration = {
+  source_id: string;
+  source_type: 'rss' | 'web' | 'api' | 'mcp' | 'email' | 'calendar';
+  source_generation: number;
+  provider: string | null;
+  configuration: ConnectorConfig;
+  expected_revision: number;
+  auth_method: 'none' | 'http_header' | 'telegram_bot_token' | 'oauth2';
+  auth_header_name: string | null;
+  desired_enabled: boolean;
+  activation_state: string;
+  activation_error_code: string | null;
+  provider_credential_configured: boolean;
+  provider_credential_state: string | null;
+  execution_backend?: ExecutionBackend;
+};
+export type DraftValidation = {
+  source_id: string;
+  source_generation: number;
+  expected_revision: number;
+  validated_at: string;
+  validation_status: 'valid';
+  checks: ('configuration' | 'public_url_policy' | 'provider_identity' | 'provider_scope' | 'receive_mode')[];
+  verified_bot_id?: string | null;
+  scope_verified?: boolean | null;
+};
+export type BuiltinCategory = 'news' | 'economy' | 'hazards' | 'space' | 'security' | 'tech';
+export type ConnectorCatalogEntry = {
+  provider_id: string;
+  kind?: 'connector' | 'group' | 'preset';
+  source_type?: 'rss' | 'web' | 'api' | 'mcp' | 'email' | 'calendar' | 'manual' | null;
+  label: string;
+  auth_methods: string[];
+  scope_fields: string[];
+  configuration_fields: string[];
+  quota_limits: Record<string, number>;
+  history_description: string | null;
+  collection_modes: string[];
+  supports_history: boolean;
+  supports_edit: boolean;
+  supports_delete: boolean;
+  data_shapes: DataShape[];
+  availability: 'available' | 'implemented' | 'requires_credentials' | 'unsupported_operation' | 'planned' | 'unavailable';
+  code_available?: boolean;
+  requires_service?: 'n8n' | 'browser' | null;
+  unavailable_reason?: string | null;
+  availability_reason?: string | null;
+  unavailable_operations: string[];
+  // Free-provider facts from the catalog; optional because older servers and non-free entries omit them.
+  eligibility?: 'unknown' | 'open' | 'personal' | 'noncommercial' | 'review';
+  terms_url?: string | null;
+  terms_checked_on?: string | null;
+  attribution?: string | null;
+  category?: BuiltinCategory | null;
+  hosts?: string[];
+  endpoints?: string[];
+  execution?: 'supported' | 'experimental' | 'research_only' | null;
+  default_interval_minutes?: number | null;
+  /** Hard server floor for the collection interval; missing means the global 15-minute floor. */
+  min_interval_minutes?: number | null;
+  realtime_tier?: RealtimeMode;
+  key_fields?: string[];
+  runtime_verified?: boolean;
+  quota_policies?: QuotaPolicy[];
+  setup_guide?: string | null;
+  // Static, fixture-shaped illustrations (never live data).
+  example_config?: Record<string, unknown> | null;
+  sample_output?: Record<string, unknown> | null;
+};
+export type QuotaPolicy = {
+  policy_key: string;
+  budget_kind: string;
+  window: 'second' | 'minute' | 'day' | 'month';
+  unit: string;
+  limit_units: number | null;
+  basis: string;
+};
+export type SourceIngestion = { current_run: IngestionRun | null; items: IngestionRun[]; next_cursor: string | null };
+export type PurgeOperation = {
+  operation_id: string;
+  source_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed';
+  error_code: string | null;
+  documents_status: 'queued' | 'deleted' | 'failed' | 'unavailable';
+  pending_child_count: number | null;
+  failed_child_count: number | null;
+  pending_owner_codes: string[];
+  memory_status: 'queued' | 'running' | 'succeeded' | 'failed';
+  memory_error_code: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export const sourceKeys = {
+  all: ['sources'] as const,
+  list: ['sources', 'list'] as const,
+  /** Flat all-pages list shared by the dashboard (nested under `list`, so list invalidation refreshes it). */
+  listAll: ['sources', 'list', 'all'] as const,
+  detail: (id: string) => ['sources', id] as const,
+};
+export const connectorKeys = {
+  catalog: ['connector-catalog'] as const,
+  githubWebhookStatus: ['github-webhook-status'] as const,
+  configuration: (id: string) => ['connector-configuration', id] as const,
+  activation: (id: string) => ['connector-activation', id] as const,
+  ingestion: (id: string) => ['source-ingestion', id] as const,
+  terms: (id: string) => ['connector-terms', id] as const,
+  coingeckoCoins: (id: string, query: string) => ['coingecko-coins', id, query] as const,
+  builtins: ['connector-builtins'] as const,
+  collection: (id: string, requestId: string) => ['source-collection-request', id, requestId] as const,
+};
 
+/** Lists source records in pages of 50 and includes the optional opaque cursor. */
 export function listSources(cursor?: string) {
   return apiRequest<SourcePage>(`/api/v1/sources?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
 }
 
-export function getSource(id: string) { return apiRequest<Source>(`/api/v1/sources/${id}`); }
+/** Page size and page cap of `listAllSources`: up to 2000 sources, beyond which the tail is ignored. */
+const ALL_SOURCES_PAGE = 100;
+const ALL_SOURCES_MAX_PAGES = 20;
 
-export function createManualSource(name: string, csrfToken: string) {
-  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type: 'manual', name }) });
+/**
+ * Loads every source by following the opaque cursor (the endpoint has no id filter and caps a page at 100), so
+ * dashboard freshness covers sources beyond the first page. Bounded to `ALL_SOURCES_MAX_PAGES` pages.
+ * @returns A single page whose `items` hold all fetched sources and `next_cursor` is null.
+ */
+export async function listAllSources(): Promise<SourcePage> {
+  const items: Source[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < ALL_SOURCES_MAX_PAGES; page += 1) {
+    const result: SourcePage = await apiRequest<SourcePage>(
+      `/api/v1/sources?limit=${ALL_SOURCES_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+    );
+    items.push(...result.items);
+    cursor = result.next_cursor;
+    if (!cursor) break;
+  }
+  return { items, next_cursor: null };
 }
 
+export type SourceImpact = {
+  document_count: number;
+  gadget_definition_count: number;
+  gadget_placement_count: number;
+  conversation_count: number;
+};
+
+/** Fetches owner-only dependent counts for a source (409 while a purge is pending). */
+export function getSourceImpact(id: string, signal?: AbortSignal) {
+  return apiRequest<SourceImpact>(`/api/v1/sources/${id}/impact`, { signal });
+}
+
+/** Fetches one source by its identifier. */
+export function getSource(id: string) {
+  return apiRequest<Source>(`/api/v1/sources/${id}`);
+}
+
+/** Archives a source through the source DELETE endpoint using CSRF protection. */
 export function archiveSource(id: string, csrfToken: string) {
   return apiRequest<void>(`/api/v1/sources/${id}`, { method: 'DELETE', headers: csrfHeaders(csrfToken) });
 }
 
+/** Requests source deletion with source data purge and returns the asynchronous purge operation. */
 export function purgeSource(id: string, csrfToken: string) {
   return apiRequest<PurgeOperation>(`/api/v1/sources/${id}?with_data=true`, { method: 'DELETE', headers: csrfHeaders(csrfToken) });
 }
 
-export function updateSourceStatus(id: string, status: 'active' | 'paused', csrfToken: string) {
-  return apiRequest<Source>(`/api/v1/sources/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ status }) });
+/** Sets a source to active or paused, forwarding the abort signal and CSRF token. */
+export function updateSourceStatus(id: string, status: 'active' | 'paused', csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Source>(`/api/v1/sources/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ status }),
+    signal,
+  });
 }
 
-export function createConnectorSource(type: 'rss' | 'web' | 'api', name: string, csrfToken: string) {
-  return apiRequest<Source>('/api/v1/sources', { method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify({ type, name }) });
+/** Renames a source through PATCH `name` only; connector configuration and its revision are untouched. The server enforces 1-200 characters. */
+export function renameSource(id: string, name: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Source>(`/api/v1/sources/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name }),
+    signal,
+  });
 }
 
-export function configureConnector(id: string, configuration: Record<string, unknown>, csrfToken: string) {
-  return apiRequest<{ source_id: string; url: string }>(`/api/v1/connectors/sources/${id}/configuration`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) }, body: JSON.stringify(configuration) });
+/** Patches the owner's graph/RAG switches on an existing source; both are optional and only sent keys change. */
+export function updateSourceAiOptions(id: string, options: Partial<SourceAiOptions>, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Source>(`/api/v1/sources/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(options),
+    signal,
+  });
 }
 
-export function validateConnector(id: string, token: string) {
-  return apiRequest<{ source_id: string; url: string }>(`/api/v1/connectors/sources/${id}/validate`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+/** Fetches the connector catalog and forwards an optional abort signal. */
+export function getConnectorCatalog(signal?: AbortSignal) {
+  return apiRequest<ConnectorCatalogEntry[]>('/api/v1/connectors/catalog', { signal });
 }
 
-export function issueCollectorCredential(id: string, csrfToken: string) {
-  return apiRequest<{ source_id: string; token: string }>(`/api/v1/ingestion/sources/${id}/collector-credential`, { method: 'POST', headers: csrfHeaders(csrfToken) });
+/** Creates a connector with its immutable native provider identity, if any, using the source owner route. */
+export function createConnectorSource(
+  type: Exclude<ConnectorCatalogEntry['source_type'], 'manual' | null | undefined>,
+  name: string,
+  csrfToken: string,
+  signal?: AbortSignal,
+  provider?: string,
+  options?: SourceAiOptions,
+) {
+  return apiRequest<Source>('/api/v1/sources', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ type, name, ...(provider ? { provider } : {}), ...options }),
+    signal,
+  });
 }
 
+/** Fetches the connector configuration and forwards an optional abort signal. */
+export function getConnectorConfiguration(id: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorConfiguration>(`/api/v1/connectors/${id}/configuration`, { signal });
+}
+
+/** Checks matching source configuration snapshots against every same-source revision and generation fence. */
+export function connectorConfigurationIsAtLeast(
+  candidate: ConnectorConfiguration,
+  fences: readonly (ConnectorConfiguration | undefined)[],
+) {
+  return fences.every(
+    (fence) =>
+      !fence ||
+      fence.source_id !== candidate.source_id ||
+      (candidate.expected_revision >= fence.expected_revision && candidate.source_generation >= fence.source_generation),
+  );
+}
+
+/** Selects the newest snapshot that is not older than the other snapshots for the requested source. */
+export function newestConnectorConfiguration(snapshots: readonly (ConnectorConfiguration | undefined)[], sourceId: string) {
+  const candidates = snapshots.filter((value): value is ConnectorConfiguration => value?.source_id === sourceId);
+  return candidates.find((candidate) => connectorConfigurationIsAtLeast(candidate, candidates)) ?? null;
+}
+
+/** Accepts the candidate when it satisfies all revision fences, otherwise falls back to the newest fenced snapshot. */
+export function selectMonotonicConnectorConfiguration(
+  candidate: ConnectorConfiguration,
+  fences: readonly (ConnectorConfiguration | undefined)[],
+) {
+  return connectorConfigurationIsAtLeast(candidate, fences) ? candidate : newestConnectorConfiguration(fences, candidate.source_id);
+}
+
+/** Fetches connector configuration, rejects a mismatched source ID, and selects a result that does not regress local revision fences. */
+export async function getMonotonicConnectorConfiguration(
+  id: string,
+  signal: AbortSignal | undefined,
+  current: () => readonly (ConnectorConfiguration | undefined)[],
+) {
+  const incoming = await getConnectorConfiguration(id, signal);
+  if (incoming.source_id !== id) throw new Error('connector_configuration_source_mismatch');
+  const fences = current();
+  return (
+    selectMonotonicConnectorConfiguration(incoming, fences) ?? [...fences].reverse().find((value) => value?.source_id === id) ?? incoming
+  );
+}
+
+/** Validates an unsaved connector draft; optional write-only Telegram replacement bytes are sent directly and never returned or cached here. */
+export function validateDraftConnector(id: string, settings: DraftValidationRequest, signal?: AbortSignal) {
+  return apiRequest<DraftValidation>(`/api/v1/connectors/${id}/validate-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+    signal,
+  });
+}
+
+/** Saves connector settings with CSRF protection and the optional abort signal. */
+export function saveConnectorConfiguration(id: string, settings: ConnectorSettings, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/configuration`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(settings),
+    signal,
+  });
+}
+
+/** Fetches the connector activation state and forwards an optional abort signal. */
+export function getConnectorActivation(id: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/activation`, { signal });
+}
+
+export type GitHubPeer = {
+  source_id: string;
+  source_generation: number;
+  configuration_revision: number;
+  token_revision: number;
+  state: string;
+};
+export type GitHubStatus = {
+  state: 'not_connected' | 'ready' | 'refreshing' | 'reconciliation_required' | 'revoked';
+  expires_at: string | null;
+  error_code: string | null;
+  coordinator_state: string;
+  operation_id: string | null;
+  coordinator_error_code: string | null;
+  recovery_available: boolean;
+  operation_kind: 'authorization' | 'refresh' | 'revoke' | null;
+  operation_source_id: string | null;
+  operation_source_generation: number | null;
+  operation_configuration_revision: number | null;
+  operation_state: string | null;
+  sync: {
+    history_days: number;
+    scope_sha256: string | null;
+    cursor_invalid: boolean;
+    last_reset_at: string | null;
+    gap_recorded: boolean;
+    unverified_hints: number;
+    reconcile_exhausted: number;
+    resources: {
+      resource: string;
+      phase: string;
+      page: number;
+      next_page: number | null;
+      sweep_revision: number;
+      floor?: string;
+      upper?: string;
+      completed_upper: string | null;
+      completed_sweep_revision: number;
+      incomplete: boolean;
+    }[];
+  };
+};
+
+export type GitHubWebhookStatus = {
+  receiver_configured: boolean;
+  receiver_revision: string;
+  digest_count: number;
+  pending_count: number;
+  pending_deliveries: number;
+  pending_hints: number;
+  needs_attention: number;
+  oldest_pending_at: string | null;
+};
+
+/** Reads secret-free GitHub receiver readiness and global durable backlog totals. */
+export function getGitHubWebhookStatus(signal?: AbortSignal) {
+  return apiRequest<GitHubWebhookStatus>('/api/v1/connectors/github/webhook-status', { signal });
+}
+
+/** Canonical mapped GitHub record counts for one source; live_verified is false unless a live check exists. */
+export type GitHubSummary = {
+  resource_counts: { repositories: number; issues: number; pull_requests: number; commits: number; releases: number };
+  live_verified: boolean;
+  last_event_at: string | null;
+};
+
+/** Reads canonical collected GitHub counts from the owner-only summary route. */
+export function getGitHubSummary(id: string, signal?: AbortSignal) {
+  return apiRequest<GitHubSummary>(`/api/v1/connectors/${id}/github/summary`, { signal });
+}
+
+/** Reads secret-free GitHub grant status and its access-token expiry for this source. */
+export function getGitHubStatus(id: string, signal?: AbortSignal) {
+  return apiRequest<GitHubStatus>(`/api/v1/connectors/${id}/github/status`, { signal });
+}
+
+/** Reads secret-free Google connector grant state for the currently selected source. */
+export function getGoogleOAuthStatus(id: string, signal?: AbortSignal) {
+  return apiRequest<{
+    state: 'not_connected' | 'ready' | 'revocation_pending' | 'reconciliation_required' | 'revoked';
+    scopes: string[];
+    token_revision: number;
+    expires_at: string | null;
+    error_code: string | null;
+  }>(`/api/v1/connectors/${id}/oauth/google/status`, { signal });
+}
+
+export type GoogleResourceChoice = {
+  id: string;
+  name: string;
+  kind: 'label' | 'calendar' | 'drive' | 'folder';
+  mime_type?: string;
+  modified_time?: string;
+};
+
+/** Discovers bounded, secret-free Google resources for the exact saved source and grant revisions. */
+export function discoverGoogleResources(
+  id: string,
+  provider: 'google_mail' | 'google_calendar' | 'google_drive',
+  sourceGeneration: number,
+  expectedRevision: number,
+  tokenRevision: number,
+  parentId?: string,
+  signal?: AbortSignal,
+) {
+  const params = new URLSearchParams({
+    expected_source_generation: String(sourceGeneration),
+    expected_revision: String(expectedRevision),
+    expected_token_revision: String(tokenRevision),
+  });
+  if (parentId) params.set('parent_id', parentId);
+  return apiRequest<{ items: GoogleResourceChoice[]; token_revision: number; truncated: boolean }>(
+    `/api/v1/connectors/${id}/oauth/google/${provider}/resources?${params.toString()}`,
+    { signal },
+  );
+}
+
+/** Starts a session-bound, read-only Google authorization attempt for a saved source revision. */
+export function startGoogleOAuth(
+  id: string,
+  provider: string,
+  sourceGeneration: number,
+  expectedRevision: number,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<{ authorization_url: string }>(`/api/v1/connectors/${id}/oauth/google/${provider}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision }),
+    signal,
+  });
+}
+
+/** Revokes the stored Google grant only for the exact reviewed source and token revisions. */
+export function disconnectGoogleOAuth(
+  id: string,
+  sourceGeneration: number,
+  expectedRevision: number,
+  tokenRevision: number,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/oauth/google/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({
+      expected_source_generation: sourceGeneration,
+      expected_revision: expectedRevision,
+      expected_token_revision: tokenRevision,
+    }),
+    signal,
+  });
+}
+
+/** Reads secret-free Reddit grant state and its source-bound token revision. */
+export function getRedditOAuthStatus(id: string, signal?: AbortSignal) {
+  return apiRequest<{
+    state: 'not_connected' | 'ready' | 'revocation_pending' | 'reconciliation_required' | 'revoked';
+    scopes: string[];
+    token_revision: number;
+    expires_at: string | null;
+    error_code: string | null;
+  }>(`/api/v1/connectors/${id}/oauth/reddit/status`, { signal });
+}
+
+/** Starts the source-revision-bound Reddit read-scope authorization flow. */
+export function startRedditOAuth(id: string, sourceGeneration: number, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ authorization_url: string }>(`/api/v1/connectors/${id}/oauth/reddit/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision }),
+    signal,
+  });
+}
+
+/** Revokes the Reddit grant only for the reviewed source and token revisions. */
+export function disconnectRedditOAuth(
+  id: string,
+  sourceGeneration: number,
+  expectedRevision: number,
+  tokenRevision: number,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/oauth/reddit/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({
+      expected_source_generation: sourceGeneration,
+      expected_revision: expectedRevision,
+      expected_token_revision: tokenRevision,
+    }),
+    signal,
+  });
+}
+
+/** Resets GitHub polling only for the current reviewed source revisions and scope digest. */
+export function resetGitHubSync(
+  id: string,
+  sourceGeneration: number,
+  connectorRevision: number,
+  scopeSha256: string,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<{ status: 'reset' }>(`/api/v1/connectors/${id}/github/sync/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({
+      expected_source_generation: sourceGeneration,
+      expected_connector_revision: connectorRevision,
+      expected_scope_sha256: scopeSha256,
+    }),
+    signal,
+  });
+}
+
+/** Starts browser-bound OAuth for the exact saved source and connector revisions. */
+export function startGitHubOAuth(id: string, sourceGeneration: number, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ authorization_url: string }>(`/api/v1/connectors/${id}/github/oauth/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_source_generation: sourceGeneration, expected_revision: expectedRevision }),
+    signal,
+  });
+}
+
+/** Rotates the stored GitHub user grant through the owner-serialized server route. */
+export function refreshGitHubOAuth(id: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/github/oauth/refresh`, {
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+    signal,
+  });
+}
+
+/** Retrieves the bounded, secret-free peer snapshot that the owner must review before disconnect. */
+export function getGitHubPeers(id: string, signal?: AbortSignal) {
+  return apiRequest<{ complete: boolean; peers: GitHubPeer[] }>(`/api/v1/connectors/${id}/github/peers`, { signal });
+}
+
+/** Submits the owner's reviewed peer snapshot for app/user-wide revocation. */
+export function disconnectGitHubOAuth(id: string, peers: GitHubPeer[], csrfToken: string, operationId?: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/github/disconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({
+      reviewed_peers: peers.map(({ source_id, source_generation, configuration_revision, token_revision }) => ({
+        source_id,
+        source_generation,
+        configuration_revision,
+        token_revision,
+      })),
+      ...(operationId ? { operation_id: operationId } : {}),
+    }),
+    signal,
+  });
+}
+
+/** Acknowledges an exact owner-wide OAuth tombstone; the selected editor source does not replace the stored operation origin. */
+export function acknowledgeGitHubReconnect(id: string, operationId: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<{ state: string }>(`/api/v1/connectors/${id}/github/reconcile/reconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ operation_id: operationId, acknowledge_unresolved_cleanup: true }),
+    signal,
+  });
+}
+
+/** Activates a connector at the expected revision with an explicit keep or replace action; secret bytes are sent only in this request body. */
+export function activateConnector(
+  id: string,
+  expectedRevision: number,
+  secretAction: 'keep' | 'replace',
+  secret: string | undefined,
+  csrfToken: string,
+  signal?: AbortSignal,
+  executionBackend?: ExecutionBackend,
+) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/activate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({
+      expected_revision: expectedRevision,
+      secret_action: secretAction,
+      ...(secret ? { secret } : {}),
+      ...(executionBackend ? { execution_backend: executionBackend } : {}),
+    }),
+    signal,
+  });
+}
+
+/** Deactivates the connector using CSRF protection and the optional abort signal. */
+export function deactivateConnector(id: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/deactivate`, {
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+    signal,
+  });
+}
+
+/** Removes the provider credential only at the supplied expected revision, using CSRF protection. */
+export function removeProviderCredential(id: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/credentials/provider?expected_revision=${expectedRevision}`, {
+    method: 'DELETE',
+    headers: csrfHeaders(csrfToken),
+    signal,
+  });
+}
+
+/** Stores a world-provider key through the owner-protected encrypted credential slot. */
+export function saveWorldProviderCredential(
+  id: string,
+  expectedGeneration: number,
+  expectedConnectorRevision: number,
+  apiKey: string,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<{ source_id: string; provider: string; configured: boolean }>(
+    `/api/v1/connectors/sources/${id}/world-data-credential`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+      body: JSON.stringify({
+        expected_generation: expectedGeneration,
+        expected_connector_revision: expectedConnectorRevision,
+        api_key: apiKey,
+      }),
+      signal,
+    },
+  );
+}
+
+/** Stores a native REST provider key (CoinGecko) in the owner-only encrypted slot; the key is never returned. */
+export function saveNativeRestCredential(id: string, expectedRevision: number, secret: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/credentials/native-rest`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ expected_revision: expectedRevision, secret }),
+    signal,
+  });
+}
+
+/** Starts connector collection with CSRF protection and returns the accepted run or batch identifiers. */
 export function triggerCollection(id: string, csrfToken: string) {
-  return apiRequest<{ run_id: string; batch_id: string | null; status: string }>(`/api/v1/connectors/sources/${id}/collect`, { method: 'POST', headers: csrfHeaders(csrfToken) });
+  return apiRequest<ManualSyncResult>(`/api/v1/connectors/sources/${id}/collect`, { method: 'POST', headers: csrfHeaders(csrfToken) });
 }
 
-export function getRun(id: string) { return apiRequest<IngestionRun>(`/api/v1/ingestion/runs/${id}`); }
-
-export function retryRun(id: string, csrfToken: string) {
-  return apiRequest<{ run_id: string }>(`/api/v1/ingestion/runs/${id}/retry`, { method: 'POST', headers: csrfHeaders(csrfToken) });
+/** Reads one durable collection request (owner only) so the UI can poll a 202 to a terminal state. */
+export function getCollectionRequest(id: string, requestId: string, signal?: AbortSignal) {
+  return apiRequest<CollectionRequest>(`/api/v1/connectors/sources/${id}/collection-requests/${requestId}`, { signal });
 }
 
-export function getOperation(id: string) { return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`); }
+/** Fetches an ingestion run by ID. */
+export function getRun(id: string) {
+  return apiRequest<IngestionRun>(`/api/v1/ingestion/runs/${id}`);
+}
+
+/** Lists a source’s ingestion runs in pages of 20 using the optional cursor. */
+export function getSourceIngestion(id: string, cursor?: string, status?: IngestionRunStatus, signal?: AbortSignal) {
+  const params = new URLSearchParams({ limit: '20' });
+  if (cursor) params.set('cursor', cursor);
+  if (status) params.set('status', status);
+  return apiRequest<SourceIngestion>(`/api/v1/ingestion/sources/${id}/runs?${params}`, { signal });
+}
+
+/** Retries the selected ingestion stage using CSRF protection. */
+export function retryRun(id: string, stageKey: string, csrfToken: string) {
+  return apiRequest<{ run_id: string }>(`/api/v1/ingestion/runs/${id}/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ stage_key: stageKey }),
+  });
+}
+
+/** Fetches the allowlisted Source purge progress projection and forwards its abort signal to the GET. */
+export function getOperation(id: string, signal?: AbortSignal) {
+  return apiRequest<PurgeOperation>(`/api/v1/system/operations/${id}`, { signal });
+}
+
+export type DeclaredUse = 'personal' | 'noncommercial' | 'commercial' | 'unknown';
+export type ProviderTerms = {
+  source_id: string;
+  provider_id: string;
+  terms_revision: number;
+  terms_url: string;
+  terms_version: string;
+  checked_on: string;
+  declared_use: string;
+  operator_review_state: string;
+  reviewed_allowed_use: string | null;
+  eligible: boolean;
+  decision: string;
+};
+
+/** Owner read of the provider terms state; null when nothing has been acknowledged yet. */
+/** Searches the owner-only CoinGecko catalog for the saved source without exposing its Demo key. */
+export function searchCoinGeckoCoins(id: string, query: string, signal?: AbortSignal) {
+  return apiRequest<{ items: CoinGeckoCoin[] }>(`/api/v1/connectors/${id}/coingecko/coins?q=${encodeURIComponent(query)}`, { signal });
+}
+
+export function getProviderTerms(id: string, signal?: AbortSignal) {
+  return apiRequest<ProviderTerms | null>(`/api/v1/connectors/sources/${id}/terms`, { signal });
+}
+
+/** Owner declares deployment use and acknowledges one terms version. */
+export function acknowledgeProviderTerms(
+  id: string,
+  declaredUse: DeclaredUse,
+  termsVersion: string,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<ProviderTerms>(`/api/v1/connectors/sources/${id}/terms`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ declared_use: declaredUse, terms_version: termsVersion }),
+    signal,
+  });
+}
+
+/** One built-in preset with the owner's toggle state; `source_id` stays null until it is first enabled. */
+export type BuiltinSource = {
+  id: string;
+  label: string;
+  category: BuiltinCategory;
+  eligibility: 'open' | 'personal' | 'noncommercial' | 'review';
+  terms_url: string;
+  terms_checked_on: string;
+  attribution: string;
+  execution: 'supported' | 'experimental' | 'research_only';
+  realtime_tier?: RealtimeMode;
+  /** Hard server floor for the collection interval; missing means the global 15-minute floor. */
+  min_interval_minutes?: number | null;
+  source_id: string | null;
+  enabled: boolean;
+  data_shapes: DataShape[];
+  /** Owner options this built-in accepts; the UI renders only these. */
+  applicable_options?: string[];
+  sections?: { slug: string; label_en: string; label_vi: string }[] | null;
+  default_section?: string | null;
+};
+
+/** Lists every built-in data source with its on/off state. */
+export function listBuiltinSources(signal?: AbortSignal) {
+  return apiRequest<BuiltinSource[]>('/api/v1/connectors/builtins', { signal });
+}
+
+/** Turns a built-in on; the server creates the source, records the terms acknowledgement (and operator review where required) and activates it. Optional `name`, interval and news filters (`max_items`, keywords, `max_age_days`) are saved with the source; omitted fields keep the saved value. */
+export function enableBuiltinSource(
+  provider: string,
+  declaredUse: DeclaredUse,
+  csrfToken: string,
+  signal?: AbortSignal,
+  options?: SourceAiOptions & {
+    realtime_mode?: RealtimeMode;
+    name?: string;
+    schedule_interval_minutes?: 15 | 30 | 60 | 360 | 1440;
+    max_items?: number;
+    include_keywords?: string[];
+    exclude_keywords?: string[];
+    max_age_days?: number;
+    feed_sections?: string[];
+  } & BuiltinTypeOptions,
+) {
+  return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/enable`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ declared_use: declaredUse, ...options }),
+    signal,
+  });
+}
+
+/** Turns a built-in off by pausing its source; the source, terms and history are kept. */
+export function disableBuiltinSource(provider: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<BuiltinSource>(`/api/v1/connectors/builtins/${encodeURIComponent(provider)}/disable`, {
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+    signal,
+  });
+}
+
+/** Smallest collection interval (minutes) the server accepts; a missing value means the global 15-minute floor. */
+export function minIntervalMinutes(entry: { min_interval_minutes?: number | null } | null | undefined): number {
+  return entry?.min_interval_minutes ?? 15;
+}
+
+/** Interval choices at or above the provider floor, in ascending order. */
+export function allowedIntervals<T extends number>(
+  all: readonly T[],
+  entry: { min_interval_minutes?: number | null } | null | undefined,
+): T[] {
+  const floor = minIntervalMinutes(entry);
+  return all.filter((minutes) => minutes >= floor);
+}
+
+/**
+ * Smallest allowed interval that is at least the preferred one and the provider floor
+ * (catalog `min_interval_minutes`, default 15), so the server never answers 422 `schedule_interval_below_minimum`.
+ */
+export function clampInterval(
+  preferred: number,
+  entry: { min_interval_minutes?: number | null } | null | undefined,
+): ConnectorConfig['schedule_interval_minutes'] {
+  const floor = Math.max(preferred, minIntervalMinutes(entry));
+  return ([15, 30, 60, 360, 1440] as const).find((value) => value >= floor) ?? 1440;
+}
+
+/**
+ * Reads a 429 `collection_too_soon` error from a manual collection request.
+ * Returns the next allowed time (or null when the server gave no usable `retry_after`, which may be ISO text or seconds), or undefined for any other error.
+ */
+export function collectionTooSoonRetryAt(cause: unknown, now: Date = new Date()): Date | null | undefined {
+  if (!(cause instanceof ApiError) || cause.status !== 429 || (cause.code ?? cause.message) !== 'collection_too_soon') return undefined;
+  const raw = cause.payload.retry_after ?? (cause.details as { retry_after?: unknown } | undefined)?.retry_after;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return new Date(now.getTime() + raw * 1000);
+  if (typeof raw === 'string') {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return null;
+}
+
+/**
+ * Reads the `minimum` (minutes) from a 422 `schedule_interval_below_minimum` error, or undefined for any other error.
+ * The server sends `detail` as a string ("...: schedule_interval_below_minimum: minimum 360 minutes"), so the code is
+ * matched with `includes` on the code or message and the minimum is parsed from the text; an object payload still wins.
+ */
+export function intervalBelowMinimum(cause: unknown): { minimum: number | null } | undefined {
+  if (!(cause instanceof ApiError) || cause.status !== 422) return undefined;
+  if (!`${cause.code ?? ''} ${cause.message}`.includes('schedule_interval_below_minimum')) return undefined;
+  const raw = cause.payload.minimum ?? (cause.details as { minimum?: unknown } | undefined)?.minimum;
+  if (typeof raw === 'number') return { minimum: raw };
+  const parsed = /minimum (\d+)/.exec(cause.message);
+  return { minimum: parsed ? Number(parsed[1]) : null };
+}
+
+/** One scoped (non built-in) starter item: provider scope written through the normal connector configuration route. */
+export type ScopedSourceSpec = {
+  provider: string;
+  type: Exclude<ConnectorCatalogEntry['source_type'], 'manual' | null | undefined>;
+  name: string;
+  configuration: ConnectorConfig;
+  /** Terms version to acknowledge as personal use; only for providers whose catalog entry requires terms. */
+  termsVersion?: string;
+};
+
+/**
+ * Creates, configures and activates one scoped source in the same order as the connector editor
+ * (create, save configuration, optional terms acknowledgement, activate at the returned revision).
+ * If any step after creation fails the half-made source is archived, so no orphan remains, and the original error is rethrown.
+ */
+export async function createScopedSource(spec: ScopedSourceSpec, csrfToken: string, signal?: AbortSignal): Promise<Source> {
+  const created = await createConnectorSource(spec.type, spec.name, csrfToken, signal, spec.provider);
+  try {
+    const saved = await saveConnectorConfiguration(
+      created.id,
+      { expected_revision: 0, configuration: spec.configuration, auth_method: 'none' },
+      csrfToken,
+      signal,
+    );
+    if (spec.termsVersion) await acknowledgeProviderTerms(created.id, 'personal', spec.termsVersion, csrfToken, signal);
+    await activateConnector(created.id, saved.desired_revision, 'keep', undefined, csrfToken, signal);
+    return created;
+  } catch (cause) {
+    await archiveSource(created.id, csrfToken).catch(() => undefined);
+    throw cause;
+  }
+}

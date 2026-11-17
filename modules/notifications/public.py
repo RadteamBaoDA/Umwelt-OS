@@ -1,0 +1,605 @@
+"""Public notification service used by dashboard, tasks and later automation (P10)."""
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.realtime import commit_with_replay
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
+from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from modules.notifications.models import Notification
+from modules.notifications.schemas import (
+    NotificationEmit,
+    NotificationEvidence,
+    NotificationPage,
+    NotificationRead,
+)
+
+__all__ = [
+    "NotificationCleanupProgress",
+    "NotificationEmit",
+    "NotificationEvidence",
+    "NotificationMissing",
+    "NotificationPage",
+    "emit",
+    "list_notifications",
+    "scrub_document_evidence",
+    "set_read",
+]
+MAX_CLEANUP_PAGE = 100
+
+
+async def _admit(
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
+) -> AccessFence:
+    """Owner admission; a member is denied before any session await.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (workspace or job scopes only, owner only); keeps this module's
+    private ``_admit`` name so call sites and tests are unchanged. No commit; the caller owns the
+    transaction and lock ordering.
+    """
+    return await admit_scope(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=lock,
+        expected=expected,
+        allowed_scopes=(WorkspaceContext, InternalJobScope),
+    )
+
+
+class NotificationMissing(Exception):
+    """Raised when a notification is absent or owned by another owner."""
+
+
+@dataclass(frozen=True)
+class NotificationCleanupProgress:
+    """Return bounded progress and stable owner-row classifications for one cleanup operation.
+
+    Provisional unavailable IDs can be resolved by later reference pages; terminal IDs must be
+    retained by the caller under ``operation_id``. No notification content is exposed.
+    """
+
+    next_cursor: UUID | None
+    complete: bool
+    changed_count: int
+    operation_id: UUID
+    provisional_unavailable_ids: tuple[UUID, ...] = ()
+    unavailable_ids: tuple[UUID, ...] = ()
+
+
+def _highlight_identity(
+    kind: str, dedupe_key: str, params: Mapping[str, object]
+) -> tuple[UUID, int, UUID, UUID] | None:
+    """Parse only the exact historical highlight dedupe grammar and its independent metadata copy."""
+    if kind != "dashboard_highlight" or not isinstance(params, dict):
+        return None
+    parts = dedupe_key.split(":")
+    if len(parts) != 6 or parts[0] != "highlight":
+        return None
+    try:
+        definition_id, rule_id, version_id = (UUID(parts[index]) for index in (1, 4, 5))
+        revision = int(parts[2])
+    except (ValueError, TypeError):
+        return None
+    fingerprint = parts[3]
+    if (
+        str(definition_id) != parts[1]
+        or str(rule_id) != parts[4]
+        or str(version_id) != parts[5]
+        or revision < 1
+        or str(revision) != parts[2]
+        or len(fingerprint) != 64
+        or any(char not in "0123456789abcdef" for char in fingerprint)
+        or params.get("definition_id") != str(definition_id)
+        or type(params.get("definition_revision")) is not int
+        or params.get("definition_revision") != revision
+        or not isinstance(params.get("severity"), str)
+    ):
+        return None
+    return definition_id, revision, rule_id, version_id
+
+
+@dataclass(frozen=True, slots=True)
+class _LockedReadSources:
+    """Version fences and held Source locks resolved once for a notification page."""
+
+    version_fences: dict[UUID, Any]
+    source_fences: dict[UUID, Any]
+
+
+async def _visible_read(
+    session: AsyncSession,
+    row: Notification,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    locked: _LockedReadSources | None = None,
+) -> NotificationRead:
+    """Build a detached DTO, holding a Source eligibility lock through copied-highlight publication.
+
+    The first locator lookup discovers Source identity only. The authoritative locator is repeated
+    after the Source lock, which serializes this read with source/document purge admission. Paused
+    and connector-only archived Sources remain browseable; unfinished with-data purges fail closed.
+    When ``locked`` is supplied the page-level prelock (`_lock_notification_read_sources`) already
+    resolved the version fences and holds every Source lock in this transaction, so the per-row
+    locator/lock/fence queries are replaced by lookups with the same fail-closed outcomes.
+    """
+    read = NotificationRead.model_validate(row)
+    if row.kind != "dashboard_highlight":
+        return read
+    identity = _highlight_identity(row.kind, row.dedupe_key, row.params)
+    document_id, version_id = row.document_id, row.document_version_id
+    if identity is not None:
+        parsed_version = identity[3]
+        if version_id is not None and version_id != parsed_version:
+            identity = None
+        else:
+            version_id = parsed_version
+    if (
+        row.copied_evidence_revoked
+        or identity is None
+        or version_id is None
+        or (document_id is not None and row.document_version_id != version_id)
+    ):
+        return read.model_copy(update={"title": None, "link": None})
+    if locked is not None:
+        # Held-lock path: absent version or an unlockable Source hides the copied fields.
+        version_fence = locked.version_fences.get(version_id)
+        source_fence = (
+            locked.source_fences.get(version_fence.source_id) if version_fence is not None else None
+        )
+        if (
+            version_fence is None
+            or source_fence is None
+            or (document_id is not None and version_fence.document_id != document_id)
+            or version_fence.source_id != source_fence.id
+            or version_fence.current_source_generation != source_fence.generation
+        ):
+            return read.model_copy(update={"title": None, "link": None})
+        return read
+    from modules.knowledge.documents import public as documents
+
+    owner = await documents.review_version_locator(
+        session,
+        version_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if owner is None or (document_id is not None and owner[0] != document_id):
+        return read.model_copy(update={"title": None, "link": None})
+    from modules.sources import public as sources
+
+    fence = await sources.lock_retained_evidence_source(
+        session,
+        owner[1],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence,
+    )
+    if fence is None:
+        return read.model_copy(update={"title": None, "link": None})
+    version_fence = (
+        await documents.review_version_fences(
+            session,
+            [version_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    ).get(version_id)
+    if (
+        version_fence is None
+        or version_fence.source_id != fence.id
+        or version_fence.current_source_generation != fence.generation
+        or (document_id is not None and version_fence.document_id != document_id)
+    ):
+        return read.model_copy(update={"title": None, "link": None})
+    return read
+
+
+async def _lock_notification_read_sources(
+    session: AsyncSession,
+    rows: list[Notification],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+) -> _LockedReadSources:
+    """Acquire candidate Source read locks in stable UUID order before projecting a page.
+
+    A notification page can refer to multiple sources. Prelocking the bounded source set avoids
+    lock-order inversions with producers that already lock several selected sources in UUID order.
+    Returns the fences and lock results so `_visible_read` evaluates each row against the held
+    locks without repeating the locator, lock and fence queries.
+    """
+    version_ids: set[UUID] = set()
+    for row in rows:
+        if row.kind != "dashboard_highlight" or row.copied_evidence_revoked:
+            continue
+        identity = _highlight_identity(row.kind, row.dedupe_key, row.params)
+        if identity is None:
+            continue
+        version_id = identity[3]
+        if row.document_version_id is not None and row.document_version_id != version_id:
+            continue
+        version_ids.add(version_id)
+    if not version_ids:
+        return _LockedReadSources({}, {})
+    from modules.knowledge.documents import public as documents
+    from modules.sources import public as sources
+
+    fences = await documents.review_version_fences(
+        session,
+        sorted(version_ids, key=str),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    source_fences: dict[UUID, Any] = {}
+    for source_id in sorted({fence.source_id for fence in fences.values()}, key=str):
+        source_fences[source_id] = await sources.lock_retained_evidence_source(
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
+    return _LockedReadSources(dict(fences), source_fences)
+
+
+async def emit(
+    session: AsyncSession,
+    payload: NotificationEmit,
+    *,
+    evidence: NotificationEvidence | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Insert an idempotent notification in the caller's transaction.
+
+    Only dashboard highlights may attach exact copied-Document provenance. The Source row is locked
+    before rechecking the exact ready current version and remains locked through insertion/commit;
+    this serializes publication with Source purge and lifecycle changes. The sidecar stays private.
+    """
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    values = payload.model_dump(mode="json")
+    if evidence is not None:
+        identity = _highlight_identity(payload.kind, payload.dedupe_key, payload.params)
+        if (
+            payload.kind != "dashboard_highlight"
+            or identity is None
+            or identity[3] != evidence.document_version_id
+        ):
+            raise ValueError(
+                "Copied notification evidence does not match a supported highlight identity"
+            )
+        from modules.knowledge.documents import public as documents
+        from modules.sources import public as sources
+
+        locator = await documents.review_version_locator(
+            session,
+            evidence.document_version_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if locator is None or locator[0] != evidence.document_id:
+            return False
+        source_fence = await sources.lock_retained_evidence_source(
+            session,
+            locator[1],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
+        )
+        current = (
+            await documents.get_ready_version_ref(
+                session,
+                evidence.document_version_id,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if source_fence
+            else None
+        )
+        if (
+            source_fence is None
+            or current is None
+            or current.document_id != evidence.document_id
+            or current.source_id != source_fence.id
+            or current.source_generation != source_fence.generation
+        ):
+            return False
+        values.update(
+            document_id=evidence.document_id,
+            document_version_id=evidence.document_version_id,
+            copied_evidence_revoked=False,
+        )
+    result = await session.execute(
+        insert(Notification)
+        .values(workspace_id=scope.workspace_id, owner_id=_actor(scope), **values)
+        .on_conflict_do_nothing(constraint="uq_notifications_dedupe")
+        .returning(Notification.id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def list_notifications(
+    session: AsyncSession,
+    *,
+    unread_only: bool = False,
+    limit: int = 50,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> NotificationPage:
+    """Return a bounded safe page with every unread row counted, even when copied display fields are withheld."""
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
+    own = (Notification.workspace_id == scope.workspace_id, Notification.owner_id == _actor(scope))
+    statement = select(Notification).where(*own)
+    if unread_only:
+        statement = statement.where(Notification.read_at.is_(None))
+    rows = (
+        await session.scalars(
+            statement.order_by(Notification.created_at.desc(), Notification.id.desc()).limit(
+                min(max(limit, 1), 100)
+            )
+        )
+    ).all()
+    locked = await _lock_notification_read_sources(
+        session,
+        list(rows),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    unread_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Notification)
+            .where(*own, Notification.read_at.is_(None))
+        )
+        or 0
+    )
+    return NotificationPage(
+        items=[
+            await _visible_read(
+                session,
+                row,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=fence,
+                locked=locked,
+            )
+            for row in rows
+        ],
+        unread_count=unread_count,
+    )
+
+
+async def set_read(
+    session: AsyncSession,
+    notification_id: UUID,
+    read: bool,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> NotificationRead:
+    """Mark one owned notification read or unread and return its currently safe detached projection."""
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
+    row = await session.scalar(
+        select(Notification)
+        .where(
+            Notification.id == notification_id,
+            Notification.workspace_id == scope.workspace_id,
+            Notification.owner_id == _actor(scope),
+        )
+        .with_for_update()
+    )
+    if row is None:
+        raise NotificationMissing
+    row.read_at = datetime.now(UTC) if read else None
+    await commit_with_replay(
+        session,
+        [],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    fence2 = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
+    return await _visible_read(
+        session,
+        row,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence2,
+    )
+
+
+async def _classify_highlight_row(  # noqa: C901, PLR0912
+    session: AsyncSession,
+    row: Notification,
+    document_id: UUID,
+    known_versions: set[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[str, UUID | None]:
+    """Decide whether one candidate notification belongs to the Document being scrubbed.
+
+    Returns ``("skip", None)`` for rows that are not this cleanup's concern (other kinds, already
+    revoked, foreign Document or version), ``("undecidable", None)`` for rows whose identity is
+    contradictory or unresolvable (provisional until the final reference page) and
+    ``("scrub", version_id)`` for rows whose copied fields must be cleared. A legacy row whose
+    version is not in the caller's receipt is resolved through the Documents public contracts
+    (read-only, admitted). Never mutates ``row``.
+    """
+    if row.kind != "dashboard_highlight" or row.copied_evidence_revoked:
+        return "skip", None
+    # A sidecar naming another Document is positive foreign ownership: never this cleanup's concern.
+    if row.document_id is not None and row.document_id != document_id:
+        return "skip", None
+    exact_match = row.document_id == document_id
+    version_id = row.document_version_id
+    identity = _highlight_identity(row.kind, row.dedupe_key, row.params)
+    # Even when the legacy parser rejects formatting, a canonical embedded version that conflicts
+    # with the private sidecar is positive contradictory identity and must not be scrubbed.
+    parts = row.dedupe_key.split(":")
+    dedupe_version: UUID | None = None
+    if len(parts) == 6 and parts[0] == "highlight":
+        try:
+            candidate = UUID(parts[5])
+            dedupe_version = candidate if str(candidate) == parts[5] else None
+        except (TypeError, ValueError):
+            pass
+    if (
+        exact_match
+        and version_id is not None
+        and dedupe_version is not None
+        and dedupe_version != version_id
+    ):
+        return "undecidable", None
+    if exact_match and version_id is not None and (identity is None or identity[3] == version_id):
+        # The private exact Document/version sidecar is sufficient authority to scrub copied fields.
+        version_id = row.document_version_id
+    elif exact_match and (
+        identity is not None and version_id is not None and identity[3] != version_id
+    ):
+        return "undecidable", None
+    elif identity is None:
+        if row.document_id is None or exact_match:
+            return "undecidable", None
+        return "skip", None
+    else:
+        parsed_version = identity[3]
+        if version_id is not None and version_id != parsed_version:
+            return "undecidable", None
+        version_id = version_id or parsed_version
+    # every surviving branch above resolved a version
+    if version_id is None:
+        raise RuntimeError("invariant violated: version_id must not be None")
+    if not exact_match and version_id not in known_versions:
+        from modules.knowledge.documents import public as documents
+
+        # Report only genuinely undecidable legacy rows; a version that resolves elsewhere is foreign.
+        locator = await documents.review_version_locator(
+            session,
+            version_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if locator is not None and locator[0] != document_id:
+            return "skip", None
+        # A Document already deleted (its own receipt not yet scrubbed) resolves from retained evidence.
+        if locator is None:
+            retained = await documents.cleanup_evidence_version_document(
+                session,
+                version_id,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if retained is not None and retained != document_id:
+                return "skip", None
+        return "undecidable", None
+    return "scrub", version_id
+
+
+async def scrub_document_evidence(
+    session: AsyncSession,
+    *,
+    operation_id: UUID,
+    document_id: UUID,
+    version_ids: tuple[UUID, ...],
+    final_reference_page: bool = False,
+    after: UUID | None = None,
+    limit: int = MAX_CLEANUP_PAGE,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> NotificationCleanupProgress:
+    """Flush-only scrub exact Document-backed highlight titles in a stable bounded notification page.
+
+    New rows match their private document ID; legacy rows match only the proven historical dedupe
+    grammar and the caller's detached immutable-version receipt. If evidence is paged, the caller's
+    durable cursor retains the operation ID and both page positions. Unsupported candidate identities
+    are provisional until the caller declares the final reference page, then remain explicitly unavailable.
+    The caller owns commit and cursor. The owner is admitted (non-locking) before any query and
+    every statement is bound to the caller's workspace and actor.
+    """
+    if not 1 <= limit <= MAX_CLEANUP_PAGE or len(version_ids) > MAX_CLEANUP_PAGE:
+        raise ValueError("Notification evidence cleanup exceeds its page bound")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    known_versions = set(version_ids)
+    candidates = select(Notification).where(
+        Notification.workspace_id == scope.workspace_id,
+        Notification.owner_id == _actor(scope),
+        or_(
+            Notification.document_id == document_id,
+            and_(
+                Notification.kind == "dashboard_highlight",
+                Notification.dedupe_key.like("highlight:%"),
+            ),
+        ),
+    )
+    if after is not None:
+        candidates = candidates.where(Notification.id > after)
+    rows = list(
+        (
+            await session.scalars(
+                candidates.order_by(Notification.id).limit(limit + 1).with_for_update()
+            )
+        ).all()
+    )
+    complete = len(rows) <= limit
+    rows = rows[:limit]
+    changed = 0
+    provisional: list[UUID] = []
+    unavailable: list[UUID] = []
+    for row in rows:
+        verdict, version_id = await _classify_highlight_row(
+            session,
+            row,
+            document_id,
+            known_versions,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if verdict == "skip":
+            continue
+        if verdict == "undecidable":
+            (unavailable if final_reference_page else provisional).append(row.id)
+            continue
+        # every scrub verdict carries a resolved version
+        if version_id is None:
+            raise RuntimeError("invariant violated: version_id must not be None")
+        row.document_id = document_id
+        row.document_version_id = version_id
+        row.title = None
+        row.link = None
+        row.copied_evidence_revoked = True
+        changed += 1
+    if changed:
+        await session.flush()
+    return NotificationCleanupProgress(
+        next_cursor=rows[-1].id if rows else after,
+        complete=complete,
+        changed_count=changed,
+        operation_id=operation_id,
+        provisional_unavailable_ids=tuple(provisional),
+        unavailable_ids=tuple(unavailable),
+    )

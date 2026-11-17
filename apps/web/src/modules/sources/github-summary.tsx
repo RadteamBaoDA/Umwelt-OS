@@ -1,0 +1,119 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { Button } from '@/components/ui/button';
+import { getGitHubSummary, getGitHubWebhookStatus } from './api';
+
+/**
+ * Shows collected GitHub record counts for one saved source in Settings / Data sources.
+ *
+ * Counts come from the owner-only summary route (mapped canonical records); the
+ * "not verified live" notice is shown whenever the API does not claim live verification.
+ */
+export function GitHubSummary({ sourceId }: { sourceId: string }) {
+  const t = useTranslations('github');
+  const display = useDisplayPreferences();
+  const query = useQuery({
+    queryKey: ['github-summary', sourceId],
+    queryFn: ({ signal }) => getGitHubSummary(sourceId, signal),
+    refetchInterval: 15_000,
+  });
+  const data = query.data;
+  const counts = data?.resource_counts;
+  const rows: [string, number][] = counts
+    ? [
+        [t('repositories'), counts.repositories],
+        [t('issues'), counts.issues],
+        [t('pullRequests'), counts.pull_requests],
+        [t('commits'), counts.commits],
+        [t('releases'), counts.releases],
+      ]
+    : [];
+  return (
+    <section aria-label={t('summary.title')} className="space-y-2">
+      <h4 className="text-sm font-semibold text-foreground">{t('summary.title')}</h4>
+      {query.isLoading && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('summary.loading')}
+        </p>
+      )}
+      {query.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('summary.error')}
+        </p>
+      )}
+      {data && rows.every(([, value]) => value === 0) && <p className="text-xs text-muted-foreground">{t('summary.empty')}</p>}
+      {data && rows.some(([, value]) => value > 0) && (
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {rows.map(([label, value]) => (
+            <div key={label} className="rounded-md border border-border bg-card p-2">
+              <dt className="text-[11px] text-muted-foreground">{label}</dt>
+              <dd className="text-base font-semibold text-foreground">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {data?.last_event_at && (
+        <p className="text-xs text-muted-foreground">
+          {t('lastRecord')}: {formatDateTime(data.last_event_at, display.locale, display.timezone)}
+        </p>
+      )}
+      {data && !data.live_verified && <p className="text-xs text-muted-foreground">{t('liveNotVerified')}</p>}
+    </section>
+  );
+}
+
+/**
+ * Shows the owner's secret-free GitHub receiver and delivery-backlog status (refreshed every 30 seconds).
+ * Rendered inside the source dialog for GitHub sources; the endpoint is owner-wide, not per source.
+ */
+export function GitHubWebhookStatus() {
+  const t = useTranslations('sources');
+  const display = useDisplayPreferences();
+  const webhook = useQuery({
+    queryKey: ['github-webhook-status'],
+    queryFn: ({ signal }) => getGitHubWebhookStatus(signal),
+    refetchInterval: 30_000,
+  });
+  return (
+    <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4" aria-labelledby="github-webhook-heading">
+      <h3 id="github-webhook-heading" className="m-0 text-base font-semibold">
+        {t('github.webhookStatus')}
+      </h3>
+      {webhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
+      {webhook.isError && (
+        <p className="error" role="alert">
+          {t('github.webhookUnavailable')}{' '}
+          <Button variant="outline" onClick={() => webhook.refetch()}>
+            {t('retry.label')}
+          </Button>
+        </p>
+      )}
+      {webhook.data && (
+        <>
+          <p role="status">
+            {t(webhook.data.receiver_configured ? 'github.webhookReady' : 'github.webhookNotConfigured')} ·{' '}
+            {t('github.webhookRevision', { revision: webhook.data.receiver_revision })}
+          </p>
+          <p className="text-muted-foreground">
+            {t('github.webhookBacklog', {
+              pending: webhook.data.pending_count,
+              deliveries: webhook.data.pending_deliveries,
+              hints: webhook.data.pending_hints,
+              capacity: 100000,
+            })}
+          </p>
+          <p className="text-muted-foreground">{t('github.webhookAttention', { count: webhook.data.needs_attention })}</p>
+          {webhook.data.oldest_pending_at && (
+            <p className="text-muted-foreground">
+              {t('github.webhookOldest', { time: formatDateTime(webhook.data.oldest_pending_at, display.locale, display.timezone) })}
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}

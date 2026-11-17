@@ -1,0 +1,23 @@
+{
+  "retry": "Retry",
+  "loading": "Loading…",
+  "cancel": "Cancel",
+  "save": "Save",
+  "saved": "Saved",
+  "unsaved": "Unsaved changes",
+  "unavailable": "Unavailable",
+  "failed": "Request failed.",
+  "close": "Close",
+  "showPassword": "Show password",
+  "hidePassword": "Hide password",
+  "rowsPerPage": "Rows per page",
+  "pageRange": "{start}–{end} of {total}",
+  "pageNumber": "Page {page}",
+  "previousPage": "Previous page",
+  "nextPage": "Next page",
+  "api.unauthorized": "Your session has ended. Sign in again.",
+  "api.forbidden": "You do not have permission to do that.",
+  "api.conflict": "This changed elsewhere. Reload and try again.",
+  "api.serviceUnavailable": "The service is unavailable. Try again shortly.",
+  "api.requestFailed": "The request failed."
+}

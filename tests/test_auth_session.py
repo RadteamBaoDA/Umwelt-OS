@@ -1,8 +1,11 @@
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from apps.api.main import create_app
@@ -12,11 +15,24 @@ from core.auth.routes import get_auth_redis
 from core.auth.service import hash_password
 from core.config import Settings
 from core.database import get_session
+from core.workspaces.models import Workspace, WorkspaceMembership
 
 
 class MemoryAuthStore:
     def __init__(self) -> None:
-        self.owner = Owner(id=1, password_hash=hash_password("test-owner-password-42"))
+        workspace_id = uuid4()
+        self.owner = Owner(
+            id=1,
+            password_hash=hash_password("test-owner-password-42"),
+            account_state="active",
+            default_workspace_id=workspace_id,
+        )
+        self.workspace_row = (
+            Workspace(id=workspace_id, name="Default", owner_user_id=1),
+            WorkspaceMembership(
+                workspace_id=workspace_id, user_id=1, owner_user_id=1, role="owner", revision=1
+            ),
+        )
         self.sessions: dict[str, AuthSession] = {}
         self.pending = None
         self.lock = asyncio.Lock()
@@ -27,8 +43,13 @@ class MemorySession:
         self.store = store
         self.pending = None
 
-    async def scalar(self, _statement):
-        return 1
+    async def scalar(self, statement):
+        str_stmt = str(statement)
+        if str_stmt.lower().startswith("select owner.password_hash"):
+            return self.store.owner.password_hash
+        if "auth_session" in str_stmt.lower():
+            return next(iter(self.store.sessions.values()), None)
+        return self.store.owner
 
     async def get(self, model, key):
         if model is Owner:
@@ -38,13 +59,23 @@ class MemorySession:
     def add(self, value) -> None:
         self.pending = value
 
+    async def __aenter__(self) -> "MemorySession":
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
     async def commit(self) -> None:
         async with self.store.lock:
             if isinstance(self.pending, AuthSession):
                 self.store.sessions[self.pending.token_hash] = self.pending
 
-    async def execute(self, _statement):
-        return object()
+    async def execute(self, _statement, _params=None):
+        # resolve_workspace_context reads the (workspace, membership) row via .one_or_none()
+        return SimpleNamespace(one_or_none=lambda: self.store.workspace_row, first=lambda: None)
 
     async def delete(self, value) -> None:
         self.store.sessions.pop(value.token_hash, None)
@@ -66,6 +97,18 @@ class MemoryRedis:
 
     async def get(self, _key):
         return None
+
+    async def ttl(self, _key):
+        return -2
+
+    async def set(self, *_a, **_k):
+        return True
+
+    async def delete(self, *_keys):
+        return 0
+
+    async def info(self, _section):
+        return {"used_memory": 1024, "maxmemory": 268435456}
 
     def incr(self, key):
         self.keys.append(key)
@@ -95,13 +138,18 @@ def test_csrf_cookie_expires_on_server(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_login_requires_csrf_and_rotates_session_tokens() -> None:
     store = MemoryAuthStore()
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
 
     app.dependency_overrides[get_session] = session_override
     app.dependency_overrides[get_auth_redis] = lambda: MemoryRedis()
+    app.state.session_factory = lambda: MemorySession(store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost:3000"
     ) as client:
@@ -180,7 +228,11 @@ async def test_expired_session_is_rejected() -> None:
         csrf_hash="unused",
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
     )
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
@@ -199,13 +251,18 @@ async def test_expired_session_is_rejected() -> None:
 async def test_login_rate_limit_rejects_the_sixth_attempt() -> None:
     store = MemoryAuthStore()
     redis = MemoryRedis()
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
 
     async def session_override():
         yield MemorySession(store)
 
     app.dependency_overrides[get_session] = session_override
     app.dependency_overrides[get_auth_redis] = lambda: redis
+    app.state.session_factory = lambda: MemorySession(store)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://localhost:3000"
     ) as client:
@@ -221,3 +278,224 @@ async def test_login_rate_limit_rejects_the_sixth_attempt() -> None:
         )
     assert limited.status_code == 429
     assert limited.headers["retry-after"]
+
+
+async def _session_fixture():
+    store = MemoryAuthStore()
+    token = "concurrent-session-token"
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    store.sessions[token_hash] = AuthSession(
+        token_hash=token_hash,
+        owner_id=1,
+        csrf_hash="stale",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
+
+    async def session_override():
+        yield MemorySession(store)
+
+    app.dependency_overrides[get_session] = session_override
+    app.dependency_overrides[get_auth_redis] = lambda: MemoryRedis()
+    app.state.session_factory = lambda: MemorySession(store)
+    return app, token
+
+
+@pytest.mark.asyncio
+async def test_session_reads_with_current_csrf_do_not_409_under_concurrency(monkeypatch) -> None:
+    app, token = await _session_fixture()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://localhost:3000"
+    ) as client:
+        client.cookies.set("bbd_session", token)
+        first = await client.get("/api/v1/auth/session")  # rotates; sets the current CSRF cookie
+        assert first.status_code == 200, first.text
+
+        async def busy(*_args, **_kwargs):
+            raise HTTPException(status_code=409, detail="busy")
+
+        monkeypatch.setattr(auth_routes, "_lock_owner_session", busy)
+        results = await asyncio.gather(*(client.get("/api/v1/auth/session") for _ in range(10)))
+    assert [r.status_code for r in results] == [200] * 10
+    assert {r.json()["csrfToken"] for r in results} == {first.json()["csrfToken"]}
+
+
+@pytest.mark.asyncio
+async def test_csrf_rotation_retries_busy_owner_lock_then_succeeds(monkeypatch) -> None:
+    app, token = await _session_fixture()
+    real = auth_routes._lock_owner_session
+    calls = 0
+
+    async def flaky(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise HTTPException(status_code=409, detail="busy")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", flaky)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://localhost:3000"
+    ) as client:
+        client.cookies.set("bbd_session", token)
+        response = await client.get("/api/v1/auth/session")
+    assert response.status_code == 200
+    assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_lock_retry_exhausts_with_409_and_backs_off_linearly(monkeypatch) -> None:
+    """A lock that stays busy is attempted ``attempts`` times, sleeping 50 ms * n between tries, then 409s."""
+    sleeps: list[float] = []
+    rollbacks = 0
+    calls = 0
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    async def busy(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise HTTPException(status_code=409, detail="busy")
+
+    class FakeSession:
+        async def rollback(self) -> None:
+            nonlocal rollbacks
+            rollbacks += 1
+
+    monkeypatch.setattr(auth_routes.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", busy)
+    stale = AuthSession(token_hash="h", owner_id=1)
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes._lock_owner_session_retrying(None, FakeSession(), stale)  # type: ignore[arg-type]
+    assert exc.value.status_code == 409
+    assert calls == 8 and rollbacks == 7
+    assert sleeps == pytest.approx([0.05 * n for n in range(1, 8)])
+
+
+@pytest.mark.asyncio
+async def test_lock_retry_does_not_swallow_non_409(monkeypatch) -> None:
+    """Only lock contention is retried; other HTTP errors surface immediately."""
+    calls = 0
+
+    async def denied(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise HTTPException(status_code=401, detail="no")
+
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", denied)
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes._lock_owner_session_retrying(
+            None, None, AuthSession(token_hash="h", owner_id=1)
+        )  # type: ignore[arg-type]
+    assert exc.value.status_code == 401 and calls == 1
+
+
+@pytest.mark.asyncio
+async def test_owner_lock_share_flag_compiles_for_share_vs_for_update() -> None:
+    """Rotation's owner lock is FOR SHARE NOWAIT (never starved by admissions); the default stays FOR UPDATE NOWAIT."""
+    from sqlalchemy.dialects import postgresql
+
+    compiled: list[str] = []
+
+    class FakeSession:
+        async def scalar(self, stmt):
+            compiled.append(str(stmt.compile(dialect=postgresql.dialect())))
+            return
+
+    await auth_routes._lock_owner(FakeSession(), 1)  # type: ignore[arg-type]
+    await auth_routes._lock_owner(FakeSession(), 1, share=True)  # type: ignore[arg-type]
+    assert compiled[0].endswith("FOR UPDATE NOWAIT")
+    assert compiled[1].endswith("FOR SHARE NOWAIT")
+
+
+@pytest.mark.asyncio
+async def test_rotation_retry_requests_share_owner_lock(monkeypatch) -> None:
+    """The CSRF rotation path asks for the shared owner lock."""
+    seen: dict[str, object] = {}
+
+    async def fake(*_args, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(auth_routes, "_lock_owner_session", fake)
+    await auth_routes._lock_owner_session_retrying(
+        None, None, AuthSession(token_hash="h", owner_id=1)
+    )  # type: ignore[arg-type]
+    assert seen["share_owner"] is True
+
+
+@pytest.mark.asyncio
+async def test_owner_lock_wait_uses_lock_timeout_instead_of_nowait() -> None:
+    """A positive wait sets a transaction-local lock_timeout and drops NOWAIT, so brief contention succeeds."""
+    from sqlalchemy.dialects import postgresql
+
+    executed: list[tuple[str, dict]] = []
+    compiled: list[str] = []
+
+    class FakeSession:
+        async def execute(self, stmt, params):
+            executed.append((str(stmt), params))
+
+        async def scalar(self, stmt):
+            compiled.append(str(stmt.compile(dialect=postgresql.dialect())))
+
+    await auth_routes._lock_owner(FakeSession(), 1, wait_seconds=3)  # type: ignore[arg-type]
+    assert executed == [("SELECT set_config('lock_timeout', :ms, true)", {"ms": "3000"})]
+    assert compiled[0].endswith("FOR UPDATE") and "NOWAIT" not in compiled[0]
+
+
+@pytest.mark.asyncio
+async def test_login_lock_timeout_is_retryable_503_not_401(monkeypatch) -> None:
+    """A correct password that cannot get the owner row within the wait is 503 + Retry-After, never 401."""
+
+    async def busy(*_a, **_k):
+        raise HTTPException(status_code=409, detail="busy")  # what _lock_owner raises on 55P03
+
+    class Sess:
+        async def scalar(self, _stmt):
+            return "hash"
+
+    monkeypatch.setattr(auth_routes, "_lock_owner", busy)
+    monkeypatch.setattr(auth_routes, "verify_login_password", lambda _h, _p: True)
+    body = SimpleNamespace(identifier=None, password="p")
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes._login_verify(None, None, body, Sess(), None)  # type: ignore[arg-type]
+    assert exc.value.status_code == 503 and exc.value.headers == {"Retry-After": "1"}
+
+
+@pytest.mark.asyncio
+async def test_login_contention_is_not_recorded_as_failed_attempt(monkeypatch) -> None:
+    """Only a 401 counts toward the login throttle; the 503 contention response must not."""
+    recorded: list[bool] = []
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def record(_r, _redis, _ident, *, success):
+        recorded.append(success)
+
+    async def busy(*_a, **_k):
+        raise HTTPException(status_code=503, detail="busy", headers={"Retry-After": "1"})
+
+    monkeypatch.setattr(auth_routes, "_allow_attempt", noop)
+    monkeypatch.setattr(auth_routes, "_login_precheck", noop)
+    monkeypatch.setattr(auth_routes, "_login_record", record)
+    monkeypatch.setattr(auth_routes, "_login_verify", busy)
+    monkeypatch.setattr(auth_routes, "_valid_csrf", lambda *_a: True)
+    monkeypatch.setattr(auth_routes, "_origin_allowed", lambda *_a: True)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace())),
+        cookies={},
+        headers={},
+        client=None,
+    )
+    with pytest.raises(HTTPException) as exc:
+        await auth_routes.login(
+            request, None, SimpleNamespace(identifier=None, password="p"), None, None
+        )  # type: ignore[arg-type]
+    assert exc.value.status_code == 503 and recorded == []

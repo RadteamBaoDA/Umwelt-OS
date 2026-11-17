@@ -1,4 +1,6 @@
 .env
+.env.local
+.env.e2e-real
 .venv/
 __pycache__/
 *.py[cod]
@@ -9,8 +11,39 @@ __pycache__/
 .next/
 node_modules/
 playwright-report/
+playwright-report-*/
 test-results/
+test-results-*/
 **/playwright/.auth/
 data/
+.backup-restores/
 .superpowers/sdd/
 .gitnexus
+
+# Git worktrees
+.worktrees/
+apps/web/public/vendor/genui/
+
+# Local native-dev data directory (DATA_DIR=./.data)
+.data/
+
+# Screenshot/design-review capture output (tests/e2e/screens-capture.spec.ts, taste-skill)
+**/.taste-skill/**/*.png
+**/.taste-skill/**/console.txt
+**/.taste-skill/**/map-diagnosis.json
+# Audit/review screenshot captures (e.g. CHAT_REVIEW_DIR output)
+docs/audit/**/*-shots/
+
+# worktree symlink to the hoisted node_modules (the trailing-slash pattern above does not match a symlink)
+/node_modules
+# Local scrape token for the monitoring profile (docs/observability.md)
+infrastructure/monitoring/metrics_token.local
+infrastructure/monitoring/alert_webhook_url.local
+apps/web/coverage/
+
+# Claude Code agent worktrees (local only)
+.claude/worktrees/
+
+# Python coverage output
+.coverage
+htmlcov/

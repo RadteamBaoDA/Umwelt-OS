@@ -1,0 +1,33 @@
+# Alertmanager routing for the optional `monitoring` compose profile.
+# Delivery target is a generic webhook. The URL is a secret-bearing value: it is read from the file mounted at
+# /run/secrets/alert_webhook_url (see docker-compose.monitoring.yml, ALERT_WEBHOOK_URL_FILE) and never committed.
+# Point it at Slack/Discord/ntfy/PagerDuty-compatible bridge of your choice. Documented in docs/observability.md.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: owner-webhook
+  group_by: [alertname, process]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # severity=page alerts (worker/queue/cron outages) go to the page receiver: shorter group_wait and repeat so an
+    # outage is not held back or forgotten. severity=ticket falls through to the default owner-webhook route.
+    - matchers: ['severity="page"']
+      receiver: owner-page
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 1h
+
+receivers:
+  - name: owner-webhook
+    webhook_configs:
+      - url_file: /run/secrets/alert_webhook_url
+        send_resolved: true
+  # Same mechanism as owner-webhook. alertmanager-entrypoint.sh refuses to start when this URL file is missing or
+  # identical to the ticket file (unless ALERT_ALLOW_SHARED_PAGE_URL=true), so a distinct paging endpoint is required.
+  - name: owner-page
+    webhook_configs:
+      - url_file: /run/secrets/alert_page_webhook_url
+        send_resolved: true

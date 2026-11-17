@@ -1,0 +1,236 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.8d14ae8a6f477069b4efb54c04085a3123644bb1.001.1",
+   "type": "Feature",
+   "geometry": null,
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.8d14ae8a6f477069b4efb54c04085a3123644bb1.001.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.8d14ae8a6f477069b4efb54c04085a3123644bb1.001.1",
+    "areaDesc": "Virginia Beach",
+    "geocode": {
+     "SAME": [
+      "051810"
+     ],
+     "UGC": [
+      "VAZ098"
+     ]
+    },
+    "affectedZones": [
+     "https://api.weather.gov/zones/forecast/VAZ098"
+    ],
+    "references": [],
+    "sent": "2026-10-21T03:59:00-04:00",
+    "effective": "2026-10-21T03:59:00-04:00",
+    "onset": "2026-10-21T15:00:00-04:00",
+    "expires": "2026-10-21T16:00:00-04:00",
+    "ends": "2026-10-22T09:00:00-04:00",
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Likely",
+    "urgency": "Expected",
+    "event": "Coastal Flood Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Wakefield VA",
+    "headline": "Coastal Flood Warning issued October 21 at 3:59AM EDT until October 22 at 9:00AM EDT by NWS Wakefield VA",
+    "description": "* WHAT...For the Coastal Flood Advisory, up to one foot of\ninundation above ground level in low-lying areas near shorelines\nand tidal waterways. For the High Surf Advisory, large breaking\nwaves of 7 to 10 feet in the surf zone. For the Coastal Flood\nWarning, 1 to 2 feet of inundation above ground level expected\nin low-lying areas near shorelines and tidal waterways.\n\n* WHERE...Virginia Beach.\n\n* WHEN...For the Coastal Flood Advisory, until 3 PM EDT this\nafternoon. For the High Surf Advisory, until 7 PM EDT\nThursday. For the Coastal Flood Warning, from 3 PM this\nafternoon to 9 AM EDT Thursday.\n\n* IMPACTS...Widespread flooding of vulnerable areas will result in\nan elevated threat of property damage to homes and businesses\nnear the waterfront and shoreline. Water will be 1 to 2 feet\nabove ground level in some areas resulting in a sufficient depth\nto close numerous roads and threaten homes and businesses.\nFlooding will extend inland from the waterfront along tidal\nrivers and bays resulting in some road closures and flooding of\nvehicles. Dangerous swimming and surfing conditions and\nlocalized beach erosion.",
+    "instruction": "Take the necessary actions to protect flood-prone property. If\ntravel is required, do not drive around barricades or through\nwater of unknown depth.\n\nInexperienced swimmers should remain out of the water due to\ndangerous surf conditions.",
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+     "AWIPSidentifier": [
+      "CFWAKQ"
+     ],
+     "WMOidentifier": [
+      "WHUS41 KAKQ 210759"
+     ],
+     "NWSheadline": [
+      "COASTAL FLOOD ADVISORY NOW IN EFFECT UNTIL 3 PM EDT THIS AFTERNOON... ...HIGH SURF ADVISORY REMAINS IN EFFECT UNTIL 7 PM EDT THURSDAY... ...COASTAL FLOOD WARNING IN EFFECT FROM 3 PM THIS AFTERNOON TO 9 AM EDT THURSDAY"
+     ],
+     "BLOCKCHANNEL": [
+      "EAS",
+      "NWEM",
+      "CMAS"
+     ],
+     "EAS-ORG": [
+      "WXR"
+     ],
+     "VTEC": [
+      "/O.NEW.KAKQ.CF.W.0003.261021T1900Z-261022T1300Z/"
+     ],
+     "eventEndingTime": [
+      "2026-10-22T09:00:00-04:00"
+     ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+     "SAME": [
+      "CFW"
+     ],
+     "NationalWeatherService": [
+      "CFW"
+     ]
+    }
+   }
+  },
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.367b442f0dc1044472f7b7d4ef46e283a2357fc4.028.1",
+   "type": "Feature",
+   "geometry": null,
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.367b442f0dc1044472f7b7d4ef46e283a2357fc4.028.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.367b442f0dc1044472f7b7d4ef46e283a2357fc4.028.1",
+    "areaDesc": "Kiska to Attu Bering Side",
+    "geocode": {
+     "SAME": [
+      "058786"
+     ],
+     "UGC": [
+      "PKZ786"
+     ]
+    },
+    "affectedZones": [
+     "https://api.weather.gov/zones/forecast/PKZ786"
+    ],
+    "references": [],
+    "sent": "2026-10-20T14:45:00-08:00",
+    "effective": "2026-10-20T14:45:00-08:00",
+    "onset": "2026-10-21T17:00:00-08:00",
+    "expires": "2026-10-21T03:00:00-08:00",
+    "ends": "2026-10-22T05:00:00-08:00",
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Observed",
+    "urgency": "Immediate",
+    "event": "Storm Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Anchorage AK",
+    "headline": "Storm Warning issued October 20 at 2:45PM AKDT until October 22 at 5:00AM AKDT by NWS Anchorage AK",
+    "description": "Coastal Waters Forecast for Southwest Alaska+Bristol Bay+The\nAlaska Peninsula Waters and the Aleutian Islands up to 100 nm out.\n\nWind forecasts reflect the predominant speed and direction\nexpected. Sea forecasts represent an average of the highest\none-third of the combined wind wave and swell height.\n\n.TONIGHT...W wind 15 kt. Seas 3 ft.\n.WED...SW wind 20 kt. Seas 5 ft.\n.WED NIGHT...S wind 35 kt becoming SE 50 kt after midnight. Seas\n9 ft building to 17 ft after midnight. Rain.\n.THU...S wind 50 kt. Seas 19 ft.\n.THU NIGHT...SW wind 40 kt. Seas 22 ft.\n.FRI...W wind 40 kt. Seas 21 ft.\n.SAT THROUGH SUN...SW wind 30 kt. Seas 16 ft.",
+    "instruction": null,
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+     "AWIPSidentifier": [
+      "CWFALU"
+     ],
+     "WMOidentifier": [
+      "FZAK52 PAFC 202245"
+     ],
+     "NWSheadline": [
+      "STORM WARNING WEDNESDAY NIGHT"
+     ],
+     "BLOCKCHANNEL": [
+      "EAS",
+      "NWEM",
+      "CMAS"
+     ],
+     "VTEC": [
+      "/O.NEW.PAFC.SR.W.5235.261022T0100Z-261022T1300Z/"
+     ],
+     "eventEndingTime": [
+      "2026-10-22T05:00:00-08:00"
+     ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+     "SAME": [
+      "NWS"
+     ],
+     "NationalWeatherService": [
+      "SRW"
+     ]
+    }
+   }
+  },
+  {
+   "id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.367b442f0dc1044472f7b7d4ef46e283a2357fc4.029.1",
+   "type": "Feature",
+   "geometry": null,
+   "properties": {
+    "@id": "https://api.weather.gov/alerts/urn:oid:2.49.0.1.840.0.367b442f0dc1044472f7b7d4ef46e283a2357fc4.029.1",
+    "@type": "wx:Alert",
+    "id": "urn:oid:2.49.0.1.840.0.367b442f0dc1044472f7b7d4ef46e283a2357fc4.029.1",
+    "areaDesc": "Kiska to Attu Pacific Side",
+    "geocode": {
+     "SAME": [
+      "058787"
+     ],
+     "UGC": [
+      "PKZ787"
+     ]
+    },
+    "affectedZones": [
+     "https://api.weather.gov/zones/forecast/PKZ787"
+    ],
+    "references": [],
+    "sent": "2026-10-20T14:45:00-08:00",
+    "effective": "2026-10-20T14:45:00-08:00",
+    "onset": "2026-10-21T17:00:00-08:00",
+    "expires": "2026-10-21T03:00:00-08:00",
+    "ends": "2026-10-22T05:00:00-08:00",
+    "status": "Actual",
+    "messageType": "Alert",
+    "category": "Met",
+    "severity": "Severe",
+    "certainty": "Observed",
+    "urgency": "Immediate",
+    "event": "Storm Warning",
+    "sender": "w-nws.webmaster@noaa.gov",
+    "senderName": "NWS Anchorage AK",
+    "headline": "Storm Warning issued October 20 at 2:45PM AKDT until October 22 at 5:00AM AKDT by NWS Anchorage AK",
+    "description": "Coastal Waters Forecast for Southwest Alaska+Bristol Bay+The\nAlaska Peninsula Waters and the Aleutian Islands up to 100 nm out.\n\nWind forecasts reflect the predominant speed and direction\nexpected. Sea forecasts represent an average of the highest\none-third of the combined wind wave and swell height.\n\n.TONIGHT...NW wind 15 kt. Seas 4 ft.\n.WED...W wind 15 kt becoming S 25 kt in the afternoon. Seas 6 ft.\n.WED NIGHT...SE wind 50 kt. Seas 11 ft building to 19 ft after\nmidnight. Rain.\n.THU...SW wind 45 kt. Seas 23 ft.\n.THU NIGHT...SW wind 40 kt. Seas 26 ft.\n.FRI...W wind 40 kt. Seas 25 ft.\n.SAT THROUGH SUN...SW wind 30 kt. Seas 18 ft.",
+    "instruction": null,
+    "response": "Avoid",
+    "note": null,
+    "parameters": {
+     "AWIPSidentifier": [
+      "CWFALU"
+     ],
+     "WMOidentifier": [
+      "FZAK52 PAFC 202245"
+     ],
+     "NWSheadline": [
+      "STORM WARNING WEDNESDAY NIGHT"
+     ],
+     "BLOCKCHANNEL": [
+      "EAS",
+      "NWEM",
+      "CMAS"
+     ],
+     "VTEC": [
+      "/O.NEW.PAFC.SR.W.5236.261022T0100Z-261022T1300Z/"
+     ],
+     "eventEndingTime": [
+      "2026-10-22T05:00:00-08:00"
+     ]
+    },
+    "scope": "Public",
+    "code": "IPAWSv1.0",
+    "language": "en-US",
+    "web": "http://www.weather.gov",
+    "eventCode": {
+     "SAME": [
+      "NWS"
+     ],
+     "NationalWeatherService": [
+      "SRW"
+     ]
+    }
+   }
+  }
+ ]
+}

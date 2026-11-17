@@ -1,19 +1,46 @@
 'use client';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { NextIntlClientProvider } from 'next-intl';
+import { RouteLoader } from '@/core/app-shell/route-loader';
+import { ThemeProvider, useTheme } from 'next-themes';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
+import { GuardedNavigationProvider } from '@/core/guarded-navigation';
+import { OwnerPreferences, PreferenceValues } from '@/core/preferences';
+import { clearAccountBrowserStorage, subscribeToAccountErasure } from '@/core/account-erasure';
+import { englishMessageFallback, useLocaleMessages } from '@/core/locale-messages';
+import { missingKeyHandlers } from '@/core/i18n-missing';
 
-type Theme = 'light' | 'dark';
-const ThemeContext = createContext<{ theme: Theme; setTheme: (theme: Theme) => void } | null>(null);
+type PreviewState = { value: PreferenceValues; generation: number } | null;
 
-export function useTheme() {
-  const value = useContext(ThemeContext);
-  if (!value) throw new Error('Theme is unavailable');
+type DisplayPreferenceContextValue = {
+  locale: AppLocaleId;
+  timezone: string;
+  confirmedPreferences: OwnerPreferences | null;
+  preview: PreferenceValues | null;
+  authGeneration: number;
+  confirmPreferences: (value: OwnerPreferences, generation: number) => void;
+  setPreview: (value: PreferenceValues | null, generation: number) => void;
+  endAuthSession: (erase?: boolean) => void;
+  isCurrentGeneration: (generation: number) => boolean;
+};
+
+const DisplayPreferenceContext = createContext<DisplayPreferenceContextValue | null>(null);
+
+/** Returns confirmed and preview display preferences for the current provider context. */
+export function useDisplayPreferences() {
+  const value = useContext(DisplayPreferenceContext);
+  if (!value) throw new Error('Display preferences are unavailable');
   return value;
 }
 
-export function QueryProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('light');
+/**
+ * Mounts React Query and locale-aware message providers around the application tree.
+ *
+ * @param props.nonce - Per-request CSP nonce for next-themes' inline theme-init script (blocked by the nonce CSP without it).
+ */
+export function QueryProvider({ children, nonce }: { children: ReactNode; nonce?: string }) {
   const [client] = useState(
     () =>
       new QueryClient({
@@ -22,6 +49,149 @@ export function QueryProvider({ children }: { children: ReactNode }) {
         },
       }),
   );
-  useEffect(() => { document.body.dataset.theme = theme; }, [theme]);
-  return <QueryClientProvider client={client}><ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider></QueryClientProvider>;
+  return (
+    <QueryClientProvider client={client}>
+      <GuardedNavigationProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange nonce={nonce}>
+          <DisplayPreferencesProvider>{children}</DisplayPreferencesProvider>
+        </ThemeProvider>
+      </GuardedNavigationProvider>
+    </QueryClientProvider>
+  );
+}
+
+/**
+ * Subscribes to cross-tab account erasure: aborts private streams and drafts, clears caches and browser storage, resets
+ * preferences, then reloads outside protected routes. Runs at most once per erasure signal.
+ *
+ * @param client - Query client whose queries and cache are dropped.
+ * @param endAuthSession - Provider callback that ends the auth generation (`true` = erase retained preferences).
+ */
+function useAccountErasureReset(client: QueryClient, endAuthSession: (erase?: boolean) => void): void {
+  useEffect(() => {
+    let ended = false;
+    /** Abort private streams and drafts across tabs, then reload outside protected routes. */
+    const erased = () => {
+      if (ended) return;
+      ended = true;
+      window.dispatchEvent(new Event('umwelt:auth-ending'));
+      void client.cancelQueries();
+      client.clear();
+      endAuthSession(true);
+      // Full navigation drops module-level state and requests not owned by React Query; it waits (bounded) for the
+      // IndexedDB live-feed delete so the navigation cannot cut it off.
+      void clearAccountBrowserStorage().then(() => window.location.replace('/account-deletion'));
+    };
+    return subscribeToAccountErasure(erased);
+  }, [client, endAuthSession]);
+}
+
+/** Owns application display preferences, including bootstrap values, confirmed owner values, temporary previews, and auth-generation resets. */
+function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
+  const client = useQueryClient();
+  const { setTheme } = useTheme();
+  const themeSetterRef = useRef(setTheme);
+  useLayoutEffect(() => {
+    themeSetterRef.current = setTheme;
+  });
+  const [confirmedPreferences, setConfirmedPreferences] = useState<OwnerPreferences | null>(null);
+  const confirmedRef = useRef<OwnerPreferences | null>(null);
+  const [bootstrapValues, setBootstrapValues] = useState<PreferenceValues>({
+    theme: 'system',
+    locale: 'en-us',
+    timezone: 'Asia/Ho_Chi_Minh',
+  });
+  const bootstrapRef = useRef(bootstrapValues);
+  const [browserLocale, setBrowserLocale] = useState<AppLocaleId>('en-us');
+  const [previewState, setPreviewState] = useState<PreviewState>(null);
+  const [authGeneration, setAuthGeneration] = useState(0);
+  const generationRef = useRef(0);
+  useEffect(() => {
+    const lang = navigator.language.toLowerCase();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
+    setBrowserLocale(lang.startsWith('vi') ? 'vi-vi' : 'en-us');
+  }, []);
+
+  const confirmedValues = useMemo<PreferenceValues>(
+    () =>
+      confirmedPreferences
+        ? { ...confirmedPreferences, locale: confirmedPreferences.persisted ? confirmedPreferences.locale : browserLocale }
+        : { ...bootstrapValues, locale: browserLocale },
+    [confirmedPreferences, bootstrapValues, browserLocale],
+  );
+  const activePreview = previewState?.generation === authGeneration ? previewState.value : null;
+  const effective = activePreview ?? confirmedValues;
+
+  useEffect(() => {
+    document.documentElement.lang = normalizeFormattingLocale(effective.locale);
+  }, [effective.locale]);
+
+  const hasConfirmedPreferences = Boolean(confirmedPreferences);
+  useEffect(() => {
+    if (hasConfirmedPreferences) themeSetterRef.current(effective.theme);
+  }, [effective.theme, hasConfirmedPreferences]);
+
+  /** Checks whether asynchronous preference work still belongs to the active auth generation. */
+  const isCurrentGeneration = useCallback((generation: number) => generationRef.current === generation, []);
+  /** Commits confirmed preference values only for the current authentication generation. */
+  const confirmPreferences = useCallback((value: OwnerPreferences, generation: number) => {
+    // Async reads from a prior login must not replace the next session's confirmed preferences.
+    if (generationRef.current !== generation) return;
+    confirmedRef.current = value;
+    setConfirmedPreferences(value);
+    const next = { theme: value.theme, locale: value.locale, timezone: value.timezone };
+    bootstrapRef.current = next;
+    setBootstrapValues(next);
+  }, []);
+  /** Sets or clears preview preferences only for the current authentication generation. */
+  const setPreview = useCallback((value: PreferenceValues | null, generation: number) => {
+    if (generationRef.current !== generation) return;
+    setPreviewState(value ? { value, generation } : (current) => (current?.generation === generation ? null : current));
+  }, []);
+  /** End auth and advance its generation; erasure resets preferences instead of retaining them. */
+  const endAuthSession = useCallback((erase = false) => {
+    const retained: PreferenceValues = erase
+      ? { theme: 'system', locale: 'en-us', timezone: 'Asia/Ho_Chi_Minh' }
+      : confirmedRef.current
+        ? { theme: confirmedRef.current.theme, locale: confirmedRef.current.locale, timezone: confirmedRef.current.timezone }
+        : bootstrapRef.current;
+    themeSetterRef.current(retained.theme);
+    bootstrapRef.current = retained;
+    setBootstrapValues(retained);
+    confirmedRef.current = null;
+    setConfirmedPreferences(null);
+    setPreviewState(null);
+    generationRef.current += 1;
+    setAuthGeneration(generationRef.current);
+  }, []);
+
+  useAccountErasureReset(client, endAuthSession);
+  const [localeMessages, english] = useLocaleMessages(effective.locale);
+
+  return (
+    <DisplayPreferenceContext.Provider
+      value={{
+        locale: effective.locale,
+        timezone: effective.timezone,
+        confirmedPreferences,
+        preview: activePreview,
+        authGeneration,
+        confirmPreferences,
+        setPreview,
+        endAuthSession,
+        isCurrentGeneration,
+      }}
+    >
+      <NextIntlClientProvider
+        locale={normalizeFormattingLocale(effective.locale)}
+        messages={localeMessages}
+        {...missingKeyHandlers((namespace, key) => englishMessageFallback(english, namespace, key))}
+      >
+        {/* Workspace-only providers (chat controller, workspace, realtime) mount in app/(workspace)/layout.tsx. */}
+        {children}
+        {/* Outside the workspace providers: their loading branches replace children and would unmount the overlay mid-load. */}
+        <RouteLoader />
+      </NextIntlClientProvider>
+    </DisplayPreferenceContext.Provider>
+  );
 }

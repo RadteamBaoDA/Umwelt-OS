@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Umwelt-OS – Audit UI 2026-11-12</title>
+<style>
+  :root { --bg:#f2f5f2; --surface:#fff; --text:#17211c; --muted:#5c6660; --line:#e3e7e3; --accent:#176a4a; --danger:#c4242a; --warn:#a65b00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0e110f; --surface:#161a17; --text:#edf3ee; --muted:#a7b1aa; --line:#252b27; --accent:#77c69c; --danger:#e5566f; --warn:#fbbf24; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 system-ui, "Segoe UI", sans-serif; }
+  main { max-width:1080px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:24px; margin:0 0 8px; }
+  h2 { font-size:20px; margin:40px 0 12px; padding-top:16px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:24px 0 8px; }
+  p, li { max-width:78ch; }
+  a { color:var(--accent); }
+  code { font:13px ui-monospace, Consolas, monospace; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 4px; overflow-wrap:anywhere; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:16px; margin:12px 0; }
+  .muted { color:var(--muted); }
+  .wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; background:var(--surface); }
+  th, td { text-align:left; vertical-align:top; padding:8px 12px; border:1px solid var(--line); }
+  th { font-size:13px; color:var(--muted); font-weight:600; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; border:1px solid currentColor; border-radius:4px; padding:0 6px; white-space:nowrap; }
+  .hi { color:var(--danger); } .mid { color:var(--warn); } .lo { color:var(--muted); } .ok { color:var(--accent); }
+  .shots { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px; align-items:start; }
+  figure { margin:0; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px; }
+  figure img { display:block; max-width:100%; height:auto; border:1px solid var(--line); border-radius:4px; }
+  figure.tall img { max-height:520px; width:auto; margin:0 auto; }
+  figcaption { font-size:13px; color:var(--muted); padding-top:8px; }
+  nav a { margin-right:12px; white-space:nowrap; }
+  .wire { display:grid; gap:8px; border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--bg); }
+  .wire div { background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:13px; }
+  .wire .row { display:grid; gap:8px; background:none; border:0; padding:0; }
+  .w1440 .row.two { grid-template-columns:45fr 55fr; } .w1440 .row.three { grid-template-columns:1fr 1fr 1fr; }
+  .w390 { max-width:280px; }
+  .wire .big { min-height:120px; } .wire .hd { font-weight:600; font-size:16px; border:0; background:none; padding:0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Umwelt-OS – Audit UI: Dashboard, Form, Responsive, Accessibility, WYSIWYG</h1>
+<p class="muted">Ngày 2026-11-12 · nhánh <code>feature/fix-ui</code> · phạm vi Dashboard + Chat + Settings · chưa sửa dòng code ứng dụng nào. Cập nhật 2026-11-13: thêm mục Chat, sửa lại mục WYSIWYG theo thao tác thật trên app. Gói fix ở phần 7.</p>
+<nav><a href="#tomtat">Tóm tắt</a><a href="#dash">1 Dashboard</a><a href="#form">2 Form</a><a href="#resp">3 Responsive</a><a href="#a11y">4 Accessibility</a><a href="#chat">5 Chat</a><a href="#wys">6 WYSIWYG</a><a href="#fix">7 Đề xuất fix</a><a href="#gioihan">8 Giới hạn</a></nav>
+
+<h2 id="tomtat">Tóm tắt</h2>
+<div class="card">
+<ul>
+<li><strong>Dashboard:</strong> màn hình đầu chủ yếu là điều khiển, không phải nội dung. Ở 390px, toàn bộ màn hình đầu là nút và 13 chip lọc; bản đồ bắt đầu ở cuối màn hình, gadget nằm sau một tab.</li>
+<li><strong>Form:</strong> không form nào kiểm tra khi rời trường. Nhiều nút Next/Save bị vô hiệu mà không nói lý do. Ô lỗi không có kiểu hiển thị riêng.</li>
+<li><strong>Responsive:</strong> không trang nào có thanh cuộn ngang cấp trang ở cả 3 kích thước. Hai trang Settings (System status, Global settings) còn bảng cuộn ngang bên trong ở 390px và 768px. Chỉ bảng nguồn dữ liệu đã chuyển thành card.</li>
+<li><strong>Accessibility:</strong> chữ đạt 4.5:1 ở cả hai theme. Ba điểm chưa đạt là viền focus (1.9:1), viền ô nhập (1.49:1) và transition vẫn chạy khi bật giảm chuyển động.</li>
+<li><strong>Chat:</strong> không tràn ngang ở cả ba kích thước. Lỗi nặng nhất: câu trả lời bị dừng giữa chừng mất sau khi mở lại hội thoại. Ở 390px phần đọc chỉ còn khoảng 290px.</li>
+<li><strong>WYSIWYG:</strong> tốt ở phần giao diện (7/8). Yếu nhất là sửa bố cục dashboard (1/8): chế độ xem không hiển thị bố cục đã sắp ở chế độ sửa, kể cả trên desktop, và xoá gadget không hoàn tác được.</li>
+</ul>
+</div>
+<p><strong>Cách làm.</strong> Ảnh chụp và số đo lấy từ stack Docker dùng-một-lần, 7 nguồn có dữ liệu thật, 13 test đạt trong 24,9 phút. Số đo gồm 99 lượt trang (23 trang × 3 kích thước ở theme sáng, cộng theme tối ở 1440px). Phần Form là đọc code. Phần WYSIWYG của dashboard và phần Chat đã được thao tác thật trên app ngày 13/11 (hai lượt chạy bổ sung, 16 và 6 test đạt); các bề mặt WYSIWYG còn lại vẫn là đọc code. Ảnh đầy đủ nằm ở <code>.taste-skill/ui-audit/</code>, số đo thô ở <code>.taste-skill/ui-audit/audit/report.json</code>.</p>
+
+<h2 id="dash">1. Audit Dashboard</h2>
+<div class="shots">
+<figure><img src="2026-11-12-ui-audit-shots/dashboard-1440.png" alt="Dashboard Overview ở 1440px"><figcaption>1440px – Overview</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/dashboard-768.png" alt="Dashboard Overview ở 768px"><figcaption>768px – Overview</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/dashboard-390.png" alt="Dashboard Overview ở 390px"><figcaption>390px – Overview</figcaption></figure>
+</div>
+<p class="muted">Vùng bản đồ trắng trong ảnh là giới hạn của trình duyệt không giao diện khi chụp canvas WebGL, không phải lỗi của app (canvas có kích thước đúng 698×300).</p>
+
+<h3>5 vấn đề lớn nhất về phân cấp thị giác và mật độ</h3>
+<div class="wrap"><table>
+<tr><th>#</th><th>Vấn đề</th><th>Bằng chứng</th><th>Ảnh hưởng</th></tr>
+<tr><td>1</td><td><strong>Điều khiển lấn át nội dung.</strong> Hai bản đồ cùng hiện trên Overview, mỗi cái kèm một bộ 13 chip lọc, ô tìm kiếm, Refresh và bộ chọn thời gian giống hệt nhau.</td><td>1440px: 78 phần tử tương tác trong màn hình đầu. Hai bộ chip chiếm khoảng 180px chiều cao mỗi cột trước khi tới nội dung.</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>2</td><td><strong>Ở 390px màn hình đầu không có nội dung.</strong> Thứ tự là: 3 nút tiêu đề, hàng tab + Add tab, tab World map / Gadgets, bộ chọn 3D globe, 13 chip, tìm kiếm, Refresh, thời gian, Live sources. Bản đồ chỉ lộ khoảng 70px ở đáy.</td><td>Ảnh 390px. Gadget (Feed, Highlights, Daily brief) nằm sau tab “Gadgets”, không thấy khi mở trang.</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>3</td><td><strong>Phân cấp chữ phẳng.</strong> Tiêu đề gadget 14px/600 cùng cỡ với chữ thân 14px. Một nửa số chữ trên trang là 12px. Thứ nổi nhất trang là “0 alerting · 0 rules” (24px, đậm), tức một trạng thái rỗng.</td><td>Đo ở 1440px: 62 khối chữ 12px, 61 khối 14px, 5 khối 16px, 2 khối 24px. H3 “Map/Feed/Highlights” đều 14px/600.</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>4</td><td><strong>Không có hành động chính.</strong> Mọi nút cùng một kiểu viền mảnh: Collapse map, Refresh, Enable sources, Comfortable, Edit layout, Topics, Add tab và 26 chip. Việc cần làm tiếp (bật nguồn, cấu hình Feed) trông giống mọi thứ khác; “Configure data sources” chỉ là liên kết gạch chân.</td><td>Ảnh 1440px. Nút nền đậm duy nhất trong màn hình đầu là chip “All” đang chọn.</td><td><span class="tag mid">Trung bình</span></td></tr>
+<tr><td>5</td><td><strong>Hai bản đồ trùng nhau và chữ bị cắt.</strong> Overview có khung bản đồ cố định bên trái, và mẫu Overview lại tạo thêm một gadget “Map” bên phải. Trong gadget Map, dòng ghi công USGS bị cắt ngang ở mép dưới.</td><td>Ảnh 1440px: hai bản đồ cạnh nhau, dòng “Credit the U.S. Geological Survey…” bị cắt. <em>Đính chính:</em> bản đầu của report ghi “cột trái trắng suốt 7000px”; đó là do cách chụp toàn trang kéo dài cửa sổ, không có trên màn hình thật.</td><td><span class="tag mid">Trung bình</span></td></tr>
+</table></div>
+<div class="shots" style="margin-top:12px">
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/all-gadgets-1440-full.png" alt="Dashboard có mọi loại gadget, toàn trang ở 1440px"><figcaption>1440px toàn trang – dashboard có mọi loại gadget. Lưu ý: cột trái kéo dài là do cách chụp toàn trang, không có trên màn hình thật.</figcaption></figure>
+</div>
+
+<h3>Quy chuẩn đề xuất (lấy từ token sẵn có, không tạo hệ mới)</h3>
+<div class="wrap"><table>
+<tr><th>Hạng mục</th><th>Quy chuẩn</th><th>Ghi chú</th></tr>
+<tr><td>Spacing</td><td>4 · 8 · 12 · 16 · 24 · 32px</td><td>Bỏ các giá trị lẻ còn trong CSS cũ (5, 7, 9, 14, 17, 18, 34px). Khoảng cách trong gadget 12px, giữa gadget 12px, lề trang 24px (16px ở điện thoại).</td></tr>
+<tr><td>Typography</td><td>Caption 12 · Label 13 · Body 14 · Tiêu đề gadget 16/600 · Tiêu đề trang 24/600 · Số liệu 40/24</td><td>Nâng tiêu đề gadget từ 14 lên 16px để tách khỏi chữ thân. Cỡ 24px đậm chỉ dành cho số liệu có dữ liệu; trạng thái rỗng dùng Body 14 màu <code>muted</code>.</td></tr>
+<tr><td>Màu (5)</td><td><code>bg</code> #f2f5f2 · <code>surface</code> #ffffff · <code>text</code> #17211c · <code>muted</code> #5c6660 · <code>accent</code> #176a4a</td><td>Giá trị theme sáng; theme tối dùng cặp tương ứng. <code>danger</code> và màu trạng thái chỉ dùng cho trạng thái, không tính vào 5 màu chủ đạo.</td></tr>
+<tr><td>Gradient</td><td>Không dùng</td><td>Còn 2 chỗ trong <code>globals.css</code>: mặt nạ mờ của sub-tabs (dòng 258) và ô mẫu theme “system” (dòng 302).</td></tr>
+</table></div>
+
+<h3>Thiết kế lại đề xuất</h3>
+<p>Giữ nguyên lưới gadget và vị trí các ô. Thay đổi nằm ở thanh điều khiển, cỡ chữ và trạng thái rỗng. Sơ đồ dưới là bố cục đề xuất; ảnh thật ở 1440px và 390px sẽ được chụp sau khi owner duyệt và code được sửa.</p>
+<div class="shots">
+<div>
+<p class="muted">1440px</p>
+<div class="wire w1440">
+  <div class="hd">Overview <span class="muted" style="font-weight:400;font-size:13px">· cập nhật 1 phút trước</span></div>
+  <div>Một thanh lọc dùng chung: [Danh mục ▾ 13 mục] [Tìm sự kiện] [7 ngày ▾] · bên phải: Mật độ, Sửa bố cục, Chủ đề</div>
+  <div class="row two"><div class="big">Bản đồ (một bản, cao theo nội dung)<br><span class="muted">Dưới bản đồ: danh sách sự kiện hoặc một hành động chính “Bật nguồn”</span></div>
+  <div class="row" style="grid-template-rows:auto auto"><div><strong>Bản tin hằng ngày</strong> 16/600<br><span class="muted">nội dung 14px</span></div><div class="row" style="grid-template-columns:1fr 1fr"><div><strong>Bảng tin</strong></div><div><strong>Mục nổi bật</strong><br><span class="muted">rỗng: chữ 14px muted + 1 nút</span></div></div></div></div>
+</div>
+</div>
+<div>
+<p class="muted">390px</p>
+<div class="wire w390">
+  <div class="hd">Overview</div>
+  <div>[Danh mục ▾] [7 ngày ▾] [⋯ thêm]</div>
+  <div class="big">Bản đồ – thấy ngay trong màn hình đầu</div>
+  <div><strong>Bản tin hằng ngày</strong></div>
+  <div><strong>Bảng tin</strong></div>
+</div>
+</div>
+</div>
+<ul>
+<li>Gộp hai bộ lọc bản đồ thành một thanh dùng chung; 13 chip thành một menu chọn danh mục (chip chỉ hiện ở màn hình từ 1100px khi còn chỗ trên một hàng).</li>
+<li>Ở điện thoại, gom Comfortable / Edit layout / Topics / Add tab vào một menu “⋯”. Bỏ tab World map / Gadgets: bản đồ và gadget xếp nối tiếp trong một luồng cuộn.</li>
+<li>Mỗi trạng thái rỗng có đúng một nút nền đậm cho bước kế tiếp; các nút còn lại giữ kiểu viền.</li>
+<li>Khung bản đồ Overview cao theo nội dung, không kéo hết chiều cao trang. Dòng ghi công nguồn được xuống dòng thay vì bị cắt.</li>
+</ul>
+
+<h2 id="form">2. Tối ưu Form</h2>
+<p>Đã đọc code khoảng 40 form. Tiêu chuẩn: một cột, label trên, kiểm tra khi rời trường, lỗi có cách sửa, đủ trạng thái focus / disabled / loading / error. Không đề xuất nào đổi thứ tự trường hay lời gọi API.</p>
+<h3>Hiện trạng chung</h3>
+<ul>
+<li><strong>Không form nào kiểm tra khi rời trường.</strong> Hoặc báo lỗi ngay lúc gõ, hoặc chỉ lúc gửi, hoặc không báo.</li>
+<li><strong>Ô lỗi không có kiểu hiển thị.</strong> <code>globals.css</code> không có rule cho <code>.input[aria-invalid]</code>; chỉ <code>Textarea</code> tự tô viền lỗi. Checkbox không có viền focus riêng.</li>
+<li><strong>Hai cột.</strong> <code>FieldGrid</code> (<code>components/settings-layout/index.tsx:50-51</code>) là hai cột từ 720px, dùng ở 12 file.</li>
+<li><strong>Nút vô hiệu im lặng.</strong> Next của wizard nguồn, Save ở viz-router, web-search, system-prompts, nút xoá tài khoản: bị khoá mà không nói phải sửa gì.</li>
+</ul>
+<h3>Năm form dễ làm người dùng bỏ cuộc nhất</h3>
+<div class="wrap"><table>
+<tr><th>#</th><th>Form</th><th>Vấn đề</th><th>Sửa nhỏ nhất</th></tr>
+<tr><td>1</td><td>Wizard thêm nguồn dữ liệu<br><code>sources/source-wizard.tsx:110</code>, <code>connector-editor/*</code></td><td>Next bị khoá không lý do. Khoảng 25 định dạng riêng theo nhà cung cấp không có phản hồi tới khi máy chủ trả lời; lỗi máy chủ hiện thành danh sách ở cuối (“too long”, “invalid value”), không tô trường nào. Lưới hai cột.</td><td>Giữ Next bật; khi bước chưa hợp lệ thì đưa focus về trường lỗi đầu tiên và hiện một dòng lý do. Gắn <code>aria-invalid</code> vào đúng trường trong <code>ScopeField</code>.</td></tr>
+<tr><td>2</td><td>Starter pack<br><code>sources/starter-pack-wizard.tsx:58-82</code></td><td>Một dòng sai khoá Next cho cả gói. Thông báo là “Check this value.” và hiện ngay lúc gõ. Tên trống không có thông báo nào.</td><td>Chỉ đánh dấu lỗi sau khi rời trường; thay bằng thông báo theo từng loại (bảng dưới).</td></tr>
+<tr><td>3</td><td>Setup<br><code>app/(public)/setup/page.tsx:39</code></td><td>Chặn mọi lần cài đặt. Lỗi là “Setup could not be completed.” không gợi ý gì về mã thiết lập. Sau lần gửi đầu, mỗi phím gõ đều kiểm tra lại.</td><td><code>mode:'onBlur', reValidateMode:'onBlur'</code> và viết lại chuỗi lỗi.</td></tr>
+<tr><td>4</td><td>Cấu hình Live Map<br><code>dashboard/live-map-config.tsx:73-112</code></td><td>Đang lưu không có dấu hiệu nào (nhãn nút không đổi). Email không bao giờ được kiểm tra vì không nằm trong <code>&lt;form&gt;</code>. Chữ cạnh checkbox điều khoản không phải label.</td><td>Kiểm tra email khi rời trường; nhãn nút thành “Đang lưu…”; bọc checkbox và chữ trong <code>&lt;label&gt;</code>.</td></tr>
+<tr><td>5</td><td>Form công việc<br><code>tasks/task-form.tsx:87</code></td><td>Lỗi hạn chót hiện ngay ở ký tự đầu tiên gõ vào. Đây là form dùng thường xuyên.</td><td>Chỉ hiện lỗi sau khi rời trường.</td></tr>
+</table></div>
+<p>Các form khác cần sửa: đăng nhập (lỗi mật khẩu không có <code>id</code> nên không được liên kết), lời mời, đổi mật khẩu (báo lỗi từ phím đầu tiên), xoá tài khoản, MCP editor (hai cột, không có nhãn đang lưu), AI settings (nút vẫn ghi “Save” khi đang lưu), upload (không khoá nút khi đang gửi, có thể gửi hai lần), automation rule (lỗi gom ở cuối, không gắn vào dòng sai). Form tốt nhất hiện nay là quy tắc nổi bật (<code>settings/highlight-rule-editor.tsx</code>): có touched, <code>aria-invalid</code>, <code>aria-describedby</code> và thông báo có cách sửa.</p>
+
+<h3>Thông báo lỗi viết lại (trích; đủ khoảng 35 chuỗi sẽ sửa cùng lúc)</h3>
+<div class="wrap"><table>
+<tr><th>Khoá</th><th>Hiện tại</th><th>Đề xuất (vi)</th><th>Đề xuất (en)</th></tr>
+<tr><td><code>sources.ts</code> starterFieldInvalid</td><td>Hãy kiểm tra giá trị này.</td><td>Tách theo loại, ví dụ mã cổ phiếu: “Nhập 1–20 mã cổ phiếu, mỗi mã 2–10 chữ in hoa hoặc số, cách nhau bằng dấu phẩy (ví dụ FPT, VNM).”</td><td>Enter 1–20 stock codes, 2–10 capital letters or digits, separated by commas (e.g. FPT, VNM).</td></tr>
+<tr><td><code>sources.ts</code> issueInvalid</td><td>giá trị không hợp lệ</td><td>không được chấp nhận; hãy đối chiếu với quy tắc ghi dưới trường</td><td>not accepted; check it against the rule under the field</td></tr>
+<tr><td><code>setup.ts</code> passwordMismatch</td><td>Mật khẩu không khớp.</td><td>Mật khẩu không khớp. Hãy nhập cùng một mật khẩu ở cả hai ô.</td><td>The passwords do not match. Type the same password in both fields.</td></tr>
+<tr><td><code>setup.ts</code> failure</td><td>Không thể hoàn tất thiết lập.</td><td>Không thể hoàn tất thiết lập. Hãy kiểm tra mã thiết lập rồi thử lại.</td><td>Setup could not be completed. Check the setup token and try again.</td></tr>
+<tr><td><code>login.ts</code> unauthorized</td><td>Mật khẩu không chính xác.</td><td>Mật khẩu không chính xác. Hãy kiểm tra lại (cả phím Caps Lock) rồi thử lại.</td><td>The password was not accepted. Check it (and Caps Lock) and try again.</td></tr>
+<tr><td><code>gadget-settings.ts</code> source_incompatible</td><td>Nguồn dữ liệu này không tương thích với tiện ích.</td><td>Hãy chọn nguồn dữ liệu phù hợp với loại tiện ích này.</td><td>Choose a datasource that works with this gadget type.</td></tr>
+<tr><td><code>sources.ts</code> mcpArgumentsInvalid</td><td>Tham số mỗi lệnh gọi phải là JSON hợp lệ.</td><td>Tham số mỗi lệnh gọi phải là JSON hợp lệ, ví dụ {"query": "news"}. Hãy sửa rồi lưu lại.</td><td>Each call argument must be valid JSON, for example {"query": "news"}. Fix it and save again.</td></tr>
+<tr><td><code>chat.ts</code> genUiFormNumberInvalid</td><td>{label} phải là một số.</td><td>Nhập một số cho {label}, ví dụ 42.</td><td>Enter a number for {label}, e.g. 42.</td></tr>
+<tr><td>(thiếu) xoá tài khoản</td><td>không có thông báo</td><td>Hãy gõ DELETE bằng chữ in hoa.</td><td>Type DELETE in capital letters.</td></tr>
+<tr><td>(thiếu) Next của wizard</td><td>không có thông báo</td><td>Hãy sửa các trường được đánh dấu để tiếp tục.</td><td>Fix the highlighted fields to continue.</td></tr>
+</table></div>
+
+<h2 id="resp">3. Responsive (390 / 768 / 1440px)</h2>
+<div class="wrap"><table>
+<tr><th>Kiểm tra</th><th>390px</th><th>768px</th><th>1440px</th></tr>
+<tr><td>Thanh cuộn ngang cấp trang (23 trang)</td><td><span class="tag ok">0 trang</span></td><td><span class="tag ok">0 trang</span></td><td><span class="tag ok">0 trang</span></td></tr>
+<tr><td>Vùng cuộn ngang bên trong</td><td><span class="tag hi">2 trang</span> System status, Global settings</td><td><span class="tag hi">2 trang</span> cùng hai trang đó</td><td><span class="tag ok">0</span> đáng kể</td></tr>
+<tr><td>Bảng chuyển thành card xếp chồng</td><td colspan="2">Chỉ bảng nguồn dữ liệu (đã chuyển từ dưới 1024px). 6 bảng ở System status và 1 bảng ở Global settings chưa chuyển.</td><td>không áp dụng</td></tr>
+</table></div>
+
+<h3>Thành phần bị lỗi</h3>
+<div class="wrap"><table>
+<tr><th>Thành phần</th><th>Kích thước</th><th>Lỗi</th><th>File</th></tr>
+<tr><td>Bảng thống kê Postgres (Table, Size, Live rows, Dead rows, Seq/index scans, Vacuum)</td><td>390, 768</td><td>Bảng rộng 748px trong khung 266px (390) và 564px (768); phải cuộn ngang.</td><td><code>modules/observability/database-panel.tsx:117</code></td></tr>
+<tr><td>Bảng duyệt điều khoản nhà cung cấp (5 cột)</td><td>390, 768</td><td>Bảng rộng 737px trong khung 300px (390) và 598px (768). Ở 390px chỉ thấy cột đầu, cột thứ hai bị cắt ở chữ đầu tiên.</td><td><code>modules/settings/provider-review.tsx:45</code></td></tr>
+<tr><td>Bảng lượt chạy lỗi, bảng mức dùng model</td><td>390</td><td>Chưa có dạng card; hiện là khối cuộn.</td><td><code>observability/system-status-dashboard.tsx:264</code>, <code>usage-panel.tsx:34</code></td></tr>
+<tr><td>Bảng model, bảng n8n, lịch sử đồng bộ, gadget việc làm, bảng trong chat</td><td>390, 768</td><td>Theo code không có dạng card. Chưa có dòng dữ liệu trong lượt chụp nên chưa đo được.</td><td><code>settings/models-section.tsx:88</code>, <code>n8n-settings.tsx:381</code>, <code>sources/sync-history.tsx:95</code>, <code>dashboard/gadgets/job-list.tsx:91</code>, <code>chat/generative-ui/components/table-catalog.tsx</code></td></tr>
+<tr><td>Dashboard Overview</td><td>390</td><td>Màn hình đầu không có nội dung (mục 1, vấn đề 2).</td><td><code>modules/dashboard/dashboard-overview.tsx</code>, <code>dashboard-header.tsx</code></td></tr>
+<tr><td>Checkbox</td><td>mọi kích thước</td><td>18×18px, không có vùng nhấn mở rộng; 36 chỗ ở 390px. Dưới cả mức tối thiểu 24px của WCAG 2.2.</td><td><code>components/ui/checkbox.tsx</code>, <code>globals.css:179</code></td></tr>
+<tr><td>Liên kết “Add … gadget”, “Open terms”, ghi công bản đồ</td><td>390</td><td>Cao 14–22px.</td><td><code>settings/sources</code> (chip gadget), <code>provider-review.tsx</code></td></tr>
+<tr><td>Logo (24×36), avatar (36×36), nút icon ở thanh trên (36×36)</td><td>390, 768</td><td>Dưới 44px và không có rule cho màn hình cảm ứng.</td><td><code>core/app-shell/workspace-shell.tsx</code>, <code>globals.css:246</code></td></tr>
+<tr><td>Liên kết thanh điều hướng trái (40×40)</td><td>768</td><td>Dưới 44px.</td><td><code>globals.css:213</code></td></tr>
+</table></div>
+<div class="shots" style="margin-top:12px">
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/settings-global-390.png" alt="Global settings ở 390px, bảng bị cắt"><figcaption>390px – Global settings: bảng 5 cột chỉ lộ cột đầu.</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/settings-sources-390.png" alt="Nguồn dữ liệu ở 390px, dạng card"><figcaption>390px – Nguồn dữ liệu: bảng đã thành card. Đây là mẫu để áp cho các bảng khác.</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/settings-system-390.png" alt="System status ở 390px"><figcaption>390px – System status (phần trên ổn; bảng nằm phía dưới).</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/chat-390.png" alt="Chat ở 390px"><figcaption>390px – Chat: không lỗi bố cục.</figcaption></figure>
+</div>
+<p><strong>Về vùng nhấn 44px.</strong> Nút và ô nhập của app cao 36px với chuột và 44px với màn hình cảm ứng (rule <code>pointer: coarse</code>). Lượt đo chạy bằng trình duyệt máy bàn thu nhỏ cửa sổ nên ghi nhận 36–38px cho các nút này; trên điện thoại thật chúng là 44px. Các thành phần liệt kê trong bảng trên là những chỗ không có rule cảm ứng nên nhỏ thật.</p>
+
+<h2 id="a11y">4. Accessibility (WCAG 2.2 AA)</h2>
+<p>Cột “Sau khi sửa” là trạng thái đề xuất; chưa có gì được sửa.</p>
+<div class="wrap"><table>
+<tr><th>Vấn đề</th><th>Trước khi sửa (hiện tại)</th><th>Sau khi sửa (đề xuất)</th></tr>
+<tr><td>Viền focus quá nhạt <span class="tag hi">1.4.11, 2.4.7</span></td><td>Viền 3px màu accent pha 40%: <strong>1.90:1</strong> trên nền trắng, 1.85:1 trên nền trang, 2.45:1 ở theme tối. Yêu cầu 3:1. Áp cho ô nhập, nút, liên kết, avatar, radio (6 rule trong <code>globals.css</code>).</td><td>Viền 3px màu accent đặc: <strong>6.57:1</strong> (sáng), <strong>8.66:1</strong> (tối).</td></tr>
+<tr><td>Viền ô nhập quá nhạt <span class="tag hi">1.4.11</span></td><td><code>--control</code> #cfd5d0 trên nền trắng: <strong>1.49:1</strong>; theme tối #3a423c: 1.70:1. Yêu cầu 3:1 để nhận ra ranh giới ô nhập.</td><td>Đổi <code>--control</code> sang màu đạt 3:1 (ví dụ #868f88 ở theme sáng: 3.33:1 trên nền trắng, 3.04:1 trên nền trang; #667069 ở theme tối: 3.42:1); cập nhật <code>tokens.json</code>.</td></tr>
+<tr><td>Chữ dưới 4.5:1 <span class="tag ok">1.4.3</span></td><td>Đo 23 trang ở cả hai theme: <strong>0 cặp màu chữ dưới ngưỡng</strong>. Cặp thấp nhất: chữ cảnh báo trên nền trang 4.64:1, chữ muted trên nền active 4.99:1.</td><td>Không cần sửa. Riêng màu <code>danger</code> theme tối trên nền active là 4.05:1; thêm rule để không đặt chữ danger trên nền đó.</td></tr>
+<tr><td>Checkbox không có viền focus riêng <span class="tag mid">2.4.7</span></td><td><code>.checkbox</code> không có rule <code>:focus-visible</code>; dùng viền mặc định 1px của trình duyệt.</td><td>Cùng viền 3px accent như ô nhập.</td></tr>
+<tr><td>Bỏ outline không có thay thế <span class="tag mid">2.4.7</span></td><td>Bản đồ (canvas) nhận focus mà không có dấu hiệu nào. Ô soạn chat, ô nhập của bảng lệnh và một mục trong feed gadget có <code>outline-none</code> không kèm ring (<code>chat-composer.tsx:472</code>, <code>command-palette.tsx:322</code>, <code>feed-gadget.tsx:404</code>).</td><td>Thêm ring cho từng chỗ; khung bản đồ hiện viền khi canvas có focus.</td></tr>
+<tr><td>Điều hướng bàn phím <span class="tag ok">2.1.1, 2.4.3</span></td><td>Tab qua 40 điểm dừng đầu của Dashboard, Chat, Settings: không điểm nào nằm ngoài màn hình, không bị kẹt. 1 điểm không có dấu hiệu focus (bản đồ).</td><td>Như trên. Chưa kiểm menu, hộp thoại và thao tác kéo ô bằng bàn phím.</td></tr>
+<tr><td>Nút chỉ có icon thiếu nhãn <span class="tag mid">4.1.2</span></td><td>Trên các trang đã đo ở trạng thái mặc định: không nút hay liên kết icon nào thiếu tên. Theo code còn 8 chỗ cần kiểm ở trạng thái khác: nút gửi và dừng của chat, nút gỡ tệp đính kèm, nút gỡ chip ngữ cảnh, nút tải lại danh sách tin, 3 nút trong khung gadget.</td><td>Thêm <code>aria-label</code> (en/vi) cho các nút được xác nhận là thiếu.</td></tr>
+<tr><td>Ô nhập thiếu nhãn <span class="tag mid">4.1.2, 3.3.2</span></td><td>Bộ chọn “Internal (default) / LLM classifier” ở trang Models không có nhãn liên kết. Một số checkbox không có <code>id</code> ở trang Models cần kiểm xem có nằm trong <code>&lt;label&gt;</code> không.</td><td>Gắn nhãn cho bộ chọn; bọc các checkbox còn thiếu trong <code>&lt;label&gt;</code>.</td></tr>
+<tr><td>Vùng nhấn nhỏ <span class="tag mid">2.5.8</span></td><td>Checkbox 18×18px; liên kết ghi công bản đồ cao 14px; chip “Add … gadget” cao 22px. Mức tối thiểu AA là 24px.</td><td>Checkbox giữ ô 18px nhưng vùng nhấn 24px (44px trên cảm ứng); chip và liên kết tối thiểu 24px.</td></tr>
+<tr><td>Giảm chuyển động <span class="tag mid">2.3.3 (AAA), thông lệ</span></td><td>Khi bật giảm chuyển động: 0 animation đang chạy, nhưng <strong>52 phần tử ở Dashboard, 87 ở Sources, 13 ở Chat vẫn có transition</strong>. Rule ở <code>globals.css:373</code> chỉ tắt animation.</td><td>Thêm <code>transition-duration: .01ms !important</code> vào cùng rule. Hộp thoại và sheet trượt cũng được phủ.</td></tr>
+<tr><td>Lỗi form không được liên kết <span class="tag mid">3.3.1, 4.1.3</span></td><td>Nhiều thông báo lỗi là <code>role="alert"</code> nhưng không có <code>id</code> và không nối với trường qua <code>aria-describedby</code> (đăng nhập, lời mời, mời thành viên, Live Map).</td><td>Mỗi lỗi có <code>id</code>, trường có <code>aria-invalid</code> và <code>aria-describedby</code>.</td></tr>
+</table></div>
+<div class="shots" style="margin-top:12px">
+<figure><img src="2026-11-12-ui-audit-shots/focus-dashboard.png" alt="Dashboard khi đang Tab, viền focus nhạt"><figcaption>Dashboard sau 3 lần Tab: viền focus hiện tại.</figcaption></figure>
+</div>
+
+<h2 id="chat">5. Chat (bổ sung 13/11, model thật)</h2>
+<p>Lượt chụp ngày 12/11 chạy khi chưa cấu hình model nên Chat chỉ có màn hình rỗng. Lượt bổ sung dùng model thật qua <code>.env.e2e-real</code>: ba hội thoại (câu trả lời dài bị dừng giữa chừng, câu trả lời markdown có bảng và khối code, câu trả lời có trích nguồn), mở lại ở 1440/768/390px. 16 test đạt trong 5 phút. Bản review UI/UX riêng của Chat (54 mục) nằm ở <a href="2026-11-11-chat-uiux-review.html">report ngày 11/11</a>; mục này chỉ thêm phần responsive, accessibility và WYSIWYG.</p>
+<div class="wrap"><table>
+<tr><th>#</th><th>Phát hiện</th><th>Bằng chứng</th><th>Mức</th></tr>
+<tr><td>C1</td><td><strong>Câu trả lời bị dừng giữa chừng mất sau khi mở lại hội thoại.</strong> Lúc dừng, phần đã viết vẫn hiện kèm “Generation stopped · Retry”. Mở lại thì chỉ còn câu hỏi: phần trả lời dở và dấu “đã dừng” đều không còn, cũng không có nút Retry.</td><td>Hai ảnh dưới. Số đo khi mở lại: 1 tin nhắn (của người dùng), 0 tin nhắn trợ lý.</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>C2</td><td><strong>Không tràn ngang.</strong> Cả ba hội thoại ở cả ba kích thước: trang không cuộn ngang, không phần tử nào vượt mép màn hình. Bảng và khối code nằm trong khung tin nhắn; ở 390px bảng 3 cột cuộn ngang bên trong 14px.</td><td>Số đo 9 lượt trang.</td><td><span class="tag ok">Đạt</span></td></tr>
+<tr><td>C3</td><td><strong>Vùng nhấn nhỏ trong câu trả lời.</strong> Số trích dẫn 16×16px (10 cái trong một câu trả lời, đặt sát nhau). Nút “Copy code” cao 22px.</td><td>Số đo; mức tối thiểu AA là 24px.</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>C4</td><td><strong>390px: phần đọc quá hẹp.</strong> Ô soạn tin cao khoảng 130px và luôn hiện; cùng thanh điều hướng dưới, phần đọc câu trả lời còn khoảng 290px trên màn hình 844px. Tên model bị cắt thành “cla…”. Tiêu đề hội thoại bị cắt còn một nửa.</td><td>Ảnh 390px bên dưới.</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>C5</td><td><strong>Nút “Jump to latest” đè lên chữ</strong> của câu trả lời ở cả 1440 và 390px.</td><td>Ảnh 1440px và 390px.</td><td><span class="tag lo">Thấp</span></td></tr>
+<tr><td>C6</td><td><strong>Không nút nào thiếu tên.</strong> Mọi nút icon trong ba hội thoại đều có nhãn (sao chép, sửa, tạo lại, menu, mở thanh nguồn).</td><td>Số đo: 0 phần tử thiếu tên.</td><td><span class="tag ok">Đạt</span></td></tr>
+</table></div>
+<div class="shots" style="margin-top:12px">
+<figure><img src="2026-11-12-ui-audit-shots/chat-stopped.png" alt="Chat ngay sau khi dừng: câu trả lời dở còn hiện"><figcaption>Ngay sau khi bấm dừng: phần đã viết còn, có “Generation stopped · Retry”.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/chat-stopped-reopened.png" alt="Cùng hội thoại sau khi mở lại: chỉ còn câu hỏi"><figcaption>Cùng hội thoại sau khi mở lại: chỉ còn câu hỏi.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/chat-grounded-1440.png" alt="Câu trả lời có trích nguồn ở 1440px"><figcaption>1440px – câu trả lời có trích nguồn và thanh nguồn.</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/chat-grounded-390.png" alt="Câu trả lời có trích nguồn ở 390px"><figcaption>390px – phần đọc còn khoảng 290px.</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/chat-markdown-390.png" alt="Câu trả lời markdown ở 390px"><figcaption>390px – khối code và gợi ý câu hỏi.</figcaption></figure>
+</div>
+<p class="muted">Chưa xác định C1 nằm ở frontend (không hiển thị lượt chạy đã huỷ) hay backend (không lưu phần trả lời dở). Cần đọc code trước khi sửa.</p>
+
+<h2 id="wys">6. Đánh giá WYSIWYG</h2>
+<p>App không có trình soạn văn bản phong phú. WYSIWYG ở đây là: thứ thấy lúc chỉnh có khớp thứ nhận được sau khi lưu hay không.</p>
+<div class="card"><strong>Đính chính so với bản 12/11.</strong> Bản đầu chấm 9 bề mặt chỉ bằng đọc code và ghi “sửa bố cục dashboard: desktop đúng WYSIWYG”. Sau khi thao tác thật trên app ngày 13/11, kết luận đó <strong>sai</strong>: ngay trên desktop, chế độ xem không hiển thị bố cục đã sắp ở chế độ sửa. Điểm của ba bề mặt dashboard bên dưới đã sửa lại theo quan sát.</div>
+
+<h3>Dashboard – đã quan sát trên app thật</h3>
+<p>Dashboard thử: “Monitor”, 15 gadget, ở 1440/768/390px. Vị trí và kích thước từng gadget được đo ở chế độ xem, chế độ sửa, sau khi lưu và sau khi tải lại.</p>
+<div class="wrap"><table>
+<tr><th>#</th><th>Quan sát</th><th>Số đo</th><th>Mức</th></tr>
+<tr><td>W-A</td><td><strong>Chế độ xem không bao giờ hiển thị bố cục 20 cột đã sắp.</strong> Ở 1440px có ba bố cục khác nhau cho cùng một dashboard: (1) xem, bản đồ mở: 2 cột; (2) xem, bản đồ thu gọn: vẫn 2 cột, rộng hơn; (3) sửa: lưới 20 cột, 2–4 ô một hàng.</td><td>Ô “Live news”: 357×357 (xem) · 662×662 (xem, thu gọn) · 460×662 (sửa). Hàng 4 ô “USD/VND, Macro, Weather, Highlights” cạnh nhau khi sửa (325px mỗi ô) thành 2 hàng 2 ô khi xem. Nguyên nhân: <code>dashboard-canvas.tsx:150</code> đặt cứng <code>isTabletView={true}</code>, nên chế độ xem luôn dùng bản chiếu 2 cột.</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W-B</td><td><strong>Đổi cỡ lúc sửa không có tác dụng tương ứng khi xem.</strong> Kéo ô bản đồ cao thêm 135px (662 → 797) rồi lưu: khi xem, ô bản đồ vẫn cao 449px như trước. Thay vào đó thứ tự các ô khác đổi: “VN market” rời khỏi vị trí cạnh “Live news” xuống hàng dưới.</td><td>Trước: Live news (690,682) · VN market (1059,682). Sau lưu và tải lại: Live news (690,682) · VN market (1059,1051) · Crypto (690,1051).</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W-C</td><td><strong>Lưu → tải lại thì khớp.</strong> Bố cục ngay sau khi lưu và sau khi tải lại trang giống nhau. Phần lưu trữ đúng; phần lệch nằm giữa sửa và xem.</td><td>Vị trí 15 ô trùng nhau giữa “sau lưu” và “sau tải lại”.</td><td><span class="tag ok">Đạt</span></td></tr>
+<tr><td>W-D</td><td><strong>Xoá gadget có hiệu lực ngay, không hoàn tác được.</strong> Không có hộp xác nhận. Lệnh <code>DELETE …/instances/…</code> gửi ngay khi bấm. Nút Undo và Save vẫn tắt. Bấm Cancel không hỏi gì và không khôi phục. Tải lại: còn 14 gadget.</td><td>15 → 14 → (Cancel) 14 → (tải lại) 14. Chuỗi xác nhận <code>removeGadgetConfirm</code> có trong file ngôn ngữ nhưng không được dùng.</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W-E</td><td><strong>Sửa bố cục ở màn hình hẹp không dùng được.</strong> Ở 768px lưới 20 cột bị thu nguyên trạng: ô nhỏ nhất 157×157px, nội dung bị cắt. Ở 390px các ô xếp một cột nhưng chỉ cao 74–161px, trong khi chế độ xem cho mỗi ô 299–403px. Thanh công cụ sửa chiếm hết màn hình đầu ở 390px.</td><td>768 sửa: USD/VND 157×157; xem: 664×326. 390 sửa: 334×74; xem: 334×299.</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>W-F</td><td><strong>Xem trước preset không khớp kết quả khi xem.</strong> Preset “Finance” xem trước là hai ô cạnh nhau (Chart hẹp, Feed rộng). Sau khi áp, chế độ xem xếp Chart nửa chiều rộng ở trên, Feed toàn chiều rộng ở dưới. Cùng nguyên nhân với W-A.</td><td>Áp dụng: Chart 357×357 tại (690,221); Feed 726×357 tại (690,590).</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>W-G</td><td><strong>Trình sửa gadget không có xem trước.</strong> Hộp thoại chỉ có trường nhập (118 điều khiển, phần lớn trong mục Advanced), không có gadget hay biểu đồ nào. Có dòng cảnh báo “It updates everywhere the saved gadget is used”, nhưng không nói bao nhiêu chỗ bị ảnh hưởng.</td><td>0 vùng gadget, 0 biểu đồ trong hộp thoại, ở cả 1440 và 390px.</td><td><span class="tag mid">TB</span></td></tr>
+</table></div>
+<div class="shots" style="margin-top:12px">
+<figure><img src="2026-11-12-ui-audit-shots/wys-1440-view.png" alt="Monitor ở chế độ xem, bản đồ mở"><figcaption>1440px – xem, bản đồ mở: gadget 2 cột trong nửa phải.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/wys-1440-view-collapsed.png" alt="Monitor ở chế độ xem, bản đồ thu gọn"><figcaption>1440px – xem, bản đồ thu gọn: vẫn bản chiếu 2 cột.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/wys-1440-edit.png" alt="Monitor ở chế độ sửa"><figcaption>1440px – sửa: lưới 20 cột toàn chiều rộng, bố cục khác hẳn.</figcaption></figure>
+<figure class="tall"><img src="2026-11-12-ui-audit-shots/wys-390-edit.png" alt="Chế độ sửa ở 390px"><figcaption>390px – sửa: thanh công cụ chiếm hết màn hình đầu.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/wys-preset-preview.png" alt="Xem trước preset Finance"><figcaption>Xem trước preset “Finance”: hai ô cạnh nhau.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/wys-preset-applied.png" alt="Preset Finance sau khi áp"><figcaption>Sau khi áp: hai ô xếp chồng.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/wys-gadget-editor.png" alt="Trình sửa gadget"><figcaption>Trình sửa gadget: không có phần xem trước.</figcaption></figure>
+<figure><img src="2026-11-12-ui-audit-shots/wys-remove-menu.png" alt="Menu gadget có mục Remove"><figcaption>Menu gadget: “Remove gadget” xoá ngay khi bấm.</figcaption></figure>
+</div>
+
+<h3>Bảng điểm (4 tiêu chí × 2 điểm)</h3>
+<p>A xem trước trực tiếp · B khớp sau lưu/khi xem · C khớp giữa các kích thước màn hình · D hủy/hoàn tác. Cột “Cách chấm” cho biết điểm đến từ quan sát hay đọc code.</p>
+<div class="wrap"><table>
+<tr><th>Bề mặt</th><th>A</th><th>B</th><th>C</th><th>D</th><th>/8</th><th>Cách chấm</th><th>Nhận xét</th></tr>
+<tr><td>Giao diện (theme, accent, ngôn ngữ)</td><td>2</td><td>2</td><td>1</td><td>2</td><td><strong>7</strong></td><td>Đọc code</td><td>Xem trước trực tiếp, đóng là hoàn lại đúng. Mật độ chỉ lưu theo thiết bị.</td></tr>
+<tr><td>Xem mẫu nguồn REST</td><td>1</td><td>1</td><td>2</td><td>2</td><td><strong>6</strong></td><td>Đọc code</td><td>Hiện JSON thô, không hiện bản ghi sau khi ánh xạ. Mẫu cũ còn nguyên sau khi sửa URL.</td></tr>
+<tr><td>Chat: xem tài liệu, xuất widget</td><td>2</td><td>1</td><td>1</td><td>2</td><td><strong>6</strong></td><td>Đọc code</td><td>Xuất widget đúng. Xuất biểu đồ là một SVG vẽ riêng, khác biểu đồ trên màn hình.</td></tr>
+<tr><td>Chat: câu trả lời đang hiển thị</td><td>2</td><td>0</td><td>2</td><td>1</td><td><strong>5</strong></td><td>Quan sát</td><td>Câu trả lời bị dừng mất sau khi mở lại (C1).</td></tr>
+<tr><td>Quy tắc nổi bật, automation</td><td>1</td><td>1</td><td>2</td><td>1</td><td><strong>5</strong></td><td>Đọc code</td><td>Kết quả chạy thử không làm mới sau khi sửa. Xoay/thu hồi khoá webhook chạy ngay.</td></tr>
+<tr><td>System prompt</td><td>0</td><td>1</td><td>2</td><td>2</td><td><strong>5</strong></td><td>Đọc code</td><td>Không thấy prompt cuối cùng model nhận.</td></tr>
+<tr><td>Chọn preset</td><td>1</td><td>1</td><td>0</td><td>1</td><td><strong>3</strong></td><td>Quan sát</td><td>Sơ đồ xem trước không khớp bố cục khi xem (W-F). Trước đây chấm 4.</td></tr>
+<tr><td>Sửa bố cục dashboard</td><td>1</td><td>0</td><td>0</td><td>0</td><td><strong>1</strong></td><td>Quan sát</td><td>Gadget thật hiện lúc sửa, nhưng bố cục xem khác bố cục sửa (W-A, W-B), màn hình hẹp không dùng được (W-E), xoá không hoàn tác (W-D). Trước đây chấm 4.</td></tr>
+<tr><td>Trình sửa gadget</td><td>0</td><td>1</td><td>0</td><td>1</td><td><strong>2</strong></td><td>Quan sát</td><td>Không có xem trước (W-G).</td></tr>
+<tr><td>Cấu hình Live Map</td><td>0</td><td>1</td><td>1</td><td>0</td><td><strong>2</strong></td><td>Đọc code</td><td>Không có bản đồ xem trước. Lưu ngay cho cả workspace; Hủy của trình sửa gadget không hoàn lại.</td></tr>
+</table></div>
+
+<h3>Năm lệch ảnh hưởng lớn nhất</h3>
+<ol>
+<li><strong>Chế độ xem không hiển thị bố cục đã sắp (W-A, W-B, W-F).</strong> Đây là lệch gốc: trình sửa bố cục làm việc trên lưới 20 cột mà trang xem không dùng. Đổi cỡ, đặt cạnh nhau và xem trước preset đều mất ý nghĩa.</li>
+<li><strong>Xoá gadget có hiệu lực ngay, không hoàn tác được (W-D).</strong> Đã xác nhận bằng thao tác thật.</li>
+<li><strong>Câu trả lời chat bị dừng mất sau khi mở lại (C1).</strong></li>
+<li><strong>Trình sửa gadget không có xem trước và đổi định nghĩa dùng chung (W-G).</strong></li>
+<li><strong>Hành động có hiệu lực ngay nằm trong trình sửa có nút Hủy</strong> (điều khoản và khoá Live Map, khoá webhook) và <strong>xem trước cũ</strong> (quy tắc nổi bật, automation, mẫu REST). Hai mục này vẫn là đọc code.</li>
+</ol>
+
+<h2 id="fix">7. Đề xuất fix – chờ duyệt</h2>
+<p>Mỗi dòng là một gói có thể duyệt riêng. “Cỡ” là ước lượng số file. Không gói nào đổi thứ tự trường, lời gọi API hay bố cục desktop, trừ gói D1–D4 thay đổi Dashboard theo mục 1.</p>
+<div class="wrap"><table>
+<tr><th>Mã</th><th>Nội dung</th><th>File chính</th><th>Cỡ</th><th>Ưu tiên</th></tr>
+<tr><td>A1</td><td>Viền focus accent đặc cho 6 rule; thêm viền focus cho checkbox</td><td><code>app/globals.css</code>, <code>docs/design-system/tokens.json</code></td><td>2</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>A2</td><td>Tắt transition khi bật giảm chuyển động</td><td><code>app/globals.css:373</code></td><td>1</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>A3</td><td>Đổi <code>--control</code> để viền ô nhập đạt 3:1 (cả hai theme). Thay đổi này làm viền ô nhập đậm hơn trên toàn app.</td><td><code>app/globals.css</code>, <code>tokens.json</code></td><td>2</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>A4</td><td>Ring cho 4 chỗ bỏ outline; nhãn cho bộ chọn ở Models; <code>aria-label</code> cho nút icon được xác nhận thiếu</td><td><code>chat-composer.tsx</code>, <code>command-palette.tsx</code>, <code>feed-gadget.tsx</code>, <code>map-gadget.tsx</code>, <code>gadget-frame.tsx</code>, messages</td><td>~8</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>F1</td><td>Kiểu hiển thị lỗi dùng chung: <code>.input[aria-invalid='true']</code> và <code>:user-invalid</code> (viền danger, chữ trợ giúp đổi màu)</td><td><code>app/globals.css</code></td><td>1</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>F2</td><td><code>FieldGrid</code> thành một cột; gỡ các lưới hai cột viết tay</td><td><code>components/settings-layout/index.tsx</code> + 6 file</td><td>~7</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>F3</td><td>Wizard nguồn: Next luôn bật, nêu lý do, đưa focus về trường lỗi; <code>aria-invalid</code> trên từng trường phạm vi</td><td><code>sources/source-wizard.tsx</code>, <code>scope-fields.tsx</code>, <code>provider-scope.tsx</code>, <code>starter-pack-wizard.tsx</code></td><td>~5</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>F4</td><td>Kiểm tra khi rời trường: react-hook-form <code>onBlur</code> (6 chỗ) và các form thủ công (đổi mật khẩu, lời mời, task, gadget editor, rename, xoá tài khoản, viz-router, web-search, system-prompts)</td><td>~15 file, mỗi file 1–5 dòng</td><td>~15</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>F5</td><td>Trạng thái đang lưu: Live Map, AI settings, MCP editor, upload (khoá nút, chống gửi hai lần)</td><td>4 file</td><td>4</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>F6</td><td>Viết lại khoảng 35 chuỗi lỗi en/vi và thêm 4 chuỗi còn thiếu</td><td><code>core/messages/*.ts</code>, <code>automations/messages.ts</code></td><td>~12</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>R1</td><td>Chế độ card xếp chồng dưới 768px trong <code>Table</code>, theo mẫu bảng nguồn; áp cho 9 bảng</td><td><code>components/ui/table.tsx</code> + 9 file</td><td>~10</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>R2</td><td>Vùng nhấn: checkbox, logo, avatar, nút icon thanh trên, liên kết điều hướng, chip “Add … gadget”; 44px trên cảm ứng và dưới 768px, desktop giữ nguyên</td><td><code>app/globals.css</code>, <code>checkbox.tsx</code>, <code>gadget-frame.tsx</code></td><td>~5</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>D1</td><td>Dashboard: một thanh lọc dùng chung; 13 chip thành menu danh mục ở màn hình hẹp</td><td><code>dashboard-overview.tsx</code>, <code>gadgets/live-map-gadget.tsx</code>, <code>map-gadget.tsx</code></td><td>~4</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>D2</td><td>Dashboard 390px: gom nút tiêu đề vào menu; bản đồ và gadget trong một luồng cuộn</td><td><code>dashboard-header.tsx</code>, <code>dashboard-panels.tsx</code></td><td>~3</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>D3</td><td>Thang chữ và trạng thái rỗng: tiêu đề gadget 16/600; số liệu 24px chỉ khi có dữ liệu; một nút chính cho mỗi trạng thái rỗng</td><td><code>gadget-frame.tsx</code>, các gadget, <code>globals.css</code></td><td>~8</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>D4</td><td>Khung bản đồ Overview cao theo nội dung; không cắt dòng ghi công; bỏ 2 gradient; đưa spacing lẻ về thang</td><td><code>dashboard-overview.tsx</code>, <code>globals.css</code></td><td>~3</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>W0</td><td><strong>Chế độ xem dùng đúng bố cục đã sắp.</strong> Bỏ <code>isTabletView={true}</code> đặt cứng; chọn bản chiếu theo chiều rộng thật của khung gadget: từ 1100px trở lên hiển thị lưới 20 cột như lúc sửa, hẹp hơn mới dùng bản chiếu 2 cột. Sơ đồ xem trước preset dùng cùng quy tắc.</td><td><code>dashboard/dashboard-canvas.tsx:150</code>, <code>use-grid-projection.ts</code>, <code>preset-picker.tsx</code></td><td>~4</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W1</td><td>Hộp xác nhận khi xoá gadget, dùng chuỗi <code>removeGadgetConfirm</code> đã có sẵn</td><td><code>dashboard/gadget-frame.tsx</code></td><td>1</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W2</td><td>Xác nhận trước khi thu hồi điều khoản Live Map và xoay/thu hồi khoá webhook</td><td><code>live-map-config.tsx</code>, <code>automations/rule-editor.tsx</code></td><td>2</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W3</td><td>Xoá kết quả xem trước khi bản nháp đổi (quy tắc nổi bật, automation, mẫu REST); đặt lại tiêu đề gadget khi đóng hộp thoại</td><td>4 file</td><td>4</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>W4</td><td>Hiện số gadget dùng chung định nghĩa cạnh nút Lưu</td><td><code>dashboard/gadget-settings.tsx</code></td><td>1</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>W5</td><td>Trong chế độ sửa: nút “Xem như hiển thị” cho ba trường hợp (desktop có bản đồ, tablet, điện thoại), chỉ đọc, dùng bản chiếu sẵn có. Ở màn hình dưới 1100px, chế độ sửa mở thẳng bản chiếu của kích thước đó thay vì lưới 20 cột thu nhỏ.</td><td><code>layout-editor.tsx</code>, <code>use-grid-projection.ts</code></td><td>~3</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>W6</td><td>Xem trước trực tiếp trong trình sửa gadget; xem prompt hiệu lực. Cần xác nhận backend có endpoint phù hợp; có thể phải thêm API.</td><td>frontend + có thể backend</td><td>lớn</td><td><span class="tag lo">Sau</span></td></tr>
+<tr><td>CH1</td><td>Giữ câu trả lời bị dừng khi mở lại hội thoại, kèm dấu “đã dừng” và nút Retry. Cần đọc code để biết sửa ở frontend hay backend.</td><td><code>modules/chat/*</code>, có thể backend chat</td><td>chưa rõ</td><td><span class="tag hi">Cao</span></td></tr>
+<tr><td>CH2</td><td>Vùng nhấn của số trích dẫn và nút “Copy code” tối thiểu 24px (44px trên cảm ứng)</td><td><code>chat/citation-*.tsx</code>, khối code của chat</td><td>~2</td><td><span class="tag mid">TB</span></td></tr>
+<tr><td>CH3</td><td>390px: ô soạn tin thu gọn một dòng khi không có focus; nút “Jump to latest” không đè lên chữ; tên model không bị cắt mất nghĩa</td><td><code>chat/chat-composer.tsx</code>, <code>chat-transcript.tsx</code></td><td>~3</td><td><span class="tag mid">TB</span></td></tr>
+</table></div>
+<p><strong>Thứ tự đề xuất:</strong> A1, A2, F1, W1, W2 (nhỏ, rủi ro thấp) → F2–F6 → R1, R2, CH2 → W0, W5 (trước Dashboard, vì D1–D4 phụ thuộc vào bố cục xem) → D1–D4, CH3 → W3, W4, CH1. Sau mỗi nhóm chạy lại lượt chụp để có ảnh “sau” ở 390/768/1440px.</p>
+
+<h2 id="gioihan">8. Giới hạn của lượt đánh giá này</h2>
+<ul>
+<li>Bản đồ không hiện trong ảnh (canvas WebGL trong trình duyệt không giao diện), nên chưa đánh giá được phần hiển thị bản đồ.</li>
+<li>Vùng nhấn đo bằng con trỏ chuột; kích thước trên màn hình cảm ứng thật lớn hơn ở các nút có rule cảm ứng.</li>
+<li>Tương phản chữ đo trên trạng thái mặc định của trang. Trạng thái hover, vô hiệu, chữ gợi ý trong ô nhập và nội dung trong hộp thoại chưa đo.</li>
+<li>Chat đã đo với ba hội thoại thật; widget generative UI và biểu đồ trong câu trả lời chưa xuất hiện trong ba hội thoại này nên chưa đo.</li>
+<li>Form là đọc code; WYSIWYG ngoài dashboard và chat là đọc code. Chưa xác minh: nội bộ n8n, memory-privacy, provider-review, agent-settings, search-page; luồng hủy của trình sửa connector; backend có endpoint xem trước cho gadget và prompt hay không.</li>
+<li>Chưa chạy bộ kiểm tra tự động axe (cần thêm một dependency); số đo trong mục 4 lấy từ script đo riêng.</li>
+<li>Thao tác dashboard chỉ thử trên một dashboard (“Monitor”) và một lần đổi cỡ; chưa thử kéo đổi vị trí, thêm gadget, nhóm, hay dashboard có nhiều tab.</li>
+<li>Hai file test tạm: <code>tests/e2e/screens-capture.zaudit.spec.ts</code> và <code>tests/e2e/zz-wysiwyg.spec.ts</code>. Giữ để chụp ảnh “sau”, xoá khi owner chốt.</li>
+</ul>
+</main>
+</body>
+</html>

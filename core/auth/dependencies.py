@@ -1,7 +1,9 @@
+import base64
 import hashlib
 import hmac
+import secrets
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 from typing import Annotated
 
@@ -9,31 +11,57 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.models import AuthSession
+from core.auth.public import get_active_account
 from core.config import Settings
 from core.database import get_session
 
 SESSION_COOKIE = "bbd_session"
 CSRF_COOKIE = "bbd_csrf"
 CSRF_MAX_AGE_SECONDS = 600
+# Sliding-window writes of last_seen_at are throttled so plain reads do not become a write per request.
+_LAST_SEEN_TOUCH_SECONDS = 300
+
+
+def derive_key(secret: str, purpose: str) -> bytes:
+    """Derive a 32-byte purpose-bound key from the single configured secret (RFC 5869 HKDF-SHA256).
+
+    Distinct ``purpose`` labels give independent keys, so a leak or misuse of the cookie-signing key
+    never yields the CSRF HMAC key. Deterministic across processes, which multi-worker deployments need.
+    """
+    prk = hmac.new(b"umwelt-os/auth/v1", secret.encode(), hashlib.sha256).digest()  # extract
+    return hmac.new(
+        prk, purpose.encode() + b"", hashlib.sha256
+    ).digest()  # expand: one block is 32 bytes
+
+
+def session_middleware_secret(secret: str) -> str:
+    """Return the Starlette SessionMiddleware key: HKDF-derived when a secret is set, else random per process."""
+    if not secret:
+        return secrets.token_urlsafe(32)
+    return base64.urlsafe_b64encode(derive_key(secret, "session-cookie")).decode()
 
 
 def _hash(value: str) -> str:
+    """Return the SHA-256 digest used to persist opaque authentication tokens."""
     return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _origin_allowed(origin: str | None, settings: Settings) -> bool:
+    """Compare the request Origin with the configured public origin after trimming trailing slashes."""
     return origin is not None and origin.rstrip("/") == str(settings.public_origin).rstrip("/")
 
 
 def _csrf_signature(token: str, expires_at: int, settings: Settings) -> str:
+    """Sign a CSRF token and expiry with the configured secret; fail closed when signing is unconfigured."""
     secret = settings.csrf_signing_secret.get_secret_value()
     if not secret:
         raise HTTPException(status_code=503, detail="CSRF protection is not configured")
     signed = f"{token}.{expires_at}"
-    return hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(derive_key(secret, "csrf-hmac"), signed.encode(), hashlib.sha256).hexdigest()
 
 
 def _valid_csrf(cookie: str | None, submitted: str | None, settings: Settings) -> bool:
+    """Validate CSRF cookie shape, expiry window, submitted token, and constant-time signature equality."""
     if not cookie or not submitted:
         return False
     try:
@@ -49,17 +77,72 @@ def _valid_csrf(cookie: str | None, submitted: str | None, settings: Settings) -
     )
 
 
+INSTANCE_OPERATOR_OWNER_ID = 1
+
+
+def is_instance_operator_id(owner_id: int) -> bool:
+    """Whether an owner/actor user id is the bootstrap account, for callers without an auth session."""
+    return owner_id == INSTANCE_OPERATOR_OWNER_ID
+
+
+def is_instance_operator(auth_session: AuthSession) -> bool:
+    """Bootstrap account (owner 1) alone holds instance operator authority."""
+    return is_instance_operator_id(auth_session.owner_id)
+
+
 async def _current_session(
     request: Request,
     session: AsyncSession,
     token: str | None,
 ) -> AuthSession:
+    """Resolve only a complete active bootstrap session for unconverted legacy auth paths.
+
+    Nonbootstrap identities always fail here, including when the rollout flag is enabled.
+    Account-scoped endpoints must deliberately select require_account instead.
+    """
+    row = await _account_session(request, session, token)
+    if not is_instance_operator(row):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return row
+
+
+async def _account_session(
+    request: Request, session: AsyncSession, token: str | None
+) -> AuthSession:
+    """Authenticate a live token and complete active account, subject to the rollout gate.
+
+    Attach a detached account identity for scoped dependencies; no membership or data access
+    follows from this authentication. Missing, disabled or incomplete identities return 401.
+    """
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
     row = await session.get(AuthSession, _hash(token))
-    if row is None or row.expires_at <= datetime.now(UTC):
+    now = datetime.now(UTC)
+    if row is None or row.expires_at <= now:
         raise HTTPException(status_code=401, detail="Authentication required")
+    settings: Settings = request.app.state.settings
+    idle_hours = getattr(settings, "session_idle_hours", None)
+    if isinstance(idle_hours, int) and not isinstance(idle_hours, bool):
+        seen = row.last_seen_at or row.created_at
+        # Rows predating last_seen_at (or in-memory fixtures) have no reference time and are not idle-checked.
+        if seen is not None:
+            if now - seen > timedelta(hours=idle_hours):
+                raise HTTPException(status_code=401, detail="Authentication required")
+            if now - seen > timedelta(seconds=_LAST_SEEN_TOUCH_SECONDS):
+                row.last_seen_at = now
+                await session.commit()
+    account = await get_active_account(
+        session,
+        row.owner_id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
+    if account is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    request.state.account = account
     request.state.auth_session = row
+    # Plain copy for later fence checks: a route that rolls back expires `row`, and reading its attributes
+    # then is a synchronous lazy load that raises MissingGreenlet under asyncio.
+    request.state.auth_session_ids = (row.owner_id, row.token_hash)
     return row
 
 
@@ -67,7 +150,40 @@ async def require_owner(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AuthSession:
+    """Require the active bootstrap operator, permanently excluding other workspace owners."""
     return await _current_session(request, session, request.cookies.get(SESSION_COOKIE))
+
+
+async def require_account(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AuthSession:
+    """Require an active rollout-admitted account without granting legacy/operator authority."""
+    return await _account_session(request, session, request.cookies.get(SESSION_COOKIE))
+
+
+async def require_account_write(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    origin: Annotated[str | None, Header()] = None,
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> AuthSession:
+    """Require account-bound CSRF before scoped write locks.
+
+    This carries no instance privilege. Anonymous invitation redemption needs a separately
+    bounded origin/token path in W1b.
+    """
+    settings: Settings = request.app.state.settings
+    if not _origin_allowed(origin, settings):
+        raise HTTPException(status_code=403, detail="Origin is not allowed")
+    auth_session = await require_account(request, session)
+    if not _valid_csrf(
+        request.cookies.get(CSRF_COOKIE), csrf_token, settings
+    ) or not compare_digest(auth_session.csrf_hash, _hash(csrf_token or "")):
+        raise HTTPException(
+            status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"}
+        )
+    return auth_session
 
 
 async def require_owner_write(
@@ -76,13 +192,24 @@ async def require_owner_write(
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> AuthSession:
+    """Authenticate the bootstrap owner and validate origin and CSRF before domain locks."""
+    return await _authorize_owner_write(request, session, origin, csrf_token)
+
+
+async def _authorize_owner_write(
+    request: Request,
+    session: AsyncSession,
+    origin: str | None,
+    csrf_token: str | None,
+) -> AuthSession:
+    """Validate owner session, same-origin policy, and its session-bound signed CSRF proof."""
     settings: Settings = request.app.state.settings
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")
     auth_session = await require_owner(request, session)
-    if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings) or not compare_digest(
-        auth_session.csrf_hash, _hash(csrf_token or "")
-    ):
+    if not _valid_csrf(
+        request.cookies.get(CSRF_COOKIE), csrf_token, settings
+    ) or not compare_digest(auth_session.csrf_hash, _hash(csrf_token or "")):
         raise HTTPException(
             status_code=403,
             detail="CSRF token is invalid",

@@ -1,0 +1,557 @@
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import type { ApiResponse } from '@/core/api-contract';
+import type { components } from '@/core/api-types.gen';
+import type { DataShape } from '@/core/data-shapes';
+
+/** Backend OpenAPI schemas; DTOs below that match the contract are derived from them so drift fails `tsc`. */
+type Schemas = components['schemas'];
+
+/** Dashboard summary returned by the owner-scoped collection endpoint (derived from the OpenAPI schema). */
+export type DashboardSummary = ApiResponse<'/api/v1/dashboards'>[number];
+
+/** Persisted rectangle for one gadget instance in a single breakpoint layout (derived from the OpenAPI schema). */
+export type DashboardPlacement = Schemas['LayoutItemRead'];
+
+/** Complete saved layout for one breakpoint, including its independent column count (derived from the OpenAPI schema). */
+export type DashboardBreakpointLayout = Schemas['DashboardBreakpointRead'];
+
+/** Warning metadata describing planned rendering or unavailable source/capability state. */
+export type DashboardWarning = {
+  code: string;
+  capability: string | null;
+  source_id: string | null;
+  setup_group: string | null;
+};
+
+/** Reusable saved renderer configuration embedded in dashboard detail responses. */
+export type GadgetDefinition = {
+  id: string;
+  name: string;
+  revision: number;
+  renderer: string;
+  source_ids: string[];
+  scope: GadgetScope;
+  filters: GadgetFilters;
+  highlight_rules: HighlightRule[];
+  config_version: number;
+  runtime_state: 'planned' | 'available';
+  warnings?: DashboardWarning[];
+};
+
+/** Bounded source, channel, symbol, region, and map-layer selectors stored as configuration. */
+export type GadgetScope = {
+  source_item_ids?: string[];
+  channel_ids?: string[];
+  symbols?: string[];
+  regions?: string[];
+  map_layer_ids?: string[];
+  live_map_providers?: string[];
+  live_map_country?: string | null;
+  live_map_github_owner?: string | null;
+  live_map_github_repo?: string | null;
+  live_map_sec_cik?: string | null;
+  cii_country_codes?: string[];
+  metrics?: string[];
+  lookback_days?: number | null;
+};
+
+/** Explainable match against one immutable current document version. */
+export type DashboardHighlightMatch = {
+  document_id: string;
+  document_version_id: string;
+  source_id: string;
+  title: string;
+  observed_at: string;
+  rule_id: string;
+  matched_keywords: string[];
+  severity: 'info' | 'warning' | 'critical';
+  notify: boolean;
+  reason: string;
+};
+
+/** Simple bounded text filters and strict integer item limit. */
+export type GadgetFilters = {
+  keywords?: string[];
+  exclude_keywords?: string[];
+  limit?: number;
+  map_engine?: 'globe' | 'flat' | null;
+  map_mode?: 'live' | 'selected_sources' | null;
+  map_weather_layer?: 'temperature' | 'precipitation' | 'wind' | 'clouds' | null;
+  show_precise_locations?: boolean;
+};
+
+/**
+ * Names the filter fields a list gadget cannot honour. The server returns every filter with defaults
+ * (for example map_engine null, show_precise_locations false), so only fields holding a set value count.
+ * @param filters Filters persisted on the gadget definition.
+ * @returns Unsupported field names with a non-default value, in object order.
+ */
+export function unsupportedListFilters(filters: GadgetFilters): string[] {
+  return Object.entries(filters)
+    .filter(([key]) => !['keywords', 'exclude_keywords', 'limit'].includes(key))
+    .filter(([, value]) => value !== null && value !== undefined && value !== false && !(Array.isArray(value) && value.length === 0))
+    .map(([key]) => key);
+}
+
+/** Non-executable highlight configuration; it does not imply notification execution. */
+export type HighlightRule = {
+  id: string;
+  keywords: string[];
+  severity: 'info' | 'warning' | 'critical';
+  notify: boolean;
+  /** Optional conditions: topics (max 8) and per-rule source include/exclude, subsets of the gadget's sources. */
+  topic_ids?: string[];
+  source_ids?: string[];
+  exclude_source_ids?: string[];
+  /** Delivery: cooldown 0..10080 min, optional ISO expiry, quiet window (HH:MM, both or neither) that suppresses notifications only. */
+  cooldown_minutes?: number;
+  expires_at?: string | null;
+  quiet_start?: string | null;
+  quiet_end?: string | null;
+};
+
+/** Dry-run result over recent current evidence; nothing is stored or notified. */
+export type HighlightPreview = {
+  window_days: number;
+  scanned: number;
+  truncated: boolean;
+  matches: DashboardHighlightMatch[];
+  rules: { rule_id: string; match_count: number; unresolved_topic_ids: string[] }[];
+};
+
+/** A dashboard that places one gadget definition. */
+export type GadgetDefinitionUsage = { dashboard_id: string; name: string; instance_count: number };
+
+/** Dashboard gadget placement reference and the associated saved definition projection. */
+export type GadgetInstance = {
+  id: string;
+  group_id: string;
+  definition_id: string;
+  title: string | null;
+  position: number;
+  definition: GadgetDefinition;
+};
+
+/** Ordered dashboard group as returned in detail and group collection responses (derived from the OpenAPI schema). */
+export type DashboardGroup = Schemas['DashboardGroupRead'];
+
+/** Full owner-scoped dashboard configuration, without rendered payload data. */
+export type Dashboard = DashboardSummary & {
+  groups: DashboardGroup[];
+  instances: GadgetInstance[];
+  layouts: { desktop: DashboardBreakpointLayout; mobile: DashboardBreakpointLayout };
+};
+
+/** Metadata-only source selection row; source content and connector settings are excluded. */
+export type GadgetSource = {
+  id: string;
+  name: string;
+  type: string;
+  provider: string | null;
+  status: 'active' | 'paused' | 'archived';
+  generation: number;
+  local_only: boolean;
+  last_success_at: string | null;
+  data_shapes: DataShape[];
+};
+
+/** Cursor page for bounded source selection. */
+export type GadgetSourcePage = { items: GadgetSource[]; next_cursor: string | null };
+
+/** Static renderer metadata; available means an adapter exists, not runtime/provider acceptance. */
+export type GadgetRenderer = {
+  id: string;
+  config_version: 1;
+  minimum_width: number;
+  minimum_height: number;
+  runtime_state: 'planned' | 'available';
+  capability_keys: string[];
+  /** How many configured sources the renderer reads: none, exactly one, or many. */
+  source_mode: 'none' | 'single' | 'multi';
+  /** Data shapes the renderer accepts; null means any shape. */
+  accepted_shapes: DataShape[] | null;
+  /** Source ceiling for multi renderers; null means the generic selector ceiling. */
+  max_sources?: number | null;
+};
+
+/** Named gadget starting point; pre-fills renderer, accepted shapes, scope and filters only. */
+export type GadgetTemplate = {
+  id: string;
+  renderer: string;
+  source_mode: 'none' | 'single' | 'multi';
+  accepted_shapes: DataShape[] | null;
+  scope: GadgetScope;
+  filters: GadgetFilters;
+};
+
+/** Static dashboard preset catalog entry with stable renderer slot identities. */
+export type DashboardPreset = {
+  id: string;
+  label: string;
+  family: string;
+  /** `label` is the slot's own gadget name (e.g. "Live news"); null falls back to the renderer's template name. */
+  slots: { slot_id: string; renderer: string; label?: string | null }[];
+};
+
+/** Input selecting explicit source IDs for known preset slots and an optional target. */
+export type PresetPreviewRequest = {
+  slot_sources?: Record<string, string[]>;
+  target_dashboard_id?: string | null;
+};
+
+/** Fully resolved, non-persistent preview returned before an explicit apply request. */
+export type PresetPreview = {
+  template_version: number;
+  preset_id: string;
+  name: string;
+  slots: {
+    slot_id: string;
+    renderer: string;
+    source_ids: string[];
+    scope: GadgetScope;
+    filters: GadgetFilters;
+    highlight_rules: HighlightRule[];
+    sources: { id: string; generation: number | null; status: string }[];
+    warnings: DashboardWarning[];
+  }[];
+  target_dashboard_id: string | null;
+  target_revision: number | null;
+  layouts: {
+    desktop: { columns: number; items: { slot_id: string; x: number; y: number; w: number; h: number }[] };
+    mobile: { columns: number; items: { slot_id: string; x: number; y: number; w: number; h: number }[] };
+  };
+  preview_fingerprint: string;
+};
+
+/** Write payload for creating a reusable gadget definition. */
+export type GadgetDefinitionCreate = {
+  name: string;
+  renderer: string;
+  source_ids?: string[];
+  scope?: GadgetScope;
+  filters?: GadgetFilters;
+  highlight_rules?: HighlightRule[];
+};
+
+/** Revision-guarded partial configuration update for a reusable definition. */
+export type GadgetDefinitionPatch = Partial<Omit<GadgetDefinitionCreate, 'name'>> & {
+  expected_revision: number;
+  name?: string;
+};
+
+/** Query key families invalidated by dashboard and definition SSE changes. */
+export const dashboardKeys = {
+  all: ['dashboards'] as const,
+  /** Builds the identifier-specific dashboard detail key used by reads and SSE invalidation. */
+  detail: (id: string) => ['dashboard', id] as const,
+  definitions: ['gadget-definitions'] as const,
+  /** Builds the identifier-specific definition key within the library invalidation family. */
+  definition: (id: string) => ['gadget-definition', id] as const,
+  renderers: ['gadget-renderers'] as const,
+  templates: ['gadget-templates'] as const,
+  sources: ['gadget-sources'] as const,
+  compatibleCounts: ['gadget-renderer-compatible-counts'] as const,
+  metricCatalog: ['gadget-metric-catalog'] as const,
+  presets: ['dashboard-presets'] as const,
+  presetPreview: ['dashboard-preset-preview'] as const,
+};
+
+/** Lists the authenticated owner's dashboards in backend creation order. */
+export function listDashboards(signal?: AbortSignal) {
+  return apiRequest<DashboardSummary[]>('/api/v1/dashboards', { signal });
+}
+
+/** Reads a dashboard's groups, instances, configurations, lifecycle warnings, and both layouts. */
+export function getDashboard(id: string, signal?: AbortSignal) {
+  return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(id)}`, { signal });
+}
+
+/** Creates an owner dashboard with empty desktop and mobile layouts. */
+export function createDashboard(name: string, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Dashboard>('/api/v1/dashboards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name }),
+    signal,
+  });
+}
+
+/** Renames a dashboard only if its shared revision still matches. */
+export function renameDashboard(id: string, name: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name, expected_revision: expectedRevision }),
+    signal,
+  });
+}
+
+/** Deletes a dashboard at the supplied revision and propagates backend conflicts unchanged. */
+export function deleteDashboard(id: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
+  return apiRequest<void>(`/api/v1/dashboards/${encodeURIComponent(id)}?${query}`, {
+    method: 'DELETE',
+    headers: csrfHeaders(csrfToken),
+    signal,
+  });
+}
+
+/** Creates a dashboard group under the shared dashboard revision. */
+export function createDashboardGroup(
+  dashboardId: string,
+  name: string,
+  expectedRevision: number,
+  csrfToken: string,
+  position = 0,
+  signal?: AbortSignal,
+) {
+  return apiRequest<DashboardGroup>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/groups`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name, expected_revision: expectedRevision, position }),
+    signal,
+  });
+}
+
+/** Adds a definition-backed instance and returns the committed dashboard projection. */
+export function createGadgetInstance(
+  dashboardId: string,
+  payload: { expected_revision: number; group_id?: string; definition_id: string; title?: string | null; position?: number },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Updates an instance's group, title, or order without changing its saved rectangles. */
+export function patchGadgetInstance(
+  dashboardId: string,
+  instanceId: string,
+  expectedRevision: number,
+  patch: { group_id?: string; title?: string | null; position?: number },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances/${encodeURIComponent(instanceId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ ...patch, expected_revision: expectedRevision }),
+    signal,
+  });
+}
+
+/** Removes an instance and both breakpoint placements while retaining its definition. */
+export function deleteGadgetInstance(
+  dashboardId: string,
+  instanceId: string,
+  expectedRevision: number,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
+  return apiRequest<Dashboard>(
+    `/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances/${encodeURIComponent(instanceId)}?${query}`,
+    {
+      method: 'DELETE',
+      headers: csrfHeaders(csrfToken),
+      signal,
+    },
+  );
+}
+
+/** Replaces exactly one breakpoint's complete placement set under dashboard revision control. */
+export function replaceDashboardLayout(
+  dashboardId: string,
+  payload: { expected_revision: number; breakpoint: 'desktop' | 'mobile'; columns?: number; items: DashboardPlacement[] },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/layout`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Lists a bounded page of reusable owner definitions. */
+export function listGadgetDefinitions(limit = 200, signal?: AbortSignal) {
+  return apiRequest<GadgetDefinition[]>(`/api/v1/gadget-definitions?${new URLSearchParams({ limit: String(limit) })}`, { signal });
+}
+
+/** Creates a reusable definition using the explicit owner CSRF token. */
+export function createGadgetDefinition(payload: GadgetDefinitionCreate, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<GadgetDefinition>('/api/v1/gadget-definitions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Applies a partial reusable definition update guarded by its independent revision. */
+export function patchGadgetDefinition(id: string, payload: GadgetDefinitionPatch, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<GadgetDefinition>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Deletes an unused definition only at its current revision. */
+export function deleteGadgetDefinition(id: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
+  return apiRequest<void>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}?${query}`, {
+    method: 'DELETE',
+    headers: csrfHeaders(csrfToken),
+    signal,
+  });
+}
+
+/** Lists fixed renderer configuration metadata and minimum geometry, not runtime implementations. */
+export function listGadgetRenderers(signal?: AbortSignal) {
+  return apiRequest<GadgetRenderer[]>('/api/v1/gadget-renderers', { signal, priority: 'high' });
+}
+
+/** Lists the fixed catalog of named gadget templates; display text is localized by template id. */
+export function listGadgetTemplates(signal?: AbortSignal) {
+  return apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal, priority: 'high' });
+}
+
+/** Metrics and symbol rules one provider exposes to measurement gadgets. */
+export type ProviderMetrics = {
+  metrics: { id: string; unit: string | null }[];
+  symbol_keyed: boolean;
+  suggested_symbols: string[];
+  /** True when the provider accepts metric ids beyond the listed ones (typed entry allowed). */
+  metrics_open: boolean;
+  /** False for point-event providers (quakes, hotspots) whose rows are not one time series. */
+  charts_as_series: boolean;
+  /** True when one source emits several regions as separate series (a chart needs one region). */
+  region_keyed: boolean;
+  /** Regions the adapter writes by default (empty when the owner configures them). */
+  suggested_regions: string[];
+  /** False when the owner configures the symbols (FRED series, Binance pairs): suggestions are hints, never seeded. */
+  seed_symbol: boolean;
+  /** Typical days between one series' observations; null for point-event providers. */
+  cadence_days: number | null;
+  /** Starting chart window in days when none is stored (annual/monthly series need more than 90); null means 90. */
+  default_lookback_days: number | null;
+};
+
+/** Counts, per renderer id, the active sources whose data shapes the renderer can read. */
+export function listCompatibleSourceCounts(signal?: AbortSignal) {
+  return apiRequest<Record<string, number>>('/api/v1/gadget-renderers/compatible-counts', { signal, priority: 'high' });
+}
+
+/** Fetches the per-provider metric catalog keyed by provider id. */
+export function getMetricCatalog(signal?: AbortSignal) {
+  return apiRequest<Record<string, ProviderMetrics>>('/api/v1/gadget-metric-catalog', { signal });
+}
+
+/** Lists bounded source identity and lifecycle metadata for explicit gadget selection. */
+export function listGadgetSources(limit = 50, cursor?: string, signal?: AbortSignal) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (cursor) query.set('cursor', cursor);
+  return apiRequest<GadgetSourcePage>(`/api/v1/gadget-sources?${query}`, { signal });
+}
+
+/** Evaluates configured rules and returns bounded exact-version matches. */
+export function evaluateGadgetHighlights(definitionId: string) {
+  return apiRequest<DashboardHighlightMatch[]>(`/api/v1/gadget-definitions/${definitionId}/highlights`);
+}
+
+/** Dry-runs draft rules over the last days (max 7) of current data; never notifies or saves. */
+export function previewHighlightRules(
+  payload: { source_ids: string[]; rules: HighlightRule[]; days?: number; source_item_ids?: string[] },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<HighlightPreview>('/api/v1/gadget-definitions/highlight-preview', {
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Lists the dashboards that use one gadget definition, to warn before editing or deleting its rules. */
+export function getGadgetDefinitionUsage(id: string, signal?: AbortSignal) {
+  return apiRequest<GadgetDefinitionUsage[]>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}/usage`, { signal });
+}
+
+/** Lists the static preset catalog without applying or creating anything. */
+export function listDashboardPresets(signal?: AbortSignal) {
+  return apiRequest<DashboardPreset[]>('/api/v1/dashboard-presets', { signal });
+}
+
+/** Resolves a preset and explicit source selection without persistence; CSRF is required because the route is POST. */
+export function previewDashboardPreset(presetId: string, payload: PresetPreviewRequest, csrfToken: string, signal?: AbortSignal) {
+  return apiRequest<PresetPreview>(`/api/v1/dashboard-presets/${encodeURIComponent(presetId)}/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+/** Applies the fingerprinted preset; backend 409 ApiError details pass through unchanged. */
+export function applyDashboardPreset(
+  presetId: string,
+  payload: PresetPreviewRequest & {
+    preview_fingerprint: string;
+    mode?: 'create' | 'replace' | 'append';
+    name?: string | null;
+    expected_revision?: number | null;
+    replace_confirmed?: boolean;
+  },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
+  return apiRequest<Dashboard>(`/api/v1/dashboard-presets/${encodeURIComponent(presetId)}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
+  });
+}
+
+const highlightRuleErrorKeys = {
+  rule_sources_not_subset: 'rule.errSources',
+  rule_excludes_all_sources: 'rule.errExcludesAll',
+  rule_topic_unknown: 'rule.errTopic',
+} as const;
+
+/** Maps a rule-condition 422 to a localized gadgetSettings key, or null when the code is not a rule error. */
+export function highlightRuleErrorKey(error: unknown): (typeof highlightRuleErrorKeys)[keyof typeof highlightRuleErrorKeys] | null {
+  const code = error instanceof ApiError && error.status === 422 ? (error.code ?? '') : '';
+  return Object.hasOwn(highlightRuleErrorKeys, code) ? highlightRuleErrorKeys[code as keyof typeof highlightRuleErrorKeys] : null;
+}
+
+/** Current local weather returned by the owner-only proxy; coordinates are never echoed back. */
+export type LocalWeather = {
+  temperature_c: number;
+  weather_code: number;
+  place: string | null;
+  observed_at: string;
+  attribution: string[];
+  /** Secondary readings; null/absent when the provider omitted them. */
+  humidity_pct?: number | null;
+  wind_kmh?: number | null;
+  precipitation_probability_pct?: number | null;
+  is_day?: boolean | null;
+  /** Next 24 forecast hours (UTC instants); empty when the provider sent none. */
+  hourly?: { at: string; temperature_c: number | null; precipitation_probability_pct: number | null; wind_kmh: number | null }[];
+};
+
+/** Reads current weather and place name for browser coordinates (already rounded by the caller) via the backend proxy. */
+export function getLocalWeather(lat: number, lon: number, locale: 'en' | 'vi', signal?: AbortSignal) {
+  const query = new URLSearchParams({ lat: String(lat), lon: String(lon), locale });
+  return apiRequest<LocalWeather>(`/api/v1/weather/local?${query}`, { signal });
+}

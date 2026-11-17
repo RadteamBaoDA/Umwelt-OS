@@ -1,0 +1,591 @@
+"""Characterization tests for the helpers extracted from ``run_response_generation`` and friends."""
+
+import json
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+
+from modules.chat import worker
+from modules.chat.generative_ui.tools.form import _resolve_slots, build_meeting_time_picker_payload
+from modules.chat.generative_ui.tools.plan import _first_provenance
+from modules.chat.generative_ui.tools.query import query_records
+from modules.chat.schemas import MAX_QUOTE_LENGTH, AnswerContext, AnswerContextRequest
+from tests.unit.modules.chat._worker_patch import patch_worker
+from tests.unit.typing_regressions.test_none_handling_regressions import _evidence
+
+
+def test_parse_sse_chunk_extracts_delta_fields() -> None:
+    payload = json.dumps(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": "hi",
+                        "reasoning": "think",
+                        "reasoning_details": [{"a": 1}],
+                        "tool_calls": [{"index": 0}],
+                    }
+                }
+            ]
+        }
+    )
+    chunk = worker._parse_sse_chunk(payload)
+    assert chunk is not None
+    assert (chunk.content, chunk.reasoning) == ("hi", "think")
+    assert chunk.details == [{"a": 1}] and chunk.tool_fragments == [{"index": 0}]
+
+
+def test_parse_sse_chunk_prefers_reasoning_content_and_skips_empty_choices() -> None:
+    chunk = worker._parse_sse_chunk(
+        json.dumps({"choices": [{"delta": {"reasoning_content": "a", "reasoning": "b"}}]})
+    )
+    assert chunk is not None and chunk.reasoning == "a" and chunk.content == ""
+    assert worker._parse_sse_chunk(json.dumps({"choices": []})) is None
+    assert worker._parse_sse_chunk(json.dumps({"usage": {}})) is None
+
+
+def test_parse_sse_chunk_raises_for_malformed_input() -> None:
+    with pytest.raises(json.JSONDecodeError):
+        worker._parse_sse_chunk("{not json")
+    with pytest.raises(AttributeError):
+        worker._parse_sse_chunk(json.dumps({"choices": ["str"]}))
+
+
+def test_validate_citations_keeps_cited_evidence_and_renumbers() -> None:
+    first, second = _evidence(content="Alpha fact one."), _evidence(content="Beta fact two.")
+    context = AnswerContext(query="q", evidence=[first, second])
+    request = AnswerContextRequest(query="q")
+    cited = worker._validate_citations("Only the second matters [2].", context, request, None, [])
+    assert [c.get("chunk_id") or c.get("chunkId") for c in cited.valid_citations] == [
+        str(second.chunk_id)
+    ]
+    assert cited.number_map == {2: 1}
+    assert cited.final_answer == "Only the second matters [1]."
+
+
+def test_validate_citations_web_only_answer_gets_web_citation() -> None:
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="snippet")
+    web_run = worker._WebSearchRun({"status": "used"}, (hit,), "searxng")  # type: ignore[arg-type]
+    context = AnswerContext(query="q", evidence=[])
+    cited = worker._validate_citations(
+        "Per the web [1].", context, AnswerContextRequest(query="q"), web_run, []
+    )
+    assert (
+        len(cited.valid_citations) == 1
+        and cited.valid_citations[0]["url"] == "https://example.test/a"
+    )
+    assert cited.number_map == {1: 1}
+
+
+def test_validate_citations_truncates_long_web_snippet_to_quote_limit() -> None:
+    """Page-text providers return snippets up to SNIPPET_MAX (4000); the stored quote is capped, not rejected."""
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="x" * 1500)
+    web_run = worker._WebSearchRun({"status": "used"}, (hit,), "searxng")  # type: ignore[arg-type]
+    context = AnswerContext(query="q", evidence=[])
+    cited = worker._validate_citations(
+        "Per the web [1].", context, AnswerContextRequest(query="q"), web_run, []
+    )
+    assert len(cited.valid_citations) == 1
+    assert len(cited.valid_citations[0]["quote"]) == MAX_QUOTE_LENGTH
+    assert cited.final_answer == "Per the web [1]."
+
+
+class _Session:
+    def __init__(self) -> None:
+        self.commit = AsyncMock()
+
+
+async def _fence(
+    monkeypatch: pytest.MonkeyPatch, *, cancelled: bool, evidence_ok: bool, with_evidence: bool
+) -> tuple[Any, list[str]]:
+    calls: list[str] = []
+    run = SimpleNamespace(status="streaming")
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, run)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=cancelled))
+    patch_worker(
+        monkeypatch,
+        "_cancel_response_locked",
+        AsyncMock(side_effect=lambda *_a: calls.append("cancel")),
+    )
+    patch_worker(
+        monkeypatch,
+        "_privacy_cancel_locked",
+        AsyncMock(side_effect=lambda *_a: calls.append("redact")),
+    )
+    patch_worker(monkeypatch, "revalidate_context_fence", AsyncMock(return_value=(evidence_ok, [])))
+    c = worker._RunCtx(
+        response_id=uuid4(),
+        session_factory=None,
+        settings=None,
+        redis=None,  # type: ignore[arg-type]
+        conversation_id=uuid4(),
+        privacy_fence={},
+        seq=3,
+        job_scope=SimpleNamespace(),  # type: ignore[arg-type]
+    )
+    if with_evidence:
+        c.answer_context = AnswerContext(query="q", evidence=[_evidence()])
+    session = _Session()
+    outcome, _run = await worker._fence_live_run(session, c, check_evidence=True)  # type: ignore[arg-type]
+    if outcome is not worker._FenceOutcome.LIVE:
+        session.commit.assert_awaited_once()
+    return outcome, calls
+
+
+async def test_fence_live_run_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert await _fence(monkeypatch, cancelled=False, evidence_ok=True, with_evidence=True) == (
+        worker._FenceOutcome.LIVE,
+        [],
+    )
+    assert await _fence(monkeypatch, cancelled=True, evidence_ok=True, with_evidence=True) == (
+        worker._FenceOutcome.CANCELLED,
+        ["cancel"],
+    )
+    assert await _fence(monkeypatch, cancelled=False, evidence_ok=False, with_evidence=True) == (
+        worker._FenceOutcome.REDACTED,
+        ["redact"],
+    )
+    # No retrieved evidence: nothing to revalidate, so a failing fence is never consulted.
+    assert await _fence(monkeypatch, cancelled=False, evidence_ok=False, with_evidence=False) == (
+        worker._FenceOutcome.LIVE,
+        [],
+    )
+
+
+def test_tool_registry_covers_every_data_tool_and_accepts_new_handlers() -> None:
+    names = {
+        worker.TOOL_READ_SKILL,
+        worker.TOOL_TRIP_IMAGES,
+        worker.TOOL_QUERY_COLLECTED_DATA,
+        worker.TOOL_REQUEST_USER_INPUT,
+        *worker.LOCAL_DATA_TOOLS,
+    }
+    assert names <= set(worker._TOOL_HANDLERS)
+    # All local data tools share one handler instance, hence one per-round cap.
+    assert len({id(worker._TOOL_HANDLERS[n]) for n in worker.LOCAL_DATA_TOOLS}) == 1
+    assert worker._TOOL_HANDLERS[worker.TOOL_REQUEST_USER_INPUT].data_round is False
+
+    class Custom:
+        data_round = True
+
+        def available(self, env: Any) -> bool:
+            return True
+
+        def round_cap(self, env: Any) -> int:
+            return 1
+
+        async def run(self, env: Any, call: dict[str, str]) -> str:
+            return "ok"
+
+    worker.register_chat_tool(["x_custom_tool"], Custom())
+    try:
+        assert "x_custom_tool" in worker._TOOL_HANDLERS
+    finally:
+        worker._TOOL_HANDLERS.pop("x_custom_tool")
+
+
+def test_request_user_input_cap_shrinks_with_answered_requests() -> None:
+    handler = worker._TOOL_HANDLERS[worker.TOOL_REQUEST_USER_INPUT]
+    env = SimpleNamespace(ts=SimpleNamespace(input_requests=0))
+    assert handler.round_cap(env) == worker.MAX_USER_INPUT_REQUESTS_PER_TURN  # type: ignore[arg-type]
+    env.ts.input_requests = worker.MAX_USER_INPUT_REQUESTS_PER_TURN
+    assert handler.round_cap(env) == 0  # type: ignore[arg-type]
+
+
+def test_round_terminals_prefixes_colliding_part_ids() -> None:
+    class Acc:
+        def terminals(self, limit: int) -> list[tuple[str, dict[str, str]]]:
+            return [("part-1", {"name": "render_table", "arguments": "{}"})][:limit]
+
+    ts = SimpleNamespace(ui_parts=[("part-1", {})], ui_rounds=1, max_parts=4)
+    out = worker._round_terminals(ts, Acc())  # type: ignore[arg-type]
+    assert [pid for pid, _ in out] == ["r2-part-1"]
+
+
+def test_stream_state_drop_pending_clears_only_unpublished_buffers() -> None:
+    st = worker._StreamState(
+        pending="a", pending_reasoning="b", pending_ui={"p": {}}, accumulated_text="kept"
+    )
+    st.drop_pending()
+    assert (st.pending, st.pending_reasoning, st.pending_ui, st.accumulated_text) == (
+        "",
+        "",
+        {},
+        "kept",
+    )
+
+
+def test_query_records_filter_group_sort_limit() -> None:
+    rows = [{"k": "A", "v": "1,000"}, {"k": "a", "v": 5}, {"k": "B", "v": 2}, {"k": "C", "v": "x"}]
+    assert query_records(rows, filters={"k": ["A", "a"]}, limit=1) == [{"k": "A", "v": "1,000"}]
+    grouped = query_records(rows, group_by="k", metric="v", agg="sum", sort_by="v")
+    assert [(r["k"], r["v"]) for r in grouped] == [
+        ("A", 1000.0),
+        ("a", 5.0),
+        ("B", 2.0),
+        ("C", 0.0),
+    ]
+    assert query_records(rows, group_by="k", agg="avg")[0] == {"k": "A", "count": 1}
+    assert query_records(rows, filters={"k": "b"}) == [{"k": "B", "v": 2}]
+    assert (
+        query_records(rows, group_by="k", metric="v", agg="max", sort_by="v", descending=False)[0][
+            "v"
+        ]
+        == 0.0
+    )
+
+
+def test_meeting_slots_defaults_and_caller_slots() -> None:
+    assert [s.id for s in _resolve_slots(None, "UTC")] == ["slot-1", "slot-2", "slot-3"]
+    custom = _resolve_slots([{"label": "L"}, {"id": "z", "recommended": True}], "Asia/Tokyo")
+    assert [(s.id, s.label, s.timezone, s.recommended) for s in custom] == [
+        ("slot-1", "L", "Asia/Tokyo", True),
+        ("z", "Option 2", "Asia/Tokyo", True),
+    ]
+    assert build_meeting_time_picker_payload().selected_slot_id == "slot-1"
+
+
+def test_first_provenance_reads_dicts_objects_and_empty() -> None:
+    assert _first_provenance([]) == (None, None, None)
+    assert _first_provenance([{"source_id": "s", "document_id": "", "chunk_id": "c"}]) == (
+        "s",
+        None,
+        "c",
+    )
+    assert _first_provenance([SimpleNamespace(source_id="s", document_id="d")]) == ("s", "d", None)
+
+
+def test_validate_citations_web_first_then_tool_evidence_numbering() -> None:
+    """Prompt web [1] and a DB row fetched later as [2] resolve to the web hit and the evidence item."""
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="snippet")
+    web_run = worker._WebSearchRun(  # type: ignore[arg-type]
+        {"status": "used"}, (hit,), "searxng", evidence_base=0
+    )
+    db_item = _evidence(content="Quake near Crete.")
+    context = AnswerContext(query="q", evidence=[db_item])
+    cited = worker._validate_citations(
+        "Web says A [1]. The database says quake [2].",
+        context,
+        AnswerContextRequest(query="q"),
+        web_run,
+        [],
+    )
+    assert len(cited.valid_citations) == 2
+    assert any(c.get("url") == "https://example.test/a" for c in cited.valid_citations)
+    assert any(
+        str(c.get("chunkId") or c.get("chunk_id")) == str(db_item.chunk_id)
+        for c in cited.valid_citations
+    )
+    # Model numbers: [1] web, [2] evidence; both survive in the map.
+    assert set(cited.number_map) == {1, 2}
+
+
+def _shifted_case(tool_rounds: int) -> tuple[Any, AnswerContext, Any]:
+    """Prompt evidence E0 (model [1]), one web hit ([2]) and ``tool_rounds`` DB rows fetched later ([3]...)."""
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="snippet")
+    web_run = worker._WebSearchRun(  # type: ignore[arg-type]
+        {"status": "used"}, (hit,), "searxng", evidence_base=1
+    )
+    items = [_evidence(content="Alpha topic notes.")] + [
+        _evidence(content=f"Quake number {i} near Crete.") for i in range(tool_rounds)
+    ]
+    return web_run, AnswerContext(query="q", evidence=items), items
+
+
+def test_validate_citations_prompt_evidence_web_and_db_row_with_base_above_zero() -> None:
+    """Model [1]=prompt doc, [2]=web, [3]=DB row: each marker resolves to its own source (Q3, base>0)."""
+    web_run, context, items = _shifted_case(1)
+    cited = worker._validate_citations(
+        "Alpha topic notes [1]. Web says A [2]. The quake near Crete [3].",
+        context,
+        AnswerContextRequest(query="q"),
+        web_run,
+        [],
+    )
+    chunk_ids = [str(c.get("chunkId") or c.get("chunk_id")) for c in cited.valid_citations]
+    assert chunk_ids[:2] == [str(items[0].chunk_id), str(items[1].chunk_id)]
+    assert cited.valid_citations[2]["url"] == "https://example.test/a"
+    assert set(cited.number_map) == {1, 2, 3}
+    # Documents keep numbers 1-2, the web hit is numbered after them.
+    assert (
+        "[1]" in cited.final_answer and "[2]" in cited.final_answer and "[3]" in cited.final_answer
+    )
+
+
+def test_validate_citations_two_tool_rounds_keep_numbers_behind_web_block() -> None:
+    """Rows fetched by two tool rounds are [3] and [4]; markers [3][4] cite them, [2] stays the web hit."""
+    web_run, context, items = _shifted_case(2)
+    cited = worker._validate_citations(
+        "Alpha topic notes [1]. Web says A [2]. Quake number 0 near Crete [3]. Quake number 1 near Crete [4].",
+        context,
+        AnswerContextRequest(query="q"),
+        web_run,
+        [],
+    )
+    docs = [
+        c for c in cited.valid_citations if c.get("sourceType", c.get("source_type")) == "document"
+    ]
+    assert [str(c.get("chunkId") or c.get("chunk_id")) for c in docs] == [
+        str(i.chunk_id) for i in items
+    ]
+    assert set(cited.number_map) == {1, 2, 3, 4}
+
+
+def test_validate_citations_widget_numbers_are_remapped_to_evidence() -> None:
+    """A widget citing model number [3] (the DB row, behind the web block) cites evidence[1], not web."""
+    web_run, context, items = _shifted_case(1)
+    call = {"name": "render_table", "arguments": json.dumps({"citations": [3]})}
+    cited = worker._validate_citations(
+        "Here is the table.", context, AnswerContextRequest(query="q"), web_run, [("p1", call)]
+    )
+    assert [str(c.get("chunkId") or c.get("chunk_id")) for c in cited.valid_citations] == [
+        str(items[1].chunk_id)
+    ]
+    assert cited.number_map == {3: 1}
+
+
+def test_citation_number_shifts_only_tool_evidence_behind_web_results() -> None:
+    """``_citation_number`` keeps prompt-time evidence numbers and shifts later items past the web block."""
+    from modules.chat.db_query import _citation_number
+
+    assert _citation_number(0, None) == 1
+    assert _citation_number(0, (0, 1)) == 2
+    assert _citation_number(1, (2, 3)) == 2
+    assert _citation_number(2, (2, 3)) == 6
+
+
+def test_uncited_answer_keeps_text_and_sets_flag() -> None:
+    """General-knowledge text is neither prefixed nor replaced; ``uncited`` marks it for the UI."""
+    from modules.chat._routes.guards import _message_uncited
+
+    context = AnswerContext(query="q", evidence=[_evidence(content="Unrelated archive text.")])
+    cited = worker._validate_citations(
+        "## HTTP Caching\nCaches store responses.",
+        context,
+        AnswerContextRequest(query="q"),
+        None,
+        [],
+    )
+    assert cited.final_answer == "## HTTP Caching\nCaches store responses."
+    assert cited.uncited is True and cited.valid_citations == []
+    assert _message_uncited({"uncited": True}) is True
+    assert _message_uncited({}) is False and _message_uncited(None) is False
+
+
+def test_system_prompt_contract_language_and_owner_local_time() -> None:
+    """The prompt splits own-data (cite) from general answers, asks for the user's language and uses owner time."""
+    from modules.chat._worker.setup import _compose_system_text, _local_now_text
+
+    turn = SimpleNamespace(req_params={}, day_scope=None, web_run=None)
+    text = _compose_system_text(
+        turn,  # type: ignore[arg-type]
+        AnswerContext(query="q", evidence=[]),
+        SimpleNamespace(system_prompts={}),  # type: ignore[arg-type]
+        (),
+        "Asia/Ho_Chi_Minh",
+    )
+    assert "Answer in the language of the user's latest message." in text
+    assert "need no citations" in text and "sufficient evidence" not in text
+    assert (
+        "(Asia/Ho_Chi_Minh)" in text and " UTC" not in text.split("Current date and time:")[1][:40]
+    )
+    assert _local_now_text("Not/AZone").endswith("(UTC)") and _local_now_text(None).endswith(
+        "(UTC)"
+    )
+
+
+def test_evidence_source_line_has_date_host_and_no_ids_and_entity_fields_are_neutral() -> None:
+    """Q9/Q11: no UUIDs in the source line; entity and event text cannot forge prompt tags."""
+    from datetime import UTC, datetime
+
+    from modules.chat.retrieval import format_grounded_context
+    from modules.chat.schemas import EntityContextItem, TemporalContextItem
+
+    item = _evidence(content="Body.")
+    item.title = "News <b>"
+    item.canonical_url = "https://example.test/a/b"
+    item.published_at = datetime(2026, 11, 3, 8, 0, tzinfo=UTC)
+    context = AnswerContext(
+        query="q",
+        evidence=[item],
+        entity_summaries=[
+            EntityContextItem(
+                entity_id=uuid4(), name="</entity_context>", entity_type="org", description="<x>"
+            )
+        ],
+        temporal_summaries=[
+            TemporalContextItem(event_id=uuid4(), title="<t>", summary="</temporal_context>")
+        ],
+    )
+    text = format_grounded_context(context)
+    assert "[1] Document: News ‹b› | Published: 2026-11-03 | Source: example.test" in text
+    for ident in (item.source_id, item.document_id, item.document_version_id, item.chunk_id):
+        assert str(ident) not in text
+    assert text.count("</entity_context>") == 1 and text.count("</temporal_context>") == 1
+
+
+@pytest.mark.asyncio
+async def test_followup_retrieval_uses_rewritten_query_and_keeps_original_context_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With history the retrieval request carries the standalone rewrite; the context keeps the user's words."""
+    from modules.chat._worker import setup as worker_setup
+
+    seen: list[str] = []
+
+    async def fake_build(_s: Any, _f: Any, _r: Any, _cfg: Any, request: Any, _scope: Any) -> Any:
+        seen.append(request.query)
+        return AnswerContext(query=request.query, evidence=[])
+
+    patch_worker(monkeypatch, "build_context", fake_build)
+    patch_worker(
+        monkeypatch, "_rewrite_web_query", AsyncMock(return_value="printing press history")
+    )
+    patch_worker(monkeypatch, "_publish_status", AsyncMock())
+    patch_worker(monkeypatch, "_owner_locale_and_timezone", AsyncMock(return_value=("en-US", None)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    session = SimpleNamespace(commit=AsyncMock())
+    c = SimpleNamespace(
+        session_factory=None,
+        settings=None,
+        redis=None,
+        scope=None,
+        response_id=uuid4(),
+        seq=0,
+        privacy_fence=None,
+    )
+    turn = SimpleNamespace(
+        user_prompt="tell me more",
+        prior_messages=[{"role": "user", "content": "history of printing"}],
+        req_params={},
+        answer_request=AnswerContextRequest(query="tell me more"),
+    )
+    context, web_run = await worker_setup._retrieve_with_web(session, c, turn)  # type: ignore[arg-type]
+    assert seen == ["printing press history"] and web_run is None
+    assert context.query == "tell me more"
+
+    turn.prior_messages = []  # first message: literal prompt, no rewrite call
+    seen.clear()
+    await worker_setup._retrieve_with_web(session, c, turn)  # type: ignore[arg-type]
+    assert seen == ["tell me more"]
+
+
+def _hit(score: float) -> Any:
+    """Search hit double with a score and fresh refs."""
+    return SimpleNamespace(score=score, document_version_id=uuid4(), chunk_id=uuid4())
+
+
+@pytest.mark.asyncio
+async def test_search_score_cut_is_relative_to_the_best_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A low-relevance tail (below 40% of the top RRF score) is trimmed; a lone weak hit survives (S4)."""
+    from modules.chat import retrieval
+
+    strong, ok, tail = _hit(0.032), _hit(0.016), _hit(0.0125)
+    for hits, kept in (([strong, ok, tail], [strong, ok]), ([tail], [tail])):
+        monkeypatch.setattr(
+            retrieval.search_public,
+            "search",
+            AsyncMock(return_value=SimpleNamespace(items=hits, warnings=[])),
+        )
+        collector = retrieval._RefCollector()
+        request = AnswerContextRequest(query="q")
+        await retrieval._collect_search_refs(
+            MagicMock(), MagicMock(), MagicMock(), request, {}, collector, []
+        )
+        assert collector.refs == [(h.document_version_id, h.chunk_id) for h in kept]
+
+
+def _followup_rig(
+    monkeypatch: pytest.MonkeyPatch, order: list[str], *, cancelled: bool = False
+) -> Any:
+    """Patch the retrieval collaborators to log call order; return (session, ctx, turn) doubles."""
+    from modules.chat._worker import setup as worker_setup
+
+    async def status(_c: Any, tool: str, state: str, **_kw: Any) -> None:
+        order.append(f"{tool}:{state}")
+
+    async def rewrite(*_a: Any, **kw: Any) -> str:
+        order.append(f"rewrite:names={kw.get('keep_names')}")
+        return "rewritten"
+
+    async def build(_s: Any, _f: Any, _r: Any, _cfg: Any, request: Any, _scope: Any) -> Any:
+        order.append(f"build:{request.query}")
+        return AnswerContext(query=request.query, evidence=[])
+
+    patch_worker(monkeypatch, "build_context", build)
+    patch_worker(monkeypatch, "_rewrite_web_query", rewrite)
+    patch_worker(monkeypatch, "_publish_status", status)
+    patch_worker(monkeypatch, "_owner_locale_and_timezone", AsyncMock(return_value=("en-US", None)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=cancelled))
+    patch_worker(monkeypatch, "_mark_cancelled", AsyncMock())
+    c = SimpleNamespace(
+        session_factory=None,
+        settings=None,
+        redis=None,
+        scope=None,
+        response_id=uuid4(),
+        seq=0,
+        privacy_fence=None,
+    )
+    turn = SimpleNamespace(
+        user_prompt="tell me more",
+        prior_messages=[{"role": "user", "content": "history of Alice Nguyen"}],
+        req_params={},
+        answer_request=AnswerContextRequest(query="tell me more"),
+    )
+    return worker_setup, SimpleNamespace(commit=AsyncMock()), c, turn
+
+
+@pytest.mark.asyncio
+async def test_retrieval_step_precedes_rewrite_and_rewrite_keeps_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3b/c: retrieval is published running before the rewrite, which uses the names-keeping variant."""
+    order: list[str] = []
+    setup, session, c, turn = _followup_rig(monkeypatch, order)
+    await setup._retrieve_with_web(session, c, turn)
+    assert order[:3] == ["retrieval:running", "rewrite:names=True", "build:rewritten"]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_rewrite_skipped_with_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3a: a conversation model override must not send prompts to the role-default model for a rewrite."""
+    from modules.chat.schemas import MODEL_OVERRIDE_KEY
+
+    order: list[str] = []
+    setup, session, c, turn = _followup_rig(monkeypatch, order)
+    turn.req_params = {MODEL_OVERRIDE_KEY: {"provider_id": "p", "model": "m"}}
+    await setup._retrieve_with_web(session, c, turn)
+    assert order[:2] == ["retrieval:running", "build:tell me more"] and not any(
+        "rewrite" in o for o in order
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieval_stops_when_cancelled_during_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3c: Stop during the rewrite persists the cancellation and never starts retrieval."""
+    order: list[str] = []
+    setup, session, c, turn = _followup_rig(monkeypatch, order, cancelled=True)
+    with pytest.raises(worker._RunStopped):
+        await setup._retrieve_with_web(session, c, turn)
+    assert not any(o.startswith("build") for o in order)
+
+
+def test_evidence_dates_use_the_owner_timezone() -> None:
+    """N4: 23:30 UTC on 11-03 is already 11-04 in Ho Chi Minh City; unknown zones fall back to UTC."""
+    from datetime import UTC, datetime
+
+    from modules.chat.retrieval import _local_date
+
+    when = datetime(2026, 11, 3, 23, 30, tzinfo=UTC)
+    assert _local_date(when, "Asia/Ho_Chi_Minh") == "2026-11-04"
+    assert _local_date(when, None) == _local_date(when, "Not/AZone") == "2026-11-03"

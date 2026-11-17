@@ -1,54 +1,46 @@
+include:
+  - docker-compose.base.yml
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
-  postgres:
-    image: pgvector/pgvector:0.8.6-pg16-bookworm
-    environment:
-      POSTGRES_DB: bbd
-      POSTGRES_USER: bbd
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run setup to create .env}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bbd -d bbd"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-
-  redis:
-    image: redis:7.4.11-alpine
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    restart: unless-stopped
-
   migrate:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
-    command: ["alembic", "upgrade", "head"]
+      dockerfile: docker/api.Dockerfile
+    # Then apply the chat SQL reader password (no-op when CHAT_SQL_READER_DATABASE_URL is unset).
+    command: ["sh", "-c", "alembic upgrade head && python -m core.chat_sql_provision"]
     env_file: .env
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits: {memory: 512M}
     restart: "no"
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
 
   api:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     env_file: .env
+    # Shares the dedicated `storage` network with the optional rustfs service (profile s3).
+    networks: [default, storage]
+    init: true
     volumes:
       - app-data:/data
     expose: ["8000"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/ready', timeout=2)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/system/ready', timeout=4)"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 5
       start_period: 15s
     depends_on:
@@ -56,14 +48,32 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    cpu_shares: 1024
+    deploy:
+      resources:
+        limits: {memory: 1G}
+        reservations: {memory: 512M}
+    stop_grace_period: 15s
     restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
 
   worker:
     build:
       context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
+      dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
+    # Shares the dedicated `storage` network with the optional rustfs service (profile s3).
+    networks: [default, storage]
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "bbd:worker:health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
     volumes:
       - app-data:/data
     depends_on:
@@ -71,22 +81,146 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 1G}
+        reservations: {memory: 256M}
+    stop_grace_period: 240s  # >= job_timeout (180) + job_completion_wait margin; SIGTERM drains running jobs
     restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  cron-worker:
+    # Recurring jobs (pollers, recovery, retention) on their own queue/process so they never take
+    # ingestion max_jobs slots; every job is lease-guarded, so extra replicas are safe.
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.CronWorkerSettings"]
+    env_file: .env
+    # Shares the dedicated `storage` network with the optional rustfs service (profile s3).
+    networks: [default, storage]
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:cron:health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 512M}
+        reservations: {memory: 192M}
+    stop_grace_period: 240s  # >= job_timeout (180) + job_completion_wait margin; SIGTERM drains running jobs
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  chat-worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.ChatWorkerSettings"]
+    # Not on the `storage` network: its jobs read only database text and never call core.storage.
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:chat:health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 768M}
+        reservations: {memory: 256M}
+    stop_grace_period: 660s  # >= CHAT_JOB_TIMEOUT (600) + 60; SIGTERM drains running jobs
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  model-worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.ModelWorkerSettings"]
+    # Not on the `storage` network: its jobs read only database text and never call core.storage.
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:model:health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 768M}
+        reservations: {memory: 256M}
+    stop_grace_period: 960s  # >= MODEL_WORKER_JOB_TIMEOUT_SECONDS (900) + 60; raise together
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
 
   web:
     build:
       context: .
-      dockerfile: infrastructure/docker/web.Dockerfile
+      dockerfile: docker/web.Dockerfile
     environment:
       API_INTERNAL_URL: http://api:8000
+      # Browser-facing origin; the frame-shell CSP and metadataBase derive from it (request.url is the bind address).
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      NODE_OPTIONS: --max-old-space-size=512
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/icon.svg"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 768M}
+        reservations: {memory: 256M}
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
 
 volumes:
   app-data:
-  postgres-data:
-  redis-data:
+

@@ -1,0 +1,15 @@
+{
+  "brand": "Umwelt-OS · Local setup",
+  "title": "Create your owner account",
+  "description": "This account is stored on this server. Choose a password with at least 12 characters.",
+  "displayName": "Your name (optional)",
+  "setupToken": "Setup token",
+  "enterSetupToken": "Enter the setup token.",
+  "password": "Password",
+  "passwordHelp": "Use at least 12 characters.",
+  "confirmPassword": "Confirm password",
+  "passwordMismatch": "Passwords do not match.",
+  "failure": "Setup could not be completed.",
+  "creating": "Creating account…",
+  "createOwner": "Create owner"
+}

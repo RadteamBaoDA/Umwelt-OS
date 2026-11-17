@@ -1,0 +1,201 @@
+# Shared backing services for local/native development and self-hosted runtime.
+# Start default services (Postgres + Redis): docker compose -f docker-compose.base.yml up -d
+# Optional profiles: --profile graph | --profile n8n
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    # Minimal environment: the database container must not see application secrets.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bbd}
+      POSTGRES_DB: ${POSTGRES_DB:-bbd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    command:
+      - postgres
+      - -c
+      - max_connections=120
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - log_autovacuum_min_duration=10s
+      - -c
+      - log_lock_waits=on
+      - -c
+      - jit=off
+      - -c
+      - max_wal_size=2GB
+    shm_size: 1gb
+    cpu_shares: 768
+    deploy:
+      resources:
+        limits: {memory: 2560M}
+        reservations: {memory: 1024M}
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+
+  redis:
+    image: redis:7.4.11-alpine
+    environment:
+      REDISCLI_AUTH: ${REDISCLI_AUTH:-}
+    # Password comes from REDISCLI_AUTH in .env; redis-cli (healthcheck) reads the same variable.
+    command: ["sh", "-c", "exec redis-server --appendonly yes --save 60 1000 --maxmemory 512mb --maxmemory-policy noeviction --requirepass \"$$REDISCLI_AUTH\""]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    cpu_shares: 128
+    deploy:
+      resources:
+        limits: {memory: 640M}
+        reservations: {memory: 64M}
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+
+  # Optional temporal-knowledge graph (Graphiti). Start with: docker compose -f docker-compose.base.yml --profile graph up -d
+  # Community edition = one database ("neo4j"); partitions are separated by group_id, not by database.
+  graph:
+    image: neo4j:5.26.2-community@sha256:099b9f74968c123209972835417985ed2a1cc19c0422c0753a313e26a736c365
+    profiles: ["graph"]
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-}
+      GRAPH_USERNAME: ${GRAPH_USERNAME:-neo4j}
+      GRAPH_PASSWORD: ${GRAPH_PASSWORD:-}
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_server_memory_heap_initial__size:-512m}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_server_memory_heap_max__size:-1g}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_server_memory_pagecache_size:-256m}
+      NEO4J_db_transaction_timeout: ${NEO4J_db_transaction_timeout:-5s}
+    ports:
+      - "127.0.0.1:${GRAPH_PORT:-7687}:7687"
+    volumes:
+      - graph-data:/data
+    healthcheck:
+      # HTTP discovery probe: cypher-shell spawned a JVM every interval and pinned the 1-CPU limit.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7474/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    cpus: 1.0
+    mem_limit: 1792m
+    stop_grace_period: 60s  # clean checkpoint on stop
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+
+  # Optional workflow automation (n8n). Start with: docker compose -f docker-compose.base.yml --profile n8n up -d
+  n8n:
+    image: n8nio/n8n:2.5.2
+    profiles: ["n8n"]
+    environment:
+      GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
+      TZ: Asia/Ho_Chi_Minh
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      # Code nodes must not read container env (encryption key etc.).
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      # Set these when n8n is served from a hostname; defaults suit loopback-only use.
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *default-logging
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 128
+    restart: unless-stopped
+
+  # Optional S3-compatible object store (RustFS) for STORAGE_BACKEND=s3.
+  # Start with: docker compose -f docker-compose.base.yml --profile s3 up -d rustfs
+  # RustFS would otherwise fall back to the public default rustfsadmin/rustfsadmin when the keys are empty, so the
+  # entrypoint guard below refuses to start (exit 64) unless RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY are set in .env,
+  # neither is `rustfsadmin`, and the secret has >= 16 characters. (No `:?` here: compose interpolates inactive profiles too.)
+  # The S3 API is path-style (keep S3_PATH_STYLE=true). The named volume inherits the image's UID 10001 ownership.
+  rustfs:
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+    profiles: ["s3"]
+    # Only on `storage` (shared with api/worker/cron-worker in docker-compose.yml), not the default network, so postgres,
+    # redis, web and the other services cannot reach the object store.
+    networks: [storage]
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+    # Fail closed; `$$` is compose escaping for a literal `$`. Image entrypoint is /entrypoint.sh, cmd `rustfs`.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ -z "$${RUSTFS_ACCESS_KEY}" ] || [ -z "$${RUSTFS_SECRET_KEY}" ] \
+          || [ "$${RUSTFS_ACCESS_KEY}" = rustfsadmin ] || [ "$${RUSTFS_SECRET_KEY}" = rustfsadmin ] \
+          || [ "$${#RUSTFS_SECRET_KEY}" -lt 16 ]; then
+          echo "rustfs: refusing to start: set RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY (not rustfsadmin; secret >= 16 chars)" >&2
+          exit 64
+        fi
+        exec /entrypoint.sh "$$@"
+      - rustfs-guard
+    command: ["rustfs"]
+    ports:
+      - "127.0.0.1:${RUSTFS_PORT:-9000}:9000"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default-logging
+    restart: unless-stopped
+
+networks:
+  storage:
+
+volumes:
+  postgres-data:
+  redis-data:
+  graph-data:
+  n8n-data:
+  rustfs-data:
+
+

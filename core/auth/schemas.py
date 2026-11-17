@@ -1,26 +1,116 @@
-from pydantic import BaseModel, Field
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+@dataclass(frozen=True, slots=True)
+class AccountSessionRef:
+    """Detached exact-session locator from authentication, without a bearer or authority.
+
+    The digest is excluded from repr. Publication must revalidate the exact live session
+    under auth-owned locks; merely constructing this value proves nothing.
+    """
+
+    account_id: int
+    token_hash: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        """Reject malformed actor/digest locators before short session admission."""
+        if type(self.account_id) is not int or self.account_id <= 0:
+            raise ValueError("A positive account ID is required")
+        if (
+            not isinstance(self.token_hash, str)
+            or len(self.token_hash) != 64
+            or any(character not in "0123456789abcdef" for character in self.token_hash)
+        ):
+            raise ValueError("A session digest is required")
 
 
 class SetupRequest(BaseModel):
+    """Validated first-run owner password request with an optional display name."""
+
     password: str = Field(min_length=12, max_length=128)
+    display_name: str | None = Field(default=None, max_length=200)
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str | None) -> str | None:
+        """Apply the settings module's name rules (trim, blank->None, <=80, no control chars)."""
+        from core.capabilities import normalize_display_name
+
+        return normalize_display_name(value)
 
 
 class SetupStatus(BaseModel):
+    """Reports whether first-run owner setup is still required."""
+
     setupRequired: bool
 
 
 class SetupResponse(BaseModel):
+    """Reports successful singleton owner creation."""
+
     created: bool
 
 
 class LoginRequest(BaseModel):
+    """Exact normalized email login; omission selects bootstrap account 1 only."""
+
     password: str = Field(min_length=1, max_length=128)
+    identifier: str | None = Field(default=None, max_length=320)
 
 
 class AuthState(BaseModel):
+    """Authenticated response containing the client CSRF token."""
+
     authenticated: bool = True
     csrfToken: str
+    isInstanceAdmin: bool = False
 
 
 class CsrfResponse(BaseModel):
+    """Response carrying a newly issued client CSRF token."""
+
     csrfToken: str
+
+
+class AccountRead(BaseModel):
+    """Detached active account identity; omits password hashes and linked provider subjects.
+
+    Bootstrap email may be unset. Invitation bearer authority does not establish mailbox
+    verification; only verified Google OIDC provenance is represented in this pilot.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    id: int
+    email: str | None
+    account_state: Literal["active"] = "active"
+    default_workspace_id: UUID
+    email_verified_at: datetime | None
+    email_verification_source: Literal["google_oidc"] | None
+
+
+class ChangePasswordRequest(BaseModel):
+    """Current password plus a replacement validated with the same policy as first-run setup."""
+
+    currentPassword: str = Field(min_length=1, max_length=128)
+    newPassword: str = Field(min_length=12, max_length=128)
+
+
+class SessionInfo(BaseModel):
+    """One live session of the caller: opaque id, timestamps, and whether it is the requesting session."""
+
+    id: str
+    createdAt: datetime
+    lastSeenAt: datetime | None
+    expiresAt: datetime
+    current: bool
+
+
+class RevokeOthersResponse(BaseModel):
+    """Count of sessions deleted by revoke-others."""
+
+    revoked: int

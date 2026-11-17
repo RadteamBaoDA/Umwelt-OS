@@ -1,98 +1,527 @@
-import base64
-import binascii
-import hashlib
 import json
+import math
+import time
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import func, select, text
+from sqlalchemy import Select, and_, false, func, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from core.config import Settings
-from core.model_gateway.client import ModelGatewayError
-from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
-from modules.search.indexing import configured_embedding, embedding_values, gateway
+from core.errors import ConflictError, DomainError, ForbiddenError, ValidationFailedError
+from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
+from core.model_gateway.policy import may_send
+from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
+from core.pagination import decode_scoped_offset, encode_scoped_offset, fingerprint_payload
+from core.tools.schemas import ToolDestination, ToolOutputFence
+from core.workspaces import public as workspaces
+from core.workspaces.admission import admit_scope
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
+from modules.goals.public import GoalFilter, GoalPage
+from modules.knowledge.documents.public import (
+    DocumentChunkReadProjection as DocumentChunk,
+)
+from modules.knowledge.documents.public import (
+    DocumentReadProjection as Document,
+)
+from modules.knowledge.documents.public import (
+    DocumentVersionReadProjection as DocumentVersion,
+)
+from modules.search.indexing import (
+    configured_embedding,
+    embedding_values,
+    gateway,
+    purge_version_embeddings,  # noqa: F401  # public re-export (Search owner contract)
+)
 from modules.search.models import IndexGeneration, SearchIndexItem
-from modules.search.schemas import Citation, SearchHit, SearchIndexStatus, SearchRequest, SearchResponse, SearchSource
-from modules.sources.models import Source
+from modules.search.schemas import (
+    Citation,
+    SearchHit,
+    SearchIndexStatus,
+    SearchResponse,
+    SearchSource,
+)
+from modules.search.schemas import (
+    SearchFilters as SearchFilters,
+)
+from modules.search.schemas import (
+    SearchRequest as SearchRequest,
+)
+from modules.sources.public import SourceReadProjection as Source
+from modules.tasks.public import TaskFilter, TaskPage
 
 MAX_CANDIDATES = 500
 MAX_RANKED_CANDIDATES = MAX_CANDIDATES * 2
 FALLBACK_WARNING = "Semantic search unavailable"
+_QUERY_VECTOR_CACHE_MAX = 128
+_QUERY_VECTOR_CACHE_TTL_SECONDS = 60.0
+_QUERY_VECTOR_CACHE: dict[tuple[Any, ...], tuple[float, list[float]]] = {}
 
 
-def _cursor_scope(request: SearchRequest) -> str:
+def _query_vector_cache_key(
+    workspace_id: UUID,
+    generation: IndexGeneration,
+    config: AIExecutionConfig,
+    mapping: ModelMapping,
+    query: str,
+) -> tuple[Any, ...]:
+    """Build a workspace-, authority-, and generation-scoped key for paginated query vectors.
+
+    Binding the key to workspace, provider/model identity, gateway identity, configuration
+    revision, and active generation ensures follow-up cursor pages never reuse vectors across
+    tenants, model changes, or privacy/configuration updates.
+    """
+    return (
+        workspace_id,
+        getattr(mapping, "provider_id", None),
+        getattr(mapping, "model_id", None) or getattr(mapping, "model", None),
+        getattr(mapping, "version", None),
+        getattr(config, "gateway_identity", None),
+        getattr(config, "configuration_revision", None),
+        getattr(generation, "id", None),
+        getattr(generation, "dimensions", None),
+        query,
+    )
+
+
+def _get_cached_query_vector(key: tuple[Any, ...]) -> list[float] | None:
+    """Return a defensive copy of a fresh cached query vector and refresh its LRU order."""
+    entry = _QUERY_VECTOR_CACHE.get(key)
+    if entry is None:
+        return None
+    cached_at, vector = entry
+    if time.monotonic() - cached_at > _QUERY_VECTOR_CACHE_TTL_SECONDS:
+        _QUERY_VECTOR_CACHE.pop(key, None)
+        return None
+    _QUERY_VECTOR_CACHE.pop(key, None)
+    _QUERY_VECTOR_CACHE[key] = (cached_at, vector)
+    return list(vector)
+
+
+def _store_cached_query_vector(key: tuple[Any, ...], vector: list[float]) -> None:
+    """Store a defensive copy of a validated query vector in the bounded TTL/LRU cache."""
+    now = time.monotonic()
+    _QUERY_VECTOR_CACHE.pop(key, None)
+    if len(_QUERY_VECTOR_CACHE) >= _QUERY_VECTOR_CACHE_MAX:
+        expired = [
+            cached_key
+            for cached_key, (cached_at, _) in _QUERY_VECTOR_CACHE.items()
+            if now - cached_at > _QUERY_VECTOR_CACHE_TTL_SECONDS
+        ]
+        for cached_key in expired:
+            _QUERY_VECTOR_CACHE.pop(cached_key, None)
+        while len(_QUERY_VECTOR_CACHE) >= _QUERY_VECTOR_CACHE_MAX:
+            _QUERY_VECTOR_CACHE.pop(next(iter(_QUERY_VECTOR_CACHE)))
+    _QUERY_VECTOR_CACHE[key] = (now, list(vector))
+
+
+def is_member_scope(scope: Scope) -> bool:
+    """True for a non-owner workspace member, who may only search explicitly shared documents."""
+    return isinstance(scope, WorkspaceContext) and scope.role != "owner"
+
+
+def _member_grants(scope: Scope) -> Select[Any]:
+    """Document-id projection of this member's active grants (members are always WorkspaceContext)."""
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("invariant violated: unexpected type for scope")
+    return workspaces.granted_resource_ids(scope=scope, kind="document")
+
+
+async def _admit(
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    allow_member: bool = False,
+) -> AccessFence:
+    """Admit Search access before candidates or generation rows are read; members only when allowed.
+
+    Thin wrapper over ``admit_scope`` (read-only fence, no flag-type check, members denied unless
+    ``allow_member``).
+    """
+    return await admit_scope(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        owner_only=not allow_member,
+        check_flag=False,
+    )
+
+
+@dataclass(frozen=True)
+class NewsSimilarityRead:
+    """Return stored-vector cosine similarity plus its active generation identity."""
+
+    left_chunk_id: UUID
+    right_chunk_id: UUID
+    cosine_similarity: float
+    generation_id: UUID
+    model_id: str
+    model_version: str | None
+    response_model_id: str | None
+    dimensions: int
+    gateway_identity: str | None
+
+
+@dataclass(frozen=True)
+class NewsSimilarityResult:
+    """Distinguish usable bounded matches from missing or incompatible index capability."""
+
+    items: tuple[NewsSimilarityRead, ...]
+    capability: str
+
+
+def _news_similarity_statement(
+    generation: IndexGeneration,
+    incoming_chunk_id: UUID,
+    candidate_chunk_ids: tuple[UUID, ...],
+    *,
+    workspace_id: UUID,
+) -> Select[Any]:
+    """Build the cosine-similarity SELECT between one incoming chunk and its candidates.
+
+    Both sides must be succeeded index items of ``generation`` and belong to current-version, ready
+    documents of active remotely indexable sources in ``workspace_id``. The caller applies the limit.
+    """
+    incoming = aliased(SearchIndexItem, name="news_incoming_index_item")
+    candidate = aliased(SearchIndexItem, name="news_candidate_index_item")
+    left_source = aliased(Source, name="news_incoming_source")
+    right_source = aliased(Source, name="news_candidate_source")
+    left_doc = aliased(Document, name="news_incoming_document")
+    right_doc = aliased(Document, name="news_candidate_document")
+    left_version = aliased(DocumentVersion, name="news_incoming_version")
+    right_version = aliased(DocumentVersion, name="news_candidate_version")
+    left_chunk = aliased(DocumentChunk, name="news_incoming_chunk")
+    right_chunk = aliased(DocumentChunk, name="news_candidate_chunk")
+    stmt = (
+        select(
+            incoming.chunk_id,
+            candidate.chunk_id,
+            (1.0 - incoming.embedding.op("<=>")(candidate.embedding)).label("similarity"),
+            IndexGeneration.id,
+            IndexGeneration.model_id,
+            IndexGeneration.model_version,
+            IndexGeneration.response_model_id,
+            IndexGeneration.dimensions,
+            IndexGeneration.gateway_identity,
+        )
+        .join(IndexGeneration, IndexGeneration.id == incoming.generation_id)
+        .join(
+            candidate,
+            (candidate.generation_id == incoming.generation_id) & (candidate.status == "succeeded"),
+        )
+        .join(left_chunk, left_chunk.id == incoming.chunk_id)
+        .join(left_version, left_version.id == left_chunk.document_version_id)
+        .join(left_doc, left_doc.id == left_version.document_id)
+        .join(left_source, left_source.id == left_doc.source_id)
+        .join(right_chunk, right_chunk.id == candidate.chunk_id)
+        .join(right_version, right_version.id == right_chunk.document_version_id)
+        .join(right_doc, right_doc.id == right_version.document_id)
+        .join(right_source, right_source.id == right_doc.source_id)
+        .where(
+            incoming.chunk_id == incoming_chunk_id,
+            incoming.status == "succeeded",
+            incoming.generation_id == generation.id,
+            IndexGeneration.status == "active",
+            candidate.chunk_id.in_(candidate_chunk_ids),
+            IndexGeneration.workspace_id == workspace_id,
+            left_doc.workspace_id == workspace_id,
+            right_doc.workspace_id == workspace_id,
+            left_doc.current_version == left_version.version_number,
+            right_doc.current_version == right_version.version_number,
+            left_doc.extraction_status.in_(("ready", "succeeded")),
+            right_doc.extraction_status.in_(("ready", "succeeded")),
+            left_source.status == "active",
+            right_source.status == "active",
+            left_source.local_only.is_(False),
+            right_source.local_only.is_(False),
+        )
+    )
+    return stmt
+
+
+async def compare_news_evidence_embeddings(
+    session: AsyncSession,
+    incoming_chunk_id: UUID,
+    candidate_chunk_ids: tuple[UUID, ...],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> NewsSimilarityResult:
+    """Compare only active stored embeddings for current visible news chunks.
+
+    No gateway call or embedding generation occurs here. Both sides must be
+    succeeded in the same active generation and current ready documents from
+    active remotely indexable sources. At most 100 candidates are inspected.
+    """
+    if len(candidate_chunk_ids) > 100 or len(set(candidate_chunk_ids)) != len(candidate_chunk_ids):
+        raise ValueError("News similarity accepts at most 100 unique candidates")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not candidate_chunk_ids:
+        return NewsSimilarityResult(items=(), capability="no_candidates")
+    generation = await session.scalar(
+        select(IndexGeneration).where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status == "active",
+        )
+    )
+    if generation is None or generation.dimensions is None:
+        return NewsSimilarityResult(items=(), capability="index_unavailable")
+    stmt = _news_similarity_statement(
+        generation, incoming_chunk_id, candidate_chunk_ids, workspace_id=scope.workspace_id
+    )
+    rows: list[Any] = list((await session.execute(stmt.limit(101))).all())
+    if len(rows) > 100:
+        return NewsSimilarityResult(items=(), capability="candidate_limit_exceeded")
+    if not rows:
+        return NewsSimilarityResult(items=(), capability="embeddings_unavailable")
+    values = []
+    for (
+        left_id,
+        right_id,
+        score,
+        generation_id,
+        model,
+        version,
+        response,
+        dimensions,
+        gateway_identity,
+    ) in rows:
+        value = float(score)
+        if not math.isfinite(value) or value < -1.00001 or value > 1.00001:
+            return NewsSimilarityResult(items=(), capability="invalid_vector_result")
+        values.append(
+            NewsSimilarityRead(
+                left_chunk_id=left_id,
+                right_chunk_id=right_id,
+                cosine_similarity=max(-1.0, min(1.0, value)),
+                generation_id=generation_id,
+                model_id=model,
+                model_version=version,
+                response_model_id=response,
+                dimensions=dimensions,
+                gateway_identity=gateway_identity,
+            )
+        )
+    return NewsSimilarityResult(items=tuple(values), capability="available")
+
+
+def _cursor_scope(
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> str:
+    """Bind cursors to request, destination and exact source generations."""
     content = request.model_dump(exclude={"cursor", "limit"}, mode="json")
-    return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:16]
+    content["destination"] = destination.value
+    content["source_generations"] = sorted(
+        (
+            (str(source_id), generation)
+            for source_id, generation in (source_generation_fences or {}).items()
+        )
+    )
+    # Default json.dumps separators keep cursors issued before the shared helper valid.
+    return fingerprint_payload(content, length=16, separators=(", ", ": "))
 
 
-def _offset(request: SearchRequest) -> int:
+def _offset(
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> int:
+    """Decode a canonical cursor bound to request, destination class and supported offsets."""
     if request.cursor is None:
         return 0
     try:
-        raw = base64.urlsafe_b64decode(request.cursor + "=" * (-len(request.cursor) % 4)).decode()
-        scope, position = raw.split(":", 1)
-        offset = int(position)
-        if scope != _cursor_scope(request) or offset < 0 or offset > MAX_RANKED_CANDIDATES or _encode_cursor(request, offset) != request.cursor:
-            raise ValueError
-        return offset
-    except (ValueError, UnicodeDecodeError, IndexError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Invalid search cursor") from exc
+        return decode_scoped_offset(
+            request.cursor,
+            _cursor_scope(request, destination, source_generation_fences),
+            max_offset=MAX_RANKED_CANDIDATES,
+        )
+    except (
+        HTTPException,
+        DomainError,
+    ) as exc:  # core helper raises the transport error; this module raises DomainError
+        raise ValidationFailedError(detail="Invalid search cursor") from exc
 
 
-def _encode_cursor(request: SearchRequest, offset: int) -> str:
-    return base64.urlsafe_b64encode(f"{_cursor_scope(request)}:{offset}".encode()).decode().rstrip("=")
+def _encode_cursor(
+    request: SearchRequest,
+    offset: int,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+) -> str:
+    """Encode request/destination scope and ranked offset as unpadded URL-safe base64."""
+    return encode_scoped_offset(
+        _cursor_scope(request, destination, source_generation_fences), offset
+    )
 
 
-def _filters(statement, request: SearchRequest):
+def _filters(
+    statement: Select[Any],
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    *,
+    workspace_id: UUID,
+) -> Select[Any]:
+    """Apply privacy, source-generation, type and effective-date predicates before ranking."""
+    statement = statement.where(Document.workspace_id == workspace_id)
     filters = request.filters
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if source_generation_fences is not None:
+        generation_conditions = [
+            and_(Document.source_id == source_id, Source.generation == generation)
+            for source_id, generation in source_generation_fences.items()
+        ]
+        statement = statement.where(
+            or_(*generation_conditions) if generation_conditions else false()
+        )
     if filters.source_ids:
         statement = statement.where(Document.source_id.in_(filters.source_ids))
     if filters.content_types:
         statement = statement.where(Document.content_type.in_(filters.content_types))
     if filters.date_from is not None:
-        statement = statement.where(func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at) >= filters.date_from)
+        statement = statement.where(
+            func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at)
+            >= filters.date_from
+        )
     if filters.date_to is not None:
-        statement = statement.where(func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at) <= filters.date_to)
+        statement = statement.where(
+            func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at)
+            <= filters.date_to
+        )
     return statement
 
 
-def _visible_rows(*columns):
-    return (
+def _visible_rows(
+    *columns: Any,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    workspace_id: UUID,
+    grants: Select[Any] | None = None,
+) -> Select[Any]:
+    """Build a fresh active/current query with destination, generation fences and member grants."""
+    statement = (
         select(*columns)
         .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
         .join(Document, Document.id == DocumentVersion.document_id)
         .join(Source, Source.id == Document.source_id)
         .where(
             Document.current_version == DocumentVersion.version_number,
+            Document.workspace_id == workspace_id,
             Document.extraction_status.in_(("ready", "succeeded")),
             Source.status == "active",
         )
     )
+    if grants is not None:
+        # Member grant predicate sits in the candidate SQL, before any ORDER BY / LIMIT.
+        statement = statement.where(Document.id.in_(grants))
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if source_generation_fences is not None:
+        fence_conditions = [
+            and_(Document.source_id == source_id, Source.generation == generation)
+            for source_id, generation in source_generation_fences.items()
+        ]
+        statement = statement.where(or_(*fence_conditions) if fence_conditions else false())
+    return statement
 
 
-async def _lexical_ids(session: AsyncSession, request: SearchRequest) -> list[UUID]:
-    vector = func.to_tsvector(text("'simple'"), DocumentChunk.content)
+async def _lexical_ids(
+    session: AsyncSession,
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    *,
+    workspace_id: UUID,
+    grants: Select[Any] | None = None,
+) -> list[UUID]:
+    """Retrieve bounded candidates after active/current, privacy and generation SQL filters."""
+    # Stored generated column ``content_tsv`` (= to_tsvector('simple', content)) with a GIN index: identical
+    # match and ts_rank_cd scores to the former inline expression, without re-parsing every candidate.
+    vector = DocumentChunk.content_tsv
     query = func.websearch_to_tsquery(text("'simple'"), request.query)
-    statement = _filters(_visible_rows(DocumentChunk.id), request).where(vector.op("@@")(query)).order_by(
-        func.ts_rank_cd(vector, query).desc(), DocumentChunk.id,
-    ).limit(MAX_CANDIDATES)
+    statement = (
+        _filters(
+            _visible_rows(
+                DocumentChunk.id, destination=destination, workspace_id=workspace_id, grants=grants
+            ),
+            request,
+            destination,
+            source_generation_fences,
+            workspace_id=workspace_id,
+        )
+        .where(vector.op("@@")(query))
+        .order_by(
+            func.ts_rank_cd(vector, query).desc(),
+            DocumentChunk.id,
+        )
+        .limit(MAX_CANDIDATES)
+    )
     return list((await session.scalars(statement)).all())
 
 
-async def _vector_ids(session: AsyncSession, request: SearchRequest, generation: IndexGeneration, values: list[float]) -> list[UUID]:
+async def _vector_ids(
+    session: AsyncSession,
+    request: SearchRequest,
+    generation: IndexGeneration,
+    values: list[float],
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    *,
+    workspace_id: UUID,
+) -> list[UUID]:
+    """Retrieve bounded cosine candidates after destination and generation fences."""
     dimensions = generation.dimensions
     if dimensions is None:
         return []
+    # The generation UUID is inlined (validated through UUID) so the WHERE carries the literal
+    # predicate of the partial HNSW index ``ix_search_vector_<hex>``; a bind parameter would stop
+    # the planner from proving the index predicate and force a sequential scan.
+    generation_literal = str(UUID(str(generation.id)))
     clauses = [
-        "i.generation_id = :generation_id", "i.status = 'succeeded'", "i.embedding IS NOT NULL",
-        "v.version_number = d.current_version", "d.extraction_status IN ('ready', 'succeeded')",
-        "s.status = 'active'", "s.local_only = false",
+        f"i.generation_id = '{generation_literal}'",
+        "i.status = 'succeeded'",
+        "i.embedding IS NOT NULL",
+        "v.version_number = d.current_version",
+        "d.extraction_status IN ('ready', 'succeeded')",
+        "s.status = 'active'",
+        "g.workspace_id = CAST(:workspace_id AS uuid)",
+        "d.workspace_id = CAST(:workspace_id AS uuid)",
     ]
-    params: dict[str, object] = {"generation_id": generation.id, "embedding": json.dumps(values), "limit": MAX_CANDIDATES}
+    if destination != ToolDestination.LOCAL:
+        clauses.append("s.local_only = false")
+    params: dict[str, object] = {
+        "workspace_id": str(workspace_id),
+        "embedding": json.dumps(values),
+        "limit": MAX_CANDIDATES,
+    }
+    if source_generation_fences is not None:
+        if not source_generation_fences:
+            clauses.append("false")
+        else:
+            fence_clauses = []
+            for index, (source_id, source_generation) in enumerate(
+                source_generation_fences.items()
+            ):
+                source_key = f"fence_source_{index}"
+                generation_key = f"fence_generation_{index}"
+                fence_clauses.append(
+                    f"(d.source_id = CAST(:{source_key} AS uuid) AND s.generation = :{generation_key})"
+                )
+                params[source_key] = str(source_id)
+                params[generation_key] = source_generation
+            # Keep every candidate inside the exact owner snapshot before vector LIMIT.
+            clauses.append("(" + " OR ".join(fence_clauses) + ")")
     if request.filters.source_ids:
         clauses.append("d.source_id = ANY(CAST(:source_ids AS uuid[]))")
         params["source_ids"] = request.filters.source_ids
@@ -105,85 +534,747 @@ async def _vector_ids(session: AsyncSession, request: SearchRequest, generation:
     if request.filters.date_to is not None:
         clauses.append("coalesce(d.published_at, d.observed_at, v.observed_at) <= :date_to")
         params["date_to"] = request.filters.date_to
+    distance = f"i.embedding::vector({dimensions}) <=> CAST(:embedding AS vector({dimensions}))"
+    # The inner ORDER BY is the bare distance expression so the HNSW index can serve it (an extra
+    # chunk_id sort key disables index ordering); all filters stay before the LIMIT. The outer sort
+    # restores deterministic tie-breaking and order under relaxed iterative scans.
     statement = text(
-        "SELECT i.chunk_id FROM search_index_items i "
+        "SELECT t.chunk_id FROM ("  # noqa: S608  # interpolates only an int dimension and fixed clause fragments; values are bound
+        f"SELECT i.chunk_id AS chunk_id, {distance} AS dist FROM search_index_items i "
+        "JOIN search_index_generations g ON g.id = i.generation_id "
         "JOIN document_chunks c ON c.id = i.chunk_id "
         "JOIN document_versions v ON v.id = c.document_version_id "
         "JOIN documents d ON d.id = v.document_id "
         "JOIN sources s ON s.id = d.source_id "
         f"WHERE {' AND '.join(clauses)} "
-        f"ORDER BY i.embedding::vector({dimensions}) <=> CAST(:embedding AS vector({dimensions})), i.chunk_id "
-        "LIMIT :limit"
+        f"ORDER BY {distance} LIMIT :limit"
+        ") t ORDER BY t.dist, t.chunk_id"
     )
+    # Transaction-local: filtered HNSW scans keep scanning until LIMIT rows survive the filters.
+    await session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
+    await session.execute(text("SET LOCAL hnsw.ef_search = 100"))
     return list((await session.scalars(statement, params)).all())
 
 
-async def search(session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest) -> SearchResponse:
-    offset = _offset(request)
-    lexical = await _lexical_ids(session, request)
-    vector: list[UUID] = []
-    effective_mode = "lexical"
-    warnings: list[str] = []
-    if request.mode == "hybrid":
-        generation = await session.scalar(select(IndexGeneration).where(IndexGeneration.status == "active"))
-        try:
-            mapping, policy = await configured_embedding(redis, settings)
-            if (
-                generation is None or generation.dimensions is None or mapping is None
-                or mapping.model != generation.model_id or mapping.version != generation.model_version
-                or not policy.embeddings_allowed
-            ):
-                raise ValueError("No permitted active embedding generation")
-            response = await gateway(settings, redis).embed("embedding", mapping, policy, [request.query])
-            values, returned_model = embedding_values(response, generation.dimensions)
-            if returned_model != generation.response_model_id:
-                raise ValueError("Embedding response identity changed")
-            vector = await _vector_ids(session, request, generation, values)
-            effective_mode = "hybrid"
-        except (ModelGatewayError, RedisError, ValueError, OSError):
-            warnings.append(FALLBACK_WARNING)
-        except DBAPIError:
-            await session.rollback()
-            warnings.append(FALLBACK_WARNING)
+async def _embed_query_vector(
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    request: SearchRequest,
+    *,
+    generation: IndexGeneration,
+    config: AIExecutionConfig,
+    mapping: ModelMapping,
+    policy: RequestPolicy,
+    offset: int,
+    admitted_fence: AccessFence,
+    source_generation_fences: dict[UUID, int] | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    before_embedding_send: Callable[
+        [AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]
+    ]
+    | None,
+    release_during_embed: bool,
+) -> list[float]:
+    """Return the query embedding, from the short-lived cache or a freshly authorized gateway call.
+
+    First-page requests (offset == 0) always verify live gateway embedding authority; paginated
+    continuation pages (offset > 0) reuse a fresh cached vector when authority matches (never when
+    ``before_embedding_send`` is supplied). Every gateway attempt first re-reads the access fence and
+    the embedding settings and raises ``PrivacyPolicyDenied`` on any change. With
+    ``release_during_embed`` the read-only transaction is committed before the call and after each
+    recheck. Raises ``ValueError`` when the response model identity differs from the generation's.
+    """
+    cache_key = _query_vector_cache_key(
+        scope.workspace_id,
+        generation,
+        config,
+        mapping,
+        request.query,
+    )
+    cached_values = (
+        _get_cached_query_vector(cache_key)
+        if offset > 0 and before_embedding_send is None
+        else None
+    )
+    if cached_values is not None:
+        return cached_values
+
+    async def recheck_send() -> None:
+        """Reload gateway and privacy state immediately before embedding the query."""
+        if (
+            await workspaces.read_access_fence(
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            != admitted_fence
+        ):
+            raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
+        latest, latest_mapping, latest_policy = await configured_embedding(
+            session,
+            settings,
+            redis,
+            scope=scope,
+        )
+        if (
+            latest.configuration_revision != config.configuration_revision
+            or latest.endpoint_destination_id != config.endpoint_destination_id
+            or latest.gateway_identity != config.gateway_identity
+            or latest_mapping != mapping
+            or not may_send(
+                latest_policy,
+                "embedding",
+                latest_mapping,
+                latest.endpoint_destination_id or "remote",
+                bool(latest.gateway_api_key),
+                "embeddings",
+            )
+        ):
+            raise PrivacyPolicyDenied("Search embedding denied by current settings")
+        if before_embedding_send is not None:
+            await before_embedding_send(
+                latest,
+                latest_mapping,
+                latest_policy,
+                dict(source_generation_fences or {}),
+            )
+        if release_during_embed:
+            await session.commit()
+
+    if release_during_embed:
+        await session.commit()
+    response = await gateway(config, redis, recheck_send, scope=scope).embed(
+        "embedding", mapping, policy, [request.query]
+    )
+    values, returned_model = embedding_values(response, generation.dimensions)
+    if returned_model != generation.response_model_id:
+        raise ValueError("Embedding response identity changed")
+    _store_cached_query_vector(cache_key, values)
+    return values
+
+
+async def _hybrid_vector_candidates(
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    request: SearchRequest,
+    *,
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    offset: int,
+    admitted_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    before_embedding_send: Callable[
+        [AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]
+    ]
+    | None,
+    release_during_embed: bool,
+) -> tuple[list[UUID], str, list[str]]:
+    """Run the vector leg of a hybrid search; return ``(vector_ids, effective_mode, warnings)``.
+
+    Any gateway/Redis/value/OS failure, a database error (after rollback) or an HTTP-shaped 503
+    degrades to lexical-only with ``FALLBACK_WARNING``; other HTTP-shaped errors propagate.
+    """
+    generation = await session.scalar(
+        select(IndexGeneration).where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status == "active",
+        )
+    )
+    try:
+        config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
+        if config.endpoint_policy_denied:
+            raise ValueError("Saved endpoint is denied by deployment network policy")
+        if (
+            generation is None
+            or generation.dimensions is None
+            or mapping is None
+            or mapping.model != generation.model_id
+            or mapping.version != generation.model_version
+            or generation.gateway_identity != config.model_identity
+            or not policy.embeddings_allowed
+        ):
+            raise ValueError("No permitted active embedding generation")
+        values = await _embed_query_vector(
+            session,
+            redis,
+            settings,
+            request,
+            generation=generation,
+            config=config,
+            mapping=mapping,
+            policy=policy,
+            offset=offset,
+            admitted_fence=admitted_fence,
+            source_generation_fences=source_generation_fences,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            before_embedding_send=before_embedding_send,
+            release_during_embed=release_during_embed,
+        )
+        vector = await _vector_ids(
+            session,
+            request,
+            generation,
+            values,
+            destination,
+            source_generation_fences,
+            workspace_id=scope.workspace_id,
+        )
+        return vector, "hybrid", []
+    except (ModelGatewayError, RedisError, ValueError, OSError):
+        return [], "lexical", [FALLBACK_WARNING]
+    except DBAPIError:
+        await session.rollback()
+        return [], "lexical", [FALLBACK_WARNING]
+    except (DomainError, HTTPException) as exc:
+        if exc.status_code != 503:
+            raise
+        return [], "lexical", [FALLBACK_WARNING]
+
+
+async def _hydration_rows(
+    session: AsyncSession,
+    request: SearchRequest,
+    selected: list[UUID],
+    *,
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    scope: Scope,
+    grants: Any,
+) -> Sequence[Any]:
+    """Read the visible chunk/version/document/source rows for the ``selected`` ids.
+
+    Applies the destination, source-generation and member-grant filters of the original query; an empty
+    selection issues no SQL.
+    """
+    return (
+        (
+            await session.execute(
+                _filters(
+                    _visible_rows(
+                        DocumentChunk.id,
+                        DocumentChunk.content,
+                        DocumentVersion.id,
+                        DocumentVersion.version_number,
+                        DocumentVersion.observed_at,
+                        Document.id,
+                        Document.title,
+                        Document.observed_at,
+                        Document.published_at,
+                        Document.content_type,
+                        Document.canonical_url,
+                        Source.id,
+                        Source.name,
+                        Source.type,
+                        Source.generation,
+                        destination=destination,
+                        source_generation_fences=source_generation_fences,
+                        workspace_id=scope.workspace_id,
+                        grants=grants,
+                    ),
+                    request,
+                    destination,
+                    source_generation_fences,
+                    workspace_id=scope.workspace_id,
+                ).where(DocumentChunk.id.in_(selected))
+            )
+        ).all()
+        if selected
+        else []
+    )
+
+
+async def _hydrate_hits(
+    session: AsyncSession,
+    request: SearchRequest,
+    selected: list[UUID],
+    ranked: dict[UUID, float],
+    *,
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    scope: Scope,
+    grants: Any,
+    member: bool,
+) -> tuple[list[SearchHit], dict[UUID, tuple[UUID, UUID, UUID, int]]]:
+    """Hydrate the selected page into hits plus the exact (document, version, source, generation) fences.
+
+    Only current/active rows allowed by the original source generations and destination are read.
+    A member page with any vanished chunk fails whole (409) instead of returning a partial page;
+    owners silently skip vanished chunks. The extra look-ahead chunk is never hydrated.
+    """
+    rows = await _hydration_rows(
+        session,
+        request,
+        selected,
+        destination=destination,
+        source_generation_fences=source_generation_fences,
+        scope=scope,
+        grants=grants,
+    )
+    visible = {row[0]: row for row in rows}
+    items: list[SearchHit] = []
+    expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
+    for chunk_id in selected[: request.limit]:
+        if chunk_id not in visible:
+            if member:
+                raise _stale_member_read()
+            continue
+        (
+            chunk_id,
+            content,
+            version_id,
+            version_number,
+            version_observed,
+            document_id,
+            title,
+            document_observed,
+            published_at,
+            content_type,
+            canonical_url,
+            source_id,
+            source_name,
+            source_type,
+            source_generation,
+        ) = visible[chunk_id]
+        expected_fences[chunk_id] = (document_id, version_id, source_id, source_generation)
+        excerpt = content[:500]
+        items.append(
+            SearchHit(
+                document_id=document_id,
+                document_version_id=version_id,
+                version_number=version_number,
+                chunk_id=chunk_id,
+                title=title,
+                excerpt=excerpt,
+                score=ranked[chunk_id],
+                source=SearchSource(id=source_id, name=source_name, type=source_type),
+                observed_at=document_observed or version_observed,
+                published_at=published_at,
+                content_type=content_type,
+                citation=Citation(
+                    sourceId=source_id,
+                    documentId=document_id,
+                    chunkId=chunk_id,
+                    title=title,
+                    url=canonical_url,
+                    observedAt=document_observed or version_observed,
+                    quote=excerpt,
+                ),
+            )
+        )
+    return items, expected_fences
+
+
+async def _require_member_page_current(
+    session: AsyncSession,
+    *,
+    member: bool,
+    current_ids: set[UUID],
+    expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]],
+    admitted_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Fail a member page whole (409) if any hydrated chunk vanished or the access fence moved.
+
+    Owners are never checked here: they silently drop vanished chunks. The access fence is re-read only
+    when every expected chunk is still current, exactly as the inline check short-circuited before.
+    """
+    if member and (
+        current_ids != set(expected_fences)
+        or await workspaces.read_access_fence(
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        != admitted_fence
+    ):
+        raise _stale_member_read()
+
+
+def _fuse_rankings(
+    lexical: list[UUID],
+    vector: list[UUID],
+    *,
+    hybrid: bool,
+    offset: int,
+    limit: int,
+) -> tuple[dict[UUID, float], list[UUID]]:
+    """Fuse lexical (and, when ``hybrid``, vector) candidates by reciprocal rank (k=60).
+
+    Returns the score map and the ordered page slice ``[offset : offset + limit + 1]``; the extra
+    look-ahead id signals a next page. Ties break on the chunk id string for a stable order.
+    """
     ranked: dict[UUID, float] = {}
-    for candidates in (lexical, vector) if effective_mode == "hybrid" else (lexical,):
+    for candidates in (lexical, vector) if hybrid else (lexical,):
         for rank, chunk_id in enumerate(candidates, 1):
             ranked[chunk_id] = ranked.get(chunk_id, 0.0) + 1 / (60 + rank)
     ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
-    selected = ordered[offset:offset + request.limit + 1]
-    # Recheck all source, revision and deletion fences after the provider call.
-    rows = (await session.execute(_filters(
-        _visible_rows(DocumentChunk, DocumentVersion.id, DocumentVersion.version_number, DocumentVersion.observed_at, Document, Source), request,
-    ).where(DocumentChunk.id.in_(selected)))).all() if selected else []
-    visible = {chunk.id: (chunk, version_id, version_number, version_observed, document, source)
-               for chunk, version_id, version_number, version_observed, document, source in rows}
-    items = []
-    for chunk_id in selected[:request.limit]:
-        if chunk_id not in visible:
-            continue
-        chunk, version_id, version_number, version_observed, document, source = visible[chunk_id]
-        excerpt = chunk.content[:500]
-        items.append(SearchHit(
-            document_id=document.id, document_version_id=version_id, version_number=version_number, chunk_id=chunk.id,
-            title=document.title, excerpt=excerpt, score=ranked[chunk_id],
-            source=SearchSource(id=source.id, name=source.name, type=source.type),
-            observed_at=document.observed_at or version_observed,
-            published_at=document.published_at, content_type=document.content_type,
-            citation=Citation(sourceId=source.id, documentId=document.id, chunkId=chunk.id,
-                              title=document.title, url=document.canonical_url,
-                              observedAt=document.observed_at or version_observed, quote=excerpt),
-        ))
-    next_cursor = _encode_cursor(request, offset + request.limit) if len(selected) > request.limit else None
-    return SearchResponse(items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings)
+    return ranked, ordered[offset : offset + limit + 1]
 
 
-async def index_status(session: AsyncSession) -> SearchIndexStatus:
-    generation = await session.scalar(select(IndexGeneration).order_by(IndexGeneration.created_at.desc()).limit(1))
+async def search(
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    request: SearchRequest,
+    *,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    before_embedding_send: Callable[
+        [AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]
+    ]
+    | None = None,
+    release_during_embed: bool = False,
+) -> SearchResponse:
+    """Retrieve current evidence only within an admitted owner workspace and destination policy.
+
+    Remote destinations exclude local-only sources in lexical/vector candidates and final
+    hydration, bind cursors to that destination, and recheck exact chunk/version/source generation
+    after any embedding await. This owner-side check is immediately before returning the result;
+    a future remote sender must perform its own fresh recheck immediately before transmission.
+    When supplied, ``before_embedding_send`` runs after the existing embedding privacy/revision
+    recheck on every gateway attempt and receives the fresh config, mapping, policy, and original
+    pre-await source generations; its authorization or cancellation exceptions propagate.
+    ``release_during_embed`` commits the read-only transaction before the embedding call and at
+    the end of every send recheck so the pooled connection is not idle in transaction during the
+    network wait. Only callers whose session holds no row/advisory locks or pending writes may set it.
+    The session must also use ``expire_on_commit=False``: ``generation`` and ``config`` are read after
+    the commits, and an expired ORM object would lazy-load (``MissingGreenlet``) under asyncio.
+    """
+    if source_generation_fences is not None and len(source_generation_fences) > 100:
+        raise ValueError("Search source fence exceeds its supported bound")
+    if destination != ToolDestination.LOCAL and not source_generation_fences:
+        raise ValueError("Remote search requires current source-generation fences")
+    member = is_member_scope(scope)
+    if member and (destination != ToolDestination.LOCAL or source_generation_fences is not None):
+        raise ForbiddenError(detail="Workspace owner required")
+    admitted_fence = await _admit(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_member=True,
+    )
+    grants = _member_grants(scope) if member else None
+    offset = _offset(request, destination, source_generation_fences)
+    lexical = await _lexical_ids(
+        session,
+        request,
+        destination,
+        source_generation_fences,
+        workspace_id=scope.workspace_id,
+        grants=grants,
+    )
+    vector: list[UUID] = []
+    effective_mode = "lexical"
+    warnings: list[str] = []
+    # Members never rerank or embed: embeddings use the owner's AI config and global statistics.
+    if request.mode == "hybrid" and not member:
+        vector, effective_mode, warnings = await _hybrid_vector_candidates(
+            session,
+            redis,
+            settings,
+            request,
+            destination=destination,
+            source_generation_fences=source_generation_fences,
+            offset=offset,
+            admitted_fence=admitted_fence,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            before_embedding_send=before_embedding_send,
+            release_during_embed=release_during_embed,
+        )
+    ranked, selected = _fuse_rankings(
+        lexical, vector, hybrid=effective_mode == "hybrid", offset=offset, limit=request.limit
+    )
+    items, expected_fences = await _hydrate_hits(
+        session,
+        request,
+        selected,
+        ranked,
+        destination=destination,
+        source_generation_fences=source_generation_fences,
+        scope=scope,
+        grants=grants,
+        member=member,
+    )
+    current_ids = await _revalidate_tool_result_fences(
+        session,
+        expected_fences,
+        destination,
+        source_generation_fences,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_member=member,
+    )
+    await _require_member_page_current(
+        session,
+        member=member,
+        current_ids=current_ids,
+        expected_fences=expected_fences,
+        admitted_fence=admitted_fence,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    items = [item for item in items if item.chunk_id in current_ids]
+    next_cursor = (
+        _encode_cursor(
+            request,
+            offset + request.limit,
+            destination,
+            source_generation_fences,
+        )
+        if len(selected) > request.limit
+        else None
+    )
+    return SearchResponse(
+        items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings
+    )
+
+
+def _stale_member_read() -> DomainError:
+    """A changed fence or grant fails the whole member page, never a partial one."""
+    return ConflictError(detail="Search results changed; retry")
+
+
+async def _revalidate_tool_result_fences(
+    session: AsyncSession,
+    expected: dict[UUID, tuple[UUID, UUID, UUID, int]],
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    allow_member: bool = False,
+) -> set[UUID]:
+    """Return exact active/current source-generation tuples still eligible in a fresh query.
+
+    Remote local-only sources, changed owner-supplied source generations, stale versions and
+    deleted chunks are rejected after provider/retrieval awaits and immediately before return.
+    This is a read-time check, not an atomic guarantee for a later network send.
+    """
+    if not expected:
+        return set()
+    await _admit(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_member=allow_member,
+    )
+    statement = (
+        select(DocumentChunk.id, DocumentVersion.id, Document.id, Source.id, Source.generation)
+        .join(DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            DocumentChunk.id.in_(expected),
+            Document.workspace_id == scope.workspace_id,
+            Document.current_version == DocumentVersion.version_number,
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
+        )
+    )
+    if allow_member:
+        statement = statement.where(Document.id.in_(_member_grants(scope)))
+    if destination != ToolDestination.LOCAL:
+        statement = statement.where(Source.local_only.is_(False))
+    if source_generation_fences is not None:
+        conditions = [
+            and_(Document.source_id == source_id, Source.generation == generation)
+            for source_id, generation in source_generation_fences.items()
+        ]
+        statement = statement.where(or_(*conditions) if conditions else false())
+    rows = (await session.execute(statement)).all()
+    valid: set[UUID] = set()
+    for chunk_id, version_id, document_id, source_id, generation in rows:
+        if expected.get(chunk_id) == (document_id, version_id, source_id, generation):
+            valid.add(chunk_id)
+    return valid
+
+
+async def revalidate_tool_search_fences(
+    session: AsyncSession,
+    fences: Sequence[ToolOutputFence],
+    *,
+    source_ids: frozenset[UUID],
+    owner_all: bool = False,
+    destination: ToolDestination = ToolDestination.REMOTE,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Require every bounded native Search result fence to remain exact and currently eligible.
+
+    This public Search-owner contract accepts only chunk result DTOs and checks explicit source
+    scope before delegating to Search's existing current-version/deletion/privacy projection.
+    """
+    if len(fences) > 100:
+        return False
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    expected: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
+    source_generations: dict[UUID, int] = {}
+    for fence in fences:
+        if (
+            not isinstance(fence, ToolOutputFence)
+            or not isinstance(fence.document_id, UUID)
+            or not isinstance(fence.document_version_id, UUID)
+            or not isinstance(fence.source_id, UUID)
+            or type(fence.source_generation) is not int
+            or fence.source_generation < 1
+            or not isinstance(fence.chunk_id, UUID)
+        ):
+            return False
+        if not owner_all and fence.source_id not in source_ids:
+            return False
+        if fence.chunk_id in expected:
+            return False
+        previous_generation = source_generations.setdefault(
+            fence.source_id, fence.source_generation
+        )
+        if previous_generation != fence.source_generation:
+            return False
+        expected[fence.chunk_id] = (
+            fence.document_id,
+            fence.document_version_id,
+            fence.source_id,
+            fence.source_generation,
+        )
+    if not expected:
+        return True
+    valid = await _revalidate_tool_result_fences(
+        session,
+        expected,
+        destination,
+        source_generations,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return valid == set(expected)
+
+
+async def index_status(
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    settings: Settings,
+    redis: Redis,
+) -> SearchIndexStatus:
+    """Report this workspace's latest run or distinguish pending, unconfigured and no-data states."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    generation = await session.scalar(
+        select(IndexGeneration)
+        .where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+        )
+        .order_by(IndexGeneration.created_at.desc())
+        .limit(1)
+    )
     if generation is None:
-        return SearchIndexStatus(run_id=None, status="unavailable", model_id=None, dimensions=None, indexed_items=0, failed_items=0)
-    counts = dict((await session.execute(
-        select(SearchIndexItem.status, func.count()).where(SearchIndexItem.generation_id == generation.id).group_by(SearchIndexItem.status)
-    )).all())
-    return SearchIndexStatus(run_id=generation.id, status=generation.status, model_id=generation.model_id,
-                             dimensions=generation.dimensions, indexed_items=counts.get("succeeded", 0),
-                             failed_items=counts.get("failed", 0))
+        has_data = await session.scalar(
+            select(DocumentChunk.id)
+            .join(
+                DocumentVersion,
+                DocumentVersion.id == DocumentChunk.document_version_id,
+            )
+            .join(Document, Document.id == DocumentVersion.document_id)
+            .join(
+                Source,
+                Source.id == Document.source_id,
+            )
+            .where(
+                Document.workspace_id == scope.workspace_id,
+                Document.current_version == DocumentVersion.version_number,
+                Document.extraction_status.in_(("ready", "succeeded")),
+                Source.status == "active",
+                Source.local_only.is_(False),
+            )
+            .limit(1)
+        )
+        if has_data is None:
+            status = "no_data"
+        else:
+            config, mapping, policy = await configured_embedding(
+                session, settings, redis, scope=scope
+            )
+            status = (
+                "pending"
+                if not config.endpoint_policy_denied
+                and may_send(
+                    policy,
+                    "embedding",
+                    mapping,
+                    config.endpoint_destination_id or "remote",
+                    bool(config.gateway_api_key),
+                    "embeddings",
+                )
+                else "unconfigured"
+            )
+        return SearchIndexStatus(
+            run_id=None,
+            status=status,
+            model_id=None,
+            dimensions=None,
+            indexed_items=0,
+            failed_items=0,
+        )
+    counts = dict(
+        (
+            await session.execute(
+                select(SearchIndexItem.status, func.count())
+                .where(SearchIndexItem.generation_id == generation.id)
+                .group_by(SearchIndexItem.status)
+            )
+        ).all()
+    )
+    return SearchIndexStatus(
+        run_id=generation.id,
+        status=generation.status,
+        model_id=generation.model_id,
+        dimensions=generation.dimensions,
+        indexed_items=counts.get("succeeded", 0),
+        failed_items=counts.get("failed", 0),
+    )
+
+
+async def search_tasks_and_goals(
+    session: AsyncSession,
+    task_filter: TaskFilter,
+    goal_filter: GoalFilter,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[TaskPage, GoalPage]:
+    """Return bounded owner pages by delegating all task and goal reads to their public APIs.
+
+    The caller supplies filters built from the authenticated owner's query. Each domain
+    keeps its own cursor; task tombstone fences and reconciled goal projections remain
+    controlled by the owning public list contract. This path performs reads only and
+    returns owner DTOs without assigning a synthetic relevance score.
+    """
+    if not task_filter.q or not task_filter.q.strip():
+        # Keep a whitespace query from becoming an unfiltered owner list request.
+        return TaskPage(items=[]), GoalPage(items=[])
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+
+    from modules.goals import public as goals
+    from modules.tasks import public as tasks
+
+    task_page = await tasks.list_tasks(
+        session,
+        task_filter,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    goal_page = await goals.list_goals(
+        session,
+        goal_filter,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return task_page, goal_page

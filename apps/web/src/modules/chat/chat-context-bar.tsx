@@ -1,0 +1,431 @@
+'use client';
+
+import * as React from 'react';
+import { useTranslations } from 'next-intl';
+import { useQuery } from '@tanstack/react-query';
+import { FileTextIcon, PlusIcon, XIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import type { ChatContext } from './api';
+import { searchDocuments, type SearchHit } from '@/modules/search/public-api';
+import { ChatDocumentPreview } from './chat-document-preview';
+
+/** Builds the human-readable label for the grounding context attached to the active chat. */
+export function useContextLabel(context: ChatContext | null) {
+  const t = useTranslations('chat');
+  if (!context) return null;
+  if (context.kind === 'day') return t('context.day', { date: String(context.date ?? ''), timezone: String(context.timezone ?? '') });
+  if (context.kind === 'document') return t('context.document', { title: String(context.resource_id ?? '') });
+  if (context.kind === 'entity') return t('context.entity', { name: String(context.resource_id ?? '') });
+  if (context.kind === 'gadget') return t('context.gadget', { title: String(context.title || context.gadgetId || '') });
+  return t('context.selection', { count: context.items?.length ?? 1 });
+}
+
+/** Drops client-only chip titles from selection items; the server rejects unknown item fields. */
+export function stripItemTitles(context: ChatContext | null): ChatContext | null {
+  if (context?.kind !== 'selection' || !context.items) return context;
+  return {
+    ...context,
+    items: context.items.map(({ sourceId, documentId, documentVersionId, chunkId }) => ({
+      sourceId,
+      documentId,
+      documentVersionId,
+      chunkId,
+    })),
+  };
+}
+
+/** One chunk-scoped ref per document keeps a 32-document selection inside the server's 100-ref limit. */
+export const MAX_ITEMS = 32;
+const noFilters = { source_ids: [], date_from: null, date_to: null, content_types: [] };
+type Item = NonNullable<ChatContext['items']>[number];
+
+/** Result list of the context picker: live search status, error/empty states and one checkbox row per unique document hit. */
+function ContextPickerResults({
+  results,
+  searching,
+  hits,
+  taken,
+  picked,
+  room,
+  onToggle,
+}: {
+  results: { isError: boolean; isSuccess: boolean; isFetching: boolean };
+  searching: boolean;
+  hits: SearchHit[];
+  taken: Set<string>;
+  picked: Map<string, SearchHit>;
+  room: number;
+  onToggle: (hit: SearchHit) => void;
+}) {
+  const t = useTranslations('chat');
+  return (
+    <div role="group" aria-label={t('context.pickerResults')} className="flex max-h-[40dvh] flex-col gap-1 overflow-y-auto">
+      {/* Always mounted so assistive tech announces the text change. */}
+      <p role="status" className="text-sm text-muted-foreground">
+        {searching ? t('context.pickerSearching') : ''}
+      </p>
+      {results.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {t('context.pickerError')}
+        </p>
+      )}
+      {results.isSuccess && !results.isFetching && hits.length === 0 && (
+        <p className="text-sm text-muted-foreground">{t('context.pickerEmpty')}</p>
+      )}
+      {hits.map((hit) => {
+        const already = taken.has(hit.document_id);
+        const checked = already || picked.has(hit.document_id);
+        return (
+          <label
+            key={hit.document_id}
+            className="flex min-h-9 pointer-coarse:min-h-11 cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-sm hover:bg-secondary"
+          >
+            <Checkbox
+              checked={checked}
+              disabled={already || (!checked && picked.size >= room)}
+              onCheckedChange={() => onToggle(hit)}
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="block truncate font-medium">{hit.title}</span>
+              <span className="block truncate text-xs text-muted-foreground">{hit.source.name}</span>
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Search-and-select dialog. Search does not filter local_only sources; the server re-fences every item at send, and local-only content is rejected later when the run uses a cloud model. */
+function ContextPicker({
+  open,
+  onOpenChange,
+  current,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  current: Item[];
+  onConfirm: (hits: SearchHit[]) => void;
+}) {
+  const t = useTranslations('chat');
+  const [query, setQuery] = React.useState('');
+  const [debounced, setDebounced] = React.useState('');
+  const [picked, setPicked] = React.useState<Map<string, SearchHit>>(new Map());
+  React.useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim()), 300);
+    return () => clearTimeout(id);
+  }, [query]);
+  const results = useQuery({
+    queryKey: ['chat-context-picker', debounced],
+    queryFn: () => searchDocuments(debounced, noFilters, 'hybrid'),
+    enabled: open && debounced.length > 0,
+    retry: false,
+  });
+  const taken = new Set(current.map((i) => i.documentId));
+  const room = MAX_ITEMS - current.length;
+  const close = () => {
+    setQuery('');
+    setDebounced('');
+    setPicked(new Map());
+    onOpenChange(false);
+  };
+  const toggle = (hit: SearchHit) =>
+    setPicked((prev) => {
+      const next = new Map(prev);
+      if (next.has(hit.document_id)) next.delete(hit.document_id);
+      else if (next.size < room) next.set(hit.document_id, hit);
+      return next;
+    });
+  const seen = new Set<string>();
+  const hits = (results.data?.items ?? []).filter((h) => !seen.has(h.document_id) && !!seen.add(h.document_id));
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) close();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('context.pickerTitle')}</DialogTitle>
+          <DialogDescription>{t('context.pickerHint', { max: MAX_ITEMS })}</DialogDescription>
+        </DialogHeader>
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('context.pickerSearch')}
+          aria-label={t('context.pickerSearch')}
+          autoFocus
+        />
+        <ContextPickerResults
+          results={results}
+          searching={(results.isFetching || query.trim() !== debounced) && query.trim() !== ''}
+          hits={hits}
+          taken={taken}
+          picked={picked}
+          room={room}
+          onToggle={toggle}
+        />
+        <p className="text-xs text-muted-foreground" role="status">
+          {t('context.pickerCount', { count: current.length + picked.size, max: MAX_ITEMS })}
+        </p>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={close}>
+            {t('context.pickerCancel')}
+          </Button>
+          <Button
+            type="button"
+            disabled={picked.size === 0}
+            onClick={() => {
+              onConfirm([...picked.values()]);
+              close();
+            }}
+          >
+            {t('context.pickerAdd')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Moves focus to the chip now at `idx` (or the add-context button) after a removal so it never falls to <body>. */
+function focusChip(bar: HTMLElement | null, idx: number) {
+  setTimeout(() => {
+    const btns = bar?.querySelectorAll<HTMLButtonElement>('button[data-chip-remove]');
+    (btns && btns.length
+      ? btns[Math.min(idx, btns.length - 1)]
+      : bar?.querySelector<HTMLButtonElement>('button[data-add-context]')
+    )?.focus();
+  }, 0);
+}
+
+/**
+ * Removable context badge; with a document id the label opens a read-only text preview without changing the submitted
+ * context. The remove button has a 44px hit area (the negative margin keeps the badge's visual height).
+ *
+ * @param props - Visible text, remove callback and the optional document (and version) to preview.
+ */
+function ContextChip({
+  text,
+  remove,
+  documentId,
+  versionId,
+}: {
+  text: string;
+  remove: () => void;
+  documentId?: string;
+  versionId?: string;
+}) {
+  const t = useTranslations('chat');
+  return (
+    <Badge variant="outline" className="min-h-6 max-w-full gap-1 bg-surface py-0.5 pl-2 pr-0 text-foreground">
+      {documentId ? (
+        <ChatDocumentPreview documentId={documentId} versionId={versionId} title={text}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-7 min-w-0 gap-1 px-1 text-xs font-normal"
+            aria-label={t('preview.document', { title: text })}
+          >
+            <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="max-w-48 truncate">{text}</span>
+          </Button>
+        </ChatDocumentPreview>
+      ) : (
+        <>
+          <FileTextIcon className="shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="truncate">{text}</span>
+        </>
+      )}
+      {/* 44px hit area; the negative margin keeps the badge's visual height. */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="-my-2 rounded-full text-muted-foreground"
+        data-chip-remove
+        onClick={remove}
+        title={t('context.remove', { label: text })}
+        aria-label={t('context.remove', { label: text })}
+      >
+        <XIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+    </Badge>
+  );
+}
+
+/**
+ * Editing commands (plain closures, not a hook) for the selected-document list: de-duplicated, capped additions and removals that announce the change
+ * to assistive tech and return focus to a neighbouring chip.
+ *
+ * @param items - Current selection items.
+ * @param onChange - Receives the next context (null when the selection becomes empty).
+ * @param barId - DOM id of the chip row (used to restore focus).
+ * @param setAnnounce - Writes the polite live-region message.
+ * @param t - `chat` translator.
+ */
+function makeContextItemEditor(
+  items: Item[],
+  onChange: ((context: ChatContext | null) => void) | undefined,
+  barId: string,
+  setAnnounce: (message: string) => void,
+  t: ReturnType<typeof useTranslations<'chat'>>,
+) {
+  const setItems = (next: Item[]) => {
+    const unique = next.filter((i, k, a) => a.findIndex((x) => x.documentId === i.documentId) === k).slice(0, MAX_ITEMS);
+    onChange?.(unique.length ? { kind: 'selection', items: unique } : null);
+  };
+  const nameOf = (i: Item, idx: number) => i.title ?? t('context.documentItem', { n: idx + 1 });
+  const removeAt = (idx: number) => {
+    const msg = t('context.removed', { label: nameOf(items[idx], idx) });
+    setAnnounce('');
+    setTimeout(() => setAnnounce(msg), 50);
+    setItems(items.filter((_, k) => k !== idx));
+    focusChip(document.getElementById(barId), idx);
+  };
+  return { setItems, nameOf, removeAt };
+}
+
+/** Container classes of the chip row per variant (the badges variant collapses to `contents` when empty). */
+function barClass(variant: 'bar' | 'badges', hasContent: boolean): string {
+  if (variant !== 'badges')
+    return 'flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-secondary px-4 py-2 text-xs text-foreground';
+  return hasContent ? 'flex flex-wrap items-center gap-1.5 text-xs text-foreground' : 'contents';
+}
+
+/** Props of {@link ChatContextBar}. */
+interface ChatContextBarProps {
+  context: ChatContext | null;
+  onRemove: () => void;
+  onChange?: (context: ChatContext | null) => void;
+  variant?: 'bar' | 'badges';
+  pickerOpen?: boolean;
+  onPickerOpenChange?: (open: boolean) => void;
+}
+
+/** Picker open state: controlled by the composer's + menu when both props are given, otherwise local. */
+function usePickerOpen(pickerOpen: boolean | undefined, onPickerOpenChange: ((open: boolean) => void) | undefined) {
+  const [ownOpen, setOwnOpen] = React.useState(false);
+  const controlled = pickerOpen !== undefined && !!onPickerOpenChange;
+  return { open: controlled ? pickerOpen : ownOpen, setOpen: controlled ? onPickerOpenChange : setOwnOpen };
+}
+
+/** Chip row (selected documents or the single context chip) plus the add-context button and picker. */
+function ContextRow({
+  context,
+  label,
+  onRemove,
+  onChange,
+  variant,
+  open,
+  setOpen,
+  canPick,
+}: {
+  context: ChatContext | null;
+  label: string | null;
+  onRemove: () => void;
+  onChange?: (context: ChatContext | null) => void;
+  variant: 'bar' | 'badges';
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  canPick: boolean;
+}) {
+  const t = useTranslations('chat');
+  const barId = React.useId();
+  const [announce, setAnnounce] = React.useState('');
+  const items = context?.kind === 'selection' ? (context.items ?? []) : [];
+  const { setItems, nameOf, removeAt } = makeContextItemEditor(items, onChange, barId, setAnnounce, t);
+  return (
+    <div id={barId} className={barClass(variant, items.length > 0 || !!label)}>
+      {label && <span className="sr-only">{t('context.label')}</span>}
+      {canPick && items.length > 0
+        ? items.map((i, idx) => (
+            <ContextChip
+              key={i.documentId}
+              text={nameOf(i, idx)}
+              remove={() => removeAt(idx)}
+              documentId={i.documentId}
+              versionId={i.documentVersionId}
+            />
+          ))
+        : label && (
+            <ContextChip
+              key="ctx"
+              text={label}
+              remove={onRemove}
+              documentId={context?.kind === 'document' ? context.resource_id : undefined}
+            />
+          )}
+      <span role="status" className="sr-only">
+        {announce}
+      </span>
+      {canPick && variant !== 'badges' && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          data-add-context
+          disabled={items.length >= MAX_ITEMS}
+          onClick={() => setOpen(true)}
+        >
+          <PlusIcon className="size-3.5" aria-hidden="true" />
+          {t('addContext')}
+        </Button>
+      )}
+      {canPick && (
+        <ContextPicker
+          open={open}
+          onOpenChange={setOpen}
+          current={items}
+          onConfirm={(hits) => {
+            setItems([
+              ...items,
+              ...hits.map((h) => ({
+                sourceId: h.source.id,
+                documentId: h.document_id,
+                documentVersionId: h.document_version_id,
+                chunkId: h.chunk_id,
+                title: h.title,
+              })),
+            ]);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Removable context badge row shared by quick chat and the full Chat page; selected document badges open a read-only
+ * text preview, while `onChange` enables the add-context picker. In the `badges` variant the composer's + menu owns
+ * the picker trigger, so its open state is controlled via `pickerOpen`/`onPickerOpenChange`.
+ *
+ * @param props - See {@link ChatContextBarProps}.
+ * @returns The chip row, or null when there is nothing to show and nothing to pick.
+ */
+export function ChatContextBar({ context, onRemove, onChange, variant = 'bar', pickerOpen, onPickerOpenChange }: ChatContextBarProps) {
+  const label = useContextLabel(context);
+  const { open, setOpen } = usePickerOpen(pickerOpen, onPickerOpenChange);
+  const canPick = !!onChange && (!context || context.kind === 'selection');
+  if (!canPick && !label) return null;
+  return (
+    <ContextRow
+      context={context}
+      label={label}
+      onRemove={onRemove}
+      onChange={onChange}
+      variant={variant}
+      open={open}
+      setOpen={setOpen}
+      canPick={canPick}
+    />
+  );
+}

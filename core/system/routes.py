@@ -1,6 +1,5 @@
 import asyncio
 from typing import Annotated, Any
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
@@ -11,12 +10,12 @@ from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.auth.routes import get_auth_redis
 from core.database import get_session
-from core.system.health import PROBE_TIMEOUT_SECONDS, system_health
-from modules.sources.models import SourcePurgeOperation
-from modules.sources.schemas import OperationRead
-from sqlalchemy import select
+from core.system.health import system_health
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
+
+# Readiness covers pool checkout under load; the compose healthcheck allows 5 s, so stay below it.
+READY_TIMEOUT_SECONDS = 3.0
 
 
 @router.get("/health")
@@ -26,34 +25,39 @@ async def read_system_health(
     _owner: Annotated[AuthSession, Depends(require_owner)],
     redis: Annotated[Any, Depends(get_auth_redis)],
 ) -> dict[str, Any]:
+    """Return authenticated component health using the current application settings."""
     return await system_health(session, redis, request.app.state.settings)
 
 
-@router.get("/operations/{operation_id}", response_model=OperationRead)
-async def get_operation(
-    operation_id: UUID,
-    session: Annotated[AsyncSession, Depends(get_session)],
+@router.get("/configuration")
+async def read_system_configuration(
+    request: Request,
     _owner: Annotated[AuthSession, Depends(require_owner)],
-) -> OperationRead:
-    operation = await session.scalar(
-        select(SourcePurgeOperation).where(SourcePurgeOperation.id == operation_id)
-    )
-    if operation is None:
-        raise HTTPException(status_code=404, detail="Operation not found")
-    return OperationRead(
-        operation_id=operation.id,
-        source_id=operation.source_id,
-        status=operation.status,
-        error_code=operation.error_code,
-        created_at=operation.created_at,
-        updated_at=operation.updated_at,
-    )
+) -> dict[str, bool]:
+    """Expose only safe deployment configuration presence and feature-state booleans."""
+    settings = request.app.state.settings
+    return {
+        "multi_workspace_enabled": settings.multi_workspace_enabled,
+        "secure_cookies": settings.secure_cookies,
+        "google_login_configured": bool(
+            settings.google_client_id and settings.google_client_secret.get_secret_value()
+        ),
+        "github_app_configured": bool(
+            settings.github_app_client_id
+            and settings.github_app_client_secret.get_secret_value()
+            and settings.github_app_id
+            and settings.github_app_webhook_secret.get_secret_value()
+        ),
+        "n8n_configured": bool(settings.n8n_api_key.get_secret_value()),
+        "mcp_widgets_enabled": settings.mcp_widgets_enabled,
+    }
 
 
 @router.get("/ready", include_in_schema=False)
 async def ready(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
+    """Return readiness only when a bounded database probe succeeds."""
     try:
-        await asyncio.wait_for(session.execute(text("SELECT 1")), PROBE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(session.execute(text("SELECT 1")), READY_TIMEOUT_SECONDS)
     except (SQLAlchemyError, TimeoutError) as exc:
         raise HTTPException(status_code=503, detail="Database is not ready") from exc
     return {"status": "ready"}

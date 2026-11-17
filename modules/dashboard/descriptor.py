@@ -1,0 +1,76 @@
+from dataclasses import dataclass
+
+from core.module_descriptor import CapabilitySpec, ModuleDescriptor, RouterSpec
+
+
+@dataclass(frozen=True)
+class DashboardDescriptor(ModuleDescriptor):
+    """Declare Dashboard routes, lifecycle-gated schedules, source dependencies, and events."""
+
+    id: str = "dashboard"
+    name: str = "Dashboard"
+    version: str = "1.0.0"
+    description: str = "Save owner-selected dashboard layouts and gadget configuration."
+    enabled: bool = True
+    dependencies: tuple[str, ...] = (
+        "sources",
+        "tasks",
+        "goals",
+        "news",
+        "knowledge.timeline",
+        "notifications",
+        "knowledge.documents",
+    )
+    optional_dependencies: tuple[str, ...] = ("connectors",)
+    scheduled_jobs: tuple[str, ...] = ("run_scheduled_brief", "run_scheduled_highlights")
+    provides: tuple[str, ...] = ("dashboards", "gadget_definitions", "daily_context", "daily_brief")
+    requires: tuple[str, ...] = ("sources", "world_observations")
+    routes: tuple[str, ...] = (
+        "/api/v1/dashboards",
+        "/api/v1/dashboards/{id}",
+        "/api/v1/dashboards/{id}/groups",
+        "/api/v1/dashboards/{id}/groups/{group_id}",
+        "/api/v1/dashboards/{id}/instances",
+        "/api/v1/dashboards/{id}/instances/{instance_id}",
+        "/api/v1/dashboards/{id}/layout",
+        "/api/v1/gadget-definitions",
+        "/api/v1/gadget-definitions/{id}",
+        "/api/v1/gadget-definitions/{definition_id}/highlights",
+        "/api/v1/gadget-renderers",
+        "/api/v1/gadget-templates",
+        "/api/v1/gadget-sources",
+        "/api/v1/dashboard-presets",
+        "/api/v1/dashboard-presets/{preset_id}/preview",
+        "/api/v1/dashboard-presets/{preset_id}/apply",
+        "/api/v1/weather/local",
+        "/api/v1/context/current",
+        "/api/v1/context/daily",
+        "/api/v1/briefs",
+        "/api/v1/briefs/generate",
+        "/api/v1/briefs/schedule",
+    )
+    emitted_events: tuple[str, ...] = ("dashboard.changed",)
+    consumed_events: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ()
+    navigation: tuple[dict[str, str], ...] = ()
+    settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.dashboard.routes", 280),
+        RouterSpec("modules.dashboard.live_map_routes", 290),
+        RouterSpec("modules.dashboard.live_config_routes", 300),
+        RouterSpec("modules.dashboard.live_config_routes:operator_router", 310),
+    )
+    capabilities: tuple[CapabilitySpec, ...] = (
+        CapabilitySpec(
+            "dashboard.check_brief_shareable", "modules.dashboard.public:check_brief_shareable"
+        ),
+        CapabilitySpec(
+            "dashboard.read_brief_access_projection",
+            "modules.dashboard.public:read_brief_access_projection",
+        ),
+    )
+    erasure_module: str | None = "modules.dashboard.erasure"
+    erasure_order: int = 50
+
+
+descriptor = DashboardDescriptor()

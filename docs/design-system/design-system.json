@@ -1,0 +1,19 @@
+{
+  "v": 3,
+  "layout": "files",
+  "createdOnFiles": { "v": 1, "at": "2026-10-05T06:18:19Z" },
+  "title": "BBD-OS",
+  "namespace": "BBDOS",
+  "libraries": [],
+  "sections": {},
+  "groups": [],
+  "assetGroups": {},
+  "blobs": {},
+  "docs": { "readme": "project/README.md", "sections": [] },
+  "lastChange": {
+    "by": "Bao Doan Anh",
+    "at": "2026-10-05T06:18:19Z",
+    "via": "Claude Code · BBD-OS@818b6af (apps/web)",
+    "note": "Extracted from apps/web globals.css, shadcn primitives and docs/DESIGN_SYSTEM.md"
+  }
+}

@@ -1,0 +1,173 @@
+'use client';
+
+import * as React from 'react';
+import { BookmarkIcon, BookmarkPlusIcon, Trash2Icon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import type { AppLocaleId } from '@/core/i18n';
+import { fmt, genUiCopy, resolveWidgetLocale } from '../copy';
+import { SEED_HTML_TEMPLATES } from './seed-html-templates';
+import { deleteUserTemplate, saveUserTemplateConfirmed, setPendingTemplate, useTemplateAccount, useUserTemplates } from './template-store';
+
+/** Props for {@link TemplateLibrary}. */
+export interface TemplateLibraryProps {
+  /** Sends the composed prompt through the chat send flow (the transcript onSendPrompt). */
+  onSendPrompt: (prompt: string) => void;
+  /** Application locale. */
+  locale?: AppLocaleId;
+  /** Session CSRF token; enables server sync and the pending-template API. */
+  csrfToken?: string;
+  /** Current conversation; the pending-template API needs an existing one. */
+  conversationId?: string | null;
+  /** Controlled open state (composer + menu); when given, the built-in trigger button is not rendered. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+/**
+ * Dialog listing built-in and user-saved widget templates. "Use template" marks the template as the
+ * conversation's pending template through the API and sends a short prompt asking the model to apply it;
+ * without a conversation, a token or a reachable API it falls back to a prompt carrying the template JSON.
+ * Either way the dialog closes. Uncontrolled it brings its own trigger button; controlled (`open`) the host opens it.
+ *
+ * @param props - Send callback, locale, CSRF token, conversation id and optional controlled open state.
+ * @returns Dialog (with a trigger button when uncontrolled).
+ */
+export function TemplateLibrary({ onSendPrompt, locale, csrfToken, conversationId, open: openProp, onOpenChange }: TemplateLibraryProps) {
+  const copy = genUiCopy(resolveWidgetLocale(locale));
+  const mine = useUserTemplates(csrfToken);
+  const [openState, setOpenState] = React.useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? openProp : openState;
+  const setOpen = controlled ? (next: boolean) => onOpenChange?.(next) : setOpenState;
+
+  /** Selects the template server-side when possible, dispatches the apply prompt and closes the drawer. */
+  const apply = async (id: string, title: string, content: string) => {
+    // Local `tpl-` entries are not on the server yet, so they can only travel inline in the prompt.
+    const selected = conversationId && csrfToken && !id.startsWith('tpl-') && (await setPendingTemplate(conversationId, id, csrfToken));
+    onSendPrompt(
+      selected
+        ? fmt(copy.shell.templatesApplyPendingPrompt, { title })
+        : fmt(copy.shell.templatesApplyPrompt, { title, template: content }),
+    );
+    setOpen(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      {!controlled && (
+        <DialogTrigger asChild>
+          <Button type="button" variant="outline" size="sm" data-testid="template-library-open">
+            <BookmarkIcon className="size-3.5" aria-hidden="true" />
+            {copy.shell.templatesOpen}
+          </Button>
+        </DialogTrigger>
+      )}
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-md" data-testid="template-library">
+        <DialogHeader>
+          <DialogTitle>{copy.shell.templatesTitle}</DialogTitle>
+          <DialogDescription>{copy.shell.templatesDescription}</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <section aria-label={copy.shell.templatesBuiltIn} className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground">{copy.shell.templatesBuiltIn}</h3>
+            {SEED_HTML_TEMPLATES.map((tpl) => (
+              <div
+                key={tpl.id}
+                data-testid={`seed-template-${tpl.id}`}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{tpl.titleOf(copy)}</p>
+                  <p className="text-xs text-muted-foreground">{tpl.descOf(copy)}</p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void apply(tpl.id, tpl.titleOf(copy), JSON.stringify(tpl.sandbox))}
+                >
+                  {copy.shell.templatesApply}
+                </Button>
+              </div>
+            ))}
+          </section>
+          <section aria-label={copy.shell.templatesMine} className="flex flex-col gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground">{copy.shell.templatesMine}</h3>
+            {mine.length === 0 && <p className="text-xs text-muted-foreground">{copy.shell.templatesEmpty}</p>}
+            {mine.map((tpl) => (
+              <div
+                key={tpl.id}
+                data-testid={`user-template-${tpl.id}`}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface p-3"
+              >
+                <p className="min-w-0 truncate text-sm font-medium text-foreground">{tpl.title}</p>
+                <div className="flex shrink-0 gap-1">
+                  <Button type="button" size="sm" variant="secondary" onClick={() => void apply(tpl.id, tpl.title, tpl.content)}>
+                    {copy.shell.templatesApply}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    aria-label={fmt(copy.shell.templatesDelete, { title: tpl.title })}
+                    onClick={() => deleteUserTemplate(tpl.id, csrfToken)}
+                  >
+                    <Trash2Icon className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </section>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Props for {@link SaveTemplateButton}. */
+export interface SaveTemplateButtonProps {
+  /** Sandbox payload of the rendered widget being saved. */
+  sandbox: Record<string, unknown>;
+  /** Widget title used as the template name. */
+  title?: string;
+  /** Application locale. */
+  locale?: AppLocaleId;
+  /** Session CSRF token; when present the template is also saved on the server. */
+  csrfToken?: string;
+}
+
+/**
+ * "Save as template" action shown under a rendered sandbox widget. The status line says "saved" only after the server
+ * accepted the template (G3); the button is disabled while saving and once saved (no duplicates); a failure is announced
+ * and the button stays available to retry.
+ *
+ * @param props - Sandbox payload, title, locale and CSRF token.
+ * @returns Button with an inline status.
+ */
+export function SaveTemplateButton({ sandbox, title, locale, csrfToken }: SaveTemplateButtonProps) {
+  const copy = genUiCopy(resolveWidgetLocale(locale));
+  const [status, setStatus] = React.useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  useTemplateAccount();
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-testid="save-template"
+        disabled={status === 'saving' || status === 'saved'}
+        onClick={() => {
+          setStatus('saving');
+          void saveUserTemplateConfirmed(title ?? '', JSON.stringify(sandbox), csrfToken).then((ok) => setStatus(ok ? 'saved' : 'failed'));
+        }}
+      >
+        <BookmarkPlusIcon className="size-3.5" aria-hidden="true" />
+        {copy.shell.templatesSave}
+      </Button>
+      <span role="status" className={`text-xs ${status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>
+        {{ idle: '', saving: copy.shell.templatesSaving, saved: copy.shell.templatesSaved, failed: copy.shell.templatesSaveFailed }[status]}
+      </span>
+    </div>
+  );
+}

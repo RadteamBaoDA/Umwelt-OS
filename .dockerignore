@@ -12,3 +12,17 @@
 test-results
 playwright-report
 data
+# Secrets and local-only material: no Dockerfile copies these (see docker/*.Dockerfile COPY lines).
+.env.*
+!.env.example
+.worktrees
+.claude
+.agents
+.taste-skill
+.gitnexus
+.remember
+.coverage
+htmlcov
+**/coverage
+test-results-*
+playwright-report-*

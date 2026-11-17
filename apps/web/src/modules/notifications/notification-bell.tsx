@@ -1,0 +1,121 @@
+'use client';
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Bell } from 'lucide-react';
+import Link from 'next/link';
+import { useTranslations } from 'next-intl';
+import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { listNotifications, type AppNotification, notificationKeys, setNotificationRead } from './api';
+import { useSession } from '@/core/session';
+
+/** Accepts only relative in-app paths and maps legacy dashboard links to the current default route. */
+function safeLink(link: string | null): string {
+  if (!link || !link.startsWith('/') || link.startsWith('//') || link.includes(String.fromCharCode(92))) return '/dashboard';
+  return link === '/app' ? '/dashboard' : link;
+}
+
+/** Literal catalog keys per known notification kind (kinds are normalised with `\W` -> `_` before lookup). */
+const KIND_KEY = { brief_ready: 'kind.briefReady', tasks_due: 'kind.tasksDue' } as const;
+
+/**
+ * Catalog key of a known notification kind, or null for unknown kinds (the caller then shows the stored title/body).
+ *
+ * @param kind Raw `kind` from the notification payload.
+ */
+function kindKey(kind: string) {
+  const normalized = kind.replace(/\W/g, '_');
+  return normalized in KIND_KEY ? KIND_KEY[normalized as keyof typeof KIND_KEY] : null;
+}
+
+/**
+ * Shared notification feed: list query (60 s refresh), read-marking mutation and the unread count.
+ * Used by the header bell and by the mobile user menu so both show identical data.
+ */
+export function useNotificationFeed() {
+  const t = useTranslations('notifications');
+  const client = useQueryClient();
+  const session = useSession();
+  const page = useQuery({ queryKey: notificationKeys.all, queryFn: ({ signal }) => listNotifications(signal), refetchInterval: 60_000 });
+  const markRead = useMutation({
+    mutationFn: (id: string) => setNotificationRead(id, true, session.data!.csrfToken),
+    onSettled: () => client.invalidateQueries({ queryKey: notificationKeys.all }),
+  });
+  const unread = page.data?.unread_count ?? 0;
+  /** Localized title for a known kind, else the stored legacy title. */
+  const titleOf = (item: AppNotification) => {
+    const key = kindKey(item.kind);
+    return key ? t(key, item.params) : (item.title ?? item.kind);
+  };
+  return { page, session, markRead, unread, titleOf };
+}
+
+/**
+ * Menu rows for the notification feed (error, empty state or one linked row per item). Must render inside a
+ * DropdownMenuContent; selecting an unread row marks it read.
+ */
+export function NotificationItems() {
+  const t = useTranslations('notifications');
+  const display = useDisplayPreferences();
+  const { page, session, markRead, titleOf } = useNotificationFeed();
+  return (
+    <>
+      {page.isError && (
+        <p role="alert" className="p-2 text-xs text-destructive">
+          {t('loadError')}
+        </p>
+      )}
+      {page.data && page.data.items.length === 0 && (
+        <p role="status" className="p-2 text-xs text-muted-foreground">
+          {t('empty')}
+        </p>
+      )}
+      {page.data?.items.map((item) => (
+        <DropdownMenuItem
+          key={item.id}
+          asChild
+          onSelect={() => {
+            if (!item.read_at && session.data) markRead.mutate(item.id);
+          }}
+        >
+          <Link href={safeLink(item.link)} className="flex flex-col items-start gap-0.5">
+            <span className="text-xs font-semibold">
+              {!item.read_at && <span className="mr-1 rounded bg-primary px-1 text-[11px] text-primary-foreground">{t('unread')}</span>}
+              {titleOf(item)}
+            </span>
+            {!kindKey(item.kind) && item.body && <span className="text-xs text-muted-foreground">{item.body}</span>}
+            <span className="text-[11px] text-muted-foreground">{formatDateTime(item.created_at, display.locale, display.timezone)}</span>
+          </Link>
+        </DropdownMenuItem>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Notification bell with an unread count. Opening an item's link marks it read; unread state is
+ * conveyed by text ("Unread"), not color alone.
+ */
+export function NotificationBell() {
+  const t = useTranslations('notifications');
+  const { unread } = useNotificationFeed();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="icon" aria-label={t('open', { count: unread })}>
+          <Bell className="h-4 w-4" aria-hidden />
+          {unread > 0 && (
+            <span className="text-xs font-semibold" aria-hidden>
+              {unread > 99 ? '99+' : unread}
+            </span>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80 max-w-[calc(100vw-2rem)]">
+        <NotificationItems />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

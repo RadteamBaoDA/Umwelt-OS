@@ -1,0 +1,19 @@
+{
+  "open": "Pick a prompt from your phone",
+  "title": "Pick from your phone",
+  "description": "Scan the code with a phone on the same network.",
+  "waiting": "Waiting for a scan…",
+  "scanned": "Scanned. Choose a prompt on your phone…",
+  "picked": "Prompt received.",
+  "expired": "This code expired. Close and reopen to get a new one.",
+  "startError": "Could not start a phone session.",
+  "noLan": "No LAN address was found; the phone may not reach this server.",
+  "phone.title": "Choose a prompt",
+  "phone.expiredTitle": "Link expired",
+  "phone.loading": "Loading…",
+  "phone.done": "Sent. You can go back to your computer.",
+  "phone.invalid": "This link has expired or is no longer valid. Open a new code on your computer.",
+  "goToDashboard": "Go to dashboard",
+  "phone.error": "Something went wrong. Please try again.",
+  "phone.tooMany": "Too many attempts. Wait a minute and try again."
+}

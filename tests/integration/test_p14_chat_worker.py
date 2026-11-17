@@ -1,0 +1,409 @@
+"""P14-T3 acceptance: chat generation runs on the dedicated arq chat worker, not in the API process.
+
+Needs the disposable Compose harness (api, chat-worker, fake-model); the docker-driven tests also need the
+docker CLI. Negative control: on 512a3fe (in-process asyncio.create_task) the restart test fails because the
+run stays `streaming` after the API container restarts.
+"""
+
+import asyncio
+import json
+import os
+import shutil
+import subprocess
+import time
+from collections.abc import AsyncIterator
+from urllib.parse import urlsplit
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from tests.integration.fake_model import fake_text
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
+)
+requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None, reason="requires the docker CLI"
+)
+
+FAKE_BASE_URL = "http://fake-model:8000/v1"
+TOKENS = 300
+
+
+def _docker(*args: str, timeout: float = 120) -> str:
+    result = subprocess.run(  # noqa: S603  # test-only
+        ["docker", *args],  # noqa: S607  # test-only
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=timeout,
+    )
+    return result.stdout.strip()
+
+
+def _start_after_exit(container: str, wait_seconds: float = 90) -> None:
+    """Restore a SIGTERMed container and always leave it running.
+
+    `docker kill --signal=SIGTERM` returns before arq's graceful drain ends and `docker start` on a still-running
+    container is a silent no-op, so first wait (bounded) for the real exit. If the drain overruns the bound the
+    container is force-killed so the restart is real and the following tests still have a worker.
+    """
+    try:
+        _docker("wait", container, timeout=wait_seconds)
+    except subprocess.TimeoutExpired:
+        _docker("kill", container)
+        _docker("wait", container, timeout=30)
+    finally:
+        _docker("start", container)
+        assert _docker("inspect", "-f", "{{.State.Running}}", container) == "true", (
+            "container not restarted"
+        )
+
+
+def _service_container(service: str) -> str:
+    """Resolve a service container inside the same disposable project that publishes the API port."""
+    port = urlsplit(os.getenv("API_URL", "http://localhost:38000")).port
+    api_id = _docker("ps", "--filter", f"publish={port}", "-q").split()
+    assert len(api_id) == 1, f"expected exactly one container publishing {port}"
+    project = _docker(
+        "inspect", "-f", '{{index .Config.Labels "com.docker.compose.project"}}', api_id[0]
+    )
+    assert project.startswith("bbd-os-test-"), f"refusing project {project}"
+    found = _docker(
+        "ps",
+        "-a",
+        "-q",
+        "--filter",
+        f"label=com.docker.compose.project={project}",
+        "--filter",
+        f"label=com.docker.compose.service={service}",
+    ).split()
+    assert len(found) == 1, f"expected one {service} container, got {found}"
+    return found[0]
+
+
+async def _wait_api_ready(client: AsyncClient, timeout: float = 90) -> None:  # noqa: ASYNC109  # test double mirrors the production signature
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if (await client.get("/api/v1/system/ready")).status_code == 200:
+                return
+        except Exception:  # noqa: BLE001, S110  # API is restarting
+            pass
+        await asyncio.sleep(1)
+    raise AssertionError("API did not become ready")
+
+
+async def configure_fake_model(
+    client: AsyncClient,
+    *,
+    allow_embeddings: bool = False,
+    extra_defaults: dict[str, dict[str, object]] | None = None,
+    extra_models: tuple[dict[str, str], ...] = (),
+) -> None:
+    """Save the fake-model server as the `default` provider and map the chat and brief roles to `fake-chat`.
+
+    Two PUTs because remote-privacy consent is bound to a provider destination that only exists once the provider
+    is stored: the first PUT creates the provider (consent is dropped for a new destination), the second grants
+    consent to the destination the API reports. Models are listed inline (the PUT validates against the stored
+    list, it does not call the server).
+    """
+    models = [{"id": "fake-chat", "type": "llm"}, *extra_models]
+    common = {
+        "defaults": {
+            "chat": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
+            "brief": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
+            **(extra_defaults or {}),
+        },
+        "request_timeout_seconds": 30,
+    }
+    current = (await client.get("/api/v1/settings/ai")).json()
+    created = await client.put(
+        "/api/v1/settings/ai",
+        json={
+            **common,
+            "providers": [
+                {
+                    "id": "default",
+                    "kind": "custom",
+                    "label": "fake",
+                    "base_url": FAKE_BASE_URL,
+                    "credential_action": "replaced",
+                    "api_key": "fake-model-key",
+                    "models": models,
+                }
+            ],
+            "expected_revision": current["configuration_revision"],
+        },
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    destination = next(p["destination_id"] for p in body["providers"] if p["id"] == "default")
+    assert destination, body
+    consent = {
+        "allow_remote_reasoning": True,
+        "reasoning_destinations": [destination],
+        "allow_remote_embeddings": allow_embeddings,
+        "embedding_destinations": [destination] if allow_embeddings else [],
+    }
+    saved = await client.put(
+        "/api/v1/settings/ai",
+        json={
+            **common,
+            "privacy": consent,
+            "expected_revision": body["configuration_revision"],  # providers omitted = keep stored
+        },
+    )
+    assert saved.status_code == 200, saved.text
+
+
+@pytest.fixture
+async def chat_ready(ready_owner_client: AsyncClient) -> AsyncClient:
+    """Point the AI settings at the fake model, grant reasoning, and probe streaming through the real routes."""
+    client = ready_owner_client
+    await configure_fake_model(client)
+    probe = await client.post("/api/v1/settings/models/chat/test", json={"capability": "streaming"})
+    assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
+    return client
+
+
+async def _send(client: AsyncClient, prompt: str) -> str:
+    conversation = (await client.post("/api/v1/conversations", json={})).json()["id"]
+    sent = await client.post(
+        f"/api/v1/conversations/{conversation}/messages", json={"content": prompt}
+    )
+    assert sent.status_code == 202, sent.text
+    return str(sent.json()["response_id"])
+
+
+async def _events(
+    client: AsyncClient,
+    response_id: str,
+    last_id: str | None,
+    stop_after: int | None = None,
+) -> AsyncIterator[tuple[str, str, dict[str, object]]]:
+    """Yield (event_id, event, data) frames until message.done / terminal status, or `stop_after` frames.
+
+    The whole read is bounded by `asyncio.timeout(120)`, so a stream that stalls without delivering any line
+    still fails at the deadline (a per-line check would never run) instead of hanging the suite.
+    """
+    headers = {"Last-Event-ID": last_id} if last_id else {}
+    seen = 0
+    async with asyncio.timeout(120):
+        async with client.stream(
+            "GET",
+            f"/api/v1/responses/{response_id}/events",
+            headers=headers,
+            timeout=120,
+        ) as response:
+            assert response.status_code == 200
+            frame: dict[str, str] = {}
+            async for line in response.aiter_lines():
+                if line:
+                    key, _, value = line.partition(": ")
+                    frame[key] = value
+                    continue
+                if "event" in frame and "id" in frame:
+                    data = json.loads(frame.get("data", "{}") or "{}")
+                    yield frame["id"], frame["event"], data
+                    seen += 1
+                    if (
+                        frame["event"] == "message.done"
+                        or (
+                            frame["event"] == "status"
+                            and data.get("status") in {"failed", "cancelled"}
+                        )
+                        or (stop_after is not None and seen >= stop_after)
+                    ):
+                        return
+                frame = {}
+
+
+@pytest.mark.asyncio
+@requires_docker
+async def test_chat_survives_api_restart_via_arq_not_in_process(chat_ready: AsyncClient) -> None:
+    client = chat_ready
+    response_id = await _send(client, f"hello [fake:tokens={TOKENS},delay_ms=20]")
+    received: list[tuple[str, str, dict[str, object]]] = []
+    async for frame in _events(client, response_id, None, stop_after=3):
+        received.append(frame)
+    assert received, "no events before restart"
+
+    await asyncio.to_thread(_docker, "restart", _service_container("api"))
+    await _wait_api_ready(client)
+
+    async for frame in _events(client, response_id, received[-1][0]):
+        received.append(frame)
+
+    seqs = [int(frame_id.rsplit(":", 1)[1]) for frame_id, _, _ in received]
+    assert seqs == list(range(1, len(seqs) + 1)), "seq values must be contiguous with no duplicates"
+    assert received[-1][1] == "message.done" and received[-1][2]["status"] == "completed"
+    streamed = "".join(str(data["text"]) for _, event, data in received if event == "message.delta")
+    assert streamed == fake_text(
+        TOKENS
+    )  # grounded answers may rewrite the final text; the stream is verbatim
+
+
+@pytest.mark.asyncio
+@requires_docker
+async def test_stopped_chat_worker_leaves_run_pending_then_completes_when_started(
+    chat_ready: AsyncClient,
+    committed_engine: AsyncEngine,
+) -> None:
+    client = chat_ready
+    worker_container = _service_container("chat-worker")
+    await asyncio.to_thread(_docker, "stop", worker_container)
+    try:
+        response_id = await _send(client, "hello [fake:tokens=20,delay_ms=5]")
+
+        async def status() -> str:
+            async with committed_engine.connect() as connection:
+                return str(
+                    (
+                        await connection.execute(
+                            text("SELECT status FROM chat_response_runs WHERE id = :id"),
+                            {"id": response_id},
+                        )
+                    ).scalar_one()
+                )
+
+        await asyncio.sleep(2)
+        assert await status() == "pending"  # nothing generates in the API process
+    finally:
+        await asyncio.to_thread(_docker, "start", worker_container)
+
+    deadline = time.monotonic() + 30
+    while await status() != "completed":
+        assert time.monotonic() < deadline, "run did not complete within 30 s of chat-worker start"
+        await asyncio.sleep(1)
+
+
+async def _run_status(engine: AsyncEngine, response_id: str) -> str:
+    """Read one chat run's committed status."""
+    async with engine.connect() as connection:
+        return str(
+            (
+                await connection.execute(
+                    text("SELECT status FROM chat_response_runs WHERE id = :id"),
+                    {"id": response_id},
+                )
+            ).scalar_one()
+        )
+
+
+async def _wait_status(
+    engine: AsyncEngine, response_id: str, wanted: set[str], seconds: float
+) -> str:
+    """Poll until the run status is in `wanted`; fail at the deadline (bounded by asyncio.timeout)."""
+    current = ""
+    try:
+        async with asyncio.timeout(seconds):
+            while (current := await _run_status(engine, response_id)) not in wanted:  # noqa: ASYNC110  # DB poll, no event to await
+                await asyncio.sleep(0.5)
+    except TimeoutError:
+        pytest.fail(f"run stuck in {current!r}, wanted {sorted(wanted)} within {seconds}s")
+    return current
+
+
+@pytest.mark.asyncio
+@requires_docker
+async def test_chat_worker_sigterm_drains_running_run_to_completion(
+    chat_ready: AsyncClient,
+    committed_engine: AsyncEngine,
+) -> None:
+    """SIGTERM mid-stream: arq drains the running job (job_completion_wait ~ CHAT_JOB_TIMEOUT + 5, compose
+    stop_grace_period 660 s), so the run is never handed back; it streams on to `completed` with the full text."""
+    client = chat_ready
+    worker_container = _service_container("chat-worker")
+    response_id = await _send(client, "hello [fake:tokens=60,delay_ms=100]")  # ~6 s of streaming
+    try:
+        await _wait_status(committed_engine, response_id, {"streaming"}, 30)
+        await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+        # Drain contract: the run must go streaming -> completed, never back to pending/failed.
+        assert (
+            await _wait_status(
+                committed_engine, response_id, {"completed", "pending", "failed"}, 60
+            )
+            == "completed"
+        )
+    finally:
+        await asyncio.to_thread(_start_after_exit, worker_container)
+    streamed = "".join(
+        [
+            str(data["text"])
+            async for _, event, data in _events(client, response_id, None)
+            if event == "message.delta"
+        ]
+    )
+    assert streamed == fake_text(60)
+
+
+@pytest.mark.asyncio
+@requires_docker
+async def test_chat_worker_sigterm_leaves_unstarted_run_pending_then_completes(
+    chat_ready: AsyncClient,
+    committed_engine: AsyncEngine,
+) -> None:
+    """A run enqueued after SIGTERM is not picked up (arq stops polling while draining): it stays `pending`
+    while the in-flight run finishes, and completes once the worker is restarted, with contiguous event seqs."""
+    client = chat_ready
+    worker_container = _service_container("chat-worker")
+    running_id = await _send(client, "hello [fake:tokens=60,delay_ms=100]")
+    pending_id = ""
+    try:
+        await _wait_status(committed_engine, running_id, {"streaming"}, 30)
+        await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
+        pending_id = await _send(client, "hello [fake:tokens=5,delay_ms=5]")
+        assert (
+            await _wait_status(committed_engine, running_id, {"completed", "pending", "failed"}, 60)
+            == "completed"
+        )
+        await asyncio.sleep(2)
+        assert (
+            await _run_status(committed_engine, pending_id) == "pending"
+        )  # nobody left to start it
+    finally:
+        await asyncio.to_thread(_start_after_exit, worker_container)
+    await _wait_status(committed_engine, pending_id, {"completed"}, 60)
+    async with committed_engine.connect() as connection:
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT seq, event_id FROM chat_stream_events WHERE response_id = :id ORDER BY seq"
+                ),
+                {"id": pending_id},
+            )
+        ).all()
+    seqs = [r[0] for r in rows]
+    assert seqs == list(range(1, len(seqs) + 1)) and len({r[1] for r in rows}) == len(rows)
+
+
+@pytest.mark.asyncio
+async def test_reranker_role_probe_and_chat_with_reranking(chat_ready: AsyncClient) -> None:
+    """Regression: /rerank replies used to fail SDK parsing (probe 500, reranking silently unavailable)."""
+    client = chat_ready
+    await configure_fake_model(
+        client,
+        allow_embeddings=True,
+        extra_models=({"id": "fake-rerank", "type": "reranker"},),
+        extra_defaults={
+            "reranker": {"model": "fake-rerank", "destination": "remote", "provider_id": "default"}
+        },
+    )
+    probe = await client.post(
+        "/api/v1/settings/models/reranker/test", json={"capability": "reranking"}
+    )
+    assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
+    # Saving settings invalidates earlier capability proofs; re-prove streaming for the chat role.
+    stream_probe = await client.post(
+        "/api/v1/settings/models/chat/test", json={"capability": "streaming"}
+    )
+    assert stream_probe.status_code == 200 and stream_probe.json()["result"] == "supported", (
+        stream_probe.text
+    )
+
+    response_id = await _send(client, "hello [fake:tokens=5]")
+    frames = [frame async for frame in _events(client, response_id, None)]
+    assert frames[-1][1] == "message.done" and frames[-1][2]["status"] == "completed", frames[-3:]

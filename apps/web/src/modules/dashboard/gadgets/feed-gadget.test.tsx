@@ -1,0 +1,145 @@
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { NextIntlClientProvider } from 'next-intl';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getCatalog } from '@locales';
+import { FeedGadget, type FeedStreamItem } from './feed-gadget';
+
+vi.mock('@/modules/knowledge/api', () => ({
+  documentKeys: { all: ['documents'] },
+  listGadgetDocumentProjections: vi.fn(async () => ({ items: [], next_cursor: null })),
+  setGadgetDocumentInteraction: vi.fn(),
+}));
+vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: vi.fn() }) }));
+vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
+
+const hour = 3_600_000;
+const items: FeedStreamItem[] = [
+  {
+    id: 'a',
+    title: 'Lead headline',
+    sourceType: 'news',
+    author: 'Wire',
+    excerpt: 'Lead excerpt text',
+    timestamp: new Date(Date.now() - 2 * hour).toISOString(),
+    read: false,
+  },
+  { id: 'b', title: 'Second headline', sourceType: 'news', timestamp: new Date(Date.now() - 30 * hour).toISOString(), read: true },
+  { id: 'c', title: 'Third headline', sourceType: 'news', timestamp: new Date(Date.now() - 55 * hour).toISOString(), read: true },
+];
+
+function view(feed: FeedStreamItem[] = items, sourceIds: string[] = ['s1']) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const instance = { id: 'g1', title: '', definition: { renderer: 'feed', source_ids: sourceIds, scope: {} } } as never;
+  return render(
+    <QueryClientProvider client={client}>
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+        <FeedGadget instance={instance} initialItems={feed} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+describe('FeedGadget lead + list', () => {
+  it('renders the first item as the lead and the rest as compact rows without an Unread pill', () => {
+    view();
+    const lead = screen.getByTestId('feed-lead');
+    expect(within(lead).getByText('Lead headline')).toBeTruthy();
+    expect(within(lead).getByText('Lead excerpt text')).toBeTruthy();
+    expect(screen.getByText('Second headline').closest('li')).toBeTruthy();
+    // Unread is a dot with screen-reader text, not a visible pill; read items carry none.
+    expect(screen.getAllByText('1 unread')).toHaveLength(1);
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('collapses the filters behind one Filter popover', async () => {
+    view();
+    expect(screen.queryByRole('searchbox')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    expect(await screen.findByRole('searchbox')).toBeTruthy();
+  });
+});
+
+describe('FeedGadget view toggle and images', () => {
+  beforeEach(() => localStorage.clear());
+  const withImage = [
+    { ...items[0]!, imageUrl: '/api/v1/media/proxy?x=1' },
+    items[1]!,
+    { ...items[2]!, imageUrl: '/api/v1/media/proxy?x=2' },
+  ];
+
+  it('shows the lead image in List mode (rows stay text-only) and hides it on load error', () => {
+    view(withImage);
+    const imgs = document.querySelectorAll('img');
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]!.getAttribute('alt')).toBe('');
+    expect(imgs[0]!.getAttribute('loading')).toBe('lazy');
+    fireEvent.error(imgs[0]!);
+    expect(document.querySelectorAll('img')).toHaveLength(0);
+  });
+
+  it('renders no image box for items without an image', () => {
+    view();
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('switches to Cards, persists per instance and restores it', async () => {
+    const { unmount } = view(withImage);
+    expect(screen.queryByTestId('feed-cards')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Cards' }));
+    expect(screen.getByTestId('feed-cards').querySelectorAll('li')).toHaveLength(3);
+    // Cards show an image only for items that have one.
+    expect(document.querySelectorAll('img')).toHaveLength(2);
+    expect(localStorage.getItem('umwelt.dashboard.feedView.g1')).toBe('cards');
+    unmount();
+    view(withImage);
+    expect(await screen.findByTestId('feed-cards')).toBeTruthy();
+  });
+});
+
+describe('FeedGadget show more and source tabs', () => {
+  beforeEach(() => localStorage.clear());
+  const many: FeedStreamItem[] = Array.from({ length: 8 }, (_, i) => ({
+    id: `m${i}`,
+    title: `Story ${i}`,
+    sourceType: 'news',
+    sourceId: i % 2 ? 's2' : 's1',
+    timestamp: new Date(Date.now() - i * hour).toISOString(),
+    read: true,
+  }));
+
+  it('collapses to a lead plus 4 rows and expands in place', async () => {
+    view(many);
+    expect(screen.queryByText('Story 5')).toBeNull();
+    expect(screen.getByText('Story 4')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Show 3 more' }));
+    expect(screen.getByText('Story 7')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows 6 cards in Cards mode', async () => {
+    view(many);
+    await userEvent.click(screen.getByRole('button', { name: /cards/i }));
+    expect(within(screen.getByTestId('feed-cards')).getAllByRole('listitem')).toHaveLength(6);
+    expect(screen.getByRole('button', { name: 'Show 2 more' })).toBeTruthy();
+  });
+
+  it('shows source tabs for 2-6 sources and filters loaded items', async () => {
+    view(many, ['s1', 's2']);
+    const tabs = within(screen.getByRole('tablist', { name: 'Filter by source' })).getAllByRole('tab');
+    expect(tabs).toHaveLength(3);
+    await userEvent.click(tabs[1]!);
+    expect(screen.getByText('Story 0')).toBeTruthy();
+    expect(screen.queryByText('Story 1')).toBeNull();
+  });
+
+  it('hides source tabs for one source and for more than six', () => {
+    const { unmount } = view(many, ['s1']);
+    expect(screen.queryByRole('tablist', { name: 'Filter by source' })).toBeNull();
+    unmount();
+    view(many, ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+    expect(screen.queryByRole('tablist', { name: 'Filter by source' })).toBeNull();
+  });
+});

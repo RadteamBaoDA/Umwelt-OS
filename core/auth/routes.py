@@ -1,44 +1,75 @@
+import asyncio
 import hmac
+import json
+import logging
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
+import httpx
+from authlib.common.errors import AuthlibBaseError  # type: ignore[import-untyped]  # no stubs
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from joserfc.errors import JoseError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, select, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import (
     CSRF_COOKIE,
     CSRF_MAX_AGE_SECONDS,
     SESSION_COOKIE,
+    _account_session,
     _csrf_signature,
-    _current_session,
     _hash,
     _origin_allowed,
     _valid_csrf,
-    require_owner_write,
+    require_account,
+    require_account_write,
 )
-from core.auth.models import AuthSession, Owner
+from core.auth.google import GOOGLE_CALLBACK_PATH, GOOGLE_ISSUER, google_client
+from core.auth.google_schemas import (
+    GoogleStartRequest,
+    GoogleStartResponse,
+    GoogleStatus,
+    ReauthenticateRequest,
+)
+from core.auth.models import AuthSession, GoogleIdentity, Owner
+from core.auth.public import (
+    get_active_account,
+    normalize_account_email,
+    provision_bootstrap_account_in_uow,
+)
 from core.auth.schemas import (
     AuthState,
+    ChangePasswordRequest,
     CsrfResponse,
     LoginRequest,
+    RevokeOthersResponse,
+    SessionInfo,
     SetupRequest,
     SetupResponse,
     SetupStatus,
 )
-from core.auth.service import hash_password, verify_password
+from core.auth.service import hash_password, verify_login_password, verify_password
+from core.capabilities import set_initial_owner_display_name
 from core.config import Settings
 from core.database import get_session
+from core.errors import DomainError
+from core.telemetry import log_event
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+logger = logging.getLogger("umwelt.auth")
+# Machine code lets the client branch without parsing English text.
+# Bounded wait for the owner row on login/password change (seconds) before a retryable error.
+OWNER_LOCK_WAIT_SECONDS = 3.0
+_PASSWORD_INCORRECT = {"message": "Password is incorrect", "code": "password_incorrect"}
 
 
 def _is_owner_conflict(exc: IntegrityError) -> bool:
+    """Recognize only the singleton owner primary-key uniqueness violation in a wrapped database error."""
     original: BaseException | None = exc.orig
     while original is not None:
         if (
@@ -50,17 +81,23 @@ def _is_owner_conflict(exc: IntegrityError) -> bool:
     return False
 
 
-def get_auth_redis(request: Request) -> Redis:
+async def get_auth_redis(request: Request) -> Redis:
+    """Return the Redis client installed on application state for authentication throttling.
+
+    ``async def`` so FastAPI resolves it on the loop instead of handing a no-op attribute read to the AnyIO threadpool.
+    """
     return cast(Redis, request.app.state.redis)
 
 
 def _new_csrf(settings: Settings) -> tuple[str, str]:
+    """Generate a random client token and signed, short-lived cookie value."""
     token = secrets.token_urlsafe(32)
     expires_at = int(time.time()) + CSRF_MAX_AGE_SECONDS
     return token, f"{token}.{expires_at}.{_csrf_signature(token, expires_at, settings)}"
 
 
 def _set_csrf_cookie(request: Request, response: Response, value: str) -> None:
+    """Set the signed CSRF cookie with HTTP-only, same-site, secure, path, and age settings."""
     settings: Settings = request.app.state.settings
     response.set_cookie(
         CSRF_COOKIE,
@@ -73,9 +110,49 @@ def _set_csrf_cookie(request: Request, response: Response, value: str) -> None:
     )
 
 
+def _client_ip(request: Request) -> str:
+    """Resolve the throttling/audit client address.
+
+    Order: the configured trusted header (AUTH_CLIENT_IP_HEADER, last comma entry), then the legacy
+    rightmost X-Forwarded-For when AUTH_TRUST_FORWARDED_FOR is on, else the TCP peer (the proxy/web container).
+    """
+    settings = request.app.state.settings
+    header = getattr(settings, "auth_client_ip_header", "")
+    if isinstance(header, str) and header.strip():
+        value = request.headers.get(header.strip(), "").rsplit(",", 1)[-1].strip()
+        if value:
+            return value
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if getattr(settings, "auth_trust_forwarded_for", False) is True and forwarded.strip():
+        return forwarded.rsplit(",", 1)[
+            -1
+        ].strip()  # rightmost hop: the one our trusted proxy wrote
+    return request.client.host if request.client else "unknown"
+
+
+def _audit(request: Request, event: str, account_id: int | None = None, **fields: object) -> None:
+    """Emit one structured, redacted auth audit event: event name, account id and a hashed client IP.
+
+    Raw IPs, tokens and passwords are never logged; log_event applies telemetry redaction and isolates failures.
+    """
+    log_event(
+        logger,
+        logging.INFO,
+        f"auth.{event}",
+        account_id=account_id,
+        ip_hash=_hash(_client_ip(request))[:16],
+        **fields,
+    )
+
+
 async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
+    """Atomically increment per-address (and, except for login, global) minute counters; fail closed on Redis outage.
+
+    Login drops the global cap because one attacker could exhaust it and lock the owner out; login is instead
+    protected by per-account backoff (see _login_precheck).
+    """
     minute = int(time.time() // 60)
-    address = request.client.host if request.client else "unknown"
+    address = _client_ip(request)
     keys = (f"auth:{action}:ip:{_hash(address)}:{minute}", f"auth:{action}:all:{minute}")
     try:
         pipeline = redis.pipeline(transaction=True)
@@ -84,9 +161,11 @@ async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
             pipeline.expire(key, 120, nx=True)
         counts = await pipeline.execute()
     except RedisError as exc:
-        raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from exc
     per_address, _, global_count, _ = counts
-    if per_address > 5 or global_count > 20:
+    if per_address > 5 or (action != "login" and global_count > 20):
         raise HTTPException(
             status_code=429,
             detail="Too many authentication attempts",
@@ -94,8 +173,67 @@ async def _allow_attempt(request: Request, redis: Redis, action: str) -> None:
         )
 
 
+_LOGIN_FREE_FAILURES = 3
+_LOGIN_MAX_BACKOFF_SECONDS = 900
+_LOGIN_FAILURE_WINDOW_SECONDS = 3600
+
+
+def _login_keys(request: Request, identifier: str | None) -> tuple[str, str]:
+    """Return (failure-counter, lock) Redis keys scoped to account identifier plus a client-IP bucket.
+
+    Scoping by IP means an attacker elsewhere cannot lock the real owner out of their own address.
+    """
+    account = _hash((identifier or "").strip().lower())[:24]
+    bucket = _hash(_client_ip(request))[:16]
+    return f"auth:login:fails:{account}:{bucket}", f"auth:login:lock:{account}:{bucket}"
+
+
+async def _login_precheck(request: Request, redis: Redis, identifier: str | None) -> None:
+    """Reject with 429 + Retry-After while this account/IP bucket is inside its backoff; 503 if Redis is down."""
+    _, lock_key = _login_keys(request, identifier)
+    try:
+        remaining = await redis.ttl(lock_key)
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from exc
+    if isinstance(remaining, int) and remaining > 0:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many authentication attempts",
+            headers={"Retry-After": str(remaining)},
+        )
+
+
+async def _login_record(
+    request: Request, redis: Redis, identifier: str | None, *, success: bool
+) -> None:
+    """Clear counters on success; on failure bump the counter and set an exponential lock.
+
+    Lock is 2^(n-3) seconds after 3 free failures, capped at 15 minutes. Redis errors raise 503
+    (fail closed) so a Redis outage cannot be used to skip throttling.
+    """
+    fails_key, lock_key = _login_keys(request, identifier)
+    try:
+        if success:
+            await redis.delete(fails_key, lock_key)
+            return
+        pipeline = redis.pipeline(transaction=True)
+        pipeline.incr(fails_key)
+        pipeline.expire(fails_key, _LOGIN_FAILURE_WINDOW_SECONDS)
+        failures = int((await pipeline.execute())[0])
+        if failures >= _LOGIN_FREE_FAILURES:
+            delay = min(2 ** (failures - _LOGIN_FREE_FAILURES), _LOGIN_MAX_BACKOFF_SECONDS)
+            await redis.set(lock_key, "1", ex=delay)
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from exc
+
+
 @router.get("/setup-status", response_model=SetupStatus)
 async def setup_status(session: Annotated[AsyncSession, Depends(get_session)]) -> SetupStatus:
+    """Report whether the singleton owner row exists."""
     has_owner = await session.scalar(select(Owner.id).limit(1)) is not None
     return SetupStatus(setupRequired=not has_owner)
 
@@ -111,6 +249,11 @@ async def create_owner(
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> SetupResponse:
+    """Atomically create bootstrap account, default workspace and owner membership.
+
+    Require setup token, Origin/CSRF and throttling; roll back the full identity unit if
+    competing setup already created account 1. This endpoint never issues a session.
+    """
     settings: Settings = request.app.state.settings
     configured_token = settings.setup_token.get_secret_value()
     if not configured_token:
@@ -119,13 +262,17 @@ async def create_owner(
         raise HTTPException(status_code=403, detail="Origin is not allowed")
     if not x_setup_token or not hmac.compare_digest(configured_token, x_setup_token):
         raise HTTPException(status_code=403, detail="Setup token is invalid")
-    await _allow_attempt(request, redis, "setup")
+    # CSRF is validated before the attempt is counted so forged cross-site requests cannot burn the shared bucket.
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
+    await _allow_attempt(request, redis, "setup")
 
-    owner = Owner(id=1, password_hash=hash_password(body.password))
-    session.add(owner)
     try:
+        await provision_bootstrap_account_in_uow(
+            session, await asyncio.to_thread(hash_password, body.password)
+        )
+        # Same transaction as the owner row: both commit or both roll back on a competing setup.
+        await set_initial_owner_display_name(session, owner_id=1, display_name=body.display_name)
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -138,6 +285,7 @@ async def create_owner(
 
 @router.get("/csrf", response_model=CsrfResponse)
 async def csrf(request: Request, response: Response) -> CsrfResponse:
+    """Issue a client CSRF token and its signed HTTP-only cookie."""
     token, cookie = _new_csrf(request.app.state.settings)
     _set_csrf_cookie(request, response, cookie)
     return CsrfResponse(csrfToken=token)
@@ -153,14 +301,104 @@ async def login(
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> AuthState:
+    """Resolve exact normalized email (omission bootstrap1), lock account and issue active identity session.
+
+    Origin and anonymous CSRF precede bounded rate admission, which precedes credentials. Never scan passwords;
+    invalid identifier, absent account, wrong password and rollout denial share generic401.
+    Recheck complete default/active identity after lock before committing hashed session state.
+    """
     settings: Settings = request.app.state.settings
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")
-    await _allow_attempt(request, redis, "login")
+    # Origin and CSRF are validated BEFORE any rate-limit/lockout counter moves, so a request that never passed them
+    # (cross-site forgery, scripted noise) cannot consume the per-IP budget or trigger a lockout for the real owner.
     if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
         raise HTTPException(status_code=403, detail="CSRF token is invalid")
-    owner = await session.get(Owner, 1)
-    if owner is None or not verify_password(owner.password_hash, body.password):
+    try:
+        await _allow_attempt(request, redis, "login")
+        await _login_precheck(request, redis, body.identifier)
+    except (HTTPException, DomainError) as exc:
+        _audit(request, "login_rate_limited" if exc.status_code == 429 else "login_unavailable")
+        raise
+    try:
+        state, owner_id = await _login_verify(request, response, body, session, settings)
+    except (HTTPException, DomainError) as exc:
+        if exc.status_code == 401:
+            await _login_record(request, redis, body.identifier, success=False)
+            _audit(request, "login_failure")
+        raise
+    await _login_record(request, redis, body.identifier, success=True)
+    _audit(request, "login_success", owner_id)
+    return state
+
+
+async def _login_verify(
+    request: Request,
+    response: Response,
+    body: LoginRequest,
+    session: AsyncSession,
+    settings: Settings,
+) -> tuple[AuthState, int]:
+    """Verify credentials outside the exclusive owner lock, then lock the owner row to issue the session.
+
+    Running Argon2id verification before acquiring the exclusive lock prevents CPU-bound password
+    hashing from blocking concurrent ``FOR SHARE`` admission reads. The lock waits up to
+    ``OWNER_LOCK_WAIT_SECONDS``; if still busy a correct password gets 503 + ``Retry-After`` (retryable),
+    never 401, and ``login`` does not count it as a failed attempt (only 401 is recorded).
+    Returns the CSRF state and the authenticated account id (for audit).
+    """
+    account_id: int | None
+    unlocked_hash: str | None = None
+    if body.identifier is None:
+        account_id = 1
+        if hasattr(session, "scalar"):
+            unlocked_hash = await session.scalar(select(Owner.password_hash).where(Owner.id == 1))
+        else:
+            preview = await _lock_owner(session, 1)
+            unlocked_hash = getattr(preview, "password_hash", None)
+    else:
+        try:
+            email = normalize_account_email(body.identifier)
+        except ValueError:
+            await asyncio.to_thread(verify_login_password, None, body.password)
+            raise HTTPException(status_code=401, detail="Email or password is incorrect") from None
+        row = (
+            await session.execute(select(Owner.id, Owner.password_hash).where(Owner.email == email))
+        ).one_or_none()
+        account_id = row[0] if row is not None else None
+        unlocked_hash = row[1] if row is not None else None
+
+    password_matches = await asyncio.to_thread(verify_login_password, unlocked_hash, body.password)
+    if account_id is None or not password_matches:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect")
+
+    try:
+        owner = await _lock_owner(session, account_id, wait_seconds=OWNER_LOCK_WAIT_SECONDS)
+    except (HTTPException, DomainError) as exc:
+        if exc.status_code != 409:
+            raise
+        # Credentials already verified: contention is retryable, never a 401 (not a failed attempt).
+        raise HTTPException(
+            status_code=503,
+            detail="Sign-in is temporarily busy; retry shortly",
+            headers={"Retry-After": "1"},
+        ) from None
+
+    if owner is not None and owner.password_hash != unlocked_hash:
+        password_matches = await asyncio.to_thread(
+            verify_login_password, owner.password_hash, body.password
+        )
+
+    if (
+        owner is None
+        or not password_matches
+        or await get_active_account(
+            session,
+            owner.id,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
+        is None
+    ):
         raise HTTPException(status_code=401, detail="Email or password is incorrect")
 
     session_token = secrets.token_urlsafe(32)
@@ -169,10 +407,404 @@ async def login(
         token_hash=_hash(session_token),
         owner_id=owner.id,
         csrf_hash=_hash(next_csrf),
+        reauthenticated_at=datetime.now(UTC),
         expires_at=datetime.now(UTC) + timedelta(hours=settings.session_lifetime_hours),
+        last_seen_at=datetime.now(UTC),
     )
     session.add(auth_session)
     await session.commit()
+    _issue_auth_session(settings, response, request, session_token, csrf_cookie)
+    return AuthState(csrfToken=next_csrf), owner.id
+
+
+def _google_configured(settings: Settings) -> bool:
+    """Report whether both Google OAuth client credentials are configured."""
+    return bool(settings.google_client_id and settings.google_client_secret.get_secret_value())
+
+
+def _require_recent_reauthentication(auth_session: AuthSession) -> None:
+    """Require a successful owner password check within the preceding five minutes."""
+    timestamp = auth_session.reauthenticated_at
+    age = datetime.now(UTC) - timestamp if timestamp is not None else None
+    if age is None or age < timedelta(0) or age > timedelta(minutes=5):
+        raise HTTPException(status_code=403, detail="Reauthentication required")
+
+
+def _raise_if_owner_lock_busy(exc: DBAPIError) -> None:
+    """Translate PostgreSQL nowait lock contention into a retryable authentication conflict."""
+    cause: BaseException | None = exc.orig
+    while cause is not None:
+        if getattr(cause, "sqlstate", None) == "55P03":
+            raise HTTPException(
+                status_code=409, detail="Authentication state changed; retry the request"
+            ) from exc
+        cause = cause.__cause__ or cause.__context__
+
+
+async def _lock_owner(
+    session: AsyncSession, owner_id: int, *, share: bool = False, wait_seconds: float = 0.0
+) -> Owner | None:
+    """Lock the owner row and map lock contention to the API conflict response.
+
+    ``wait_seconds == 0`` (default) is ``NOWAIT``. A positive value instead waits for the lock up to
+    that long via a transaction-local ``lock_timeout`` (reset at commit/rollback), so a correct
+    credential is not rejected just because a request/worker briefly holds the row. Timeout is the same
+    ``55P03`` as NOWAIT and maps to the same 409; callers needing a different status re-map it.
+
+    Default is ``FOR UPDATE``. ``share=True`` takes ``FOR SHARE`` instead, which coexists with the
+    ``FOR SHARE`` admission locks held by concurrent collection/request work (so it is not starved)
+    but still conflicts with every account-state writer's ``FOR UPDATE``.
+    """
+    try:
+        if wait_seconds > 0:
+            await session.execute(
+                text("SELECT set_config('lock_timeout', :ms, true)"),
+                {"ms": str(int(wait_seconds * 1000))},
+            )
+        return await session.scalar(
+            select(Owner)
+            .where(Owner.id == owner_id)
+            .with_for_update(read=share, nowait=wait_seconds <= 0)
+            .execution_options(populate_existing=True)
+        )
+    except DBAPIError as exc:
+        _raise_if_owner_lock_busy(exc)
+        raise
+
+
+async def _lock_auth_session(session: AsyncSession, token_hash: str, owner_id: int) -> AuthSession:
+    """Lock and validate a live auth session belonging to the expected owner."""
+    try:
+        auth_session = await session.scalar(
+            select(AuthSession)
+            .where(AuthSession.token_hash == token_hash)
+            .with_for_update(nowait=True)
+            .execution_options(populate_existing=True)
+        )
+    except DBAPIError as exc:
+        _raise_if_owner_lock_busy(exc)
+        raise
+    if (
+        auth_session is None
+        or auth_session.owner_id != owner_id
+        or auth_session.expires_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return auth_session
+
+
+async def _lock_owner_session(
+    request: Request,
+    session: AsyncSession,
+    stale_session: AuthSession,
+    csrf_token: str | None,
+    *,
+    check_csrf: bool = True,
+    share_owner: bool = False,
+    owner_wait_seconds: float = 0.0,
+) -> tuple[Owner, AuthSession]:
+    """Lock account then session, rechecking complete active identity, feature gate and current CSRF.
+
+    ``share_owner`` downgrades only the owner-row lock to ``FOR SHARE`` (CSRF rotation): it writes
+    nothing on the owner, and the session row stays ``FOR UPDATE`` so rotation is still serialized.
+
+    Reauthentication, logout and rotation share this ordered lock/reload. Inactive, incomplete
+    or gate-denied accounts return401 even when an earlier dependency admitted the session.
+    This grants account lifecycle authority only, never legacy operator/domain access.
+    ``owner_wait_seconds`` > 0 waits (bounded) for the owner row instead of failing NOWAIT with 409.
+    """
+    owner = await _lock_owner(
+        session, stale_session.owner_id, share=share_owner, wait_seconds=owner_wait_seconds
+    )
+    if owner is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_session = await _lock_auth_session(
+        session, stale_session.token_hash, stale_session.owner_id
+    )
+    if (
+        await get_active_account(
+            session,
+            owner.id,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+        is None
+    ):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if check_csrf and (
+        not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, request.app.state.settings)
+        or not hmac.compare_digest(auth_session.csrf_hash, _hash(csrf_token or ""))
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="CSRF token is invalid",
+            headers={"X-CSRF-Error": "invalid"},
+        )
+    return owner, auth_session
+
+
+async def _lock_owner_session_retrying(
+    request: Request, session: AsyncSession, stale_session: AuthSession, attempts: int = 8
+) -> tuple[Owner, AuthSession]:
+    """Take the owner/session locks for CSRF rotation, briefly retrying NOWAIT contention.
+
+    Rotation is idempotent for the caller, so concurrent tabs wait up to ~1.4 s in total (50 ms steps) for
+    each other instead of surfacing a 409. Still 409 if the locks stay busy after ``attempts``.
+
+    The owner row is locked ``FOR SHARE``: rotation never writes the owner, and an exclusive NOWAIT lock
+    could never win against concurrent admissions holding ``FOR SHARE``. Disable, password change and
+    lifecycle writers take ``FOR UPDATE`` and still conflict, so account state stays protected.
+    """
+    # rollback expires loaded rows; keep the two identifiers the lock helpers read on a detached copy.
+    ids = AuthSession(token_hash=stale_session.token_hash, owner_id=stale_session.owner_id)
+    for attempt in range(attempts):
+        try:
+            return await _lock_owner_session(
+                request, session, ids, None, check_csrf=False, share_owner=True
+            )
+        except (HTTPException, DomainError) as exc:
+            if exc.status_code != 409 or attempt == attempts - 1:
+                raise
+            await session.rollback()  # a failed NOWAIT aborts the transaction
+            await asyncio.sleep(0.05 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
+async def _lock_identity_for_owner(session: AsyncSession, owner_id: int) -> GoogleIdentity | None:
+    """Lock the owner Google identity row with NOWAIT."""
+    try:
+        return await session.scalar(
+            select(GoogleIdentity)
+            .where(GoogleIdentity.owner_id == owner_id)
+            .with_for_update(nowait=True)
+            .execution_options(populate_existing=True)
+        )
+    except DBAPIError as exc:
+        _raise_if_owner_lock_busy(exc)
+        raise
+
+
+async def _lock_identity_for_subject(
+    session: AsyncSession,
+    subject: str,
+    owner_id: int,
+) -> GoogleIdentity | None:
+    """Lock exact issuer/subject only beneath its already-locked account; never lock foreign identity.
+
+    A changed association returns None rather than acquiring an undiscovered account lock.
+    Linking races are rejected by issuer/subject uniqueness at the caller's atomic commit.
+    """
+    try:
+        return await session.scalar(
+            select(GoogleIdentity)
+            .where(
+                GoogleIdentity.issuer == GOOGLE_ISSUER,
+                GoogleIdentity.subject == subject,
+                GoogleIdentity.owner_id == owner_id,
+            )
+            .with_for_update(nowait=True)
+            .execution_options(populate_existing=True)
+        )
+    except DBAPIError as exc:
+        _raise_if_owner_lock_busy(exc)
+        raise
+
+
+def _google_callback_url(settings: Settings) -> str:
+    """Build the callback URL from the configured public origin and fixed callback path."""
+    return f"{str(settings.public_origin).rstrip('/')}{GOOGLE_CALLBACK_PATH}"
+
+
+@router.get("/google/status", response_model=GoogleStatus)
+async def google_status(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> GoogleStatus:
+    """Return OAuth configuration and authenticated actor link state; anonymous reveals no identity."""
+    linked = False
+    if request.cookies.get(SESSION_COOKIE):
+        auth = await _account_session(request, session, request.cookies.get(SESSION_COOKIE))
+        linked = await session.get(GoogleIdentity, auth.owner_id) is not None
+    return GoogleStatus(configured=_google_configured(request.app.state.settings), linked=linked)
+
+
+@router.post("/reauthenticate", status_code=204)
+async def reauthenticate(
+    request: Request,
+    body: ReauthenticateRequest,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_auth_redis)],
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> None:
+    """Verify current account password under account/session locks and active gate, then record reauth."""
+    await _allow_attempt(request, redis, "reauthenticate")
+    owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
+    if owner is None or not await asyncio.to_thread(
+        verify_password, owner.password_hash, body.password
+    ):
+        raise HTTPException(status_code=403, detail=_PASSWORD_INCORRECT)
+    auth_session.reauthenticated_at = datetime.now(UTC)
+    await session.commit()
+
+
+@router.post("/password", response_model=AuthState)
+async def change_password(
+    request: Request,
+    response: Response,
+    body: ChangePasswordRequest,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_auth_redis)],
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> AuthState:
+    """Verify the current password, store the new hash, revoke every owner session, and issue a fresh one.
+
+    The owner lock waits up to ``OWNER_LOCK_WAIT_SECONDS``; still busy afterwards is a retryable 409.
+    """
+    settings: Settings = request.app.state.settings
+    # Same bucket as reauthenticate: both are password-guess oracles for a stolen session.
+    await _allow_attempt(request, redis, "reauthenticate")
+    owner, auth_session = await _lock_owner_session(
+        request, session, auth_session, csrf_token, owner_wait_seconds=OWNER_LOCK_WAIT_SECONDS
+    )
+    if not await asyncio.to_thread(verify_password, owner.password_hash, body.currentPassword):
+        raise HTTPException(status_code=403, detail=_PASSWORD_INCORRECT)
+    if await asyncio.to_thread(verify_password, owner.password_hash, body.newPassword):
+        raise HTTPException(
+            status_code=422, detail="New password must differ from the current password"
+        )
+    owner.password_hash = await asyncio.to_thread(hash_password, body.newPassword)
+    revoked = await session.execute(delete(AuthSession).where(AuthSession.owner_id == owner.id))
+    session_token = secrets.token_urlsafe(32)
+    next_csrf, csrf_cookie = _new_csrf(settings)
+    session.add(
+        AuthSession(
+            token_hash=_hash(session_token),
+            owner_id=owner.id,
+            csrf_hash=_hash(next_csrf),
+            reauthenticated_at=datetime.now(UTC),
+            expires_at=datetime.now(UTC) + timedelta(hours=settings.session_lifetime_hours),
+        )
+    )
+    await session.commit()
+    _issue_auth_session(settings, response, request, session_token, csrf_cookie)
+    logger.info(
+        "owner password changed; sessions rotated, revoked: %s", getattr(revoked, "rowcount", 0)
+    )
+    _audit(request, "password_change", owner.id, revoked=getattr(revoked, "rowcount", 0))
+    return AuthState(csrfToken=next_csrf)
+
+
+@router.post("/google/start", response_model=GoogleStartResponse)
+async def google_start(
+    body: GoogleStartRequest,
+    request: Request,
+    response: Response,
+    redis: Annotated[Redis, Depends(get_auth_redis)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    origin: Annotated[str | None, Header()] = None,
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> GoogleStartResponse:
+    """Begin linked login, recent-password account linking or valid-invitation Google enrollment.
+
+    State contains only binding/account/session identifiers or invitation SHA256, never raw
+    bearer/password. Release lifecycle SQL locks before Redis/provider I/O. Invite enrollment
+    does not provision an account; callback verifies bound mailbox then issues a server proof.
+    """
+    settings: Settings = request.app.state.settings
+    auth_session: AuthSession | None = None
+    if not _google_configured(settings):
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
+    if body.purpose in {"login", "invitation"}:
+        if not _origin_allowed(origin, settings) or not _valid_csrf(
+            request.cookies.get(CSRF_COOKIE), csrf_token, settings
+        ):
+            raise HTTPException(status_code=403, detail="CSRF token is invalid")
+        await _allow_attempt(request, redis, "google")
+        if body.purpose == "invitation":
+            if not settings.multi_workspace_enabled:
+                raise HTTPException(status_code=403, detail="Invitation acceptance is not enabled")
+            if request.cookies.get(SESSION_COOKIE) or body.invitation_token is None:
+                raise HTTPException(
+                    status_code=403, detail="Invitation enrollment requires anonymous bearer proof"
+                )
+            from core.workspaces.public import invitation_target
+
+            await invitation_target(session, _hash(body.invitation_token.get_secret_value()))
+    else:
+        auth_session = await require_account_write(request, session, origin, csrf_token)
+        if auth_session is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        _owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
+        _require_recent_reauthentication(auth_session)
+
+    state = secrets.token_urlsafe(32)
+    binding = secrets.token_urlsafe(32)
+    transaction = {
+        "purpose": body.purpose,
+        "binding": _hash(binding),
+        "owner_id": auth_session.owner_id if auth_session else None,
+        "session_hash": auth_session.token_hash if auth_session else None,
+        "invitation_hash": _hash(body.invitation_token.get_secret_value())
+        if body.purpose == "invitation" and body.invitation_token is not None
+        else None,
+        "csrf_cookie_hash": _hash(request.cookies.get(CSRF_COOKIE, "")),
+    }
+    # Release every SQL preparation transaction before Redis/provider I/O, including invitation reads.
+    await session.rollback()
+    try:
+        stored = await redis.set(
+            f"auth:google:state:{state}", json.dumps(transaction), ex=300, nx=True
+        )
+    except RedisError as exc:
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from exc
+    if not stored:
+        raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable")
+
+    response.set_cookie(
+        "bbd_google_binding",
+        binding,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="lax",
+        path=GOOGLE_CALLBACK_PATH,
+        max_age=300,
+    )
+    oauth = google_client(settings)
+    try:
+        async with asyncio.timeout(10):
+            authorization = await oauth.google.authorize_redirect(
+                request, _google_callback_url(settings), state=state
+            )
+    except (
+        TimeoutError,
+        httpx.HTTPError,
+        AuthlibBaseError,
+        JoseError,
+        ValueError,
+        RuntimeError,
+    ) as exc:
+        try:
+            await redis.getdel(f"auth:google:state:{state}")
+        except RedisError:
+            pass
+        response.delete_cookie("bbd_google_binding", path=GOOGLE_CALLBACK_PATH)
+        raise HTTPException(
+            status_code=503, detail="Google sign-in provider is temporarily unavailable"
+        ) from exc
+    return GoogleStartResponse(authorization_url=authorization.headers["location"])
+
+
+def _issue_auth_session(
+    settings: Settings,
+    response: Response,
+    request: Request,
+    session_token: str,
+    csrf_cookie: str,
+) -> None:
+    """Set session and CSRF cookies with configured security and session lifetime attributes."""
     response.set_cookie(
         SESSION_COOKIE,
         session_token,
@@ -183,7 +815,339 @@ async def login(
         max_age=settings.session_lifetime_hours * 3600,
     )
     _set_csrf_cookie(request, response, csrf_cookie)
-    return AuthState(csrfToken=next_csrf)
+
+
+async def _google_invitation_branch(
+    request: Request,
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    transaction: dict[str, Any],
+    subject: str,
+    email: str,
+    response: Response,
+) -> Response:
+    """Mint a 5-minute one-use Redis enrollment proof for an invitation-bound Google identity.
+
+    Preconditions: multi-workspace enabled, CSRF cookie hash matches the transaction, and the
+    invitation target email equals the verified Google email. Every SQL read is rolled back before
+    Redis is touched; any mismatch or Redis failure returns the unchanged error ``response``.
+    On success sets the enrollment cookie and redirects to the invitation page (no secret in query).
+    """
+    from core.workspaces.public import invitation_target
+
+    digest = transaction.get("invitation_hash")
+    if (
+        not settings.multi_workspace_enabled
+        or not isinstance(digest, str)
+        or transaction.get("csrf_cookie_hash") != _hash(request.cookies.get(CSRF_COOKIE, ""))
+    ):
+        return response
+    try:
+        target = await invitation_target(session, digest)
+    except (HTTPException, DomainError):
+        await session.rollback()
+        return response
+    if target.email != email:
+        await session.rollback()
+        return response
+    await session.rollback()
+    handle = secrets.token_urlsafe(32)
+    proof = {
+        "invitation_hash": digest,
+        "email": email,
+        "issuer": GOOGLE_ISSUER,
+        "subject": subject,
+        "csrf_cookie_hash": transaction["csrf_cookie_hash"],
+    }
+    try:
+        async with asyncio.timeout(2):
+            stored = await redis.set(
+                f"auth:google:enrollment:{_hash(handle)}", json.dumps(proof), ex=300, nx=True
+            )
+    except (RedisError, TimeoutError):
+        return response
+    if not stored:
+        return response
+    response.set_cookie(
+        "bbd_google_enrollment",
+        handle,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="strict",
+        path="/api/v1/workspaces/invitations/accept",
+        max_age=300,
+    )
+    # The browser continues its existing invitation/password page; no secret in redirect query.
+    response.headers["location"] = "/invitations/accept?google=enrollment"
+    return response
+
+
+async def _google_login_branch(
+    session: AsyncSession,
+    settings: Settings,
+    subject: str,
+    response: Response,
+) -> tuple[Any, None] | None:
+    """Resolve a linked Google identity to its locked owner for login.
+
+    Lock order: unlocked owner-id lookup, then owner lock, then identity lock. Returns
+    ``(owner, None)`` after setting the ``/dashboard`` redirect, or ``None`` (session rolled back) when
+    the identity is unlinked, the account inactive, or the identity changed owner.
+    """
+    # Resolve linked account IDs without locks, then account -> identity reload.
+    owner_id = await session.scalar(
+        select(GoogleIdentity.owner_id).where(
+            GoogleIdentity.issuer == GOOGLE_ISSUER,
+            GoogleIdentity.subject == subject,
+        )
+    )
+    owner = await _lock_owner(session, owner_id) if owner_id is not None else None
+    if (
+        owner is None
+        or await get_active_account(
+            session,
+            owner.id,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
+        is None
+    ):
+        await session.rollback()
+        return None
+    identity = await _lock_identity_for_subject(session, subject, owner.id)
+    if identity is None or identity.owner_id != owner.id:
+        await session.rollback()
+        return None
+    response.headers["location"] = "/dashboard"
+    return owner, None
+
+
+async def _google_link_branch(
+    request: Request,
+    session: AsyncSession,
+    settings: Settings,
+    transaction: dict[str, Any],
+    subject: str,
+    email: str,
+    response: Response,
+) -> tuple[Any, Any] | None:
+    """Link (or refresh) the Google identity on the transaction's owner under account/session locks.
+
+    Requires the same active auth session and recent password reauthentication (may raise
+    ``HTTPException``, handled by the caller's rollback). Consumes the old auth session and applies
+    verified-mailbox evidence only when the owner email equals the Google email. Returns
+    ``(owner, reauthenticated_at)`` with the link redirect set, or ``None`` (rolled back, except for
+    a malformed owner id which has no open locks) when any ownership check fails.
+    """
+    owner_id = transaction.get("owner_id")
+    if not isinstance(owner_id, int) or isinstance(owner_id, bool):
+        return None
+    linked_user_id = await session.scalar(
+        select(GoogleIdentity.owner_id).where(
+            GoogleIdentity.issuer == GOOGLE_ISSUER,
+            GoogleIdentity.subject == subject,
+        )
+    )
+    if linked_user_id is not None and linked_user_id != owner_id:
+        await session.rollback()
+        return None
+    owner = await _lock_owner(session, owner_id)
+    if owner is None:
+        await session.rollback()
+        return None
+    auth = await _lock_auth_session(
+        session, _hash(request.cookies.get(SESSION_COOKIE, "")), owner.id
+    )
+    if (
+        transaction.get("session_hash") != auth.token_hash
+        or await get_active_account(
+            session,
+            owner.id,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
+        is None
+    ):
+        await session.rollback()
+        return None
+    _require_recent_reauthentication(auth)
+    identity = await _lock_identity_for_owner(session, owner.id)
+    subject_identity = await _lock_identity_for_subject(session, subject, owner.id)
+    if (subject_identity is not None and subject_identity.owner_id != owner.id) or (
+        identity is not None and (identity.issuer != GOOGLE_ISSUER or identity.subject != subject)
+    ):
+        await session.rollback()
+        return None
+    if identity is None:
+        session.add(
+            GoogleIdentity(owner_id=owner.id, issuer=GOOGLE_ISSUER, subject=subject, email=email)
+        )
+    else:
+        identity.email = email
+    # Verified provider evidence applies only to the exact bound account mailbox.
+    if owner.email == email:
+        owner.email_verified_at = datetime.now(UTC)
+        owner.email_verification_source = "google_oidc"
+    reauthenticated_at = auth.reauthenticated_at
+    await session.delete(auth)
+    response.headers["location"] = "/knowledge/documents?google=linked"
+    return owner, reauthenticated_at
+
+
+async def _consume_google_state(redis: Redis, state: str) -> Any:
+    """Atomically take (get-and-delete) the OAuth state transaction; ``None`` when absent or malformed.
+
+    Raises a 503 when Redis is unavailable or slow (2s bound), so a lost state never looks like a replay.
+    """
+    try:
+        async with asyncio.timeout(2):
+            raw = (
+                await redis.getdel(f"auth:google:state:{state}")
+                if state and len(state) <= 256
+                else None
+            )
+    except (RedisError, TimeoutError):
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from None
+    try:
+        return json.loads(raw) if raw else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _google_userinfo_valid(userinfo: Any) -> bool:
+    """True when the OIDC userinfo has the Google issuer, a bounded subject and a verified string email."""
+    return not (
+        not userinfo
+        or userinfo.get("iss") != GOOGLE_ISSUER
+        or not isinstance(userinfo.get("sub"), str)
+        or not userinfo["sub"]
+        or len(userinfo["sub"]) > 255
+        or userinfo.get("email_verified") is not True
+        or not isinstance(userinfo.get("email"), str)
+    )
+
+
+@router.get("/google/callback")
+async def google_callback(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_auth_redis)],
+) -> Response:
+    """Consume browser-bound OAuth state and verified OIDC identity, then recheck locked auth.
+
+    Linked issuer/subject alone resolves login; email never resolves an existing account.
+    Link requires same active session and recent password reauth after locks. Invitation
+    branch creates only a 5-minute, one-use, CSRF-cookie/invitation/email-bound Redis proof;
+    password acceptance later atomically provisions account/default/membership. No SQL lock
+    spans provider network.
+    """
+    settings: Settings = request.app.state.settings
+    state = request.query_params.get("state", "")
+    transaction = await _consume_google_state(redis, state)
+    response = Response(status_code=303, headers={"location": "/login?google=error"})
+    purpose = transaction.get("purpose") if isinstance(transaction, dict) else None
+    if purpose == "link":
+        response.headers["location"] = "/knowledge/documents?google=error"
+    response.delete_cookie("bbd_google_binding", path=GOOGLE_CALLBACK_PATH)
+    binding = request.cookies.get("bbd_google_binding", "")
+    if (
+        not isinstance(transaction, dict)
+        or purpose not in {"login", "link", "invitation"}
+        or not isinstance(transaction.get("binding"), str)
+        or not binding
+        or not hmac.compare_digest(transaction["binding"], _hash(binding))
+        or not _google_configured(settings)
+    ):
+        return response
+    # Provider exchange finishes before the first SQL lifecycle lock.
+    try:
+        async with asyncio.timeout(10):
+            token = await google_client(settings).google.authorize_access_token(request)
+    except (TimeoutError, httpx.HTTPError, AuthlibBaseError, JoseError, ValueError, RuntimeError):
+        return response
+    userinfo = token.get("userinfo")
+    if not _google_userinfo_valid(userinfo):
+        return response
+    try:
+        email = normalize_account_email(userinfo["email"])
+    except ValueError:
+        return response
+
+    if purpose == "invitation":
+        return await _google_invitation_branch(
+            request,
+            session,
+            redis,
+            settings,
+            transaction,
+            userinfo["sub"],
+            email,
+            response,
+        )
+
+    try:
+        branch = (
+            await _google_login_branch(session, settings, userinfo["sub"], response)
+            if purpose == "login"
+            else await _google_link_branch(
+                request, session, settings, transaction, userinfo["sub"], email, response
+            )
+        )
+        if branch is None:
+            return response
+        owner, reauthenticated_at = branch
+        # Owner row stays locked through issuance; recheck immediately before publishing session.
+        if (
+            await get_active_account(
+                session, owner.id, multi_workspace_enabled=settings.multi_workspace_enabled
+            )
+            is None
+        ):
+            await session.rollback()
+            response.headers["location"] = "/login?google=error"
+            return response
+        session_token = secrets.token_urlsafe(32)
+        csrf_token, csrf_cookie = _new_csrf(settings)
+        session.add(
+            AuthSession(
+                token_hash=_hash(session_token),
+                owner_id=owner.id,
+                csrf_hash=_hash(csrf_token),
+                reauthenticated_at=reauthenticated_at,
+                expires_at=datetime.now(UTC) + timedelta(hours=settings.session_lifetime_hours),
+            )
+        )
+        await session.commit()
+    except (HTTPException, IntegrityError):
+        await session.rollback()
+        response.headers["location"] = (
+            "/knowledge/documents?google=error" if purpose == "link" else "/login?google=error"
+        )
+        return response
+    _issue_auth_session(settings, response, request, session_token, csrf_cookie)
+    _audit(request, "google_link" if purpose == "link" else "google_login", owner.id)
+    return response
+
+
+@router.post("/google/unlink", status_code=204)
+async def google_unlink(
+    request: Request,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> None:
+    """Require active account/recent password reauthentication and unlink under account/session locks."""
+    owner, auth_session = await _lock_owner_session(request, session, auth_session, csrf_token)
+    _require_recent_reauthentication(auth_session)
+    identity = await _lock_identity_for_owner(session, owner.id)
+    if identity is None:
+        raise HTTPException(status_code=404, detail="Google account is not linked")
+    if not owner.password_hash:
+        raise HTTPException(status_code=409, detail="Cannot remove the last sign-in method")
+    await session.delete(identity)
+    await session.commit()
+    _audit(request, "google_unlink", owner.id)
 
 
 @router.get("/session", response_model=AuthState)
@@ -192,22 +1156,31 @@ async def auth_session(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AuthState:
-    row = await _current_session(request, session, request.cookies.get(SESSION_COOKIE))
+    """Return current account CSRF; rotate only after locked active/gate revalidation."""
+    row = await _account_session(request, session, request.cookies.get(SESSION_COOKIE))
     settings: Settings = request.app.state.settings
     existing_cookie = request.cookies.get(CSRF_COOKIE)
-    existing_token = existing_cookie.split(".", 1)[0] if existing_cookie and "." in existing_cookie else None
-    if (
+    existing_token = (
+        existing_cookie.split(".", 1)[0] if existing_cookie and "." in existing_cookie else None
+    )
+    csrf_is_current = bool(
         existing_token
         and _valid_csrf(existing_cookie, existing_token, settings)
         and hmac.compare_digest(row.csrf_hash, _hash(existing_token))
-    ):
+    )
+    if csrf_is_current:
+        # Read-only: _current_session already validated existence and expiry, and nothing is written,
+        # so no NOWAIT owner/session lock is needed (concurrent tabs must not 409 on a plain read).
+        if existing_token is None:
+            raise RuntimeError("invariant violated: existing_token must not be None")
         csrf_token = existing_token
     else:
+        _owner, row = await _lock_owner_session_retrying(request, session, row)
         csrf_token, csrf_cookie = _new_csrf(settings)
         row.csrf_hash = _hash(csrf_token)
         await session.commit()
         _set_csrf_cookie(request, response, csrf_cookie)
-    return AuthState(csrfToken=csrf_token)
+    return AuthState(csrfToken=csrf_token, isInstanceAdmin=row.owner_id == 1)
 
 
 @router.post("/logout", status_code=204)
@@ -215,9 +1188,90 @@ async def logout(
     request: Request,
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
-    _auth_session: Annotated[AuthSession, Depends(require_owner_write)],
+    stale_session: Annotated[AuthSession, Depends(require_account_write)],
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> None:
-    await session.delete(_auth_session)
+    """Invalidate active account session after ordered lock/CSRF recheck and clear browser cookies."""
+    _owner, auth_session = await _lock_owner_session(request, session, stale_session, csrf_token)
+    await session.delete(auth_session)
     await session.commit()
+    _audit(request, "logout", _owner.id)
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.delete_cookie(CSRF_COOKIE, path="/")
+
+
+def _session_id(token_hash: str) -> str:
+    """Opaque public id for a session: a prefix of its stored hash (not usable as the cookie token)."""
+    return token_hash[:16]
+
+
+@router.get("/sessions", response_model=list[SessionInfo])
+async def list_sessions(
+    auth_session: Annotated[AuthSession, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[SessionInfo]:
+    """List the caller's own unexpired sessions (newest first), flagging the one making this request."""
+    rows = (
+        await session.scalars(
+            select(AuthSession)
+            .where(
+                AuthSession.owner_id == auth_session.owner_id,
+                AuthSession.expires_at > datetime.now(UTC),
+            )
+            .order_by(AuthSession.created_at.desc())
+            .limit(100)
+        )
+    ).all()
+    return [
+        SessionInfo(
+            id=_session_id(row.token_hash),
+            createdAt=row.created_at,
+            lastSeenAt=row.last_seen_at,
+            expiresAt=row.expires_at,
+            current=row.token_hash == auth_session.token_hash,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/sessions/revoke-others", response_model=RevokeOthersResponse)
+async def revoke_other_sessions(
+    request: Request,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RevokeOthersResponse:
+    """Delete every session of the caller's account except the current one (origin + CSRF enforced by dependency)."""
+    result = await session.execute(
+        delete(AuthSession).where(
+            AuthSession.owner_id == auth_session.owner_id,
+            AuthSession.token_hash != auth_session.token_hash,
+        )
+    )
+    await session.commit()
+    revoked = getattr(result, "rowcount", 0) or 0
+    _audit(request, "sessions_revoke_others", auth_session.owner_id, revoked=revoked)
+    return RevokeOthersResponse(revoked=revoked)
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def revoke_session(
+    request: Request,
+    session_id: str,
+    auth_session: Annotated[AuthSession, Depends(require_account_write)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Revoke one other session of the caller's account by its opaque id; 404 if absent, 409 for the current one."""
+    if len(session_id) != 16:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if auth_session.token_hash.startswith(session_id):
+        raise HTTPException(status_code=409, detail="Use logout to end the current session")
+    result = await session.execute(
+        delete(AuthSession).where(
+            AuthSession.owner_id == auth_session.owner_id,
+            AuthSession.token_hash.startswith(session_id),
+        )
+    )
+    await session.commit()
+    if not (getattr(result, "rowcount", 0) or 0):
+        raise HTTPException(status_code=404, detail="Session not found")
+    _audit(request, "session_revoke", auth_session.owner_id)

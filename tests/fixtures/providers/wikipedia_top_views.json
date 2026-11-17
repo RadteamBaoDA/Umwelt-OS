@@ -1,0 +1,53 @@
+{
+ "items": [
+  {
+   "project": "en.wikipedia",
+   "access": "all-access",
+   "year": "2026",
+   "month": "10",
+   "day": "20",
+   "articles": [
+    {
+     "article": "Main_Page",
+     "views": 6426300,
+     "rank": 1
+    },
+    {
+     "article": "Special:Search",
+     "views": 1005087,
+     "rank": 2
+    },
+    {
+     "article": "Wikipedia:Featured_pictures",
+     "views": 558650,
+     "rank": 3
+    },
+    {
+     "article": "Kim_Jong_Un",
+     "views": 321739,
+     "rank": 4
+    },
+    {
+     "article": "Jailer_2",
+     "views": 303129,
+     "rank": 5
+    },
+    {
+     "article": "Elizabeth_Holmes",
+     "views": 253155,
+     "rank": 6
+    },
+    {
+     "article": "You_Can_See_Everything",
+     "views": 206507,
+     "rank": 7
+    },
+    {
+     "article": "Helen_Haines",
+     "views": 158924,
+     "rank": 8
+    }
+   ]
+  }
+ ]
+}

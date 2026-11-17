@@ -1,21 +1,46 @@
+# Legacy connectors overlay: n8n plus (via include) the browser overlay, so the existing command keeps both.
+# include needs Docker Compose >= 2.20. n8n-only or browser-only: use docker-compose.browser.yml directly.
+# N8N_* and CONNECTOR_CREDENTIAL_ENCRYPTION_KEY reach api/worker through env_file: .env in docker-compose.yml.
+include:
+  - docker-compose.browser.yml
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   n8n:
+    # The base file gates n8n behind the "n8n" profile; including this overlay is the opt-in.
+    profiles: !reset []
+    image: umwelt-os-n8n-connectors:2.5.2
     build:
       context: .
-      dockerfile: infrastructure/docker/n8n-connectors.Dockerfile
+      dockerfile: docker/n8n-connectors.Dockerfile
     environment:
       GENERIC_TIMEZONE: Asia/Ho_Chi_Minh
       TZ: Asia/Ho_Chi_Minh
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set N8N_ENCRYPTION_KEY (make setup generates it)}
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
-      BBD_SOURCE_ID: ${BBD_SOURCE_ID:-}
       CONNECTOR_API_IP: 172.29.250.10
+      # Code nodes must not read container env (encryption key etc.).
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      # Set these when n8n is served from a hostname; defaults suit loopback-only use.
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     volumes:
       - n8n-data:/home/node/.n8n
-    cap_add: ["NET_ADMIN"]
+    # NET_ADMIN only for the entrypoint's iptables rules; SETUID/SETGID for su-exec. The n8n process runs as
+    # `node` with no capabilities. Never publish 5678 beyond loopback (see docs/deployment.md).
+    cap_drop: [ALL]
+    cap_add: ["NET_ADMIN", "SETUID", "SETGID"]
+    security_opt: ["no-new-privileges:true"]
+    logging: *default-logging
     mem_limit: 768m
     cpus: 1.0
     pids_limit: 128
@@ -24,52 +49,10 @@ services:
       - n8n_egress
     restart: unless-stopped
 
-  browser:
-    build:
-      context: .
-      dockerfile: infrastructure/docker/browser.Dockerfile
-    environment:
-      BROWSER_SHARED_TOKEN: ${BROWSER_SHARED_TOKEN:-}
-    expose: ["8001"]
-    cap_add: ["NET_ADMIN"]
-    mem_limit: 1536m
-    cpus: 1.5
-    pids_limit: 128
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/docs', timeout=2)"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - connectors_internal
-      - browser_egress
-
-  api:
-    environment:
-      N8N_SERVICE_URL: ${N8N_SERVICE_URL:-http://n8n:5678}
-      BBD_SOURCE_ID: ${BBD_SOURCE_ID:-}
-      N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-}
-    networks:
-      default: {}
-      connectors_internal:
-        ipv4_address: 172.29.250.10
-
-  worker:
-    networks:
-      - default
-      - connectors_internal
-
 volumes:
   n8n-data:
 
 networks:
-  connectors_internal:
-    internal: true
-    ipam:
-      config:
-        - subnet: 172.29.250.0/24
-  browser_egress:
-    driver: bridge
   n8n_egress:
     driver: bridge
+

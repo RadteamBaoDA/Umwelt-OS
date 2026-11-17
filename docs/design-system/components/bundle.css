@@ -1,0 +1,61 @@
+/* Static renditions of apps/web/src/app/globals.css component classes and the
+   Tailwind classes of the shadcn primitives in apps/web/src/components/ui.
+   Variable names match tokens.json, so values come from tokens.css. */
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 15px; }
+button, input, textarea, select { font: inherit; }
+a { color: var(--accent); }
+.stage { padding: 20px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.stage.col { flex-direction: column; align-items: stretch; max-width: 420px; }
+.muted { color: var(--muted); line-height: 1.6; }
+.label { font-size: 13px; font-weight: 650; }
+.field { display: grid; gap: 7px; }
+.input { min-height: 44px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text); text-align: left; }
+.input::placeholder { color: var(--muted); }
+.input:focus-visible, .button:focus-visible, .text-button:focus-visible, .is-focus { outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 2px; }
+.button { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 9px; background: var(--accent); color: var(--on-accent); cursor: pointer; font-weight: 700; }
+.button:disabled { opacity: .65; cursor: progress; }
+.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.text-button { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; text-align: left; }
+.error { color: var(--danger); font-size: 14px; }
+.checkbox { width: 18px; height: 18px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--bg); display: inline-grid; place-items: center; vertical-align: middle; padding: 0; }
+.checkbox[data-state='checked'] { border-color: var(--accent); background: var(--accent); }
+.check-row { display: inline-flex; align-items: center; gap: 9px; }
+.radio-group-item { width: 20px; height: 20px; flex: 0 0 20px; display: inline-grid; place-items: center; border: 1px solid var(--muted); border-radius: 50%; background: var(--surface); color: var(--accent); padding: 0; }
+.radio-group-item[data-state='checked'] { border: 2px solid var(--accent); }
+.radio-group-item[data-state='checked']::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+.theme-options { display: flex; flex-wrap: wrap; gap: 9px; }
+.theme-option { min-height: 44px; display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; background: var(--surface); }
+.theme-option.is-checked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+.select-trigger { display: flex; justify-content: space-between; align-items: center; }
+.select-content { min-width: 220px; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); box-shadow: var(--shadow-popover); }
+.select-item { position: relative; min-height: 40px; display: flex; align-items: center; padding: 8px 30px 8px 10px; border-radius: 6px; }
+.select-item.is-highlighted { background: var(--bg); }
+.select-item.is-checked { color: var(--accent); }
+.select-item .tick { position: absolute; right: 8px; }
+.ds-tabs-list { display: inline-flex; height: 36px; align-items: center; border-radius: 12px; background: var(--color-accent); padding: 4px; color: var(--color-accent-foreground); }
+.ds-tabs-trigger { display: inline-flex; align-items: center; white-space: nowrap; border-radius: 9px; padding: 4px 12px; font-size: 14px; font-weight: 500; border: 0; background: none; color: inherit; }
+.ds-tabs-trigger[data-state='active'] { background: var(--color-background); color: var(--color-foreground); box-shadow: 0 1px 3px rgb(0 0 0 / 10%); }
+.ds-menu { min-width: 8rem; width: 220px; padding: 4px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-popover); color: var(--color-popover-foreground); box-shadow: var(--shadow-popover); }
+.ds-menu-label { padding: 6px 8px; font-size: 14px; font-weight: 500; }
+.ds-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 14px; }
+.ds-menu-item svg { width: 16px; height: 16px; color: var(--color-muted-foreground); flex: none; }
+.ds-menu-item.is-focus { background: var(--color-accent); color: var(--color-accent-foreground); }
+.ds-menu-item.destructive, .ds-menu-item.destructive svg { color: var(--color-destructive); }
+.ds-menu-sep { height: 1px; margin: 4px -4px; background: var(--color-border); }
+.ds-menu-shortcut { margin-left: auto; font-size: 12px; letter-spacing: .1em; color: var(--color-muted-foreground); }
+.ds-backdrop { position: relative; padding: 24px; background: color-mix(in srgb, var(--text) 50%, var(--bg)); display: grid; place-items: center; min-height: 100%; }
+.ds-dialog { position: relative; display: grid; gap: 16px; width: 100%; max-width: 32rem; padding: 24px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-background); box-shadow: var(--shadow-dialog); }
+.ds-dialog-title { margin: 0; font-size: 18px; line-height: 1; font-weight: 600; }
+.ds-dialog-desc { margin: 0; font-size: 14px; color: var(--color-muted-foreground); }
+.ds-dialog-header { display: flex; flex-direction: column; gap: 8px; }
+.ds-dialog-footer { display: flex; justify-content: flex-end; gap: 8px; }
+.ds-close { position: absolute; top: 16px; right: 16px; border: 0; background: none; color: var(--text); opacity: .7; padding: 0; }
+.ds-sheet-wrap { display: flex; justify-content: flex-end; min-height: 100%; background: color-mix(in srgb, var(--text) 40%, var(--bg)); }
+.ds-sheet { position: relative; display: flex; flex-direction: column; width: 65%; background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -12px 0 40px rgb(0 0 0 / 18%); }
+.ds-sheet-header { display: flex; flex-direction: column; gap: 6px; padding: 16px; border-bottom: 1px solid var(--color-border); }
+.ds-sheet-body { flex: 1; padding: 16px; display: grid; gap: 12px; align-content: start; }
+.ds-sheet-footer { display: flex; gap: 8px; padding: 16px; border-top: 1px solid var(--color-border); }
+.bubble { max-width: 80%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; font-size: 14px; }
+.bubble.user { justify-self: end; background: var(--bg); border: 1px solid var(--line); }
+.bubble.assistant { justify-self: start; background: var(--surface); border: 1px solid var(--line); }

@@ -1,0 +1,18 @@
+{
+  "ci": {
+    "collect": {
+      "url": ["http://localhost:3300/login", "http://localhost:3300/terms", "http://localhost:3300/privacy", "http://localhost:3300/", "http://localhost:3300/dashboard"],
+      "numberOfRuns": 1,
+      "puppeteerScript": "scripts/lighthouse-auth.cjs",
+      "puppeteerLaunchOptions": { "args": ["--no-sandbox"] },
+      "settings": { "chromeFlags": "--no-sandbox --headless=new", "disableStorageReset": true }
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["warn", { "minScore": 0.8 }],
+        "categories:accessibility": ["error", { "minScore": 0.9 }]
+      }
+    },
+    "upload": { "target": "filesystem", "outputDir": "test-results/lighthouse" }
+  }
+}

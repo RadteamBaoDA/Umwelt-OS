@@ -4,22 +4,170 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { DocumentForm } from './document-form';
 import { documentKeys, listDocuments } from './api';
-import { Upload } from '@/modules/ingestion/upload';
+import { Upload } from '@/modules/ingestion';
+import { useRealtime } from '@/core/realtime-provider';
+import { useTranslations } from 'next-intl';
+import { formatDateTime } from '@/core/i18n';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { useWorkspace } from '@/core/workspace-context';
 
+/** Lists documents and consumes realtime refresh state for the knowledge document view. */
 export function DocumentList() {
+  const s0 = useDocumentListController();
+  const { t, d, realtime, consumeUpdates, setAdding, setUploading, refreshingUpdates, isOwner } = s0;
+  const vm: DocumentListVm = s0;
+  return (
+    <section className="rounded-lg border bg-card p-6">
+      <div className="section-heading">
+        <div>
+          <h1>{d('list.title')}</h1>
+          <p className="text-muted-foreground">{d('list.intro')}</p>
+        </div>
+        <div className="form-actions">
+          {(realtime.newDocumentCount > 0 || realtime.documentRefreshRequired) && (
+            <Button variant="outline" disabled={refreshingUpdates} onClick={() => void consumeUpdates()}>
+              {refreshingUpdates
+                ? t('reconnecting')
+                : realtime.newDocumentCount > 0
+                  ? t('newDocumentUpdates', { count: realtime.newDocumentCount })
+                  : t('refreshDocumentList')}
+            </Button>
+          )}
+          {isOwner && (
+            <>
+              <Button variant="outline" onClick={() => setUploading((value) => !value)}>
+                {d('uploadFile')}
+              </Button>
+              <Button onClick={() => setAdding(true)}>{d('newDocument')}</Button>
+            </>
+          )}
+        </div>
+      </div>
+      <DocumentListControls vm={vm} />
+      <DocumentListResults vm={vm} />
+    </section>
+  );
+}
+
+type DocumentListVm = ReturnType<typeof useDocumentListController>;
+
+/** Refresh notices, filter toggle and the add/upload panels. */
+function DocumentListControls({ vm }: { vm: DocumentListVm }) {
+  const { t, d, realtime, adding, setAdding, uploading, showDataRecords, setShowDataRecords } = vm;
+  return (
+    <>
+      {realtime.documentRefreshRequired && (
+        <p className="text-muted-foreground" role="status">
+          {t('documentRefreshAvailable')}
+        </p>
+      )}
+      {realtime.documentRefreshFailed && (
+        <p className="error" role="alert">
+          {t('documentRefreshFailed')}
+        </p>
+      )}
+      <div className="mt-4 flex items-center gap-2">
+        <Checkbox id="documents-show-data" checked={showDataRecords} onCheckedChange={(checked) => setShowDataRecords(checked === true)} />
+        <Label htmlFor="documents-show-data">{d('showDataRecords')}</Label>
+      </div>
+      {adding && <DocumentForm onCancel={() => setAdding(false)} />}
+      {uploading && <Upload />}
+    </>
+  );
+}
+
+/** Loading, error, empty and populated document states. */
+function DocumentListResults({ vm }: { vm: DocumentListVm }) {
+  const { d, display, documents, items } = vm;
+  return (
+    <>
+      {documents.isPending && <div className="skeleton" aria-label={d('loading.documents')} />}
+      {documents.isError && (
+        <p className="error" role="alert">
+          {d('list.loadFailed')}{' '}
+          <Button variant="outline" onClick={() => documents.refetch()}>
+            {d('retry')}
+          </Button>
+        </p>
+      )}
+      {documents.isSuccess && items.length === 0 && <p className="empty-state">{d('list.empty')}</p>}
+      {items.length > 0 && (
+        <ul className="record-list">
+          {items.map((document) => (
+            <li key={document.id} className="record-row">
+              <div className="min-w-0">
+                <Link href={`/knowledge/documents/${document.id}`}>
+                  <strong>{document.title}</strong>
+                </Link>
+                <p className="meta text-muted-foreground m-0">
+                  {d(document.current_version > 1 ? 'version.updated' : 'updatedOn', {
+                    version: document.current_version,
+                    updated: formatDateTime(document.updated_at, display.locale, display.timezone),
+                  })}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {documents.hasNextPage && (
+        <Button variant="outline" disabled={documents.isFetchingNextPage} onClick={() => documents.fetchNextPage()}>
+          {d('load.more')}
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** Holds the state, queries and derived values of DocumentList. */
+function useDocumentListController() {
+  const t = useTranslations('shell');
+  const d = useTranslations('documents');
+  const display = useDisplayPreferences();
+  const realtime = useRealtime();
+  const { isOwner } = useWorkspace();
   const [adding, setAdding] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const documents = useInfiniteQuery({ queryKey: documentKeys.all, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listDocuments(pageParam), getNextPageParam: (last) => last.next_cursor ?? undefined });
+  const [refreshingUpdates, setRefreshingUpdates] = useState(false);
+  // Measurement records (ISS position, prices) are observations; hidden unless the user opts in.
+  const [showDataRecords, setShowDataRecords] = useState(false);
+  const documents = useInfiniteQuery({
+    queryKey: [...documentKeys.all, 'list', showDataRecords],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listDocuments(pageParam, undefined, !showDataRecords),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
   const items = documents.data?.pages.flatMap((page) => page.items) ?? [];
-  return <section className="content-panel"><div className="section-heading"><div><span className="brand">Knowledge</span><h1>Documents</h1><p className="muted">Your private source backed library. Semantic search and AI answers are not available yet.</p></div><div className="form-actions"><Button className="secondary" onClick={() => setUploading((value) => !value)}>Upload file</Button><Button onClick={() => setAdding(true)}>New document</Button></div></div>
-    {adding && <DocumentForm onCancel={() => setAdding(false)} />}
-    {uploading && <Upload />}
-    {documents.isPending && <div className="skeleton" aria-label="Loading documents" />}
-    {documents.isError && <p className="error" role="alert">Could not load documents. <Button className="secondary" onClick={() => documents.refetch()}>Retry</Button></p>}
-    {documents.isSuccess && items.length === 0 && <p className="empty-state">No documents yet. Create a manual source, add a document, or upload a file. Search and AI answers become available in later phases.</p>}
-    {items.length > 0 && <ul className="record-list">{items.map((document) => <li key={document.id} className="record-row"><div><Link href={`/knowledge/documents/${document.id}`}><strong>{document.title}</strong></Link><p className="muted">Version {document.current_version} · Updated {new Date(document.updated_at).toLocaleString()}</p></div></li>)}</ul>}
-    {documents.hasNextPage && <Button className="secondary" disabled={documents.isFetchingNextPage} onClick={() => documents.fetchNextPage()}>Load more</Button>}
-  </section>;
+  /** Refreshes documents from realtime updates and clears the local busy indicator after the attempt settles. */
+  const consumeUpdates = async () => {
+    setRefreshingUpdates(true);
+    try {
+      await realtime.consumeDocumentUpdates();
+    } finally {
+      setRefreshingUpdates(false);
+    }
+  };
+
+  return {
+    t,
+    d,
+    display,
+    realtime,
+    documents,
+    items,
+    consumeUpdates,
+    adding,
+    setAdding,
+    uploading,
+    setUploading,
+    refreshingUpdates,
+    setRefreshingUpdates,
+    showDataRecords,
+    setShowDataRecords,
+    isOwner,
+  };
 }

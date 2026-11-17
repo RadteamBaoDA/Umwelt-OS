@@ -1,0 +1,31 @@
+**********************
+PowerShell transcript start
+Start time: 20261027181124
+Username: DESKTOP-DSGLNS6\doana
+RunAs User: DESKTOP-DSGLNS6\doana
+Configuration Name: 
+Machine: DESKTOP-DSGLNS6 (Microsoft Windows NT 10.0.26300.0)
+Host Application: C:\Users\doana\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\powershell\pwsh.dll -Command try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}
+$env:COMPOSE_PARALLEL_LIMIT='1'; $env:PLAYWRIGHT_RUN_ID='datasource-dashboard-20261027'; Start-Transcript -Path 'D:\Project\Umwelt-OS\e2e-datasource-dashboard-20261027.log'; try { & .\scripts\dev.ps1 test -E2eOnly -E2eTarget 'dashboard-datasources|sources-.*\.spec' } finally { Stop-Transcript }
+Process ID: 29332
+PSVersion: 7.6.5
+PSEdition: Core
+GitCommitId: 7.6.5
+OS: Microsoft Windows 10.0.26300
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.4
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+Transcript started, output file is D:\Project\Umwelt-OS\e2e-datasource-dashboard-20261027.log
+
+
+
+PS>TerminatingError(): "npm failed with exit code 1"
+
+PS>TerminatingError(): "npm failed with exit code 1"
+**********************
+PowerShell transcript end
+End time: 20261027190529
+**********************

@@ -1,30 +1,335 @@
 'use client';
 
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useTranslations } from 'next-intl';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { TablePagination } from '@/components/ui/pagination';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { getRun, retryRun } from './api';
+import { useDisplayPreferences } from '@/core/query-provider';
+import { AppLocaleId } from '@/core/i18n';
+import { formatDateTime as formatDate } from '@/core/format';
+import { isStale } from './freshness';
+import { useErrorCodeLabel } from '@/core/error-codes';
+import { CollectionStats, connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
 
-export function SyncHistory({ runId }: { runId: string }) {
+/** Maps run and stage states to their translated message keys. */
+function statusKey(status: string): 'run.queued' | 'run.running' | 'run.succeeded' | 'run.needsOcr' | 'run.failed' {
+  return status === 'running'
+    ? 'run.running'
+    : status === 'succeeded'
+      ? 'run.succeeded'
+      : status === 'needs_ocr'
+        ? 'run.needsOcr'
+        : status === 'failed'
+          ? 'run.failed'
+          : 'run.queued';
+}
+
+/** Source timestamps (last success, collected, indexed, next due, retry), stale notice and last collection error code. */
+function SourceFreshness({ source, intervalMinutes }: { source: Source; intervalMinutes?: number }) {
+  const t = useTranslations('sources');
+  const display = useDisplayPreferences();
+  /** One muted "label: date" line, omitted when the timestamp is absent. */
+  const dated = (key: 'collectedAt' | 'indexedAt' | 'nextDueAt' | 'retry.at', value: string | null | undefined) =>
+    value && (
+      <p className="m-0 text-muted-foreground">
+        {t(key)}: {formatDate(value, display.locale, display.timezone)}
+      </p>
+    );
+  return (
+    <div className="grid gap-1 text-sm sm:grid-cols-2">
+      <p className="m-0 text-muted-foreground">
+        {t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}
+      </p>
+      {dated('collectedAt', source.collected_at)}
+      {dated('indexedAt', source.indexed_at)}
+      {dated('nextDueAt', source.next_due_at)}
+      {dated('retry.at', source.retry_at)}
+      {isStale(source.last_success_at, intervalMinutes) && (
+        <p className="m-0 text-muted-foreground" role="status">
+          {t('stale')}
+        </p>
+      )}
+      {source.collection_error_code && (
+        <p className="m-0 text-destructive" role="alert">
+          {t('collectionError')}: {source.collection_error_code}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Run-status filter select (all or one run state); picking a value is handled by `onChange`. */
+function RunStatusFilter({ status, onChange }: { status: 'all' | IngestionRunStatus; onChange: (value: string) => void }) {
+  const t = useTranslations('sources');
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <span>{t('run.filterStatus')}</span>
+      <Select value={status} onValueChange={onChange}>
+        <SelectTrigger className="w-52">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">{t('run.filterAll')}</SelectItem>
+          {(['queued', 'running', 'succeeded', 'needs_ocr', 'failed'] as const).map((value) => (
+            <SelectItem key={value} value={value}>
+              {t(statusKey(value))}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </label>
+  );
+}
+
+type RunTableProps = {
+  source: Source;
+  displayed: IngestionRun[];
+  pageIndex: number;
+  hasNext: boolean;
+  fetching: boolean;
+  retryPending: boolean;
+  onRetry: (runId: string, stageKey: string) => void;
+  onPrev: () => void;
+  onNext: () => void;
+};
+
+/** Run rows (or a "no matches" row) with the cursor pager beneath; page numbers are 1-based over the caller's cursor stack. */
+function RunTable({ source, displayed, pageIndex, hasNext, fetching, retryPending, onRetry, onPrev, onNext }: RunTableProps) {
+  const t = useTranslations('sources');
+  const display = useDisplayPreferences();
+  return (
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t('run.columnId')}</TableHead>
+            <TableHead>{t('run.columnStarted')}</TableHead>
+            <TableHead>{t('run.columnStatus')}</TableHead>
+            <TableHead>{t('run.columnStages')}</TableHead>
+            <TableHead>{t('run.columnError')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {displayed.map((run) => (
+            <RunRow
+              key={run.run_id}
+              run={run}
+              source={source}
+              t={t}
+              locale={display.locale}
+              timezone={display.timezone}
+              retryPending={retryPending}
+              onRetry={(stageKey) => onRetry(run.run_id, stageKey)}
+            />
+          ))}
+          {displayed.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={5} className="text-muted-foreground">
+                {t('run.noMatches')}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <TablePagination page={pageIndex + 1} hasPrev={pageIndex > 0} hasNext={hasNext} disabled={fetching} onPrev={onPrev} onNext={onNext} />
+    </>
+  );
+}
+
+/** Shows source freshness and a filterable, cursor-paginated run table; retry reuses the ingestion API and refreshes source history. */
+export function SyncHistory({ source, intervalMinutes }: { source: Source; intervalMinutes?: number }) {
+  const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
-  const run = useQuery({
-    queryKey: ['ingestion-run', runId],
-    queryFn: () => getRun(runId),
-    refetchInterval: (query) => ['succeeded', 'needs_ocr', 'failed'].includes(query.state.data?.status ?? '') ? false : 1500,
+  const queryClient = useQueryClient();
+  const [status, setStatus] = useState<'all' | IngestionRunStatus>('all');
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const pageIndex = cursors.length - 1;
+  const history = useQuery({
+    queryKey: [...connectorKeys.ingestion(source.id), status, cursors[pageIndex]],
+    queryFn: ({ signal }) => getSourceIngestion(source.id, cursors[pageIndex], status === 'all' ? undefined : status, signal),
+    refetchInterval: (query) => (query.state.data?.current_run ? 1500 : false),
   });
   const retry = useMutation({
-    mutationFn: () => retryRun(runId, csrfToken),
-    onSuccess: (receipt) => { void apiRequest(`/api/v1/ingestion/runs/${receipt.run_id}`); void run.refetch(); },
+    mutationFn: ({ runId, stageKey }: { runId: string; stageKey: string }) => retryRun(runId, stageKey, csrfToken),
+    onSuccess: (receipt) => {
+      void queryClient.invalidateQueries({ queryKey: ['ingestion-run', receipt.run_id] });
+      void queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(source.id) });
+      void queryClient.invalidateQueries({ queryKey: sourceKeys.detail(source.id) });
+    },
   });
-  if (run.isPending) return <p className="muted">Loading collection run…</p>;
-  if (run.isError) return <p className="error" role="alert">Could not load run: {run.error instanceof ApiError ? run.error.message : 'request failed'}</p>;
-  const stages = run.data.stages;
-  return <div className="sub-panel" aria-live="polite">
-    <h3>Collection and processing</h3>
-    <p>Received: {run.data.status === 'queued' ? 'queued' : run.data.status === 'failed' ? 'failed' : 'yes'}</p>
-    {stages.map((stage) => <p key={stage.stage_key}>{stage.stage_key === 'parse_file' ? 'Parsed and chunked' : stage.stage_key}: {stage.status}{stage.error_code ? ` · ${stage.error_code}` : ''}</p>)}
-    <p>Embedded: not configured · Indexed: not configured</p>
-    {run.data.status === 'failed' && <button className="button secondary" disabled={retry.isPending} onClick={() => retry.mutate()}>Retry</button>}
-    {retry.error && <p className="error" role="alert">{retry.error instanceof ApiError ? retry.error.message : 'Could not retry this run.'}</p>}
-  </div>;
+
+  /** Clears cursor history when a filter changes so the new result set starts at page one. */
+  const changeStatus = (value: string) => {
+    setStatus(value as 'all' | IngestionRunStatus);
+    setCursors([undefined]);
+  };
+  /** Appends the server-provided opaque cursor and exposes a matching previous-page path. */
+  const nextPage = () => {
+    const cursor = history.data?.next_cursor;
+    if (cursor) setCursors((current) => [...current, cursor]);
+  };
+
+  const current = history.data?.current_run;
+  const runs = history.data?.items ?? [];
+  const displayed = [
+    ...(pageIndex === 0 && current && (status === 'all' || current.status === status) ? [current] : []),
+    ...runs.filter((run) => run.run_id !== current?.run_id),
+  ];
+  return (
+    <section className="grid gap-4" aria-label={t('recentRuns')}>
+      <SourceFreshness source={source} intervalMinutes={intervalMinutes} />
+      <RunStatusFilter status={status} onChange={changeStatus} />
+      {history.isPending && (
+        <p className="text-muted-foreground" role="status">
+          {t('loading')}
+        </p>
+      )}
+      {history.isError && (
+        <p className="error" role="alert">
+          {t('actionFailed')}
+        </p>
+      )}
+      {history.data && (
+        <RunTable
+          source={source}
+          displayed={displayed}
+          pageIndex={pageIndex}
+          hasNext={Boolean(history.data.next_cursor)}
+          fetching={history.isFetching}
+          retryPending={retry.isPending}
+          onRetry={(runId, stageKey) => retry.mutate({ runId, stageKey })}
+          onPrev={() => setCursors((current) => current.slice(0, -1))}
+          onNext={nextPage}
+        />
+      )}
+      {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && (
+        <p className="text-sm text-muted-foreground">{t('provider.historyCaveat')}</p>
+      )}
+      <p className="text-sm text-muted-foreground">{t('embeddedStatus')}</p>
+      {retry.error && (
+        <p className="error" role="alert">
+          {t('actionFailed')}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Renders one run and its stage-level counts/errors, with retry only when a failed stage belongs to an active source. */
+function RunRow({
+  run,
+  source,
+  t,
+  locale,
+  timezone,
+  retryPending,
+  onRetry,
+}: {
+  run: IngestionRun;
+  source: Source;
+  t: ReturnType<typeof useTranslations<'sources'>>;
+  locale: AppLocaleId;
+  timezone: string;
+  retryPending: boolean;
+  onRetry: (stageKey: string) => void;
+}) {
+  const errorLabel = useErrorCodeLabel();
+  const hasActiveStage = run.stages.some((stage) => ['pending', 'queued', 'running', 'retrying'].includes(stage.status));
+  return (
+    <TableRow>
+      <TableCell className="text-xs tabular-nums" title={run.run_id}>
+        {run.run_id.slice(0, 8)}
+      </TableCell>
+      <TableCell className="tabular-nums">{formatDate(run.created_at, locale, timezone)}</TableCell>
+      <TableCell>{t(statusKey(run.status))}</TableCell>
+      <TableCell className="min-w-64 whitespace-normal">
+        <div className="grid gap-2">
+          {run.stages.map((stage) => (
+            <details key={stage.stage_key} className="rounded border border-border px-2 py-1">
+              <summary className="cursor-pointer">
+                {stage.stage_key === 'normalize' ? t('normalizeStage') : stage.stage_key}: {t(statusKey(stage.status))}
+              </summary>
+              <div className="grid gap-1 pt-2 text-xs text-muted-foreground">
+                <span>
+                  {t('run.attempts', { count: stage.attempts })}
+                  {stage.error_code ? ` · ${errorLabel(stage.error_code)}` : ''}
+                </span>
+                {stage.result_count !== null && (
+                  <span>
+                    {t(stage.stage_key === 'normalize' || stage.stage_key === 'parse_file' ? 'chunkCount' : 'resultCount')}:{' '}
+                    {stage.result_count}
+                  </span>
+                )}
+                {stage.stage_key === 'normalize' && (
+                  <span>
+                    {t('normalizedCount')}: {stage.normalized_count} · {t('selectedCurrentCount')}: {stage.selected_current_count} ·{' '}
+                    {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}:{' '}
+                    {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}
+                  </span>
+                )}
+                {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && (
+                  <Button type="button" size="sm" variant="outline" disabled={retryPending} onClick={() => onRetry(stage.stage_key)}>
+                    {t('run.retryStage', { stage: stage.stage_key })}
+                  </Button>
+                )}
+              </div>
+            </details>
+          ))}
+          {run.collection_stats && <CollectionStatsLines stats={run.collection_stats} t={t} locale={locale} timezone={timezone} />}
+        </div>
+      </TableCell>
+      <TableCell className="whitespace-normal">{run.error_code ? `${t('run.error')}: ${errorLabel(run.error_code)}` : '—'}</TableCell>
+    </TableRow>
+  );
+}
+
+/**
+ * Per-run collection telemetry from the acceptance receipt: new vs waiting-for-next-sync counts, a gap warning when the
+ * feed no longer returned items since the last cursor, skipped duplicates, sections that failed to fetch, a page-cut (`truncated`) warning, failed MCP calls and a
+ * "catching up" note while a social source has not reached its older posts yet (`caught_up === false`).
+ * Every line is omitted when its field is absent or zero, so runs without stats render nothing.
+ */
+function CollectionStatsLines({
+  stats,
+  t,
+  locale,
+  timezone,
+}: {
+  stats: CollectionStats;
+  t: ReturnType<typeof useTranslations<'sources'>>;
+  locale: AppLocaleId;
+  timezone: string;
+}) {
+  const failed = stats.failed_sections ?? [];
+  return (
+    <div className="grid gap-1 text-xs text-muted-foreground">
+      {stats.new != null && <span>{t('run.collectionNew', { new: stats.new, backlog: stats.backlog ?? 0 })}</span>}
+      {stats.gap && (
+        <span className="text-destructive" role="status">
+          {t('run.collectionGap', { gap: `${formatDate(stats.gap[0], locale, timezone)} – ${formatDate(stats.gap[1], locale, timezone)}` })}
+        </span>
+      )}
+      {Boolean(stats.duplicates) && <span>{t('run.collectionDuplicates', { count: stats.duplicates ?? 0 })}</span>}
+      {stats.truncated === true && (
+        <span className="text-destructive" role="status">
+          {t('run.collectionTruncated')}
+        </span>
+      )}
+      {Boolean(stats.failed_calls) && (
+        <span className="text-destructive" role="alert">
+          {t('run.collectionFailedCalls', { count: stats.failed_calls ?? 0 })}
+        </span>
+      )}
+      {stats.caught_up === false && <span role="status">{t('run.collectionCatchingUp')}</span>}
+      {failed.length > 0 && (
+        <span className="text-destructive" role="alert">
+          {t('run.collectionFailedSections', { sections: failed.join(', ') })}
+        </span>
+      )}
+    </div>
+  );
 }

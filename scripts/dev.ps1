@@ -1,9 +1,14 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'lint', 'typecheck', 'test', 'build')]
+  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'load-test', 'build', 'audit')]
   [string]$Task,
   [string]$PytestTarget,
-  [string]$E2eTarget
+  [string]$E2eTarget,
+  [switch]$E2eOnly,
+  [ValidateSet('en-us', 'vi-vi')]
+  [string]$E2eLocale,
+  [string]$Workspace,
+  [string]$ConfirmFingerprint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,17 +16,34 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Push-Location $repo
 try {
   function Invoke-Checked([string]$Program, [string[]]$Arguments) {
+    <#
+    .SYNOPSIS
+    Run an external program and fail the current task when it exits unsuccessfully.
+
+    .PARAMETER Program
+    Executable name or path to invoke.
+
+    .PARAMETER Arguments
+    Argument vector passed to the executable without joining it into a command string.
+
+    .OUTPUTS
+    Forwards output emitted by the external program.
+
+    .NOTES
+    Throws when the native process exit code is nonzero.
+    #>
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
   }
 
-  function New-Secret {
-    $bytes = [byte[]]::new(48)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-  }
-
   function Get-ComposeArgs {
+    <#
+    .SYNOPSIS
+    Return the base and development Compose file arguments used by local stack commands.
+
+    .OUTPUTS
+    System.String[]
+    #>
     return @('-f', 'docker-compose.yml', '-f', 'docker-compose.dev.yml')
   }
 
@@ -32,39 +54,49 @@ try {
     finally { $listener.Stop() }
   }
 
+  if ($Workspace -and $Workspace -notmatch '^bbd-os-ws-[0-9a-f]{12}$') {
+    throw 'Workspace must match bbd-os-ws- followed by exactly 12 lowercase hexadecimal characters'
+  }
+  if ($Workspace -and $Task -notin @('dev', 'stop', 'seed', 'reset-preview', 'reset')) {
+    throw '-Workspace applies only to named development-workspace commands'
+  }
+
   switch ($Task) {
     'setup' {
-      if (-not (Test-Path '.env')) {
-        $dbPassword = New-Secret
-        $config = @"
-PUBLIC_ORIGIN=http://localhost:3000
-SECURE_COOKIES=false
-SETUP_TOKEN=$(New-Secret)
-CSRF_SIGNING_SECRET=$(New-Secret)
-SESSION_LIFETIME_HOURS=24
-POSTGRES_PASSWORD=$dbPassword
-DATABASE_URL=postgresql+asyncpg://bbd:${dbPassword}@postgres:5432/bbd
-REDIS_URL=redis://redis:6379/0
-DATA_DIR=/data
-WEB_PORT=3000
-OMNIROUTE_BASE_URL=
-OMNIROUTE_API_KEY=
-OMNIROUTE_MODELS={}
-"@
-        [System.IO.File]::WriteAllText((Join-Path $repo '.env'), $config, [System.Text.UTF8Encoding]::new($false))
-        Write-Output 'Created local .env with generated secrets. Keep it private.'
-      } else {
-        Write-Output 'Kept existing .env unchanged.'
-      }
       Invoke-Checked 'uv' @('sync', '--frozen')
       Invoke-Checked 'npm' @('ci')
+      # Same generator as `make setup`: creates or completes .env (all secrets, both Fernet keys) without
+      # changing existing real values.
+      Invoke-Checked 'python' @('scripts/ensure_env.py')
     }
-    'dev' { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('up', '-d', '--build')) }
-    'stop' { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('stop')) }
+    'dev' {
+      if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'up', '--name', $Workspace) }
+      else { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('up', '-d', '--build')) }
+    }
+    'stop' {
+      if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'stop', '--name', $Workspace) }
+      else { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('stop')) }
+    }
     'migrate' { Invoke-Checked 'docker' (@('compose') + (Get-ComposeArgs) + @('run', '--rm', 'migrate')) }
-    'seed' { Invoke-Checked 'docker' @('compose', '-f', 'docker-compose.yml', 'run', '--rm', '--build', 'api', 'python', '-m', 'modules.knowledge.documents.seed') }
+    'seed' {
+      if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'seed', '--name', $Workspace) }
+      else { Invoke-Checked 'docker' @('compose', '-f', 'docker-compose.yml', 'run', '--rm', '--build', 'api', 'python', '-m', 'modules.knowledge.documents.seed') }
+    }
+    'reset-preview' {
+      if (-not $Workspace) { throw 'Specify -Workspace bbd-os-ws-<12 lowercase hex characters>' }
+      Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset-preview', '--name', $Workspace)
+    }
+    'reset' {
+      if (-not $Workspace -or -not $ConfirmFingerprint) { throw 'Specify -Workspace and the fingerprint shown by reset-preview' }
+      Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset', '--name', $Workspace, '--confirm', $ConfirmFingerprint)
+    }
     'lint' {
-      Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations')
+      Invoke-Checked 'uv' @('run', 'ruff', 'format', '--check', 'core', 'apps', 'modules', 'tests', 'scripts')
+      Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'scripts', 'infrastructure/postgres/migrations')
+      Invoke-Checked 'uv' @('run', 'python', 'scripts/check_genui_parity.py')
+      Invoke-Checked 'uv' @('run', 'python', 'scripts/check_function_length.py')
+      Invoke-Checked 'uv' @('run', 'python', 'scripts/check_file_size.py')
+      if (Test-Path '.importlinter') { Invoke-Checked 'uv' @('run', 'lint-imports') }
       Invoke-Checked 'npm' @('run', 'lint')
     }
     'typecheck' {
@@ -72,26 +104,31 @@ OMNIROUTE_MODELS={}
       Invoke-Checked 'npm' @('run', 'typecheck')
     }
     'test' {
-      if ($PytestTarget -and $E2eTarget) { throw 'Choose only one of -PytestTarget or -E2eTarget.' }
+      if ($PytestTarget -and ($E2eTarget -or $E2eOnly)) { throw 'Choose only one of -PytestTarget or -E2eTarget/-E2eOnly.' }
       if ($PytestTarget -and $PytestTarget -notlike 'tests/integration/*') {
         Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q')
         break
       }
-      if (-not $PytestTarget -and -not $E2eTarget) {
+      if (-not $PytestTarget -and -not $E2eTarget -and -not $E2eOnly) {
         Invoke-Checked 'uv' @('run', 'pytest', '-q')
       }
       $project = 'bbd-os-test-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
-      $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml')
+      $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml', '--profile', 's3')
       $previousWebPort = $env:WEB_PORT
       $previousApiTestPort = $env:API_TEST_PORT
       $previousTestPostgresPort = $env:TEST_POSTGRES_PORT
       $previousTestDatabaseUrl = $env:TEST_DATABASE_URL
-      $previousIntegration = $env:BBD_INTEGRATION
-      $previousApiUrl = $env:BBD_API_URL
+      $previousChatSqlReaderUrl = $env:CHAT_SQL_READER_DATABASE_URL
+      $previousIntegration = $env:INTEGRATION
+      $previousApiUrl = $env:API_URL
       $previousTestOrigin = $env:TEST_PUBLIC_ORIGIN
       $previousE2eToken = $env:E2E_SETUP_TOKEN
       $previousPlaywrightUrl = $env:PLAYWRIGHT_BASE_URL
       $previousExternalServer = $env:PLAYWRIGHT_EXTERNAL_SERVER
+      $previousAllowPublic = $env:E2E_ALLOW_PUBLIC_PROVIDERS
+      $previousE2eLocale = $env:E2E_LOCALE
+      # Owner UI locale for the browser specs (tests/e2e/fixtures.ts); -E2eLocale wins over an inherited E2E_LOCALE.
+      if ($E2eLocale) { $env:E2E_LOCALE = $E2eLocale }
       $webPort = Get-FreePort
       $apiPort = Get-FreePort
       while ($apiPort -eq $webPort) { $apiPort = Get-FreePort }
@@ -104,37 +141,72 @@ OMNIROUTE_MODELS={}
         $env:API_TEST_PORT = [string]$apiPort
         $env:TEST_POSTGRES_PORT = [string]$postgresPort
         $env:TEST_DATABASE_URL = "postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:$postgresPort/bbd_test"
+        # Host-side pytest reaches the chat SQL reader login (password provisioned by the compose stack).
+        $env:CHAT_SQL_READER_DATABASE_URL = "postgresql+asyncpg://umwelt_chat_sql_login:bbd-os-test-chat-sql-only@127.0.0.1:$postgresPort/bbd_test"
         $env:TEST_PUBLIC_ORIGIN = "http://localhost:$webPort"
+        # Optional S3 profile (RustFS) backs tests/integration/test_storage_s3.py (disposable credentials from docker-compose.test.yml).
+        $s3Port = Get-FreePort
+        $env:TEST_S3_PORT = [string]$s3Port
+        $env:S3_TEST_ENDPOINT_URL = "http://127.0.0.1:$s3Port"
+        $env:S3_TEST_ACCESS_KEY = 'bbd-os-test-s3'
+        $env:S3_TEST_SECRET_KEY = 'bbd-os-test-s3-only'
+        # Opt-in real-model chat e2e: only when .env.e2e-real holds a non-empty key. The key itself is never exported to compose;
+        # the spec reads the file directly. Without it the stack keeps AI egress pinned to the fake model.
+        if ((Test-Path '.env.e2e-real') -and (Select-String -Path '.env.e2e-real' -Pattern '^\s*E2E_REAL_API_KEY\s*=\s*\S' -Quiet)) {
+          $env:E2E_ALLOW_PUBLIC_PROVIDERS = 'true'
+        }
         Invoke-Checked 'docker' ($compose + @('up', '-d', '--build'))
-        # `up` waits for migration completion; this second run proves the revision is idempotent.
-        Invoke-Checked 'docker' ($compose + @('run', '--rm', 'migrate'))
-        Invoke-Checked 'docker' ($compose + @('run', '--rm', '--no-deps', 'api', 'python', '-c', 'import apps.api.main, core.auth.dependencies, modules'))
-        $env:BBD_INTEGRATION = '1'
-        $env:BBD_API_URL = "http://localhost:$apiPort"
-        $identity = & docker @($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-At', '-c', "SELECT current_database() || '|' || current_user"))
-        if ($LASTEXITCODE -ne 0) { throw 'Could not verify disposable PostgreSQL identity' }
-        if (($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Refusing integration tests against a non-test database' }
-        Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration/test_auth_race.py', '-q')
-        if ($PytestTarget) {
-          if ($PytestTarget -ne 'tests/integration/test_auth_race.py') {
-            Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q')
+        # -E2eOnly skips the (slow) integration suite and runs only the browser specs.
+        if (-not $E2eOnly) {
+          # `up` waits for migration completion; this second run proves the revision is idempotent.
+          Invoke-Checked 'docker' ($compose + @('run', '--rm', 'migrate'))
+          Invoke-Checked 'docker' ($compose + @('run', '--rm', '--no-deps', 'api', 'python', '-c', 'import apps.api.main, core.auth.dependencies, modules'))
+          $env:INTEGRATION = '1'
+          $env:API_URL = "http://localhost:$apiPort"
+          $identity = & docker @($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-At', '-c', "SELECT current_database() || '|' || current_user"))
+          if ($LASTEXITCODE -ne 0) { throw 'Could not verify disposable PostgreSQL identity' }
+          if (($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Refusing integration tests against a non-test database' }
+          Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration/test_auth_race.py', '-q')
+          if ($PytestTarget) {
+            if ($PytestTarget -ne 'tests/integration/test_auth_race.py') {
+              Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q', '--ignore=tests/integration/test_auth_race.py')
+            }
+          } else {
+            Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration', '-q', '--ignore=tests/integration/test_auth_race.py')
           }
-        } else {
-          Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration', '-q', '--ignore=tests/integration/test_auth_race.py')
         }
         if (-not $PytestTarget -or $E2eTarget) {
           if ($project -notmatch '^bbd-os-test-[0-9a-f]{10}$') { throw 'Refusing browser reset outside unique disposable project' }
-          $reset = @'
-DO $$ DECLARE tables text; BEGIN IF current_database() <> 'bbd_test' OR current_user <> 'bbd_test' THEN RAISE EXCEPTION 'unsafe test database'; END IF; SELECT string_agg(format('%I.%I', schemaname, tablename), ',') INTO tables FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version'; IF tables IS NOT NULL THEN EXECUTE 'TRUNCATE TABLE ' || tables || ' CASCADE'; END IF; END $$;
-'@
-          Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', $reset))
-        $env:E2E_SETUP_TOKEN = 'bbd-os-disposable-test-token'
-        $env:PLAYWRIGHT_BASE_URL = "http://localhost:$webPort"
-        $env:PLAYWRIGHT_EXTERNAL_SERVER = '1'
+          $reset = (Get-Content -Raw (Join-Path $PSScriptRoot 'sql/e2e-reset.sql')) -replace '\r?\n', ' '
+          $resetE2e = {
+            Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', $reset))
+            Invoke-Checked 'docker' ($compose + @('exec', '-T', 'redis', 'sh', '-c', 'unset REDISCLI_AUTH; redis-cli FLUSHALL'))
+          }
+          & $resetE2e
+          $env:E2E_SETUP_TOKEN = 'bbd-os-disposable-test-token'
+          $env:PLAYWRIGHT_BASE_URL = "http://localhost:$webPort"
+          $env:PLAYWRIGHT_EXTERNAL_SERVER = '1'
+          $env:API_URL = "http://localhost:$apiPort"
           if ($E2eTarget) { Invoke-Checked 'npm' @('run', 'test:e2e', '--', $E2eTarget) }
-          elseif (-not $PytestTarget) { Invoke-Checked 'npm' @('run', 'test:e2e') }
+          elseif (-not $PytestTarget) {
+            # Two groups, each with its own global timeout and a fresh owner bootstrap (see playwright.config.ts).
+            # The second group runs even when the first fails, so one slow provider cannot hide the rest of the suite.
+            $failed = @()
+            foreach ($group in @('datasources', 'rest')) {
+              $env:E2E_GROUP = $group
+              & npm run test:e2e
+              if ($LASTEXITCODE -ne 0) { $failed += $group }
+              if ($group -eq 'datasources') { & $resetE2e }
+            }
+            Remove-Item Env:E2E_GROUP -ErrorAction SilentlyContinue
+            if ($failed) { throw "e2e groups failed: $($failed -join ', ')" }
+          }
         }
       } finally {
+        # Keep the disposable stack's logs: `down` destroys the only evidence of a container that died mid-run.
+        New-Item -ItemType Directory -Force -Path 'test-results' | Out-Null
+        & docker @($compose + @('ps', '-a')) 2>&1 | Out-File -Encoding utf8 'test-results/compose-ps.txt'
+        & docker @($compose + @('logs', '--no-color', '--timestamps', '--tail', '5000')) 2>&1 | Out-File -Encoding utf8 'test-results/compose-logs.txt'
         & docker @($compose + @('down', '--volumes', '--remove-orphans'))
         if ($null -eq $previousWebPort) { Remove-Item Env:WEB_PORT -ErrorAction SilentlyContinue }
         else { $env:WEB_PORT = $previousWebPort }
@@ -144,10 +216,12 @@ DO $$ DECLARE tables text; BEGIN IF current_database() <> 'bbd_test' OR current_
         else { $env:TEST_POSTGRES_PORT = $previousTestPostgresPort }
         if ($null -eq $previousTestDatabaseUrl) { Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue }
         else { $env:TEST_DATABASE_URL = $previousTestDatabaseUrl }
-        if ($null -eq $previousIntegration) { Remove-Item Env:BBD_INTEGRATION -ErrorAction SilentlyContinue }
-        else { $env:BBD_INTEGRATION = $previousIntegration }
-        if ($null -eq $previousApiUrl) { Remove-Item Env:BBD_API_URL -ErrorAction SilentlyContinue }
-        else { $env:BBD_API_URL = $previousApiUrl }
+        if ($null -eq $previousChatSqlReaderUrl) { Remove-Item Env:CHAT_SQL_READER_DATABASE_URL -ErrorAction SilentlyContinue }
+        else { $env:CHAT_SQL_READER_DATABASE_URL = $previousChatSqlReaderUrl }
+        if ($null -eq $previousIntegration) { Remove-Item Env:INTEGRATION -ErrorAction SilentlyContinue }
+        else { $env:INTEGRATION = $previousIntegration }
+        if ($null -eq $previousApiUrl) { Remove-Item Env:API_URL -ErrorAction SilentlyContinue }
+        else { $env:API_URL = $previousApiUrl }
         if ($null -eq $previousTestOrigin) { Remove-Item Env:TEST_PUBLIC_ORIGIN -ErrorAction SilentlyContinue }
         else { $env:TEST_PUBLIC_ORIGIN = $previousTestOrigin }
         if ($null -eq $previousE2eToken) { Remove-Item Env:E2E_SETUP_TOKEN -ErrorAction SilentlyContinue }
@@ -156,11 +230,70 @@ DO $$ DECLARE tables text; BEGIN IF current_database() <> 'bbd_test' OR current_
         else { $env:PLAYWRIGHT_BASE_URL = $previousPlaywrightUrl }
         if ($null -eq $previousExternalServer) { Remove-Item Env:PLAYWRIGHT_EXTERNAL_SERVER -ErrorAction SilentlyContinue }
         else { $env:PLAYWRIGHT_EXTERNAL_SERVER = $previousExternalServer }
+        if ($null -eq $previousAllowPublic) { Remove-Item Env:E2E_ALLOW_PUBLIC_PROVIDERS -ErrorAction SilentlyContinue }
+        else { $env:E2E_ALLOW_PUBLIC_PROVIDERS = $previousAllowPublic }
+        if ($null -eq $previousE2eLocale) { Remove-Item Env:E2E_LOCALE -ErrorAction SilentlyContinue }
+        else { $env:E2E_LOCALE = $previousE2eLocale }
       }
+    }
+    'load-test' {
+      # Mirrors scripts/load-test.sh: disposable Compose project + fake model, k6 from the pinned image on its network.
+      $k6Image = if ($env:K6_IMAGE) { $env:K6_IMAGE } else { 'grafana/k6:0.57.0' }
+      $scenario = if ($env:LOAD_SCENARIO) { $env:LOAD_SCENARIO } else { 'all.js' }
+      if ($scenario -notmatch '^[a-z_]+\.js$' -or -not (Test-Path (Join-Path 'tests/load' $scenario))) { throw "Unknown LOAD_SCENARIO: $scenario" }
+      $outDir = if ($env:LOAD_OUT_DIR) { $env:LOAD_OUT_DIR } else { Join-Path 'test-results/load' ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')) }
+      New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+      $outDir = (Resolve-Path $outDir).Path
+      $project = 'bbd-os-test-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+      $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml')
+      $saved = @{}
+      foreach ($name in 'WEB_PORT', 'API_TEST_PORT', 'TEST_POSTGRES_PORT', 'TEST_PUBLIC_ORIGIN') { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+      $ports = @()
+      while ($ports.Count -lt 3) { $candidate = Get-FreePort; if ($candidate -notin $ports) { $ports += $candidate } }
+      try {
+        $env:WEB_PORT = [string]$ports[0]
+        $env:API_TEST_PORT = [string]$ports[1]
+        $env:TEST_POSTGRES_PORT = [string]$ports[2]
+        $env:TEST_PUBLIC_ORIGIN = "http://localhost:$($ports[0])"
+        Invoke-Checked 'docker' ($compose + @('up', '-d', '--build'))
+        $network = (& docker network ls --filter "label=com.docker.compose.project=$project" --format '{{.Name}}' | Select-Object -First 1)
+        if (-not $network) { throw "Compose network for $project not found" }
+        $scale = { param($name, $default) if ([Environment]::GetEnvironmentVariable($name)) { [Environment]::GetEnvironmentVariable($name) } else { $default } }
+        $k6Args = @(
+          'run', '--rm', '--network', $network,
+          '-v', "$((Resolve-Path 'tests/load').Path):/scripts:ro", '-v', "${outDir}:/out",
+          '-e', 'API_URL=http://api:8000', '-e', "PUBLIC_ORIGIN=$($env:TEST_PUBLIC_ORIGIN)",
+          '-e', 'E2E_SETUP_TOKEN=bbd-os-disposable-test-token', '-e', 'FAKE_MODEL_URL=http://fake-model:8000/v1',
+          '-e', "LOAD_DURATION_SCALE=$(& $scale 'LOAD_DURATION_SCALE' '1')",
+          '-e', "SLO_LATENCY_SCALE=$(& $scale 'SLO_LATENCY_SCALE' '1')",
+          '-e', "SEED_DOCS=$(& $scale 'SEED_DOCS' '8')",
+          $k6Image, 'run', '--summary-export', '/out/summary.json', "/scripts/$scenario"
+        )
+        # k6 exits 99 when an SLO threshold is crossed; surface that after the stack logs are saved.
+        & docker @k6Args
+        $k6Status = $LASTEXITCODE
+      } finally {
+        & docker @($compose + @('ps', '-a')) 2>&1 | Out-File -Encoding utf8 (Join-Path $outDir 'compose-ps.txt')
+        & docker @($compose + @('logs', '--no-color', '--timestamps', '--tail', '2000')) 2>&1 | Out-File -Encoding utf8 (Join-Path $outDir 'compose-logs.txt')
+        & docker @($compose + @('down', '--volumes', '--remove-orphans'))
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+      }
+      if ($k6Status -ne 0) { throw "k6 exited with $k6Status (99 = SLO threshold crossed). Results: $outDir" }
     }
     'build' {
       Invoke-Checked 'npm' @('run', 'build')
       Invoke-Checked 'docker' @('compose', '-f', 'docker-compose.yml', 'build')
+    }
+    'audit' {
+      # Mirrors scripts/audit.sh: npm high/critical advisories, then pip-audit over the locked production set.
+      Invoke-Checked 'npm' @('audit', '--audit-level=high')
+      $requirements = New-TemporaryFile
+      try {
+        Invoke-Checked 'uv' @('export', '--frozen', '--no-hashes', '--no-dev', '--no-emit-project', '-o', $requirements.FullName)
+        Invoke-Checked 'uvx' @('pip-audit', '--no-deps', '--disable-pip', '-r', $requirements.FullName)
+      } finally {
+        Remove-Item -LiteralPath $requirements.FullName -ErrorAction SilentlyContinue
+      }
     }
   }
 } finally {

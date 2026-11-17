@@ -2,44 +2,186 @@
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources, sourceKeys, getRun } from '@/modules/sources/api';
+import { listSources, sourceKeys, getRun } from '@/modules/sources';
+import { Input } from '@/components/ui/input';
 
+/** Sentinel Select value for "no explicit source": the server files the upload under its default Uploads source. */
+const DEFAULT_SOURCE = 'default';
+
+/** Renders file selection and upload state, then reports the accepted ingestion run.
+ *
+ * The source is optional: when none is chosen `source_id` is omitted and the API stores the
+ * file in the server-owned "Uploads" source. Notes and finance modes only offer local-only manual sources.
+ */
 export function Upload() {
+  const s0 = useUploadController();
+
+  const vm: UploadVm = s0;
+  return (
+    <section className="sub-panel">
+      <UploadFormSection vm={vm} />
+      <UploadProgress vm={vm} />
+    </section>
+  );
+}
+
+type UploadVm = ReturnType<typeof useUploadController>;
+
+/** Title and file upload form. */
+function UploadFormSection({ vm }: { vm: UploadVm }) {
+  const { ts, available, sourceId, setSourceId, mode, setMode, setRunId, error, setError, upload } = vm;
+  return (
+    <>
+      <h2>{ts('upload.title')}</h2>
+      <form className="form" onSubmit={upload}>
+        <div className="field">
+          <Label htmlFor="upload-mode">{ts('upload.mode')}</Label>
+          <Select
+            value={mode}
+            onValueChange={(value) => {
+              setMode(value as typeof mode);
+              setSourceId(DEFAULT_SOURCE);
+              setRunId('');
+              setError('');
+            }}
+          >
+            <SelectTrigger id="upload-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="document">{ts('upload.modeDocument')}</SelectItem>
+              <SelectItem value="notes">{ts('upload.modeNotes')}</SelectItem>
+              <SelectItem value="finance">{ts('upload.modeFinance')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="field">
+          <Label htmlFor="upload-source">{ts('upload.source')}</Label>
+          <Select value={sourceId} onValueChange={setSourceId}>
+            <SelectTrigger id="upload-source">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={DEFAULT_SOURCE}>{ts('upload.defaultSource')}</SelectItem>
+              {available.map((source) => (
+                <SelectItem value={source.id} key={source.id}>
+                  {source.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="field">
+          <Label htmlFor="upload-file">{ts('upload.file')}</Label>
+          <Input
+            id="upload-file"
+            name="file"
+            type="file"
+            accept={mode === 'finance' ? '.csv,.ofx' : mode === 'notes' ? '.md,.markdown' : '.txt,.md,.json,.csv,.pdf,.docx'}
+            required
+          />
+          <span className="muted">
+            {mode === 'finance' ? ts('upload.financeHint') : mode === 'notes' ? ts('upload.notesHint') : ts('upload.hint')}
+          </span>
+        </div>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <Button type="submit">{ts('upload.button')}</Button>
+      </form>
+    </>
+  );
+}
+
+/** Ingestion run progress and failure notices. */
+function UploadProgress({ vm }: { vm: UploadVm }) {
+  const { ts, run, runId } = vm;
+  return (
+    <>
+      {runId && run.data && (
+        <div aria-live="polite">
+          <h3>{ts('upload.progress')}</h3>
+          <p>{ts('upload.received')}</p>
+          <p>
+            {ts('upload.parsed', {
+              value:
+                run.data.status === 'needs_ocr'
+                  ? ts('upload.noText')
+                  : (run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.status ?? ts('upload.queued')),
+            })}
+          </p>
+          <p>
+            {ts('upload.chunked', {
+              value:
+                run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.result_count ??
+                (run.data.status === 'running' ? ts('upload.processing') : '0'),
+            })}
+          </p>
+          <p>{ts('upload.embedded')}</p>
+          {run.data.error_code && <p className="error">{ts('upload.error', { code: run.data.error_code })}</p>}
+        </div>
+      )}
+      {run.isError && (
+        <p className="error" role="alert">
+          {ts('upload.progressFailed')}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Holds the state, queries and derived values of Upload. */
+function useUploadController() {
   const { csrfToken } = useWorkspaceSession();
-  const [sourceId, setSourceId] = useState('');
+  const ts = useTranslations('uiSweep');
+  const [sourceId, setSourceId] = useState(DEFAULT_SOURCE);
+  const [mode, setMode] = useState<'document' | 'notes' | 'finance'>('document');
   const [runId, setRunId] = useState('');
   const [error, setError] = useState('');
-  const sources = useInfiniteQuery({ queryKey: sourceKeys.list, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listSources(pageParam), getNextPageParam: (last) => last.next_cursor ?? undefined });
-  const run = useQuery({ queryKey: ['ingestion-run', runId], queryFn: () => getRun(runId), enabled: !!runId, refetchInterval: (query) => ['succeeded', 'needs_ocr', 'failed'].includes(query.state.data?.status ?? '') ? false : 1500 });
-  const available = sources.data?.pages.flatMap((page) => page.items).filter((source) => source.status === 'active' && (source.type === 'file' || source.type === 'manual')) ?? [];
+  const sources = useInfiniteQuery({
+    queryKey: sourceKeys.list,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listSources(pageParam),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+  const run = useQuery({
+    queryKey: ['ingestion-run', runId],
+    queryFn: () => getRun(runId),
+    enabled: !!runId,
+    refetchInterval: (query) => (['succeeded', 'needs_ocr', 'failed'].includes(query.state.data?.status ?? '') ? false : 1500),
+  });
+  const available =
+    sources.data?.pages
+      .flatMap((page) => page.items)
+      .filter(
+        (source) =>
+          source.status === 'active' &&
+          (source.type === 'file' || source.type === 'manual') &&
+          (mode === 'document' || (source.type === 'manual' && source.local_only)),
+      ) ?? [];
 
+  /** Posts a document or local-only financial export through its durable ingestion receipt and tracks the run. */
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
     const form = new FormData(event.currentTarget);
-    form.set('source_id', sourceId);
+    if (sourceId !== DEFAULT_SOURCE) form.set('source_id', sourceId);
     try {
-      const receipt = await apiRequest<{ run_id: string }>('/api/v1/documents/upload', { method: 'POST', headers: csrfHeaders(csrfToken), body: form });
+      const endpoint = mode === 'finance' ? '/api/v1/documents/finance-import' : '/api/v1/documents/upload';
+      const receipt = await apiRequest<{ run_id: string }>(endpoint, { method: 'POST', headers: csrfHeaders(csrfToken), body: form });
       setRunId(receipt.run_id);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : 'Upload failed.');
+      setError(cause instanceof ApiError ? cause.message : ts('upload.failed'));
     }
   }
 
-  return <section className="sub-panel">
-    <h2>Upload a document</h2>
-    <form className="form" onSubmit={upload}>
-      <div className="field"><Label htmlFor="upload-source">Source</Label><select id="upload-source" className="input" value={sourceId} onChange={(event) => setSourceId(event.target.value)} required><option value="">Choose an active source</option>{available.map((source) => <option value={source.id} key={source.id}>{source.name}</option>)}</select></div>
-      <div className="field"><Label htmlFor="upload-file">File</Label><input id="upload-file" className="input" name="file" type="file" accept=".txt,.md,.json,.csv,.pdf,.docx" required /><span className="muted">Up to 25 MiB. Supported text formats: TXT, Markdown, JSON, CSV, PDF, DOCX.</span></div>
-      {error && <p className="error" role="alert">{error}</p>}
-      {sources.isSuccess && available.length === 0 && <p className="empty-state">Create an active manual or file source before uploading.</p>}
-      <Button type="submit" disabled={!sourceId || available.length === 0}>Upload</Button>
-    </form>
-    {runId && run.data && <div aria-live="polite"><h3>Upload progress</h3><p>Received: yes</p><p>Parsed: {run.data.status === 'needs_ocr' ? 'no extractable text' : run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.status ?? 'queued'}</p><p>Chunked: {run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.result_count ?? (run.data.status === 'running' ? 'processing' : '0')}</p><p>Embedded: not configured · Indexed: not configured</p>{run.data.error_code && <p className="error">Processing error: {run.data.error_code}</p>}</div>}
-    {run.isError && <p className="error" role="alert">Could not load upload progress.</p>}
-  </section>;
+  return { ts, sources, run, available, sourceId, setSourceId, mode, setMode, runId, setRunId, error, setError, csrfToken, upload };
 }

@@ -1,0 +1,139 @@
+# PgBouncer overlay (transaction pooling): lets several API/worker replicas share PostgreSQL's connection budget.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pgbouncer.yml up -d
+#
+# What changes:
+#   * api / worker / cron-worker / chat-worker / model-worker use DATABASE_URL -> pgbouncer (one database alias per role) with
+#     PGBOUNCER_ENABLED=true, which turns off asyncpg prepared-statement caches (transaction pooling shares server
+#     connections between clients) and stops sending startup GUCs. Each alias applies that role's statement_timeout and
+#     idle_in_transaction_session_timeout through `connect_query`, so the per-role timeouts survive pooling.
+#   * DATABASE_DIRECT_URL (PostgreSQL, bypassing the pooler) is used by migrations, admin scripts and the few paths
+#     that need a stable backend: session advisory leases (agent runs, account erasure, workspace storage uploads).
+#     Those leases are capped per role by DB_DIRECT_POOL_SIZE (worker and cron-worker: their max_jobs).
+# See docs/deployment.md "PgBouncer and horizontal scaling" for the connection budget and making this the default.
+#
+# The image tag below is pinned; verify it against your registry before first use and bump it deliberately.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-direct-url: &direct-url postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bbd}
+
+services:
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bbd}
+      POSTGRES_DB: ${POSTGRES_DB:-bbd}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-60000}
+      DB_WORKER_STATEMENT_TIMEOUT_MS: ${DB_WORKER_STATEMENT_TIMEOUT_MS:-120000}
+      DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS: ${DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS:-120000}
+      DB_IDLE_TX_TIMEOUT_MS: ${DB_IDLE_TX_TIMEOUT_MS:-240000}
+      # Server connections per role alias (the pooled budget; see the table in docs/deployment.md).
+      PGBOUNCER_POOL_API: ${PGBOUNCER_POOL_API:-20}
+      PGBOUNCER_POOL_WORKER: ${PGBOUNCER_POOL_WORKER:-12}
+      PGBOUNCER_POOL_CRON: ${PGBOUNCER_POOL_CRON:-10}
+      PGBOUNCER_POOL_CHAT: ${PGBOUNCER_POOL_CHAT:-12}
+      PGBOUNCER_POOL_MODEL: ${PGBOUNCER_POOL_MODEL:-6}
+    entrypoint: ["sh", "-c"]
+    # The config is rendered at start from the same variables as PostgreSQL, so no credential is committed.
+    command:
+      - |
+        set -eu
+        umask 077
+        printf '"%s" "%s"\n' "$$POSTGRES_USER" "$$POSTGRES_PASSWORD" > /tmp/userlist.txt
+        db="host=postgres port=5432 dbname=$$POSTGRES_DB"
+        idle="SET idle_in_transaction_session_timeout=$$DB_IDLE_TX_TIMEOUT_MS"
+        cat > /tmp/pgbouncer.ini <<EOF
+        [databases]
+        bbd_api = $$db pool_size=$$PGBOUNCER_POOL_API connect_query='SET statement_timeout=$$DB_STATEMENT_TIMEOUT_MS; $$idle'
+        bbd_worker = $$db pool_size=$$PGBOUNCER_POOL_WORKER connect_query='SET statement_timeout=$$DB_WORKER_STATEMENT_TIMEOUT_MS; $$idle'
+        bbd_cron = $$db pool_size=$$PGBOUNCER_POOL_CRON connect_query='SET statement_timeout=$$DB_WORKER_STATEMENT_TIMEOUT_MS; $$idle'
+        bbd_chat = $$db pool_size=$$PGBOUNCER_POOL_CHAT connect_query='SET statement_timeout=$$DB_STATEMENT_TIMEOUT_MS; $$idle'
+        bbd_model = $$db pool_size=$$PGBOUNCER_POOL_MODEL connect_query='SET statement_timeout=$$DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS; $$idle'
+
+        [pgbouncer]
+        listen_addr = 0.0.0.0
+        listen_port = 6432
+        auth_type = scram-sha-256
+        auth_file = /tmp/userlist.txt
+        pool_mode = transaction
+        max_client_conn = 1000
+        reserve_pool_size = 0
+        query_wait_timeout = 30
+        server_idle_timeout = 600
+        server_lifetime = 3600
+        ignore_startup_parameters = extra_float_digits
+        log_connections = 0
+        log_disconnections = 0
+        EOF
+        exec pgbouncer /tmp/pgbouncer.ini
+    expose: ["6432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: {memory: 128M}
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  migrate:
+    environment:
+      DATABASE_DIRECT_URL: *direct-url
+
+  api:
+    environment:
+      PGBOUNCER_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD}@pgbouncer:6432/bbd_api
+      DATABASE_DIRECT_URL: *direct-url
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+
+  worker:
+    environment:
+      PGBOUNCER_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD}@pgbouncer:6432/bbd_worker
+      DATABASE_DIRECT_URL: *direct-url
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+
+  cron-worker:
+    environment:
+      PGBOUNCER_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD}@pgbouncer:6432/bbd_cron
+      DATABASE_DIRECT_URL: *direct-url
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+
+  chat-worker:
+    environment:
+      PGBOUNCER_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD}@pgbouncer:6432/bbd_chat
+      DATABASE_DIRECT_URL: *direct-url
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+
+  model-worker:
+    environment:
+      PGBOUNCER_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD}@pgbouncer:6432/bbd_model
+      DATABASE_DIRECT_URL: *direct-url
+    depends_on:
+      pgbouncer:
+        condition: service_healthy

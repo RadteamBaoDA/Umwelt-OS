@@ -1,0 +1,231 @@
+'use client';
+
+import * as React from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { chatKeys, deleteConversation, patchConversation } from './api';
+import { useChatController } from '@/core/app-shell/chat-controller';
+import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+
+/** Openers returned by {@link useConversationActions}; `dialogs` must be rendered once by the owner. */
+export interface ConversationActions {
+  /** Opens the rename dialog for a conversation. */
+  rename: (conversation: { id: string; title: string }) => void;
+  /** Opens the delete confirmation for a conversation id. */
+  remove: (id: string) => void;
+  /** Pins or unpins a conversation (pinned ones are listed first by the server). */
+  setPinned: (id: string, pinned: boolean) => void;
+  /** Archives or restores a conversation; archived ones leave the default list. */
+  setArchived: (id: string, archived: boolean) => void;
+  /** Id of the conversation whose last pin/archive request failed (cleared by the next attempt), for an inline row error. */
+  flagError: string | null;
+  /** Dismisses `flagError` (e.g. when the history view changes and the failed row is no longer shown). */
+  clearFlagError: () => void;
+  /** Rename and delete dialogs; mounted by the owner so they work whether or not the history list is mounted. */
+  dialogs: React.ReactNode;
+}
+
+/** State and mutations owned by {@link useConversationActions} that the dialogs render. */
+interface ConversationDialogsProps {
+  pendingDeleteId: string | null;
+  setPendingDeleteId: (id: string | null) => void;
+  deleteMutation: { isError: boolean; isPending: boolean; mutate: (id: string) => void };
+  pendingRename: { id: string; title: string } | null;
+  setPendingRename: (value: { id: string; title: string } | null) => void;
+  renameValue: string;
+  setRenameValue: (value: string) => void;
+  renameMutation: { isError: boolean; isPending: boolean; mutate: (value: { id: string; title: string }) => void };
+}
+
+/**
+ * Delete confirmation and rename dialogs. A failed delete or rename keeps its dialog open with an inline error so the
+ * owner can retry; both dialogs close only on success or an explicit cancel.
+ *
+ * @param props - See {@link ConversationDialogsProps}.
+ */
+function ConversationDialogs({
+  pendingDeleteId,
+  setPendingDeleteId,
+  deleteMutation,
+  pendingRename,
+  setPendingRename,
+  renameValue,
+  setRenameValue,
+  renameMutation,
+}: ConversationDialogsProps) {
+  const t = useTranslations('chat');
+  return (
+    <>
+      <AlertDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('delete')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('deleteConfirm')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteMutation.isError && (
+            <p role="alert" className="text-xs text-destructive">
+              {t('deleteFailed')}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                // Keep the dialog open so a failed delete shows its error and can be retried.
+                event.preventDefault();
+                if (pendingDeleteId && !deleteMutation.isPending) deleteMutation.mutate(pendingDeleteId);
+              }}
+              className="bg-destructive text-destructive-foreground hover:opacity-90"
+            >
+              {deleteMutation.isError ? t('retry') : t('delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={pendingRename !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRename(null);
+        }}
+      >
+        <DialogContent closeLabel={t('cancel')}>
+          <DialogHeader>
+            <DialogTitle>{t('rename.conversation')}</DialogTitle>
+            <DialogDescription className="sr-only">{t('rename.label')}</DialogDescription>
+          </DialogHeader>
+          <form
+            className="grid gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const title = renameValue.trim();
+              if (pendingRename && title && !renameMutation.isPending) renameMutation.mutate({ id: pendingRename.id, title });
+            }}
+          >
+            <Input
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              aria-label={t('rename.label')}
+              maxLength={200}
+            />
+            {renameMutation.isError && (
+              <p role="alert" className="text-xs text-destructive">
+                {t('rename.failed')}
+              </p>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setPendingRename(null)}>
+                {t('cancel')}
+              </Button>
+              <Button type="submit" disabled={!renameValue.trim() || renameMutation.isPending}>
+                {t('rename.save')}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/**
+ * Owns the rename and delete dialogs plus their mutations, and the one-click pin/archive toggles (a failed toggle is reported through `flagError`), for conversations.
+ * Lifted out of ChatHistory so the conversation header can use them while the history sidebar is collapsed.
+ * Deleting the active conversation starts a new one; deleting always unbinds a day-conversation target.
+ *
+ * @param activeConversationId - Currently selected conversation, to detect deleting the active one.
+ * @param onNewConversation - Invoked after the active conversation was deleted.
+ * @returns Openers and the dialogs element to render once.
+ */
+export function useConversationActions(activeConversationId: string | null, onNewConversation: () => void): ConversationActions {
+  const session = useWorkspaceSession();
+  const queryClient = useQueryClient();
+  const { unbindConversation } = useChatController();
+  const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
+  const [pendingRename, setPendingRename] = React.useState<{ id: string; title: string } | null>(null);
+  const [renameValue, setRenameValue] = React.useState('');
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteConversation(id, session.csrfToken),
+    onSuccess: (_, deletedId) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      // A deleted day conversation must stop being that day's drawer target.
+      unbindConversation(deletedId);
+      if (activeConversationId === deletedId) onNewConversation();
+      setPendingDeleteId(null);
+    },
+  });
+  const renameMutation = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) => patchConversation(id, { title }, session.csrfToken),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(updated.id) });
+      setPendingRename(null);
+    },
+  });
+  // Pin/archive are one-click toggles with no dialog; the list and the open transcript header are refetched on success.
+  const flagMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: { pinned?: boolean; archived?: boolean } }) =>
+      patchConversation(id, patch, session.csrfToken),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(updated.id) });
+    },
+  });
+  const flagMutate = flagMutation.mutate;
+  const clearFlagError = flagMutation.reset;
+  const setPinned = React.useCallback((id: string, pinned: boolean) => flagMutate({ id, patch: { pinned } }), [flagMutate]);
+  const setArchived = React.useCallback((id: string, archived: boolean) => flagMutate({ id, patch: { archived } }), [flagMutate]);
+  const resetDelete = deleteMutation.reset;
+  const resetRename = renameMutation.reset;
+
+  const rename = React.useCallback(
+    (conversation: { id: string; title: string }) => {
+      resetRename();
+      setRenameValue(conversation.title);
+      setPendingRename(conversation);
+    },
+    [resetRename],
+  );
+  const remove = React.useCallback(
+    (id: string) => {
+      resetDelete();
+      setPendingDeleteId(id);
+    },
+    [resetDelete],
+  );
+
+  const dialogs = (
+    <ConversationDialogs
+      pendingDeleteId={pendingDeleteId}
+      setPendingDeleteId={setPendingDeleteId}
+      deleteMutation={deleteMutation}
+      pendingRename={pendingRename}
+      setPendingRename={setPendingRename}
+      renameValue={renameValue}
+      setRenameValue={setRenameValue}
+      renameMutation={renameMutation}
+    />
+  );
+
+  const flagError = flagMutation.isError ? flagMutation.variables.id : null;
+  return { rename, remove, setPinned, setArchived, flagError, clearFlagError, dialogs };
+}

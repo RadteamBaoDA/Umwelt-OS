@@ -1,0 +1,491 @@
+'use client';
+
+import * as React from 'react';
+import { useTranslations } from 'next-intl';
+import { FileTextIcon, LockIcon, XIcon } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { ApiError } from '@/core/api';
+import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_MAX_BYTES,
+  MAX_ATTACHMENTS,
+  getChatAttachment,
+  uploadChatAttachment,
+  type ChatAttachment,
+  type ChatContext,
+} from './api';
+import { ChatDocumentPreview } from './chat-document-preview';
+
+/** Translator bound to the `chat` namespace (typed keys, so a dynamic key must be a literal union). */
+type ChatTranslator = ReturnType<typeof useTranslations<'chat'>>;
+
+type Item = NonNullable<ChatContext['items']>[number];
+
+/** One composer attachment: local upload state plus the server Document once accepted. */
+export interface AttachmentEntry {
+  key: string;
+  name: string;
+  state: 'uploading' | ChatAttachment['status'] | 'rejected';
+  /** Kept so a private attachment can be re-attached as shared without picking it again. */
+  file: File;
+  doc?: ChatAttachment;
+  error?: string;
+}
+
+/** Element id of the attachment status line; the composer's Send button references it when blocked. */
+export const ATTACHMENT_STATUS_ID = 'chat-attachment-status';
+/** Element id of the composer's + menu trigger; focus lands here when the last attachment chip is removed. */
+export const COMPOSER_MENU_ID = 'chat-composer-menu';
+const POLL_MS = 1500;
+/** Consecutive non-404 polling errors tolerated (with exponential backoff) before giving up. */
+const MAX_POLL_FAILURES = 5;
+/** Overall cap on one attachment's ingest polling, whatever the server keeps reporting. */
+const MAX_POLL_MS = 10 * 60_000;
+const allowed = new Set(ATTACHMENT_ACCEPT.split(','));
+
+/** Maps an upload failure to localized copy; the server's English detail is never shown verbatim. */
+function uploadErrorKey(err: unknown): 'attachment.tooBig' | 'attachment.type' | 'attachment.inactive' | 'attachment.uploadFailed' {
+  if (err instanceof ApiError) {
+    if (err.status === 413) return 'attachment.tooBig';
+    if (err.status === 415) return 'attachment.type';
+    if (err.status === 409) return 'attachment.inactive';
+  }
+  return 'attachment.uploadFailed';
+}
+
+/**
+ * Polls one accepted Document until ingest settles. Only a 404, too many consecutive failures or the overall
+ * deadline fail it; other errors back off exponentially. Returns silently once `signal` aborts.
+ * @param onSettle Receives the final patch for the entry.
+ * @param timedOut Localized message for the deadline failure.
+ */
+async function pollAttachment(
+  documentId: string,
+  signal: AbortSignal,
+  onSettle: (next: Partial<AttachmentEntry>) => void,
+  timedOut: string,
+): Promise<void> {
+  let failures = 0;
+  const deadline = Date.now() + MAX_POLL_MS;
+  while (!signal.aborted) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS * 2 ** failures));
+    if (signal.aborted) return;
+    try {
+      const doc = await getChatAttachment(documentId, signal);
+      failures = 0;
+      if (doc.status !== 'pending') return onSettle({ doc, state: doc.status });
+      if (Date.now() > deadline) return onSettle({ state: 'failed', error: timedOut });
+    } catch (err: unknown) {
+      if (signal.aborted) return;
+      if ((err instanceof ApiError && err.status === 404) || ++failures > MAX_POLL_FAILURES) return onSettle({ state: 'failed' });
+    }
+  }
+}
+
+/**
+ * Derives the send selection and why a send must wait. Only `ready` attachments with a version become items;
+ * the first blocking reason wins (unavailable, still uploading, failed). A private (local-only) attachment never blocks:
+ * the server refuses it for cloud models with a localized error, so the client only advises and offers re-attach.
+ */
+function sendState(entries: AttachmentEntry[], unavailable: boolean, askPending: boolean, t: (key: AttachmentBlockKey) => string) {
+  const items: Item[] = entries
+    .filter((e) => e.state === 'ready' && e.doc?.document_version_id)
+    .map((e) => ({ sourceId: e.doc!.source_id, documentId: e.doc!.document_id, documentVersionId: e.doc!.document_version_id! }));
+  let sendBlock: string | null = null;
+  let advisory: string | null = null;
+  let showReattach = false;
+  if (askPending) sendBlock = t('attachment.shareAsk');
+  else if (unavailable && entries.length) sendBlock = t('attachment.unavailableBlock');
+  else if (entries.some((e) => e.state === 'uploading' || e.state === 'pending')) sendBlock = t('attachment.pendingBlock');
+  else if (entries.some((e) => e.state === 'failed' || e.state === 'too_large' || e.state === 'rejected'))
+    sendBlock = t('attachment.failedBlock');
+  if (!sendBlock && entries.some((e) => e.doc?.local_only)) {
+    advisory = t('attachment.localOnlyHint');
+    showReattach = true;
+  }
+  return { items, sendBlock, advisory, showReattach };
+}
+
+type AttachmentBlockKey =
+  'attachment.shareAsk' | 'attachment.unavailableBlock' | 'attachment.pendingBlock' | 'attachment.failedBlock' | 'attachment.localOnlyHint';
+
+/**
+ * Creates the entry for one picked file, rejecting a disallowed extension or an oversize file locally
+ * (the server re-validates both).
+ */
+function newEntry(file: File, t: ChatTranslator): AttachmentEntry {
+  const ext = file.name.includes('.') ? `.${file.name.split('.').pop()!.toLowerCase()}` : '';
+  const error = !allowed.has(ext) ? t('attachment.type') : file.size > ATTACHMENT_MAX_BYTES ? t('attachment.tooBig') : undefined;
+  return {
+    key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name: file.name,
+    file,
+    state: error ? 'rejected' : 'uploading',
+    error,
+  };
+}
+
+/**
+ * Sharing-choice gate of the composer's attachments (C5): while the choice is unset, picked files are held back.
+ *
+ * @param addNow - Uploads files immediately with the given share flag.
+ * @param entriesRef - Mirror of the uploaded entries; their count is what the held files compete with for the cap.
+ * @param onDropped - Receives how many files were turned away because the cap is reached.
+ * @returns `add` (uploads at once when the choice is known or passed, else holds the files up to the cap),
+ * `resolveShare` (answers the question: remembers the choice and uploads the held files), `removePending`,
+ * `resetShareChoice`, the `pendingShare` files and the `shareWithModel` flag with its setter (an explicit setting
+ * counts as an answer and also flushes any held files).
+ */
+function useShareGate(
+  addNow: (files: File[], share: boolean) => void,
+  entriesRef: React.RefObject<unknown[]>,
+  onDropped: (n: number) => void,
+) {
+  const [shareChoice, setShareChoice] = React.useState<'unset' | 'private' | 'shared'>('unset');
+  const [pendingShare, setPendingShare] = React.useState<File[]>([]);
+  const add = React.useCallback(
+    (files: File[], share?: boolean) => {
+      if (share === undefined && shareChoice === 'unset') {
+        // Held files occupy attachment slots too, so the cap holds before the owner answers.
+        const free = Math.max(0, MAX_ATTACHMENTS - entriesRef.current.length - pendingShare.length);
+        onDropped(Math.max(0, files.length - free));
+        setPendingShare((prev) => [...prev, ...files.slice(0, free)]);
+      } else addNow(files, share ?? shareChoice === 'shared');
+    },
+    [shareChoice, addNow, entriesRef, onDropped, pendingShare.length],
+  );
+  const resolveShare = React.useCallback(
+    (share: boolean) => {
+      setShareChoice(share ? 'shared' : 'private');
+      setPendingShare([]);
+      addNow(pendingShare, share);
+    },
+    [addNow, pendingShare],
+  );
+  const setShareWithModel = React.useCallback(
+    (share: boolean) => (pendingShare.length ? resolveShare(share) : setShareChoice(share ? 'shared' : 'private')),
+    [pendingShare.length, resolveShare],
+  );
+  const removePending = React.useCallback((index: number) => setPendingShare((prev) => prev.filter((_, i) => i !== index)), []);
+  const resetShareChoice = React.useCallback(() => {
+    setShareChoice('unset');
+    setPendingShare([]);
+  }, []);
+  return { shareWithModel: shareChoice === 'shared', setShareWithModel, pendingShare, add, resolveShare, removePending, resetShareChoice };
+}
+
+/**
+ * Owns the full Chat composer's attachments. Each file is uploaded to a server-chosen source (the
+ * private, local-only "Chat attachments" by default; "Chat attachments (shared)" when the owner opts
+ * in) and polled until ingest finishes. Only `ready` attachments become `selection` items; `sendBlock`
+ * explains why a send must wait or cannot include them. Each entry owns an AbortController that
+ * cancels its upload and polling when it is removed.
+ *
+ * Sharing choice (C5): the first file picked in a conversation is held until the owner says whether the model may read
+ * it (`pendingShare` + `resolveShare`); the answer is then remembered for the rest of the conversation. The owner (or
+ * the + menu toggle) can also decide up front. `resetShareChoice` forgets it (new chat, switching conversation).
+ */
+export function useChatAttachments(csrfToken: string, unavailable = false) {
+  const t = useTranslations('chat');
+  const [entries, setEntries] = React.useState<AttachmentEntry[]>([]);
+  const [dropped, setDropped] = React.useState(0);
+  // Synchronous mirror of `entries`, so the remaining room is computed from the latest state, never a stale render.
+  const entriesRef = React.useRef<AttachmentEntry[]>([]);
+  const controllers = React.useRef(new Map<string, AbortController>());
+
+  const update = React.useCallback((fn: (prev: AttachmentEntry[]) => AttachmentEntry[]) => {
+    entriesRef.current = fn(entriesRef.current);
+    setEntries(entriesRef.current);
+  }, []);
+  const patch = React.useCallback(
+    (key: string, next: Partial<AttachmentEntry>) => {
+      update((prev) => prev.map((e) => (e.key === key ? { ...e, ...next } : e)));
+    },
+    [update],
+  );
+
+  /** Polls one accepted Document until ingest settles; see `pollAttachment`. */
+  const poll = React.useCallback(
+    (key: string, documentId: string, signal: AbortSignal) =>
+      pollAttachment(documentId, signal, (next) => patch(key, next), t('attachment.timedOut')),
+    [patch, t],
+  );
+
+  const upload = React.useCallback(
+    (key: string, file: File, share: boolean) => {
+      const controller = new AbortController();
+      controllers.current.set(key, controller);
+      uploadChatAttachment(file, csrfToken, share, controller.signal)
+        .then((doc) => {
+          patch(key, { doc, state: doc.status });
+          if (doc.status === 'pending') void poll(key, doc.document_id, controller.signal);
+        })
+        .catch((err: unknown) => {
+          if (!controller.signal.aborted) patch(key, { state: 'rejected', error: t(uploadErrorKey(err)) });
+        });
+    },
+    [csrfToken, patch, poll, t],
+  );
+
+  /** Validates type and size locally (the server re-validates), then uploads each file that fits. */
+  const addNow = React.useCallback(
+    (files: File[], share: boolean) => {
+      const room = Math.max(0, MAX_ATTACHMENTS - entriesRef.current.length);
+      setDropped(Math.max(0, files.length - room));
+      const added = files.slice(0, room).map((file) => newEntry(file, t));
+      update((prev) => [...prev, ...added]);
+      for (const e of added) if (e.state === 'uploading') upload(e.key, e.file, share);
+    },
+    [t, update, upload],
+  );
+
+  const gate = useShareGate(addNow, entriesRef, setDropped);
+  const { add, pendingShare } = gate;
+
+  const remove = React.useCallback(
+    (key: string) => {
+      controllers.current.get(key)?.abort();
+      controllers.current.delete(key);
+      setDropped(0);
+      update((prev) => prev.filter((e) => e.key !== key));
+    },
+    [update],
+  );
+
+  const clear = React.useCallback(() => {
+    for (const c of controllers.current.values()) c.abort();
+    controllers.current.clear();
+    setDropped(0);
+    update(() => []);
+  }, [update]);
+
+  /** Replaces every private (local-only) attachment with a fresh upload to the shared source. */
+  const reattachShared = React.useCallback(() => {
+    const privateEntries = entriesRef.current.filter((e) => e.doc?.local_only);
+    for (const e of privateEntries) remove(e.key);
+    add(
+      privateEntries.map((e) => e.file),
+      true,
+    );
+  }, [add, remove]);
+
+  // Abort in-flight uploads and polling when the composer unmounts.
+  React.useEffect(() => {
+    const live = controllers.current;
+    return () => {
+      for (const c of live.values()) c.abort();
+    };
+  }, []);
+
+  const { items, sendBlock, advisory, showReattach } = sendState(entries, unavailable, pendingShare.length > 0, t);
+  return {
+    entries,
+    items,
+    remove,
+    clear,
+    reattachShared,
+    sendBlock,
+    advisory,
+    dropped,
+    showReattach,
+    ...gate,
+    full: entries.length + pendingShare.length >= MAX_ATTACHMENTS,
+  };
+}
+
+/** Merges ready attachment refs into the chat context as `selection` items (deduplicated by document). */
+export function withAttachments(context: ChatContext | null, items: Item[]): ChatContext | null {
+  if (!items.length) return context;
+  const base = context?.kind === 'selection' ? (context.items ?? []) : [];
+  const merged = [...base, ...items].filter((i, k, a) => a.findIndex((x) => x.documentId === i.documentId) === k);
+  return { kind: 'selection', items: merged };
+}
+
+/**
+ * Document a chip can preview: only ready (or oversized-but-stored) uploads with a persisted version are openable.
+ *
+ * @param e - Upload entry.
+ * @returns `documentId` (null while unavailable) and the exact `versionId` to compare against.
+ */
+function previewTarget(e: AttachmentEntry): { documentId: string | null; versionId: string | null | undefined } {
+  const previewable = e.state === 'ready' || e.state === 'too_large';
+  return {
+    documentId: e.doc?.document_version_id && previewable ? e.doc.document_id : null,
+    versionId: previewable ? e.doc?.document_version_id : undefined,
+  };
+}
+
+/**
+ * One attachment chip: a preview trigger (only openable once the document is ready), its status text and a remove button.
+ *
+ * @param props - The upload entry, its localized status text and the remove callback.
+ */
+function AttachmentChip({ entry: e, statusText: status, onRemove }: { entry: AttachmentEntry; statusText: string; onRemove: () => void }) {
+  const t = useTranslations('chat');
+  const problem = e.state === 'rejected' || e.state === 'failed' || e.state === 'too_large';
+  return (
+    <Badge variant="secondary" className={`min-h-8 max-w-full gap-1 py-1 pl-1 pr-0 text-xs ${problem ? 'border border-destructive' : ''}`}>
+      <ChatDocumentPreview
+        {...previewTarget(e)}
+        title={e.name}
+        unavailableMessage={e.state === 'uploading' || e.state === 'pending' ? t('attachment.previewWaiting') : t('preview.unavailable')}
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-7 min-w-0 gap-1 px-1 text-xs font-normal"
+          aria-label={t('preview.document', { title: e.name })}
+        >
+          {e.doc?.local_only && e.state === 'ready' ? (
+            <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+          ) : (
+            <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+          )}
+          <span className="max-w-48 truncate">{e.name}</span>
+        </Button>
+      </ChatDocumentPreview>
+      <span className={problem ? 'text-destructive' : 'text-muted-foreground'}>· {status}</span>
+      {/* 44px hit area; the negative margin keeps the chip's visual height. */}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="-my-1.5 rounded-full text-muted-foreground"
+        data-attachment-remove
+        onClick={onRemove}
+        title={t('attachment.remove', { name: e.name })}
+        aria-label={t('attachment.remove', { name: e.name })}
+      >
+        <XIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+    </Badge>
+  );
+}
+
+/**
+ * Chip of a file held back by the sharing question (C5): it already counts toward the cap and the owner can still drop it.
+ *
+ * @param props - The held file and the remove callback.
+ */
+function HeldAttachmentChip({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const t = useTranslations('chat');
+  return (
+    <AttachmentChip
+      entry={{ key: `held-${file.name}`, name: file.name, file, state: 'uploading' }}
+      statusText={t('attachment.held')}
+      onRemove={onRemove}
+    />
+  );
+}
+
+/**
+ * Hidden file input, attachment text-preview badges and the live status line for the full Chat composer. The Attach
+ * and cloud-sharing controls live in the composer's + menu, which opens the picker through `inputRef`.
+ *
+ * @param state - Attachment state from `useChatAttachments`.
+ * @param disabled - Disables chip removal side effects such as the re-attach button.
+ * @param inputRef - Ref to the hidden file input, shared with the + menu's Attach item.
+ * @returns The chips row (only when entries exist) and the status line (only when it has text).
+ */
+export function ChatAttachmentBar({
+  state,
+  disabled,
+  inputRef,
+}: {
+  state: ReturnType<typeof useChatAttachments>;
+  disabled?: boolean;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  const t = useTranslations('chat');
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const [removedNote, setRemovedNote] = React.useState('');
+  /** Removes an entry, announces it, and moves focus to a neighbouring remove button (or the + menu) so it never falls to <body>. */
+  const removeEntry = (remove: () => void, name: string, idx: number) => {
+    remove();
+    setRemovedNote(t('attachment.removed', { name }));
+    setTimeout(() => {
+      const btns = rootRef.current?.querySelectorAll<HTMLButtonElement>('button[data-attachment-remove]');
+      (btns && btns.length ? btns[Math.min(idx, btns.length - 1)] : document.getElementById(COMPOSER_MENU_ID))?.focus();
+    }, 0);
+  };
+  const statusText = (e: AttachmentEntry) => {
+    if (e.state === 'rejected') return e.error ?? t('attachment.uploadFailed');
+    if (e.state === 'uploading') return t('attachment.uploading');
+    if (e.state === 'pending') return t('attachment.processing');
+    if (e.state === 'ready') return e.doc?.local_only ? t('attachment.localOnly') : t('attachment.ready');
+    if (e.state === 'too_large') return t('attachment.tooLargeContext');
+    return e.error ?? t('attachment.failed');
+  };
+  const note =
+    state.dropped > 0
+      ? t('attachment.dropped', { max: MAX_ATTACHMENTS })
+      : state.entries.length
+        ? t('attachment.note', { max: MAX_ATTACHMENTS })
+        : '';
+  const statusLine = state.sendBlock ?? state.advisory ?? note;
+  return (
+    <div ref={rootRef} className="contents">
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(e) => {
+          state.add(Array.from(e.target.files ?? []));
+          e.target.value = '';
+        }}
+      />
+      {state.entries.length + state.pendingShare.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {state.entries.map((e, idx) => (
+            <AttachmentChip
+              key={e.key}
+              entry={e}
+              statusText={statusText(e)}
+              onRemove={() => removeEntry(() => state.remove(e.key), e.name, idx)}
+            />
+          ))}
+          {state.pendingShare.map((file, i) => (
+            <HeldAttachmentChip
+              key={`held-${file.name}-${i}`}
+              file={file}
+              onRemove={() => removeEntry(() => state.removePending(i), file.name, state.entries.length + i)}
+            />
+          ))}
+        </div>
+      )}
+      <span role="status" className="sr-only">
+        {removedNote}
+      </span>
+      {/* Rendered only with text; Send's aria-describedby points here only while a block is active, so the id exists then. */}
+      {(statusLine || state.showReattach || state.pendingShare.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {statusLine && (
+            <p id={ATTACHMENT_STATUS_ID} role="status" aria-live="polite" className="text-xs text-muted-foreground">
+              {statusLine}
+            </p>
+          )}
+          {state.pendingShare.length > 0 && (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={() => state.resolveShare(true)}>
+                {t('attachment.shareYes')}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => state.resolveShare(false)}>
+                {t('attachment.shareNo')}
+              </Button>
+            </>
+          )}
+          {state.showReattach && (
+            <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={state.reattachShared}>
+              {t('attachment.reattachShared')}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,125 @@
+'use client';
+
+import * as React from 'react';
+import { useTranslations } from 'next-intl';
+import type { PendingMessageMutation, PendingSpecialistRun } from '@/core/app-shell/chat-controller';
+import { Button } from '@/components/ui/button';
+import dynamic from 'next/dynamic';
+import type { AgentRun } from '@/modules/agents/public-api';
+import { profileTitleKeys } from './chat-session-header';
+
+// Agent chrome renders only for runs/agent mode; keeping it out of the main chunk keeps plain chat first-load small.
+const ConversationAgentActivity = dynamic(
+  () => import('@/modules/agents/conversation-agent-activity').then((m) => m.ConversationAgentActivity),
+  { ssr: false },
+);
+const AgentRunDetail = dynamic(() => import('@/modules/agents/run-detail').then((m) => m.AgentRunDetail), { ssr: false });
+
+const runStatusKeys: Record<
+  string,
+  'agent.runQueued' | 'agent.runRunning' | 'agent.runWaitingApproval' | 'agent.runSucceeded' | 'agent.runFailed' | 'agent.runCancelled'
+> = {
+  queued: 'agent.runQueued',
+  running: 'agent.runRunning',
+  waiting_approval: 'agent.runWaitingApproval',
+  succeeded: 'agent.runSucceeded',
+  failed: 'agent.runFailed',
+  cancelled: 'agent.runCancelled',
+};
+
+const ACTIVE_RUN_STATUSES = ['queued', 'running', 'waiting_approval'];
+
+/** Props of {@link AgentPanels}. */
+export interface AgentPanelsProps {
+  conversationId?: string | null;
+  csrfToken: string;
+  /** True when a specialist is selected or a profile run is pending (plain Q&A shows no agent chrome). */
+  agentMode: boolean;
+  pendingProfileRun: PendingSpecialistRun | null;
+  activeRun: AgentRun | undefined;
+  runs: { items: AgentRun[] } | undefined;
+  onCancelRun: () => void;
+  cancelling: boolean;
+  onOpenRun: (id: string) => void;
+}
+
+/**
+ * Agent chrome above the transcript: pending-revision status, conversation agent activity, the opened run and history.
+ *
+ * @param props - See {@link AgentPanelsProps}.
+ */
+export function AgentPanels(props: AgentPanelsProps) {
+  const { conversationId, csrfToken, agentMode, pendingProfileRun, activeRun, runs, onCancelRun, cancelling, onOpenRun } = props;
+  const tAgents = useTranslations('aiSettings');
+  const watching = Boolean(pendingProfileRun) || Boolean(runs?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)));
+  return (
+    <>
+      {pendingProfileRun ? (
+        <div role="status" className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agent.profileKnowledge')} ·{' '}
+          {tAgents('agent.pendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
+        </div>
+      ) : null}
+      {/* R7: approvals UI (and its chunk and polling) exists only while a specialist is selected or one of the
+          conversation's runs is still active (it may be waiting for approval even after switching back to Assistant). */}
+      {(agentMode || watching) && <ConversationAgentActivity conversationId={conversationId} csrfToken={csrfToken} watch={watching} />}
+      {agentMode && activeRun && (
+        <div className="shrink-0 border-b border-border p-3">
+          <AgentRunDetail run={activeRun} onCancel={onCancelRun} cancelling={cancelling} />
+        </div>
+      )}
+      {agentMode && runs?.items.length ? (
+        <details className="shrink-0 border-b border-border px-4 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            {tAgents('agent.history')} ({runs.items.length})
+          </summary>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {runs.items.map((run) => (
+              <Button
+                key={run.id}
+                type="button"
+                variant="outline"
+                className="h-auto rounded-md px-2 py-1 text-xs font-normal"
+                onClick={() => onOpenRun(run.id)}
+              >
+                {run.agent_id === 'assistant'
+                  ? tAgents('agent.assistant')
+                  : tAgents(profileTitleKeys[run.agent_id] ?? 'agent.profileKnowledge')}
+                : {tAgents(runStatusKeys[run.status] ?? 'agent.runFailed')}
+              </Button>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
+/** Props of {@link RevisionBanners}. */
+export interface RevisionBannersProps {
+  mode: 'drawer' | 'full';
+  pendingMessageMutation: PendingMessageMutation | null;
+  busy: boolean;
+  onRetryRevision: () => void;
+}
+
+/**
+ * Full-mode banner for an unacknowledged revision (with Retry). The edit-mode banner lives inside the composer.
+ *
+ * @param props - See {@link RevisionBannersProps}.
+ */
+export function RevisionBanners({ mode, pendingMessageMutation, busy, onRetryRevision }: RevisionBannersProps) {
+  const t = useTranslations('chat');
+  return (
+    <>
+      {mode === 'full' && pendingMessageMutation && (
+        <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
+          <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
+          <Button type="button" variant="outline" className="h-8 px-2 text-xs" disabled={busy} onClick={onRetryRevision}>
+            {t('retryRevision')}
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}

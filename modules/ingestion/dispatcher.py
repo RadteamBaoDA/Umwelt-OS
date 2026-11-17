@@ -1,62 +1,55 @@
-from datetime import UTC, datetime, timedelta
-from typing import cast
+"""Compatibility facade for the outbox dispatcher, which now lives in ``core.events.dispatch``.
+
+``dispatch_pending_work`` and the envelope validator are re-exported unchanged for the ARQ cron registration and
+existing callers. ``WORKER_BY_EVENT`` / ``PRODUCERS_BY_EVENT`` are derived on access from the descriptor-driven
+event registry instead of being hard-coded here.
+"""
+
+from typing import Any
 from uuid import UUID
 
-from arq.connections import ArqRedis
-from sqlalchemy import and_, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.ingestion.models import EventOutbox
+from core.events.dispatch import (
+    DISPATCH_SCAN_STATE,
+    DISPATCH_STALE_AFTER,
+    dispatch_pending_work,
+    valid_event_envelope,
+)
+from core.events.registry import get_event_registry
+from core.workspaces.schemas import Scope
+from modules.ingestion import public
 
-DISPATCH_STALE_AFTER = timedelta(seconds=30)
-
-
-async def dispatch_pending_work(ctx: dict[str, object]) -> int:
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-    redis = cast(ArqRedis, ctx["redis"])
-    now = datetime.now(UTC)
-    async with factory() as session:
-        events = list(
-            (
-                await session.scalars(
-                    select(EventOutbox)
-                    .where(
-                        or_(
-                            and_(EventOutbox.status == "pending", EventOutbox.next_attempt_at <= now),
-                            and_(
-                                EventOutbox.status == "queued",
-                                EventOutbox.dispatched_at < now - DISPATCH_STALE_AFTER,
-                            ),
-                        )
-                    )
-                    .order_by(EventOutbox.created_at)
-                    .limit(100)
-                    .with_for_update(skip_locked=True)
-                )
-            ).all()
-        )
-        enqueued = 0
-        for event in events:
-            job = {
-                "document.file.uploaded": "process_uploaded_file",
-                "source.purge.requested": "process_source_purge",
-            }.get(event.type, "process_ingestion_event")
-            await redis.enqueue_job(
-                job,
-                str(event.id),
-                _job_id=f"ingestion:{event.id}",
-                _defer_until=now,
-            )
-            event.status = "queued"
-            event.dispatched_at = now
-            enqueued += 1
-        if events:
-            await session.commit()
-        return enqueued
+__all__ = [
+    "DISPATCH_SCAN_STATE",
+    "DISPATCH_STALE_AFTER",
+    "dispatch_pending_work",
+    "mark_event_delivered",
+    "valid_event_envelope",
+]
 
 
-async def mark_event_delivered(session: AsyncSession, event_id: UUID) -> None:
-    event = await session.get(EventOutbox, event_id, with_for_update=True)
-    if event is not None:
-        event.status = "delivered"
-        await session.commit()
+def __getattr__(name: str) -> Any:
+    """Serve the historical routing tables from the event registry (lazy, so import order is irrelevant)."""
+    if name == "WORKER_BY_EVENT":
+        return get_event_registry().job_names
+    if name == "PRODUCERS_BY_EVENT":
+        return get_event_registry().producers
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+async def mark_event_delivered(
+    session: AsyncSession,
+    event_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Forward the owner flush-only acknowledgement; caller holds ordered locks and commits.
+
+    Entities' old dispatcher import remains an explicit required-scope caller migration.
+    This compatibility module path introduces no commit or earlier-lock acquisition.
+    """
+    return await public.mark_event_delivered(
+        session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Umwelt-OS — Rà soát 2026-11-10</title>
+<style>
+  :root { --bg:#f6f5f2; --surface:#fff; --text:#1c1b19; --muted:#625f58; --line:#dedbd3; --accent:#1f5f8b;
+    --hi:#a3261c; --hi-bg:#fbe9e6; --mid:#8a5a00; --mid-bg:#fbf0d6; --lo:#2f6b3a; --lo-bg:#e4f2e6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151514; --surface:#1e1e1c; --text:#ecebe7; --muted:#a5a199; --line:#34332f; --accent:#7db8e0;
+      --hi:#ff9a8f; --hi-bg:#3a1c19; --mid:#f0c060; --mid-bg:#33290f; --lo:#8fd09a; --lo-bg:#16301b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  h2 { font-size: 19px; margin: 40px 0 4px; padding-top: 16px; border-top: 1px solid var(--line); }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 26px 0 8px; }
+  p { margin: 6px 0; } .muted { color: var(--muted); }
+  code { font: 12.5px/1.4 ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--line) 55%, transparent); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:10px; margin: 18px 0; }
+  .stat { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .stat b { display:block; font-size:22px; } .stat span { color:var(--muted); font-size:13px; }
+  .note { background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:12px 16px; margin:14px 0; }
+  .item { background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin:8px 0; display:grid; grid-template-columns: 1fr auto; gap: 6px 16px; }
+  .item h4 { margin:0; font-size:15px; }
+  .item .body { grid-column: 1 / -1; }
+  .item dl { margin:6px 0 0; display:grid; grid-template-columns: 82px 1fr; gap:3px 10px; font-size:14px; }
+  .item dt { color:var(--muted); } .item dd { margin:0; }
+  .tags { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:4px; }
+  .tag { font-size:12px; padding:1px 8px; border-radius:99px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .tag.hi { color:var(--hi); background:var(--hi-bg); border-color:transparent; }
+  .tag.mid { color:var(--mid); background:var(--mid-bg); border-color:transparent; }
+  .tag.lo { color:var(--lo); background:var(--lo-bg); border-color:transparent; }
+  .choice { display:flex; gap:10px; align-items:center; font-size:13px; white-space:nowrap; }
+  .choice label { display:flex; gap:4px; align-items:center; cursor:pointer; }
+  ul.plain { margin:6px 0; padding-left:20px; } ul.plain li { margin:3px 0; }
+  .bar { position:sticky; bottom:0; background:var(--surface); border-top:1px solid var(--line); padding:10px 20px; display:flex; gap:12px; align-items:center; justify-content:center; flex-wrap:wrap; }
+  button { font:inherit; padding:7px 14px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); color:var(--surface); border-color:transparent; }
+  button:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  @media (max-width:640px) { .item { grid-template-columns: 1fr; } .item dl { grid-template-columns: 1fr; } }
+  @media print { .bar { display:none; } .item { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Umwelt-OS — kết quả rà soát toàn dự án</h1>
+  <p class="muted">Ngày 2026-11-10 · nhánh <code>feature/fix-ui</code> tại <code>bc32f33b</code> · chỉ đọc, chưa sửa gì trong repo · bản 2: Fable tự kiểm lại từng mục</p>
+
+  <div class="note">
+    <p><b>Trạng thái repo:</b> mọi thay đổi thử trong phiên rà soát đã được hoàn nguyên; <code>git status</code> sạch, ngoại trừ chính file này (chưa track).</p>
+    <p><b>Ai kiểm:</b> danh sách ban đầu do 3 sub-agent lập. Ở bản này Fable (model chính) tự mở mã nguồn đối chiếu lại, không dùng sub-agent. Mỗi mục có nhãn: <span class="tag lo">Fable xác nhận</span> <span class="tag mid">Fable sửa nội dung</span> <span class="tag hi">Fable phát hiện mới</span> <span class="tag">Chưa tự kiểm</span>. Dòng “Ghi chú review” nêu chỗ khác với báo cáo gốc.</p>
+    <p><b>Cách duyệt:</b> chọn Duyệt / Bỏ qua ở từng mục, bấm “Sao chép danh sách duyệt” ở cuối trang rồi dán lại cho Claude. Lựa chọn được lưu trong trình duyệt này.</p>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <h3>Kết quả công cụ (số thật)</h3>
+  <ul class="plain">
+    <li><b>mypy</b> <code>core apps modules</code>: 6 lỗi ở 3 file (729 file được kiểm; Fable tự chạy) → job CI backend đỏ.</li>
+    <li><b>ruff check</b> theo đường dẫn CI: 2 lỗi S608 trong migration <code>0022</code>. <b>ruff format --check</b>: sạch.</li>
+    <li><b>check_function_length.py</b>: thất bại, 4 hàm vượt ngưỡng. <b>check_genui_parity.py</b>: thất bại, <b>125</b> anchor lệch (báo cáo gốc ghi 11; Fable tự chạy và đếm lại). <b>check_file_size.py</b>, <b>lint-imports</b> (3/3): đạt.</li>
+    <li><b>tsc</b>: 0 lỗi. <b>eslint</b>: 0 lỗi, 2 cảnh báo. <b>vitest</b> (Fable tự chạy, 78 giây): 1218 đạt, 1 trượt trên 1219. Log rút gọn không giữ tên test trượt; <code>local-weather.test.tsx</code> chạy riêng đạt 3/3.</li>
+    <li><b>Bundle</b>: route chat 796,4 KB trên ngân sách 800 KB; tổng 2203 / 2313 KB.</li>
+  </ul>
+
+  <div id="sections"></div>
+
+  <h2>C. Đã kiểm, không có vấn đề</h2>
+  <ul class="plain">
+    <li>Token design-system: 29 màu sáng + 29 màu tối, 4 accent, radii trong <code>globals.css</code> khớp <code>tokens.json</code>.</li>
+    <li>i18n: 5090 khoá ở mỗi ngôn ngữ, không thiếu chiều nào. Không có màu literal trong code tính năng; không có hệ button/dialog song song.</li>
+    <li>Test: không có <code>.only</code>, <code>.todo</code> hay skip vô điều kiện; selector e2e đều còn tồn tại trong mã nguồn.</li>
+    <li>Media proxy / SSRF: token HMAC gắn chủ thể, kiểm lại allowlist khi xác minh, không theo redirect, giới hạn 5 MB, từ chối SVG.</li>
+    <li>Không có datetime thiếu múi giờ; không có task chạy nền bị bỏ rơi; mọi field <code>Settings</code> và mọi khoá <code>.env.example</code> đều được đọc; không còn dấu vết MinIO trong code/cấu hình.</li>
+    <li>Header bảo mật Caddy khớp <code>docs/security.md</code>; cổng metrics khớp <code>prometheus.yml</code>; 16 skill trong <code>skills-lock.json</code> đều có mặt ở cả hai cây.</li>
+  </ul>
+
+  <h2>D. Phạm vi review của Fable và phần chưa kiểm</h2>
+  <h3>Khoá / transaction trong connector</h3>
+  <ul class="plain">
+    <li>Gói <code>modules/connectors</code> có 55.879 dòng và 146 vị trí khoá. Fable quét bằng script tìm “khoá rồi await mạng trước khi commit/rollback”: 30 vị trí nghi, đọc tay 12 vị trí có gọi mạng thật.</li>
+    <li>10/12 vị trí đúng mẫu khoá → nhả → gọi → kiểm lại: <code>send_fence</code> nhả SQL trong <code>finally</code>; <code>rest-sample</code> và <code>validate</code> rollback trước DNS/HTTP; ngắt kết nối Google/Reddit commit trạng thái <code>revocation_pending</code> trước khi gọi revoke rồi đối soát khi lỗi.</li>
+    <li>2/12 giữ khoá qua HTTP: làm mới token Google (mục N1).</li>
+    <li><b>Chưa kiểm:</b> thứ tự lấy khoá giữa các đường đi (nguy cơ deadlock), 18 vị trí nghi còn lại, scheduler/outbox/reconcile, và hành vi khi chạy đồng thời thật (cần test tích hợp trên Docker).</li>
+  </ul>
+  <h3>Truy vấn trong vòng lặp (N+1)</h3>
+  <ul class="plain">
+    <li>Script AST tìm thấy 109 hàm có truy vấn nằm trong vòng lặp ở <code>core</code>, <code>modules</code>, <code>apps</code>. Bỏ worker/dọn dẹp/xuất dữ liệu còn 45 hàm trên đường request; Fable đọc tay 7 hàm.</li>
+    <li>Kết quả: 2 trường hợp N+1 thật (N2, N3); 5 hàm còn lại là dương tính giả (truy vấn nằm ở biểu thức lặp, hoặc vòng lặp theo số bước nhảy có giới hạn).</li>
+    <li><b>Chưa kiểm:</b> 38 hàm còn lại trên đường request (phần lớn là luồng sửa/gộp/tách entity và timeline) và toàn bộ 64 hàm nền.</li>
+  </ul>
+  <h3>Khác</h3>
+  <ul class="plain">
+    <li>Chưa chạy: test backend (pytest), Docker integration/e2e, gọi provider thật, trình duyệt, Lighthouse, gitleaks, trivy.</li>
+    <li>Chưa đọc: nội dung chi tiết <code>docs/superpowers/</code> (40 file), toàn văn các tài liệu trên 100 KB, <code>THIRD_PARTY_NOTICES.md</code>.</li>
+    <li>Các mục gắn nhãn “Chưa tự kiểm” vẫn dựa trên báo cáo sub-agent; ghi chú review nêu phần nào Fable đã đối chiếu.</li>
+    <li>Fable không đọc hết ~1.500 file nguồn. Review này là đối chiếu từng phát hiện cộng hai lượt quét có mục tiêu, không phải đọc toàn bộ mã.</li>
+  </ul>
+</main>
+
+<div class="bar">
+  <span id="count" class="muted"></span>
+  <button class="primary" id="copy">Sao chép danh sách duyệt</button>
+  <button id="reset">Xoá lựa chọn</button>
+</div>
+
+<script>
+// sev: hi | mid | lo.  conf: v = đã xác minh, s = nghi ngờ.  size: m = cơ học, d = cần quyết định.
+const SECTIONS = [
+ { id:'A', title:'A. Sửa được ngay, rủi ro thấp', intro:'Thay đổi nhỏ, đã có bằng chứng. Duyệt là làm được trong một lượt.', groups:[
+  { name:'Cấu hình agent, skill, tài liệu', items:[
+   ['A1','lo','v','m','CLAUDE.md lặp nguyên khối GitNexus của AGENTS.md','<code>CLAUDE.md:3-46</code>','<code>CLAUDE.md</code> đã import <code>@AGENTS.md</code>, rồi chép lại đúng khối GitNexus (~3,5 KB). Khối này được nạp hai lần ở mọi phiên.','Để <code>CLAUDE.md</code> chỉ còn <code>@AGENTS.md</code>. Lưu ý: <code>gitnexus analyze</code> sẽ chèn lại trừ khi chạy với <code>--skip-agents-md</code>.'],
+   ['A2','lo','v','m','6 skill GitNexus lồng nhau, không được nạp','<code>.claude/skills/gitnexus/*</code>','Trùng từng byte với <code>.claude/skills/gitnexus-*/</code> (và với bản global <code>~/.claude/skills</code>). Thư mục lồng hai cấp nên không công cụ nào đọc.','Xoá thư mục <code>.claude/skills/gitnexus/</code>.'],
+   ['A3','mid','v','m','Hai skill của dự án lệch nhau giữa .claude và .agents','<code>.claude/skills/</code> vs <code>.agents/skills/</code>: <code>umwelt-os-ui-system</code>, <code>implementing-umwelt-os</code>','Mỗi cây giữ một bản cũ: bản <code>.agents</code> của UI skill thiếu phần token và mô tả sai shell cuộn; bản <code>.claude</code> của implementing skill ghi spec “156–164” (thực tế đến 167), bị lỗi mã hoá <code>156â€“164</code>. <code>AGENTS.md</code> lại trỏ agent tới bản <code>.agents</code> cũ.','Hợp nhất mỗi skill thành một bản đúng rồi chép sang cả hai cây.'],
+   ['A4','mid','v','m','Skill còn cấm chạy test/lint','cả hai skill trên; <code>README.md:24</code>; <code>docs/development.md:13</code>','Ghi “chỉ build, không tạo/chạy test, lint, typecheck” và “CI chỉ build, chạy Run deferred validation thủ công”. Thực tế <code>ci.yml</code> chạy ruff, mypy, pytest có ngưỡng coverage, eslint, tsc, vitest ở mọi push; input “deferred validation” không còn. Trái với mục Testing Guidelines của <code>AGENTS.md</code>.','Thay bằng một câu trỏ về Testing Guidelines; sửa hai đoạn mô tả CI trong docs.'],
+   ['A5','lo','v','m','Link hỏng và đoạn lặp trong skill','<code>umwelt-os-ui-system/SKILL.md:8</code>; cuối hai skill','Link <code>docs/ux-proposals/2026-09-26-life-dashboard-proposal.md</code> không tồn tại. Ba đoạn “Code documentation required by the owner” chép lại <code>AGENTS.md</code>.','Bỏ link; thay ba đoạn bằng một dòng trỏ về <code>AGENTS.md</code>.'],
+   ['A6','lo','v','m','Skill fix-bug ghi sai tên tool GitNexus','<code>.claude/skills/fix-bug/SKILL.md:49,64,89,102,106</code>','Ghi <code>gitnexus_query({query})</code>; tool thật là <code>query({search_query})</code>, <code>context</code>, <code>impact</code>, <code>detect_changes({scope})</code> như trong <code>AGENTS.md</code>.','Sửa năm chỗ cho khớp.'],
+   ['A7','lo','v','m','AGENTS.md mô tả thư mục không tồn tại','<code>AGENTS.md:10</code>','Liệt kê <code>packages/</code> (shared UI, contracts, SDK) nhưng repo không có thư mục này.','Ghi rõ “dự kiến, chưa tạo” hoặc bỏ dòng.'],
+   ['A8','lo','v','m','Link hỏng và thiếu sót trong docs','<code>README.md:32</code>; <code>docs/third-party-services.md:133</code>; <code>docs/deployment.md:139</code>','README trỏ tới <code>docs/backup-recovery.md</code> (tính năng backup đã gỡ). Link <code>core/storage_admission.py</code> nay là <code>core/storage/admission.py</code>. Danh sách volume cần snapshot thiếu <code>rustfs-data</code>.','Sửa ba chỗ.'],
+  ]},
+  { name:'Hạ tầng', items:[
+   ['A9','hi','v','m','.dockerignore để lọt bí mật và ~1 GB rác vào build context','<code>.dockerignore</code>','Cả 8 image build với <code>context: .</code>. File chỉ loại <code>.env</code>, nên <code>.env.e2e-real</code> (khoá provider thật) được gửi tới Docker daemon, cùng <code>.taste-skill/</code> 971 MB, 44 worktree, report Playwright. Không Dockerfile nào COPY các thứ này.','Thêm <code>.env.*</code> (giữ <code>.env.example</code>), <code>.worktrees</code>, <code>.claude</code>, <code>.agents</code>, <code>.taste-skill</code>, <code>.gitnexus</code>, <code>.remember</code>, <code>test-results-*</code>, <code>playwright-report-*</code>. Build lại một lần để xác nhận.'],
+   ['A10','lo','v','m','File .coverage đang bị track','<code>.coverage</code> (156 KB, SQLite)','Sản phẩm sinh ra của pytest-cov, nằm trong git.','<code>git rm --cached .coverage</code>; thêm <code>.coverage</code>, <code>htmlcov/</code> vào <code>.gitignore</code>.'],
+   ['A11','lo','v','m','make e2e có trong docs nhưng không có rule','<code>Makefile:1</code>; <code>docs/development.md:17</code>','<code>e2e</code> chỉ nằm trong <code>.PHONY</code>. <code>scripts/test.sh:6</code> đọc <code>E2E_ONLY_RUN</code> nhưng Makefile không bao giờ đặt.','Thêm rule <code>e2e: E2E_ONLY_RUN=1 E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh</code>.'],
+  ]},
+  { name:'Backend — CI đang đỏ', items:[
+   ['A12','hi','v','m','mypy 6 lỗi','<code>modules/chat/web_search.py:29</code>; <code>_worker/setup.py:618</code>; <code>_worker/finalize.py:245-249</code>','Import <code>MediaError</code>, <code>sign_media_url</code>… qua shim <code>modules/chat/media.py</code>; mypy strict báo “does not explicitly export”. Nơi ở thật là <code>core/media_proxy.py</code>.','Import thẳng từ <code>core.media_proxy</code>; bỏ ba re-export không ai dùng (<code>_CTRL</code>, <code>PROXY_HOSTS</code>, <code>SEARCH_THUMB_HOST</code>). Đã grep: test vẫn dùng được các tên còn lại.'],
+   ['A13','mid','v','m','ruff S608 ×2 trong migration','<code>infrastructure/postgres/migrations/versions/0022_dashboard_panels.py:94,97</code>','Nối chuỗi SQL hằng, không có dữ liệu đầu vào — dương tính giả, nhưng CI kiểm thư mục này.','Thêm <code># noqa: S608</code> ở <b>cả hai</b> vị trí; không đổi SQL hay revision.'],
+   ['A14','mid','v','d','GenUI parity: 125 anchor lệch','manifest của <code>scripts/check_genui_parity.py</code>','Gate thoát lỗi với 125 dòng “symbol not near line / line out of range”, trải khắp T01–E07. Ví dụ <code>modules/chat/worker.py:1347</code>, <code>:1872</code> (file nay còn 527 dòng), <code>chat-session.tsx:1127</code> (file còn 168 dòng).','Không còn là sửa nhỏ: cần sinh lại anchor bằng script (tìm symbol theo tên) thay vì sửa tay 125 dòng; symbol nào không còn thì báo lại.'],
+   ['A15','mid','v','m','3 route thử kết nối thiếu rate limit','<code>modules/settings/routes.py:232,428,490</code>','<code>/ai/discover</code>, <code>/web-search/test</code>, <code>/n8n/test</code> gọi mạng ra ngoài mà không có <code>require_budget</code>; các route anh em trong cùng file đều có <code>require_budget("model_probe", 10, 60)</code>.','Thêm cùng dependency. Lưu ý: budget fail-closed, Redis sập thì nút thử trả 503 như các route anh em.'],
+  ]},
+  { name:'Frontend', items:[
+   ['A16','hi','v','m','Xoá tài khoản không dọn hết dữ liệu trình duyệt','<code>apps/web/src/core/account-erasure.ts:13-14</code>','Chỉ xoá khoá bắt đầu <code>umwelt:</code>, <code>bbd:</code>, <code>umwelt.genui.templates.</code>. Còn sót <code>umwelt.chat.model</code>, <code>umwelt.dashboard.groupSeen.&lt;id&gt;</code>, <code>groupFrame.&lt;id&gt;</code>, <code>feedView.&lt;id&gt;</code> (chứa id của tài khoản đã xoá), <code>umwelt-accent</code>, <code>umwelt-density</code>…','Xoá mọi khoá bắt đầu <code>umwelt</code>; bổ sung test. Hệ quả: màu nhấn và mật độ về mặc định sau khi xoá tài khoản.'],
+   ['A17','mid','v','m','Bản đồ dashboard không hiện quan sát mới','<code>apps/web/src/modules/dashboard/gadgets/map-gadget.tsx:61-67</code>','<code>to</code> được tính một lần lúc mount; realtime có refetch nhưng vẫn dùng mốc cũ.','Neo <code>to</code> một lần cho mỗi chu kỳ fetch và mang theo trong <code>pageParam</code>. <b>Không</b> tính lại theo từng trang: backend ràng cursor với <code>from_at</code>/<code>to_at</code> (<code>modules/knowledge/observations/_reads.py:46-66</code>), tính lại sẽ trả 422 từ trang 2. Bản sửa thử trong phiên này mắc đúng lỗi đó và đã hoàn nguyên.'],
+   ['A18','lo','v','m','14 hàm API và helper không ai gọi','<code>dashboard/api.ts</code> (4), <code>intelligence-api.ts</code>, <code>knowledge/api.ts</code> (2), <code>observability/api.ts</code>, <code>search/api.ts</code>, <code>sources/mcp-api.ts</code>, <code>entity-gadget.tsx</code>, <code>feed-gadget.tsx</code>, <code>core/format.ts</code>, <code>chat-attachments.tsx</code>; barrel <code>chat/generative-ui/index.ts</code>','Mỗi tên chỉ xuất hiện đúng một lần trong <code>apps/web/src</code> và <code>tests/</code> (chỗ định nghĩa).','Xoá. Kèm theo phải bỏ 7 import icon thừa ở hai gadget, 2 type thừa (<code>CiiAvailability</code>, <code>GlobalSearchResponse</code>), và chạy prettier cho file đã chạm vì CI kiểm định dạng file thay đổi.'],
+   ['A19','lo','v','m','Hai danh sách route public lệch nhau','<code>core/realtime-provider.tsx:112-116</code> vs <code>core/session-gate.ts:11</code>','Một bên so khớp chính xác và chỉ có <code>/invitations/accept</code>; bên kia so khớp tiền tố và có <code>/invitations</code>.','Xuất một hàm <code>isPublicPath</code> từ <code>session-gate.ts</code> và dùng chung. Thay đổi hành vi: các đường dẫn con như <code>/invite/…</code> sẽ được realtime coi là public.'],
+   ['A20','lo','v','m','Test chập chờn','<code>apps/web/src/modules/dashboard/local-weather.test.tsx:48</code>','<code>WeatherCard</code> nạp qua <code>next/dynamic</code>; khi chạy cả bộ, import lâu hơn 1000 ms mặc định của <code>findByText</code>.','Đặt timeout 5000 ms cho lệnh chờ đó.'],
+  ]},
+ ]},
+ { id:'B', title:'B. Cần bạn quyết định', intro:'Có đổi hành vi, đổi phạm vi, hoặc xoá thứ có thể còn dự định dùng.', groups:[
+  { name:'Bảo mật', items:[
+   ['B1','mid','v','d','3 route connector gọi mạng ngoài mà không rate limit','<code>modules/connectors/provisioning/_routes/config.py:139,299,993</code>','<code>POST validate-draft</code>, <code>rest-sample</code>, <code>validate</code> không có <code>require_budget</code> (cả gói <code>provisioning</code> không dùng budget). <code>rest-sample</code> GET tới URL người dùng nhập; <code>validate-draft</code> gọi Telegram bằng token nháp. Ba route cũng không kiểm Origin/CSRF, và docstring của chúng ghi “retains CSRF checks” là sai.','Thêm <code>require_budget</code> cho ba route. Nếu muốn thêm CSRF thì phải sửa frontend cùng lúc: <code>apps/web/src/modules/sources/api.ts:369</code> hiện không gửi <code>X-CSRF-Token</code>, đổi thẳng sang <code>OwnerWrite</code> sẽ làm hỏng nút kiểm tra. Sửa docstring.'],
+   ['B2','hi','v','d','Thông tin đăng nhập MCP hỏng khi xoay khoá mã hoá','<code>modules/tools/mcp_credentials.py:12-19</code>','<code>CONNECTOR_CREDENTIAL_ENCRYPTION_KEY</code> là vòng khoá phân tách bằng dấu phẩy ở hai nơi khác (<code>MultiFernet</code>), nhưng đường MCP gọi <code>Fernet(key)</code> trên nguyên chuỗi. Đặt <code>new,old</code> là mọi thao tác mã hoá/giải mã MCP báo khoá không hợp lệ.','Một helper vòng khoá dùng chung cho cả ba nơi, đặt ở <code>core/</code>.'],
+   ['B3','lo','v','d','CSRF_SIGNING_SECRET rỗng vẫn khởi động','<code>apps/api/main.py:51-71</code>; <code>core/config.py:193</code>','Chỉ từ chối khi có hơn một worker. Với một worker, API chạy nhưng trả 503 cho mọi thao tác ghi và media proxy báo chưa cấu hình.','Từ chối khởi động khi secret rỗng (ngoài môi trường test).'],
+   ['B4','mid','v','d','Docs nói Postgres/Redis không publish cổng, thực tế có','<code>docs/development.md:5</code>; <code>docs/deployment.md:5</code>; <code>docker-compose.base.yml</code>','Compose publish trên loopback: Postgres <code>5432</code>, Redis <code>6379</code>, và cả graph <code>7687</code>, n8n <code>5678</code>, RustFS <code>9000</code>.','Chuyển <code>ports:</code> sang overlay dev (production thực sự kín), hoặc sửa docs.'],
+   ['B5','lo','s','d','4 route catalog dashboard không có dependency xác thực','<code>modules/dashboard/routes.py:594,601,621,649</code>','Nội dung là catalog tĩnh nên mức lộ thấp, nhưng khác các route còn lại trong router.','Thêm <code>WorkspaceRead</code> hoặc ghi rõ là cố ý công khai.'],
+   ['B6','lo','s','d','Kiểm lại SHA đang pin của trivy-action','<code>.github/workflows/ci.yml</code> (job trivy)','Chưa xác minh SHA; chỉ nêu để bạn kiểm vì đây là action bảo mật pin theo commit cũ.','Đối chiếu SHA với release chính thức, cập nhật lên bản hiện hành.'],
+  ]},
+  { name:'Fable phát hiện mới: khoá và truy vấn trong vòng lặp', items:[
+   ['N1','mid','v','d','Giữ khoá DB trong lúc gọi Google làm mới token','<code>modules/connectors/oauth_routes.py:750-786</code>; <code>modules/connectors/_collection/oauth.py:225-286</code>','Cả route khám phá Google lẫn worker thu thập đều giữ <code>FOR UPDATE</code> trên dòng grant (kèm khoá source/credential và access fence) trong khi chờ <code>refresh_google_token</code> (HTTP, timeout 10 giây). Docstring nói rõ đây là cố ý để tránh làm mới trùng, nhưng trái với nguyên tắc ở spec 167.2 (khoá → nhả → gọi → khoá lại → so sánh).','Hoặc ghi ngoại lệ này vào spec 167.2, hoặc chuyển sang mẫu nhả khoá rồi so <code>token_revision</code> khi ghi lại. Ảnh hưởng thực tế: một request khác đụng cùng source bị treo tối đa 10 giây.'],
+   ['N2','lo','v','d','Đếm memory theo loại: tới 400 dòng, mỗi dòng nhiều truy vấn có khoá','<code>modules/memory/_reads.py:180-215</code>','<code>_visible_kind_counts</code> duyệt tối đa <code>COUNT_SCAN_CAP = 400</code> dòng và gọi <code>_verified_memory_read</code> cho từng dòng (khoá privacy dùng chung + khoá provenance). Có giới hạn và có chú thích là cố ý, nhưng một lần mở danh sách memory có thể phát sinh hơn nghìn truy vấn.','Gộp kiểm tra provenance theo lô 100 dòng, hoặc cache số đếm theo revision.'],
+   ['N3','lo','v','m','Lịch sử quan hệ: kiểm tồn tại từng dòng một','<code>modules/knowledge/relationships/_history.py:551-562</code>','Mỗi dòng lịch sử trong trang (tối đa 100) chạy một <code>SELECT Relationship.id</code> riêng.','Một truy vấn <code>IN (...)</code> cho cả trang trước vòng lặp.'],
+  ]},
+  { name:'CI', items:[
+   ['B7','mid','v','d','4 hàm vượt ngưỡng độ dài','<code>modules/dashboard/_crud.py</code> (<code>create_instance</code> 133, <code>patch_instance</code> 122); <code>_presets.py::apply_preset</code> 184; <code>news/stories/_read.py::list_stories</code> 161','Gate <code>check_function_length.py</code> thoát mã 1.','Tách hàm, hoặc chủ động nâng baseline.'],
+   ['B8','mid','s','m','Job Lighthouse nhiều khả năng không chạy được','<code>lighthouserc.json</code>; job lighthouse trong <code>ci.yml</code>','<code>puppeteerScript</code> cần puppeteer nhưng job chỉ chạy <code>npx @lhci/cli</code>; puppeteer không có trong lockfile. <code>state.md</code> ghi job chưa từng chạy trên GitHub.','Cài puppeteer trong job; sửa chú thích và điều kiện <code>if:</code> cho giống các job đêm khác.'],
+   ['B9','lo','v','d','3 job audit trùng phạm vi; dependabot trỏ sai thư mục','<code>ci.yml</code> (<code>make-audit</code>, <code>pip-audit</code>, <code>npm-audit</code>); <code>.github/dependabot.yml:6-8</code>','Ba job, ba phạm vi khác nhau. Dependabot npm trỏ <code>/apps/web</code> trong khi lockfile ở gốc repo (phần này là nghi ngờ).','Giữ một job audit; đặt <code>directory: /</code>.'],
+  ]},
+  { name:'Hiệu năng frontend', items:[
+   ['B10','hi','v','d','Nguyên nhân bundle landing tăng 245 → 273 KB','<code>apps/web/src/app/layout.tsx:40</code>; <code>core/query-provider.tsx:215-219</code>','Layout gốc bọc mọi route, kể cả <code>/</code>, <code>/login</code>, <code>/terms</code>, trong provider chat, workspace và realtime (~36 KB gzip). Trang landing còn gọi <code>/api/v1/workspaces</code> (trả 401 cho khách; <code>workspace-context.tsx</code> không có điều kiện <code>enabled</code>).','Chuyển ba provider đó vào <code>app/(workspace)/layout.tsx</code>, nạp lười menu <code>Sheet</code> của landing, rồi trả ngân sách về 245 KB.'],
+   ['B11','mid','v','d','Toàn bộ catalog i18n gửi tới mọi trang','<code>app/layout.tsx:40</code>; <code>app/(public)/page.tsx:21</code>','248 KB thô (75 KB gzip) trong payload của mọi tài liệu; landing chỉ cần namespace <code>landing</code> (5,6 KB).','Chỉ truyền namespace mỗi route cần.'],
+   ['B12','lo','v','m','Query session định nghĩa ở 7 nơi với kiểu khác nhau','<code>realtime-provider.tsx:120</code>, <code>use-shell-session.ts:61</code>, <code>landing-demo.tsx:130</code>, <code>daily-brief.tsx:57</code>, <code>goals-gadget.tsx:67</code>, <code>tasks-gadget.tsx:30</code>, <code>notification-bell.tsx:27</code>','Cùng khoá <code>[\'session\']</code>, kiểu dữ liệu không thống nhất. 236 query key là chuỗi thô so với 167 dùng <code>query-keys.ts</code>.','Một hook <code>useSession()</code> và <code>sessionKeys</code>.'],
+  ]},
+  { name:'Lãng phí token và cấu hình agent', items:[
+   ['B13','hi','v','d','Skill bảo agent đọc ~1 MB nhật ký trước khi làm','<code>implementing-umwelt-os/SKILL.md:15</code>','Yêu cầu đọc <code>docs/superpowers/plans/EXECUTION.md</code> (717 KB) và <code>docs/IMPLEMENTATION_STATUS.md</code> (275 KB). Phần lớn là lịch sử tháng 10.','Lưu trữ phần cũ, giữ một file trạng thái ngắn; hoặc cho skill chỉ đọc phần đầu.'],
+   ['B14','mid','v','d','Hai cây skill giống hệt nhau cùng bị track','<code>.claude/skills/</code> (195 file) và <code>.agents/skills/</code> (159 file)','22 skill trùng từng byte, ~1 MB mỗi bên. Đã lệch nhau ở 2 skill (mục A3).','Chọn một nguồn và sinh bên kia bằng script, hoặc bỏ cây ít dùng.'],
+   ['B15','lo','v','d','Skill bên thứ ba ít liên quan','<code>caveman-learn</code> (chỉ ở .claude), <code>langchain-rag</code>, <code>mcp-builder</code>, <code>n8n-workflow-patterns</code>, <code>langgraph-*</code>','Mỗi skill thêm một dòng mô tả vào mọi phiên. Dự án có dùng langgraph, mcp, n8n nên đây là lựa chọn của bạn; <code>langchain</code> không nằm trong dependency.','Gỡ skill không dùng; <code>caveman-learn</code> đã có sẵn qua plugin.'],
+   ['B16','lo','v','d','Mục “Execution context after repository rename” trong AGENTS.md','<code>AGENTS.md:108-110</code>','Hướng dẫn riêng cho một phiên chat từng chèn cwd <code>BBD-OS</code>; phiên này cwd đã đúng.','Bỏ nếu công cụ kia không còn chèn đường dẫn cũ.'],
+  ]},
+  { name:'Dọn dẹp', items:[
+   ['B17','mid','v','d','69 worktree và 204 nhánh đã merge','<code>.worktrees/</code> (24), <code>.claude/worktrees/</code> (19), <code>.agents/worktree</code>, <code>D:/Project/wt/*</code> (25)','Mọi nhánh của chúng đã nằm trong <code>feature/fix-ui</code>.','<code>git worktree remove</code> từng cái, <code>git worktree prune</code>, <code>git branch -d</code>. Không hoàn tác được ngoài reflog.'],
+   ['B18','lo','v','m','~1,2 GB rác cục bộ','<code>.taste-skill/</code> 971 MB; <code>.superpowers/</code> 106 MB; <code>playwright-report-*</code> 53 MB; <code>test-results-*</code> 43 MB','Đều bị gitignore; ảnh chụp và report của các lần chạy cũ.','Xoá các thư mục có ngày tháng và các lần chạy <code>.taste-skill</code> cũ.'],
+   ['B19','mid','v','d','Tài liệu báo cáo một lần còn trong repo','<code>docs/IMPLEMENTATION_CHECKPOINT.md</code> (174 KB), <code>IMPLEMENTATION_TASK_REPORT.md</code> (127 KB), <code>docs/task-reports/*</code> (16 file), <code>docs/wip/*.patch</code> (360 KB), <code>docs/evidence/omni.json</code> (284 KB), <code>state.md</code>, <code>.superpowers/sdd/*</code>','Không file nào tham chiếu tới chúng. Hai file IMPLEMENTATION mở đầu giống nhau. Hai patch là công việc đã merge. <code>state.md</code> ghi head cũ <code>8bb840c2</code>.','Xoá khỏi nhánh (lịch sử git vẫn giữ) hoặc gộp phần còn giá trị vào <code>IMPLEMENTATION_STATUS.md</code>.'],
+   ['B20','lo','v','d','Code backend không ai gọi','<code>agents/approvals.py:361</code> <code>mark_approval_requires_review</code>; <code>connectors/providers/macro.py:463,485</code>; <code>modules/search/evaluation.py</code>; <code>github/adapter.py:386</code>; <code>core/media_proxy.py:146</code> (chỉ test dùng)','Đã <code>git grep -w</code> toàn repo kể cả test và <code>apps/web</code>.','Xoá, sau khi bạn xác nhận không còn dự định dùng (đặc biệt World Bank / FRED).'],
+   ['B21','lo','v','d','Dependency thừa','<code>pyproject.toml:21</code> <code>structlog</code>; <code>:29-35</code> <code>pytz</code>, <code>numpy</code>, <code>tenacity</code>, <code>posthog</code>, <code>backoff</code>; <code>apps/web/package.json</code>: <code>@eslint/eslintrc</code>, <code>@types/d3</code>, <code>@types/leaflet</code>','<code>structlog</code> không được import ở đâu. Năm gói kia là phụ thuộc gián tiếp bị pin như phụ thuộc trực tiếp. Ba devDependency không có import nào.','Gỡ <code>structlog</code> và ba devDependency; chuyển năm gói pin sang <code>constraint-dependencies</code>. Cần khoá lại lockfile.'],
+   ['B22','lo','v','d','Code frontend chỉ còn test dùng','<code>modules/sources/source-ai-toggles.tsx</code>; <code>chat/generative-ui/templates/demo-gallery.tsx</code>, <code>shell-extras.tsx</code>; <code>components/ui/scroll-area.tsx</code>, <code>separator.tsx</code>','<code>SourceAiToggles</code> là cả một tính năng UI không còn được gắn vào trang nào.','Xoá cùng test, hoặc gắn lại tính năng. Cần biết việc gỡ <code>SourceAiToggles</code> có chủ ý không.'],
+   ['B23','lo','s','d','~290 khoá i18n nghi không dùng','ví dụ <code>uiSweep.systemLoading</code>, <code>dashboard.deleteGroup</code>, <code>shell.offlineHelp</code>','23 khoá mẫu đã xác minh bằng grep; con số tổng đếm thừa các khoá ghép động.','Chạy công cụ kiểm khoá i18n chuyên dụng rồi tỉa.'],
+  ]},
+  { name:'Thiếu nhất quán', items:[
+   ['B24','mid','v','d','Tên bbd còn sót sau khi đổi tên dự án','<code>pyproject.toml:2</code>; 9 logger <code>bbd.*</code>; <code>alembic.ini:4</code> (URL mặc định <code>bbd:bbd@localhost</code>); cookie <code>bbd_session</code>; khoá Redis <code>bbd:*</code>; user Postgres <code>bbd</code>; sự kiện <code>bbd:auth-ending</code>','<code>env.py:234</code> âm thầm dùng URL mặc định trong <code>alembic.ini</code> khi thiếu <code>DATABASE_URL</code>.','Đổi tên gói, logger, sự kiện, văn bản (an toàn). Bỏ URL mặc định để lỗi lộ rõ. Giữ cookie, khoá Redis, user DB trừ khi có kế hoạch chuyển đổi.'],
+   ['B25','mid','v','d','Docs ghi tên migration đã không còn','<code>docs/release-checklist.md:7,9,40</code>; <code>docs/deployment.md:133-217</code>; <code>docs/local-development.md:35</code>; <code>docs/development.md:25</code>','Ghi head là <code>r21_drop_backup_control</code>, <code>r19_…</code>, <code>r28_…</code>. Chuỗi đã gộp; head thật là <code>0022_dashboard_panels</code>.','Viết lại các đoạn đó theo <code>0001_init</code>…<code>0022</code>.'],
+   ['B26','mid','v','m','Setup trên Windows ghi .env khác Linux','<code>scripts/dev.ps1:76-100</code> vs <code>Makefile:4-7</code>','<code>make setup</code> gọi <code>ensure_env.py</code> (điền đủ secret, cả hai khoá Fernet). <code>dev.ps1 setup</code> ghi cứng 12 khoá và bỏ qua nếu <code>.env</code> đã có. <code>dev.ps1</code> cũng thiếu task <code>audit</code>.','Cho <code>dev.ps1</code> gọi <code>ensure_env.py</code>; thêm task <code>audit</code>.'],
+   ['B27','mid','v','m','Hot reload không gồm thư mục modules','<code>docker-compose.dev.yml:5-33</code>','Overlay mount <code>./apps</code> và <code>./core</code> cho api và 4 worker nhưng không mount <code>./modules</code>; sửa module phải build lại image.','Thêm <code>./modules:/app/modules</code> cho api và các worker.'],
+   ['B28','mid','v','d','Giới hạn bộ nhớ Redis thấp hơn maxmemory','<code>docker-compose.limits.yml:13</code>','Giới hạn 256M trong khi Redis chạy với <code>--maxmemory 512mb</code>: kernel sẽ kill Redis trước khi cơ chế của chính nó kích hoạt. Overlay này dùng cho load-smoke trên CI.','Nâng giới hạn lên ≥ 640M hoặc đặt <code>--maxmemory 200mb</code> trong overlay.'],
+   ['B29','lo','s','d','chat-worker và model-worker không vào mạng storage','<code>docker-compose.yml</code>','Chỉ api, worker, cron-worker vào mạng <code>storage</code>. Fable grep <code>modules/chat</code> không thấy dùng <code>core.storage</code>, nên chat-worker nhiều khả năng không cần; model-worker (trích xuất entity/timeline, dịch) chưa lần hết.','Xác nhận chúng có đọc file gốc không; nếu có thì thêm mạng.'],
+   ['B30','lo','v','d','Biến môi trường và cấu hình lệch nhau','<code>core/langfuse_export.py:33-39</code>; <code>.env.example</code>','Langfuse đọc <code>os.getenv</code> ngoài <code>Settings</code>. 11 biến code có đọc nhưng không được ghi ở đâu (<code>SESSION_IDLE_HOURS</code>, <code>AI_CREDENTIAL_ENCRYPTION_KEY_SECONDARY</code>…). <code>.env</code> của bạn còn 4 khoá không ai đọc (<code>BACKUP_AGE_*</code>, <code>DEV_KEY_AI</code>, <code>GEMINI_API_KEY</code>).','Đưa Langfuse vào <code>Settings</code>; thêm mục chú thích vào <code>.env.example</code>.'],
+   ['B31','lo','v','m','Tài liệu lỗi thời khác','<code>OSS_USED.md</code>; bảng bundle trong <code>docs/development.md</code>; <code>README.md:3</code>; <code>docs/workspace-access-matrix.md</code>, <code>GENUI_PARITY.md</code>','<code>OSS_USED.md</code> còn <code>age</code> cho backup, thiếu RustFS/Caddy/PgBouncer/Prometheus. Bảng bundle ghi <code>/login</code> 1030 KB (thực tế ngân sách 375). README vẫn nói backup “đã tích hợp”. Nhiều đường dẫn code đã đổi sau khi tách gói.','Quét và sửa theo trạng thái hiện tại.'],
+   ['B32','mid','v','d','Cờ multi_workspace_enabled','~4.400 tham chiếu trong <code>core/</code>, <code>modules/</code>, <code>apps/</code>','Mặc định <code>False</code>, không compose hay CI nào bật. Là khối phức tạp lớn nhất đang mang theo cho sản phẩm một người dùng.','Quyết định đa workspace còn trong lộ trình không; nếu không thì lên kế hoạch gỡ theo giai đoạn.'],
+  ]},
+ ]},
+];
+// f = Fable xác nhận, c = Fable sửa nội dung, n = Fable phát hiện mới, u = chưa tự kiểm (lấy từ báo cáo sub-agent)
+const REVIEW = {
+  A1:['f'],A2:['f'],A3:['f'],A4:['f','Đã đọc ci.yml: backend/frontend chạy lint, type, test ở mọi push.'],A5:['f'],A6:['f'],A7:['f'],A8:['f'],
+  A9:['f','Đã đọc cả 4 Dockerfile: không file nào COPY các thư mục này.'],A10:['f'],A11:['f'],
+  A12:['f','Tự chạy mypy: đúng 6 lỗi, 3 file.'],A13:['f','Tự chạy ruff: 2 vị trí.'],
+  A14:['c','Báo cáo gốc ghi 11 anchor; đếm lại là 125. Chuyển từ “sửa cơ học” sang “cần quyết định”.'],
+  A15:['f'],A16:['f'],A17:['f','Đã đọc _cursor_fingerprint và ObservationQuery: from_at/to_at nằm trong fingerprint.'],
+  A18:['f','Grep lại từng tên: 0 tham chiếu ngoài chỗ định nghĩa.'],A19:['f'],
+  A20:['u','Lần chạy đầy đủ của Fable có 1 test trượt nhưng không ghi được tên; file này chạy riêng đạt 3/3.'],
+  B1:['c','Hạ từ Cao xuống Vừa. Vai trò owner VẪN được kiểm (trong _owner_access). Cookie phiên SameSite=Lax và body JSON nên CSRF khó khai thác; lỗ hổng thực là thiếu rate limit. Đổi sang OwnerWrite như báo cáo gốc đề xuất sẽ làm hỏng frontend.'],
+  B2:['f','Đã đọc cả ba nơi: hai nơi MultiFernet tách dấu phẩy, MCP dùng Fernet đơn.'],
+  B3:['c','Hạ xuống Thấp: hệ thống fail-closed (503), không phải lỗ hổng; chỉ là lỗi cấu hình lộ ra muộn.'],
+  B4:['c','Thêm: graph, n8n và RustFS cũng publish cổng loopback.'],
+  B5:['f','Router chỉ có module_dependency; 4 route trả catalog tĩnh.'],B6:['u'],
+  B7:['f','Tự chạy script: đúng 4 hàm.'],B8:['u','Đã xác nhận puppeteer không có trong lockfile và job không cài; chưa chạy job.'],
+  B9:['u','Đã đọc cấu hình: 3 job audit và dependabot trỏ /apps/web đúng như mô tả; hành vi của Dependabot với workspace chưa kiểm.'],
+  B10:['c','Cấu trúc provider đã xác nhận. Sửa: request /auth/session trên landing là có chủ đích (landing-demo dùng); chỉ /workspaces là thừa. Con số KB theo từng chunk Fable chưa đo lại.'],
+  B11:['u','Đã xác nhận layout gốc và trang landing truyền nguyên catalog; kích thước KB chưa đo lại.'],
+  B12:['c','Đếm lại là 7 nơi, không phải 5.'],
+  B13:['f'],B14:['f'],B15:['f'],B16:['f'],B17:['f','git worktree list: 70 worktree phụ; 204/246 nhánh đã merge vào HEAD.'],
+  B18:['u','Dung lượng lấy từ báo cáo gốc.'],B19:['f','Đã đo: omni.json 288 KB, hai patch 234 + 128 KB, 16 file task-reports.'],
+  B20:['f','git grep -w từng tên: không có lời gọi nào ngoài test/docstring.'],
+  B21:['f','Không file .py nào import 6 gói này; 3 devDependency không có import.'],
+  B22:['f','SourceAiToggles, DemoGallery, ScrollArea chỉ xuất hiện ở file định nghĩa và test. Separator: chỉ tên trùng trong dropdown-menu.'],
+  B23:['u','Kiểm 8 khoá mẫu: 7 không dùng, 1 (relevancePartial) có dùng → danh sách gốc có dương tính giả.'],
+  B24:['f'],B25:['f','Thư mục versions có 0001…0022; docs còn r19/r21/r28.'],B26:['f'],
+  B27:['c','Service api có mount migrations; phần thiếu ./modules đúng cho api và 4 worker.'],
+  B28:['f'],B29:['c','Hạ độ tin cậy: chat-worker nhiều khả năng không cần mạng storage.'],
+  B30:['u','Đã xác nhận Langfuse dùng os.getenv và 5/7 khoá mẫu thiếu trong .env.example. PARSED_TEXT_MAX_CHARS thực ra đã có; GRAPHITI_TELEMETRY_ENABLED không nằm trong config.py.'],
+  B31:['u','Đã xác nhận OSS_USED.md (age, DOMPurify 3.4.16 vs 3.4.17, thiếu RustFS/Caddy); các đường dẫn docs khác chưa quét lại.'],
+  B32:['f','Đếm lại: 4.401 tham chiếu; mặc định False.'],
+  N1:['n'],N2:['n'],N3:['n'],
+};
+const RV = { f:['lo','Fable xác nhận'], c:['mid','Fable sửa nội dung'], n:['hi','Fable phát hiện mới'], u:['','Chưa tự kiểm'] };
+const SEV = { hi:'Cao', mid:'Vừa', lo:'Thấp' };
+const KEY = 'umwelt-audit-2026-11-10-v2';
+const state = JSON.parse(localStorage.getItem(KEY) || '{}');
+const all = SECTIONS.flatMap(s => s.groups.flatMap(g => g.items));
+const root = document.getElementById('sections');
+for (const s of SECTIONS) {
+  const h = document.createElement('h2'); h.textContent = s.title; root.append(h);
+  const p = document.createElement('p'); p.className = 'muted'; p.textContent = s.intro; root.append(p);
+  for (const g of s.groups) {
+    const h3 = document.createElement('h3'); h3.textContent = g.name; root.append(h3);
+    for (const [id, sev, conf, size, title, where, problem, fix] of g.items) {
+      const el = document.createElement('section'); el.className = 'item';
+      el.innerHTML = `<div><h4>${id}. ${title}</h4><div class="tags">
+          <span class="tag ${sev}">Mức ${SEV[sev]}</span>
+          <span class="tag">${conf === 'v' ? 'Đã xác minh' : 'Nghi ngờ, chưa xác minh'}</span>
+          <span class="tag">${size === 'm' ? 'Sửa cơ học' : 'Cần quyết định'}</span>
+          <span class="tag ${RV[(REVIEW[id]||['u'])[0]][0]}">${RV[(REVIEW[id]||['u'])[0]][1]}</span></div></div>
+        <div class="choice" role="radiogroup" aria-label="Quyết định cho ${id}">
+          <label><input type="radio" name="${id}" value="ok"> Duyệt</label>
+          <label><input type="radio" name="${id}" value="no"> Bỏ qua</label></div>
+        <div class="body"><dl><dt>Vị trí</dt><dd>${where}</dd><dt>Vấn đề</dt><dd>${problem}</dd><dt>Đề xuất</dt><dd>${fix}</dd>${(REVIEW[id]||[])[1] ? `<dt>Ghi chú review</dt><dd>${REVIEW[id][1]}</dd>` : ''}</dl></div>`;
+      root.append(el);
+      for (const input of el.querySelectorAll('input')) {
+        input.checked = state[id] === input.value;
+        input.addEventListener('change', () => { state[id] = input.value; localStorage.setItem(KEY, JSON.stringify(state)); count(); });
+      }
+    }
+  }
+}
+const n = (f) => all.filter(f).length;
+document.getElementById('stats').innerHTML = [
+  [all.length, 'mục tổng cộng'], [n(i => i[1] === 'hi'), 'mức cao'],
+  [n(i => i[0][0] === 'A'), 'sửa được ngay (A)'], [n(i => i[0][0] !== 'A'), 'cần quyết định (B, N)'],
+  [all.filter(i => (REVIEW[i[0]]||['u'])[0] !== 'u').length, 'Fable đã tự kiểm'], [all.filter(i => (REVIEW[i[0]]||['u'])[0] === 'u').length, 'chưa tự kiểm'],
+].map(([b, t]) => `<div class="stat"><b>${b}</b><span>${t}</span></div>`).join('');
+function count() {
+  const ok = all.filter(i => state[i[0]] === 'ok').length, no = all.filter(i => state[i[0]] === 'no').length;
+  document.getElementById('count').textContent = `Duyệt ${ok} · Bỏ qua ${no} · Chưa chọn ${all.length - ok - no}`;
+}
+count();
+document.getElementById('copy').addEventListener('click', async (e) => {
+  const ids = (v) => all.filter(i => state[i[0]] === v).map(i => i[0]).join(', ') || '(không có)';
+  const text = `Duyệt: ${ids('ok')}\nBỏ qua: ${ids('no')}`;
+  try { await navigator.clipboard.writeText(text); e.target.textContent = 'Đã sao chép'; }
+  catch { prompt('Sao chép nội dung này:', text); }
+});
+document.getElementById('reset').addEventListener('click', () => { localStorage.removeItem(KEY); location.reload(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review UI/UX và workflow Chat — Umwelt-OS — 2026-11-11</title>
+<style>
+  :root { --bg:#f7f7f5; --surface:#fff; --text:#1c1c1a; --muted:#5d5d57; --line:#deded8; --accent:#2f5d8a; --hi:#b3261e; --mid:#9a6200; --lo:#3d6b3d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --surface:#201f1e; --text:#ecebe6; --muted:#a8a69e; --line:#3a3936; --accent:#8db8e0; --hi:#ff8a80; --mid:#f0b860; --lo:#9ccc9c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 96px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 40px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+  p, li { max-width: 75ch; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  code { font: 12.5px/1.4 ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--line) 45%, transparent); padding: 1px 5px; border-radius: 4px; }
+  pre { font: 12.5px/1.5 ui-monospace, Consolas, monospace; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .card header { display: flex; gap: 10px; align-items: flex-start; }
+  .card header label { display: flex; gap: 10px; align-items: flex-start; flex: 1; cursor: pointer; }
+  .card input[type=checkbox] { width: 18px; height: 18px; margin-top: 3px; flex: none; }
+  .card h3 { font-size: 15.5px; margin: 0; font-weight: 600; }
+  .id { font: 600 12.5px ui-monospace, Consolas, monospace; color: var(--accent); margin-right: 6px; }
+  .tag { flex: none; font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+  .hi { color: var(--hi); } .mid { color: var(--mid); } .lo { color: var(--lo); }
+  .ask { color: var(--accent); }
+  dl { display: grid; grid-template-columns: 96px 1fr; gap: 6px 12px; margin: 10px 0 0 28px; }
+  dt { color: var(--muted); font-size: 12.5px; padding-top: 2px; }
+  dd { margin: 0; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 10px 20px; display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; }
+  button { font: inherit; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+  #out { font: 12.5px ui-monospace, Consolas, monospace; color: var(--muted); }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin: 14px 0; }
+  figure { margin: 0; }
+  figure img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; display: block; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+  @media (max-width: 640px) { dl { grid-template-columns: 1fr; margin-left: 0; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Review UI/UX và workflow chức năng Chat</h1>
+<p class="sub">Umwelt-OS · nhánh <code>feature/fix-ui</code> · 2026-11-11 · chờ duyệt phạm vi, chưa sửa dòng code ứng dụng nào · cập nhật lần cuối 12:52</p>
+
+<p><strong>Kết luận ngắn:</strong> nền tảng kỹ thuật của Chat chắc (stream bền, chống gửi trùng, sandbox widget kín), nhưng có ba lớp vấn đề. Một: câu trả lời thật bị hỏng ở hai chỗ dễ thấy (kết thúc bằng lời tường thuật công cụ, và chữ "[Uncited]" chèn vào nội dung). Hai: trải nghiệm hụt ở các điểm chuyển trạng thái (vừa gửi, dừng, lỗi, sửa câu hỏi, đính kèm). Ba: trang Chat nặng 797 KB, chỉ cách ngưỡng 3 KB. Tổng cộng 54 đề xuất: 19 về workflow và cấu trúc (C), 6 về giao diện thị giác (U), 13 về chất lượng câu trả lời (Q), 8 về widget (G), 8 về hiệu năng (P). Cả bảy quyết định đã chốt; file này chờ anh duyệt phạm vi sửa.</p>
+
+<h2>Phạm vi và cách làm</h2>
+<ul>
+  <li>Đọc toàn bộ mã frontend của Chat ở <code>apps/web/src/modules/chat</code> (không gồm nội bộ sandbox Generative UI), trang <code>app/(workspace)/chat</code>, <code>core/app-shell/chat-controller.tsx</code>, và phần backend <code>modules/chat</code> có ảnh hưởng tới workflow.</li>
+  <li>Đối chiếu với <code>docs/DESIGN_SYSTEM.md</code> và quy tắc trong skill <code>umwelt-os-ui-system</code>.</li>
+  <li>Đã chạy thật một lần bằng e2e với model <code>anthropic/claude-haiku-5-5</code> và chụp 24 ảnh (xem phần "Kết quả chạy thật"). Chat nhanh và widget sandbox chưa được chụp.</li>
+  <li>Ba phần bổ sung (chất lượng câu trả lời, widget, hiệu năng) là review trên code; mục nào cần đo thêm đều ghi rõ.</li>
+</ul>
+
+<h2>Điểm đang làm tốt (giữ nguyên)</h2>
+<ul>
+  <li>Stream bền: tự nối lại 3 lần, gắn lại vào run đang chạy khi quay lại cuộc trò chuyện, không bao giờ gửi lại prompt.</li>
+  <li>Bản nháp lưu theo từng cuộc trò chuyện; gửi thất bại thì trả lại nội dung vào ô nhập.</li>
+  <li>Enter an toàn với bộ gõ tiếng Việt (IME), dán tệp từ clipboard, kéo-thả tệp.</li>
+  <li>A11y: vùng live cho trạng thái, trả focus sau khi xoá chip, nút Gửi vẫn focus được khi bị chặn và đọc được lý do.</li>
+  <li>Riêng tư là mặc định cho tệp đính kèm; lỗi server không hiển thị nguyên văn.</li>
+</ul>
+
+<h2>Mức cao — workflow sai hoặc gây mất công</h2>
+
+<div class="card"><header><label><input type="checkbox" data-id="C1"><h3><span class="id">C1</span>Câu hỏi vừa gửi không hiện ngay</h3></label><span class="tag hi">Cao</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Sau khi bấm Gửi, ô nhập bị xoá nhưng bong bóng câu hỏi chỉ xuất hiện khi server nhận xong và transcript tải lại. Với cuộc trò chuyện mới là 3 lượt gọi mạng (tạo cuộc trò chuyện, gửi tin, tải lại). Trong lúc đó màn hình chỉ có dòng "Đang suy luận…", người dùng không thấy mình vừa hỏi gì.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-send.ts:291-318</code>, <code>chat-transcript.tsx:697-702</code></dd>
+  <dt>Đề xuất</dt><dd>Hiện bong bóng câu hỏi ngay (ghi tạm vào cache transcript theo <code>client_request_id</code>, lần tải lại sẽ thay bằng bản thật; gửi lỗi thì gỡ ra và trả nháp như hiện nay).</dd>
+  <dt>Công sức</dt><dd>Nhỏ — 1 file chính + test.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C2"><h3><span class="id">C2</span>Bấm Dừng xong vẫn còn vòng xoay "Đang tạo câu trả lời…"</h3></label><span class="tag hi">Cao · đã xác nhận khi chạy</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Lệnh Dừng tắt cờ streaming nhưng không xoá phần chữ đã stream. Bong bóng streaming vẫn hiển thị vì còn chữ, và nhãn của nó vẫn là "Đang tạo câu trả lời…" kèm vòng xoay, ngay phía trên dòng "Đã dừng tạo phản hồi". Hai thông điệp trái ngược nhau cho tới lần gửi kế tiếp.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-session.ts:149-164</code> (không gọi <code>clearOutput</code>), <code>chat-transcript.tsx:606-608</code> và <code>:701</code></dd>
+  <dt>Đề xuất</dt><dd>Khi đã dừng: giữ phần chữ dở nhưng bỏ vòng xoay và nhãn; thêm nút "Tạo lại" cạnh dòng "Đã dừng". Xác nhận trên trình duyệt trước, kiểm tra luôn việc server có lưu phần dở hay không để tránh hiện trùng.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C3"><h3><span class="id">C3</span>"Thử lại" sau khi run lỗi sẽ gửi trùng câu hỏi</h3></label><span class="tag hi">Cao</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Nút Thử lại trong băng lỗi luôn gửi lại nội dung vừa gửi như một tin nhắn mới. Nếu lỗi xảy ra sau khi server đã nhận câu hỏi (model lỗi, hết quota, mất stream), transcript sẽ có hai câu hỏi giống hệt nhau.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-session.ts:199-202</code>, <code>use-chat-stream.ts:134-142</code>, <code>chat-transcript.tsx:836</code></dd>
+  <dt>Đề xuất</dt><dd>Phân biệt hai trường hợp: server chưa nhận thì gửi lại như cũ; server đã nhận thì Thử lại gọi "tạo lại câu trả lời" trên câu hỏi đó. Cần kiểm tra backend có cho regenerate khi chưa có câu trả lời hay không.</dd>
+  <dt>Công sức</dt><dd>Vừa — có thể chạm backend.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C4"><h3><span class="id">C4</span>Câu trả lời dài chạy khuất dưới màn hình</h3></label><span class="tag hi">Cao · xác nhận một phần</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Thiết kế hiện tại: khi run bắt đầu thì cuộn câu trả lời lên đầu khung nhìn một lần, sau đó không bám theo stream. Nhưng không có khoảng đệm bên dưới, nên trình duyệt không thể đưa bong bóng cuối cùng lên đầu; thực tế nó nằm sát đáy, chữ mới chạy xuống dưới mép và người đọc phải tự cuộn hoặc bấm "Mới nhất" nhiều lần.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-scroll.ts:84-91</code>, <code>:199-204</code>; <code>pinToBottom</code> chỉ được gọi khi mở cuộc trò chuyện (<code>:107-118</code>)</dd>
+  <dt>Đề xuất</dt><dd>Cho lượt hỏi-đáp mới nhất một chiều cao tối thiểu bằng khung nhìn (CSS <code>min-height</code>), để câu hỏi neo ở đầu và câu trả lời lấp dần xuống mà không cần cuộn. Đây là cách làm ý định "không đuổi theo stream" hoạt động đúng. Chỉ CSS và một thuộc tính, không thêm logic cuộn.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C5"><h3><span class="id">C5</span>Đính kèm tệp theo mặc định luôn dẫn tới ngõ cụt</h3></label><span class="tag hi">Cao · đã quyết</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Tệp đính kèm mặc định là riêng tư. Sau khi tải lên và xử lý xong, nút Gửi bị chặn với mọi tệp riêng tư, bất kể model là cloud hay local. Người dùng phải bấm "Đính kèm lại dạng chia sẻ", tức là tải lên và xử lý lần hai. Công tắc "Cho phép AI đám mây đọc tệp này" nằm trong menu + và phải bật <em>trước</em> khi đính kèm thì mới tránh được.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-attachments.tsx:97-100</code>, <code>:203-210</code>; <code>chat-composer.tsx:282-291</code></dd>
+  <dt>Đề xuất</dt><dd>Giữ mặc định riêng tư, nhưng hỏi ngay lúc chọn tệp (một dòng trong thanh đính kèm: "Cho model đọc tệp này?" với hai nút), không đợi xử lý xong mới báo chặn. Nếu model đang dùng là local thì không chặn. <strong>Đã quyết:</strong> hỏi ở tệp đầu tiên, rồi nhớ lựa chọn trong phạm vi một cuộc trò chuyện; cuộc trò chuyện mới hỏi lại.</dd>
+  <dt>Công sức</dt><dd>Vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C6"><h3><span class="id">C6</span>Tìm web tự bật lại sau mỗi tin nhắn</h3></label><span class="tag hi">Cao · đã quyết</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Sau mỗi lần gửi thành công, hai công tắc quay về mặc định: tìm web BẬT, truy vấn dữ liệu TẮT. Người đã tắt tìm web (ví dụ vì câu hỏi riêng tư) sẽ bị bật lại ở tin kế tiếp mà không báo; người đang phân tích dữ liệu nhiều lượt phải bật lại truy vấn dữ liệu mỗi tin. Chú thích trong code lại ghi đây là tuỳ chọn "sticky".</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-composer-state.ts:33-43</code>; <code>use-chat-send.ts:139</code>, <code>:309</code>; <code>chat-composer.tsx:47</code></dd>
+  <dt>Đề xuất</dt><dd><strong>Đã quyết: giữ lựa chọn.</strong> Công tắc tìm web giữ nguyên trong suốt cuộc trò chuyện, chỉ đặt lại khi bấm Chat mới. Công tắc truy vấn dữ liệu bị bỏ hẳn theo Q10, nên mục này chỉ còn áp dụng cho tìm web.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C7"><h3><span class="id">C7</span>Sửa câu hỏi: ghi đè bản nháp, băng thông báo ở xa, không đánh dấu tin đang sửa</h3></label><span class="tag hi">Cao</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Bấm "Sửa" sẽ chép nội dung tin cũ vào ô nhập, ghi đè luôn bản nháp đang gõ dở. Bấm "Huỷ sửa" thì ô nhập bị xoá trắng. Băng "Đang sửa câu hỏi trước" nằm sát header, cách ô nhập cả màn hình. Tin đang được sửa không có dấu hiệu nào trong transcript.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-session.ts:187-191</code>; <code>chat-session.tsx:139-142</code>; <code>chat-session-panels.tsx:95-102</code></dd>
+  <dt>Đề xuất</dt><dd>Đưa băng "Đang sửa" vào ngay trên ô nhập (cùng khung composer); tô viền tin đang sửa; cất bản nháp cũ và trả lại khi huỷ; Esc để huỷ sửa.</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa.</dd>
+</dl></div>
+
+<h2>Mức vừa — cấu trúc giao diện</h2>
+
+<div class="card"><header><label><input type="checkbox" data-id="C8"><h3><span class="id">C8</span>Header quá tải: gom thao tác vào một menu</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Từ 640px trở lên header có: nút QR, Đổi tên, Xuất Markdown, Xoá (ba nút chữ có viền), menu "…" (ghim, lưu trữ), ô chọn agent, nút Nguồn. Nút Xoá màu đỏ luôn hiện cạnh Đổi tên. Các thao tác này đã có sẵn trong menu của từng dòng lịch sử. Ở 375px header sẽ xuống hai dòng.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-session-header.tsx:78-92</code>, <code>:127-147</code></dd>
+  <dt>Đề xuất</dt><dd>Mọi kích thước màn hình chỉ dùng menu "…" (đã có sẵn cho di động). Xoá khối nút inline. Kết quả là ít code hơn.
+<pre>Trước:  [Tiêu đề…] [QR] [Đổi tên] [Xuất Markdown] [Xoá] […] [Agent ▾] [Nguồn (3)]
+Sau:    [Tiêu đề…]                                    [QR] [Nguồn (3)] […]</pre></dd>
+  <dt>Công sức</dt><dd>Nhỏ — chủ yếu xoá.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C9"><h3><span class="id">C9</span>Hai ô chọn "ai trả lời" ở hai nơi, và ô chọn model mất tác dụng khi dùng agent chuyên biệt</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Ô chọn agent nằm trên header, ô chọn model nằm dưới composer. Khi chọn agent chuyên biệt: tìm web, đính kèm, truy vấn dữ liệu bị tắt (mục truy vấn dữ liệu biến mất không giải thích), còn ô chọn model vẫn bật nhưng không được gửi theo run. Lựa chọn agent cũng không đặt lại khi chuyển cuộc trò chuyện hay bấm Chat mới.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-session-header.tsx:99-114</code>; <code>chat-composer.tsx:349</code>; <code>use-chat-send.ts:261-266</code>; <code>use-chat-composer-state.ts:39</code>; <code>use-chat-session.ts:123</code></dd>
+  <dt>Đề xuất</dt><dd>Chuyển ô chọn agent xuống thanh công cụ composer, cạnh ô chọn model. Khi chọn agent chuyên biệt thì vô hiệu ô chọn model kèm một dòng lý do. Đặt agent về "Trợ lý" khi bấm Chat mới.</dd>
+  <dt>Công sức</dt><dd>Vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C10"><h3><span class="id">C10</span>Dưới mỗi câu trả lời có tới 4–5 dòng phụ; danh sách bước nhảy từ trên xuống dưới</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Thứ tự hiện tại dưới một câu trả lời: nút "N nguồn", dòng thao tác (ngày giờ, Sao chép, Tạo lại — đều có chữ), dòng tên model, rồi "N bước", rồi gợi ý. Trong lúc stream, danh sách bước nằm <em>trên</em> câu trả lời; khi xong nó nhảy xuống <em>dưới</em> dòng model.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-transcript.tsx:522-526</code>, <code>:557-566</code>, <code>:614-615</code></dd>
+  <dt>Đề xuất</dt><dd>Gộp thành một dòng; nút chỉ còn icon (vẫn có <code>aria-label</code>); giữ "N bước" ở phía trên câu trả lời trong cả hai trạng thái.
+<pre>Trước:  [📖 3 nguồn]
+        ‹ 2/3 ›  11/11 10:42  [⧉ Sao chép] [↻ Tạo lại câu trả lời]
+        Model: claude-…
+        ▸ 3 bước
+Sau:    ▸ 3 bước
+        (nội dung câu trả lời)
+        ‹ 2/3 ›  ⧉  ↻  ·  3 nguồn  ·  claude-…  ·  10:42</pre></dd>
+  <dt>Công sức</dt><dd>Vừa — một file, cần cập nhật test.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C11"><h3><span class="id">C11</span>Vòng xoay "Đang tạo câu trả lời…" vẫn quay khi chữ đã chạy</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Dòng trạng thái có vòng xoay nằm phía trên câu trả lời suốt thời gian stream, kể cả khi chữ đang chạy. Cùng lúc có thể có danh sách bước, khối "Đang suy nghĩ…" và dòng tìm web: bốn chỉ báo tiến trình chồng lên nhau.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-transcript.tsx:606-621</code></dd>
+  <dt>Đề xuất</dt><dd>Ẩn dòng trạng thái khi chữ câu trả lời đã bắt đầu; bản thân chữ đang chạy là chỉ báo. Giữ cho giai đoạn chờ token đầu và lúc chạy công cụ. Sửa một điều kiện.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C12"><h3><span class="id">C12</span>Số nguồn trong câu trả lời không khớp số ở thanh Nguồn; tab "Ngữ cảnh" gần như trống</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Chip [2] trong câu trả lời đánh số theo từng tin nhắn. Thanh bên gộp nguồn của cả cuộc trò chuyện và đánh số lại, nên bấm [2] có thể làm sáng thẻ số 7. Tab "Ngữ cảnh" chỉ có một dòng chữ (ví dụ "3 tài liệu đã chọn"), thông tin này đã có ở chip trong composer.</dd>
+  <dt>Bằng chứng</dt><dd><code>page.tsx:217-225</code>; <code>citation-panel.tsx:77</code>; <code>chat-side-rail.tsx:28-37</code></dd>
+  <dt>Đề xuất</dt><dd>Khi mở từ một câu trả lời, thanh bên chỉ hiện nguồn của câu đó với đúng số của nó, kèm nút "Xem tất cả". Bỏ tab Ngữ cảnh và bỏ luôn bộ Tabs; thanh bên chỉ hiện khi có nguồn.</dd>
+  <dt>Công sức</dt><dd>Vừa; phần bỏ tab là xoá.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C13"><h3><span class="id">C13</span>Chat nhanh: không biết đang ở cuộc trò chuyện nào, không sang được trang Chat, không xem được nguồn</h3></label><span class="tag mid">Vừa · đã quyết</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Ngăn kéo chat nhanh dùng chung cuộc trò chuyện với trang Chat nhưng tiêu đề luôn là "Chat nhanh", không có tên cuộc trò chuyện và không có lối mở sang trang đầy đủ. Nguồn chỉ hiện dạng "· N nguồn" (chữ thường); muốn xem phải rê chuột lên chip, màn hình cảm ứng không làm được. Nút mở chat nhanh trên header đã bị gỡ, chỉ còn Ctrl+J và bảng lệnh, nên trên di động gần như không tìm thấy.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-drawer.tsx:49-52</code>; <code>chat-transcript.tsx:431-450</code>; <code>workspace-shell.tsx:105-106</code>; biến thể <code>inline</code> của <code>CitationPanel</code> đã có sẵn nhưng không nơi nào dùng (<code>citation-panel.tsx:187-191</code>)</dd>
+  <dt>Đề xuất</dt><dd>Hiện tên cuộc trò chuyện ở tiêu đề ngăn kéo; thêm nút "Mở trong Chat" (liên kết <code>/chat/&lt;id&gt;</code>); cho "N nguồn" bấm được để mở danh sách nguồn ngay dưới câu trả lời bằng biến thể <code>inline</code> có sẵn. <strong>Đã quyết:</strong> đưa lại nút chat nhanh lên header.</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C14"><h3><span class="id">C14</span>Lịch sử: thông báo trống sai ngữ cảnh, lỗi ghim/lưu trữ im lặng, ngày giờ thừa</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>
+    <ul>
+      <li>Tìm không ra hoặc mục lưu trữ trống đều hiện "Không có kết quả" với nút tên là "Huỷ" (thực chất là xoá bộ lọc).</li>
+      <li>Khi đang xem mục lưu trữ không có tiêu đề nào cho biết điều đó, chỉ có icon đổi màu.</li>
+      <li>Ghim hoặc lưu trữ thất bại không báo gì.</li>
+      <li>Mỗi dòng hiện đầy đủ ngày giờ dù đã nằm trong nhóm "Hôm nay" hay "Hôm qua".</li>
+    </ul></dd>
+  <dt>Bằng chứng</dt><dd><code>chat-history.tsx:213-221</code>, <code>:255</code>, <code>:344-355</code>; <code>conversation-actions.tsx:77-84</code></dd>
+  <dt>Đề xuất</dt><dd>Tách thông báo: "Không tìm thấy cuộc trò chuyện khớp" + "Xoá tìm kiếm"; "Chưa có cuộc trò chuyện lưu trữ" + "Quay lại danh sách". Thêm nhãn "Đã lưu trữ" phía trên danh sách. Hiện lỗi ghim/lưu trữ ngay tại dòng. Nhóm Hôm nay/Hôm qua chỉ hiện giờ.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C15"><h3><span class="id">C15</span>Không biết cuộc trò chuyện nào đang chạy nền</h3></label><span class="tag mid">Vừa · đã quyết · cần backend</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Chuyển sang cuộc trò chuyện khác khi đang stream thì run vẫn chạy trên server, nhưng danh sách lịch sử không có dấu hiệu nào cho biết cuộc nào đang trả lời hay vừa trả lời xong. API danh sách không trả cờ run đang chạy.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-history.tsx:137-144</code>; kiểu <code>Conversation</code> trong <code>api.ts</code> không có trường run</dd>
+  <dt>Đề xuất</dt><dd>Thêm một trường boolean vào API danh sách, hiện chấm nhấp nháy ở dòng đang chạy. <strong>Đã quyết:</strong> làm, gồm cả trường backend.</dd>
+  <dt>Công sức</dt><dd>Vừa — chạm backend và contract.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C16"><h3><span class="id">C16</span>Màn hình trống: hai hàng nút giống nhau nhưng hành vi khác nhau; chặn "chưa có model" đến quá muộn</h3></label><span class="tag mid">Vừa · đã quyết</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Hàng gợi ý (bấm là gửi ngay, tốn một lượt gọi model, tìm web đang bật) và hàng năng lực (bấm là bật/tắt) cùng một kiểu nút viền. Mô tả dùng thuật ngữ nội bộ ("dòng thời gian sự kiện và cơ sở tri thức thực thể"). Nếu chưa cấu hình model, người dùng gõ xong bấm Gửi mới được báo.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-transcript.tsx:173-200</code>; <code>use-chat-send.ts:355-359</code>; <code>core/messages/chat.ts</code> (<code>emptyStateDescription</code>)</dd>
+  <dt>Đề xuất</dt><dd>Thêm nhãn nhỏ cho từng hàng ("Thử hỏi" / "Công cụ cho tin nhắn này"). Viết lại mô tả bằng lời thường. Khi chưa có model: hiện thông báo cấu hình ngay ở màn hình trống thay cho gợi ý. <strong>Đã quyết:</strong> giữ gửi ngay. Hàng năng lực còn hai nút (tìm web, đính kèm) sau khi bỏ nút dữ liệu theo Q10.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C17"><h3><span class="id">C17</span>Lần gửi đầu thất bại để lại cuộc trò chuyện rỗng trong lịch sử</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Tin đầu tiên gồm hai bước: tạo cuộc trò chuyện rồi mới gửi tin. Nếu bước hai lỗi (429, mất mạng), lịch sử có thêm một cuộc trò chuyện không có tin nào, và mở nó ra là màn hình trắng vì phần gợi ý chỉ hiện khi chưa có ID.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-chat-send.ts:430-435</code>; <code>chat-transcript.tsx:700</code></dd>
+  <dt>Đề xuất</dt><dd>Nếu cuộc trò chuyện vừa được tạo trong chính lần gửi này và server chưa nhận tin, xoá nó đi khi báo lỗi. Đồng thời hiện màn hình trống cho mọi cuộc trò chuyện chưa có tin.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<h2>Mức thấp — tinh chỉnh</h2>
+
+<p><strong>C18 đã rút lại (2026-11-11):</strong> nhận định "chữ phụ trong transcript thiếu tương phản" là sai. Trong <code>apps/web/src/app/globals.css</code>, <code>--color-background</code> trỏ về <code>--surface</code>, nên nền transcript đã là <code>surface</code> và không có vấn đề tương phản.</p>
+
+<div class="card"><header><label><input type="checkbox" data-id="C19"><h3><span class="id">C19</span>Nút thao tác tin nhắn chỉ cao 32px trên màn hình cảm ứng</h3></label><span class="tag lo">Thấp</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Sao chép, Sửa, Tạo lại, mũi tên chuyển phiên bản và nút "N bước" cao 32px. Chuẩn của hệ thống là 44px; các nơi khác trong Chat đã dùng <code>pointer-coarse:min-h-11</code>.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-transcript.tsx:352</code>, <code>:390</code>, <code>:403</code>, <code>:415</code>, <code>:457</code>; <code>chat-steps.tsx:64</code></dd>
+  <dt>Đề xuất</dt><dd>Thêm <code>pointer-coarse:min-h-11</code> (làm cùng lúc với C10).</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="C20"><h3><span class="id">C20</span>Phím tắt không ai biết; Enter lúc đang stream bị bỏ qua im lặng</h3></label><span class="tag lo">Thấp</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Có Ctrl+J (chat nhanh), Ctrl+Shift+O (chat mới), Esc (dừng), Shift+Enter (xuống dòng) nhưng không hiển thị ở đâu. Khi đang stream, gõ xong bấm Enter không có phản hồi gì.</dd>
+  <dt>Bằng chứng</dt><dd><code>workspace-shell.tsx:110-132</code>; <code>use-chat-shortcuts.ts</code>; <code>chat-composer.tsx:89-93</code></dd>
+  <dt>Đề xuất</dt><dd>Thêm phím tắt vào <code>title</code> của nút Chat mới và nút Dừng. Khi đang stream, đổi placeholder thành "Đang trả lời — Esc để dừng".</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<h2>Kết quả chạy thật (e2e, 2026-11-11 12:39–12:43)</h2>
+<p>Chạy trên stack Docker dùng-một-lần với model thật <code>anthropic/claude-haiku-5-5</code> qua <code>.env.e2e-real</code>. Kết quả: 16 test đạt, 1 bỏ qua, trong 3,1 phút. Test bị bỏ qua là khối "Thinking": model không stream suy luận nào cho lượt đó (không phải lỗi ứng dụng).</p>
+<table>
+<tr><th>Spec</th><th>Kết quả</th></tr>
+<tr><td><code>auth</code></td><td>2/2 đạt</td></tr>
+<tr><td><code>chat-real-model</code></td><td>4 đạt, 1 bỏ qua (suy luận)</td></tr>
+<tr><td><code>sources-builtin-fetch</code> (thu hẹp còn 2 nguồn)</td><td>3/3 đạt: Thanh Niên 60 bản ghi, EMSC 50 bản ghi</td></tr>
+<tr><td><code>zz-chat-review</code> (spec tạm để chụp ảnh)</td><td>7/7 đạt, 24 ảnh</td></tr>
+</table>
+<p>Những gì lần chạy này xác nhận hoặc không xác nhận được:</p>
+<ul>
+<li><strong>C2 đã xác nhận.</strong> Sau khi bấm Dừng, bong bóng streaming vẫn còn, có 1 vòng xoay và chữ "Generating response…", ngay trên dòng "Generation stopped". Sau khi transcript tải lại 4 giây vẫn vậy và server không lưu phần dở.</li>
+<li><strong>C4 xác nhận một phần.</strong> Câu trả lời dài kết thúc với phần cuối nằm dưới mép composer và không có nút "Mới nhất" (nút chỉ cập nhật khi người dùng tự cuộn). Số đo giữa lúc stream không kết luận được vì lúc đo câu trả lời còn ngắn.</li>
+<li><strong>C7, C8, C10, C11, C14 thấy đúng trên ảnh.</strong></li>
+<li><strong>Chat nhanh chưa chụp được.</strong> Phím Ctrl+J trong Playwright không mở ngăn kéo, nên phần giao diện của chat nhanh (C13) vẫn chỉ dựa trên code.</li>
+<li><strong>Ba vấn đề mới về chất lượng câu trả lời</strong> lộ ra khi chạy thật: Q1, Q2, Q13 bên dưới.</li>
+</ul>
+<div class="shots">
+<figure><a href="2026-11-11-chat-shots/05-stopped-1440-light.png"><img src="2026-11-11-chat-shots/05-stopped-1440-light.png" alt="C2: đã dừng nhưng vẫn còn vòng xoay "Generating response…"" loading="lazy"></a><figcaption>C2: đã dừng nhưng vẫn còn vòng xoay "Generating response…"</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/09-grounded-1440-light.png"><img src="2026-11-11-chat-shots/09-grounded-1440-light.png" alt="Q1 và Q2: câu trả lời là lời tường thuật công cụ, có tiền tố [Uncited]" loading="lazy"></a><figcaption>Q1 và Q2: câu trả lời là lời tường thuật công cụ, có tiền tố [Uncited]</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/06-answer-markdown-1440-light.png"><img src="2026-11-11-chat-shots/06-answer-markdown-1440-light.png" alt="Q2, U2, U4, C8, C10: [Uncited] phá tiêu đề; hai nhãn model; header nhiều nút" loading="lazy"></a><figcaption>Q2, U2, U4, C8, C10: [Uncited] phá tiêu đề; hai nhãn model; header nhiều nút</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/06-answer-markdown-390-light.png"><img src="2026-11-11-chat-shots/06-answer-markdown-390-light.png" alt="U1: vùng đọc trên điện thoại" loading="lazy"></a><figcaption>U1: vùng đọc trên điện thoại</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/08-edit-mode-1440-light.png"><img src="2026-11-11-chat-shots/08-edit-mode-1440-light.png" alt="C7: băng "đang sửa" ở sát header, xa ô nhập" loading="lazy"></a><figcaption>C7: băng "đang sửa" ở sát header, xa ô nhập</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/04-streaming-1440-light.png"><img src="2026-11-11-chat-shots/04-streaming-1440-light.png" alt="C11, Q6, Q13: vòng xoay khi chữ đã chạy; "Found 0 documents"; đoạn ghi chú thừa" loading="lazy"></a><figcaption>C11, Q6, Q13: vòng xoay khi chữ đã chạy; "Found 0 documents"; đoạn ghi chú thừa</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/01-empty-1440-light.png"><img src="2026-11-11-chat-shots/01-empty-1440-light.png" alt="U3, U5: màn hình trống" loading="lazy"></a><figcaption>U3, U5: màn hình trống</figcaption></figure>
+<figure><a href="2026-11-11-chat-shots/02-composer-menu-1440-light.png"><img src="2026-11-11-chat-shots/02-composer-menu-1440-light.png" alt="U5, C5: menu + của composer" loading="lazy"></a><figcaption>U5, C5: menu + của composer</figcaption></figure>
+</div>
+
+<h2>Giao diện thị giác (từ ảnh chụp)</h2>
+
+<div class="card"><header><label><input type="checkbox" data-id="U1"><h3><span class="id">U1</span>Trên điện thoại vùng đọc chỉ còn khoảng một phần tư màn hình</h3></label><span class="tag hi">Cao · đã thấy trên ảnh</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Ở 390×844, header chiếm hai hàng, composer cao hai dòng dù đang trống, cộng thanh điều hướng dưới. Câu trả lời chỉ còn chừng 230px chiều cao, tức khoảng 5 dòng chữ.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>06-answer-markdown-390-light</code>; <code>chat-composer.tsx:387-389</code> (<code>rows={2}</code>, <code>min-h-14</code>)</dd>
+  <dt>Đề xuất</dt><dd>Trên màn hẹp cho composer cao một dòng khi trống (tự giãn khi gõ như hiện nay). Header về một hàng sau khi làm C8. Hai thay đổi này gần gấp đôi vùng đọc.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="U2"><h3><span class="id">U2</span>Composer hiện hai nhãn model cạnh nhau</h3></label><span class="tag mid">Vừa · đã thấy trên ảnh</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Thanh công cụ composer ghi "Model: anthropic/claude-haiku-5-5" (model của câu trả lời gần nhất) và ngay bên phải là ô chọn ghi "Default model". Người dùng không biết "mặc định" là model nào, và hai nhãn nói về cùng một thứ.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>06-answer-markdown-1440-light</code>; <code>chat-composer.tsx:314-323</code>, <code>:348-349</code></dd>
+  <dt>Đề xuất</dt><dd>Bỏ dòng "Model: …" khi đã có ô chọn. Trong ô chọn, mục mặc định ghi kèm tên model thật: "Mặc định · claude-haiku-5-5".</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ — xoá một component.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="U3"><h3><span class="id">U3</span>Màn hình trống: khối gợi ý lơ lửng giữa trang, cách xa ô nhập</h3></label><span class="tag lo">Thấp · đã thấy trên ảnh</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Tiêu đề và các nút gợi ý được căn giữa theo chiều dọc, còn ô nhập nằm sát đáy, cách nhau khoảng 200px trống. Mắt phải đi từ giữa trang xuống đáy để bắt đầu gõ.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>01-empty-1440-light</code>; <code>chat-transcript.tsx:179</code> (<code>my-auto</code>)</dd>
+  <dt>Đề xuất</dt><dd>Neo khối gợi ý ngay phía trên ô nhập (đổi <code>my-auto</code> thành <code>mt-auto</code>). Đổi một class.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="U4"><h3><span class="id">U4</span>Tiêu đề cấp 3 trong câu trả lời trông như chữ đậm thường</h3></label><span class="tag lo">Thấp · đã thấy trên ảnh</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>H1 18px, H2 16px, H3 14px bằng cỡ chữ thường; khoảng cách đoạn 6px. Trong ảnh, "Key Mechanisms" và "Common Directives" không khác gì một dòng in đậm, khó quét nhanh câu trả lời dài.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>06-answer-markdown-1440-light</code>; <code>chat-markdown.tsx:199</code></dd>
+  <dt>Đề xuất</dt><dd>H3 lên 15px, thêm khoảng cách trên cho tiêu đề (16px) và giữa các đoạn (8px). Sửa trong cùng một chuỗi class.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="U5"><h3><span class="id">U5</span>Tìm web chưa cấu hình: nút mờ và dòng chữ không bấm được</h3></label><span class="tag lo">Thấp · đã thấy trên ảnh</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Ở màn hình trống nút "Search the web" bị mờ, lý do chỉ có trong tooltip. Trong menu + có dòng "Not set up — Settings › AI" nhưng chỉ là chữ; người dùng phải tự tìm đường tới trang cài đặt.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>01-empty-1440-light</code>, <code>02-composer-menu-1440-light</code>; <code>chat-composer.tsx:232-257</code></dd>
+  <dt>Đề xuất</dt><dd>Khi chưa cấu hình, cho mục này thành liên kết tới trang cài đặt tìm web (<code>/settings/web-search</code>).</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="U6"><h3><span class="id">U6</span>Lẫn hai bộ tên token và nhiều giá trị ngoài thang</h3></label><span class="tag lo">Thấp</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd><code>text-destructive</code> (14 chỗ) và <code>text-negative</code> (2 chỗ) cùng chỉ màu lỗi. Cỡ chữ ngoài thang: <code>text-[11px]</code> (4), <code>text-[13px]</code> (1), <code>text-[15px]</code> (2). Màu pha độ mờ thay cho token: <code>border-border/40</code>, <code>bg-muted/40</code>, <code>bg-destructive/10</code>. Bốn mức bo góc và bốn cỡ icon trong cùng một màn hình.</dd>
+  <dt>Bằng chứng</dt><dd>Đếm bằng grep trong <code>apps/web/src/modules/chat</code> (không gồm <code>generative-ui</code>); alias token ở <code>apps/web/src/app/globals.css:4-36</code></dd>
+  <dt>Đề xuất</dt><dd>Thống nhất về một tên (<code>destructive</code>), dùng type style của design system, hai cỡ icon (14 và 16px). Làm dần khi chạm vào từng file ở các mục khác, không mở đợt riêng.</dd>
+  <dt>Công sức</dt><dd>Nhỏ, rải rác.</dd>
+</dl></div>
+
+<h2>Chất lượng câu trả lời, prompt, truy hồi</h2>
+<p>Luồng xử lý một tin nhắn, để anh đối chiếu: (1) đọc tối đa 20 lượt lịch sử, trần 16.000 ký tự; (2) truy hồi hybrid 20 đoạn cho mọi tin nhắn, song song với tìm web nếu bật; (3) gom ngữ cảnh, cắt ở 64 KB, rerank nếu có cấu hình; (4) ghép system prompt; (5) stream theo vòng, widget tối đa 3 vòng, công cụ dữ liệu thêm tối đa 2 vòng; (6) hậu kiểm và đánh số lại trích dẫn; (7) lưu; (8) gọi model thêm một lần cho tiêu đề và gợi ý.</p>
+<p>Phần này là review trên code cộng với 5 câu hỏi chạy thật. Các mục ghi "cần bộ câu hỏi mẫu" chưa kết luận được mức ảnh hưởng nếu không đo.</p>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q1"><h3><span class="id">Q1</span>Câu trả lời kết thúc bằng lời tường thuật công cụ, không có đáp án</h3></label><span class="tag hi">Cao · thấy khi chạy thật</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Hỏi "động đất gần nhất và tin Thanh Niên mới nhất trong dữ liệu đã thu thập" khi kho có 60 tin và 50 bản ghi động đất. Câu trả lời cuối cùng được lưu là: "The structured queries returned hot-cache counts but no records. I'll try a direct SQL query. The news documents came back. Earthquake records didn't surface yet, so I'll try one more query against the EMSC provider." Hết 5 bước, không có dữ liệu, không có trích dẫn.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>09-grounded-1440-light</code>; log e2e <code>SOURCES strip=0 cites=0</code>. Nguyên nhân chưa truy tới cùng; nghi do hết số vòng công cụ (<code>modules/chat/_worker/stream.py:282-303</code>, <code>_worker/base.py:108</code>).</dd>
+  <dt>Đề xuất</dt><dd>Truy nguyên nhân trước. Hướng sửa dự kiến: khi hết vòng công cụ, gọi thêm một lượt không có tool để buộc model tổng hợp từ những gì đã lấy được; lời tường thuật giữa các vòng hiển thị ở danh sách bước, không ghi vào nội dung câu trả lời.</dd>
+  <dt>Công sức</dt><dd>Vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q2"><h3><span class="id">Q2</span>Chữ "[Uncited]" tiếng Anh bị chèn vào đầu câu trả lời và làm hỏng định dạng</h3></label><span class="tag hi">Cao · thấy khi chạy thật</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Mọi câu trả lời không có trích dẫn (kiến thức chung, code, chào hỏi) bị thêm tiền tố <code>[Uncited] </code> vào nội dung lưu. Khi chạy thật, câu trả lời hiện "[Uncited] ## HTTP Caching": tiền tố đẩy <code>##</code> khỏi đầu dòng nên tiêu đề không còn là tiêu đề. Nếu lượt có tài liệu đã chọn, toàn bộ câu trả lời đã stream còn bị thay bằng một câu tiếng Anh "I do not have sufficient evidence…".</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>06-answer-markdown-1440-light</code>, <code>09-grounded-1440-light</code>; <code>modules/chat/citations.py:15-18</code>, <code>:554-567</code>, <code>:610-618</code>; <code>_worker/finalize.py:106-118</code></dd>
+  <dt>Đề xuất</dt><dd>Không chèn chữ vào nội dung. Trả cờ <code>uncited</code> trong metadata tin nhắn; UI hiện một nhãn nhỏ đã dịch ("Không dựa trên tài liệu của bạn") ở dòng thông tin dưới câu trả lời. Không xoá văn bản đã stream.</dd>
+  <dt>Công sức</dt><dd>Vừa — backend, UI và test.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q3"><h3><span class="id">Q3</span>Số trích dẫn của kết quả web và của công cụ dữ liệu trùng nhau</h3></label><span class="tag hi">Cao · chưa tái hiện</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Kết quả web được đánh số nối tiếp sau bằng chứng truy hồi. Khi model gọi công cụ truy vấn dữ liệu, bằng chứng mới cũng nhận số từ cùng vị trí đó. Lúc hậu kiểm, số mà model dùng cho kết quả web bị hiểu là tài liệu DB: trích dẫn trỏ sai nguồn mà không báo lỗi. Dễ gặp vì tìm web bật mặc định và DB tự bật theo từ khoá.</dd>
+  <dt>Bằng chứng</dt><dd><code>_worker/setup.py:533</code>; <code>db_query.py:297-352</code>; <code>_worker/finalize.py:157</code>, <code>:189-203</code></dd>
+  <dt>Đề xuất</dt><dd>Cho bằng chứng DB nhận số sau khối web. Thêm một unit test cho ca có cả web lẫn DB, và tái hiện bằng một câu hỏi thật.</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q4"><h3><span class="id">Q4</span>Không có chỉ dẫn "trả lời bằng ngôn ngữ của người dùng"</h3></label><span class="tag mid">Vừa · cần bộ câu hỏi mẫu</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Toàn bộ prompt là tiếng Anh. Chỉ có chỉ dẫn ngôn ngữ cho chữ trong widget và cho tiêu đề/gợi ý. Prompt và bằng chứng tiếng Anh dễ kéo câu trả lời sang tiếng Anh dù người dùng hỏi tiếng Việt.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/settings/prompts.py:10-13</code>; <code>_worker/setup.py:551-557</code>; <code>generative_ui/prompt.py:216-219</code></dd>
+  <dt>Đề xuất</dt><dd>Thêm một câu vào phần hợp đồng cố định: "Answer in the language of the user's latest message."</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q5"><h3><span class="id">Q5</span>Ngày giờ trong prompt là UTC</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Prompt ghi ngày giờ UTC; múi giờ của chủ sở hữu chỉ được thêm ở chat theo ngày. Với UTC+7, từ 00:00 đến 07:00 "hôm nay" trong prompt là hôm qua, nên "tin hôm nay" lệch ngày.</dd>
+  <dt>Bằng chứng</dt><dd><code>_worker/setup.py:559-565</code>, <code>:182-183</code>; múi giờ đã có sẵn ở <code>modules/settings/schemas.py:19</code></dd>
+  <dt>Đề xuất</dt><dd>Đọc múi giờ từ tuỳ chọn (cùng chỗ đang đọc locale) và ghi giờ địa phương vào prompt.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q6"><h3><span class="id">Q6</span>Truy hồi chạy cho mọi tin nhắn bằng nguyên văn câu hỏi, không có ngưỡng điểm</h3></label><span class="tag mid">Vừa · cần bộ câu hỏi mẫu</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Kể cả "xin chào" cũng truy hồi và nhồi tới 20 đoạn / 64 KB vào prompt. Câu nối tiếp như "nói rõ hơn" truy hồi theo chính mấy chữ đó. Khi chạy thật, câu hỏi kiến thức chung vẫn hiện bước "Found 0 documents", và model tự thêm một đoạn ghi chú mở đầu giải thích vì sao không có trích dẫn.</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>04-streaming-1440-light</code>; <code>_worker/setup.py:184-195</code>; <code>retrieval.py:431-451</code>, <code>:743-762</code></dd>
+  <dt>Đề xuất</dt><dd>Với câu nối tiếp, dùng lại hàm viết lại truy vấn đã có cho tìm web. Thêm ngưỡng điểm tối thiểu. Ẩn bước truy hồi khi kết quả là 0.</dd>
+  <dt>Công sức</dt><dd>Vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q7"><h3><span class="id">Q7</span>Lịch sử hội thoại bị cắt sạch sau một câu trả lời rất dài</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Bộ cắt lịch sử duyệt từ lượt mới nhất và dừng ngay khi vượt 16.000 ký tự, kể cả ở lượt đầu tiên. Sau một câu trả lời dài, yêu cầu "rút gọn lại" không còn ngữ cảnh nào.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/history.py:77-87</code>, <code>:251-255</code></dd>
+  <dt>Đề xuất</dt><dd>Luôn giữ lượt mới nhất; nếu quá dài thì cắt bớt phần giữa.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q8"><h3><span class="id">Q8</span>Tự gắn trích dẫn sau khi trả lời với ngưỡng trùng từ thấp</h3></label><span class="tag mid">Vừa · cần đo</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Khi câu trả lời không có số trích dẫn nhưng lượt có bằng chứng, hệ thống gắn <code>[1]</code> cho đoạn trùng từ 3 từ nội dung trở lên. Với 20 đoạn mỗi lượt, câu trả lời kiến thức chung dễ nhận một nguồn nó không dùng.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/citations.py:287-369</code> (ngưỡng ở <code>:291-292</code>)</dd>
+  <dt>Đề xuất</dt><dd>Bỏ bước tự gắn khi làm Q2 (đã có nhãn "không dựa trên tài liệu"), hoặc nâng ngưỡng.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q9"><h3><span class="id">Q9</span>Mỗi bằng chứng đưa cho model 4 mã UUID nhưng thiếu ngày và nguồn</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Dòng nguồn của mỗi đoạn ghi mã nguồn, mã tài liệu, mã phiên bản, mã đoạn. Model không cần chúng, trong khi ngày xuất bản và tên nguồn lại không có, nên câu hỏi "tin mới nhất" không có cơ sở để xếp theo thời gian.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/retrieval.py:1085-1092</code></dd>
+  <dt>Đề xuất</dt><dd>Thay bằng: tiêu đề, ngày xuất bản hoặc ngày thu thập, tên miền nguồn. Tiết kiệm khoảng 150 ký tự mỗi đoạn.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q10"><h3><span class="id">Q10</span>Công tắc truy vấn dữ liệu tắt ở UI nhưng server vẫn tự bật theo từ khoá</h3></label><span class="tag mid">Vừa · đã quyết</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Công cụ dữ liệu được cấp khi người dùng bật, khi mở từ gadget, hoặc khi tin nhắn khớp một danh sách từ khoá cố định (giá, thời tiết, động đất…). UI không cho biết việc tự bật. Điều này mâu thuẫn với quyết định C6 (công tắc phản ánh đúng trạng thái).</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/db_query.py:43-55</code>, <code>:182-201</code>; <code>_worker/setup.py:624</code></dd>
+  <dt>Đề xuất</dt><dd><strong>Đã quyết: bỏ công tắc.</strong> Server luôn cấp công cụ truy vấn dữ liệu khi có nguồn dữ liệu đang hoạt động; xoá danh sách từ khoá. Ở giao diện: bỏ mục "Truy vấn cơ sở dữ liệu thu thập (SQL)" trong menu + (cả trang Chat và chat nhanh), bỏ huy hiệu trạng thái ở composer, bỏ nút "Hỏi dữ liệu đã thu thập" ở màn hình trống, bỏ tham số <code>db_query</code> khi gửi. Việc model có dùng dữ liệu hay không vẫn thấy được ở danh sách bước của câu trả lời ("Đã truy vấn dữ liệu thu thập"). Agent chuyên biệt giữ nguyên như hiện nay (không có công cụ này).</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa — chủ yếu xoá ở frontend; backend đổi điều kiện cấp công cụ và test.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q11"><h3><span class="id">Q11</span>Tên thực thể và tóm tắt sự kiện vào prompt chưa được trung hoà ký tự</h3></label><span class="tag lo">Thấp</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Nội dung đoạn văn và tiêu đề tài liệu được đổi ký tự <code>&lt; &gt;</code> trước khi vào prompt, còn tên/mô tả thực thể và tiêu đề/tóm tắt sự kiện (trích từ tài liệu) thì chèn thẳng. Văn bản trong tài liệu có thể giả thẻ đóng và chèn chỉ dẫn.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/retrieval.py:1096-1108</code> so với <code>:1087-1091</code></dd>
+  <dt>Đề xuất</dt><dd>Gọi cùng hàm trung hoà cho bốn trường đó.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q12"><h3><span class="id">Q12</span>Tiêu đề, gợi ý và viết lại truy vấn web dùng trần token thấp trên model có suy luận</h3></label><span class="tag lo">Thấp · cần đo</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Lời gọi tạo tiêu đề/gợi ý giới hạn 300 token, viết lại truy vấn 64 token. Nếu nhà cung cấp tính token suy luận vào trần, kết quả có thể rỗng và bị bỏ qua im lặng. Viết lại truy vấn cũng không được cấp ngày hiện tại. Ghi nhận khi chạy thật: với <code>reasoning_effort=low</code>, model không stream suy luận nào nên test khối "Thinking" bị bỏ qua.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/_worker/followup.py:139-148</code>; <code>_worker/web.py:492-497</code>, <code>:601-611</code></dd>
+  <dt>Đề xuất</dt><dd>Ghi log tỉ lệ kết quả rỗng trước, rồi mới chỉnh trần. Thêm ngày hiện tại vào prompt viết lại truy vấn.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="Q13"><h3><span class="id">Q13</span>Prompt mặc định mâu thuẫn: "chỉ dựa trên tài liệu" và "trợ lý tổng quát"</h3></label><span class="tag lo">Thấp · cần bộ câu hỏi mẫu</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Phần đầu prompt bảo trả lời dựa trên ngữ cảnh truy hồi và nói "không đủ bằng chứng" khi thiếu; phần Generative UI nối sau lại mô tả trợ lý tổng quát. Khi chạy thật, bài luận lịch sử in ấn mở đầu bằng một đoạn in nghiêng: "This essay draws on general historical knowledge, not on the retrieved records in this session, so it carries no bracketed citations."</dd>
+  <dt>Bằng chứng</dt><dd>Ảnh <code>04-streaming-1440-light</code>; <code>modules/settings/prompts.py:10-13</code>; <code>_worker/setup.py:553-557</code>; <code>generative_ui/prompt.py:17-119</code></dd>
+  <dt>Đề xuất</dt><dd>Viết một câu phân vai: câu hỏi về dữ liệu của người dùng thì phải có trích dẫn; kiến thức chung thì trả lời bình thường, không cần giải thích về trích dẫn. Làm cùng Q2.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<p><strong>Đang làm tốt:</strong> hậu kiểm trích dẫn nghiêm (trích dẫn do server dựng, quote phải nằm trong đoạn nguồn, số ngoài phạm vi bị gỡ); bằng chứng và kết quả web được đánh dấu "không tin cậy" và trung hoà ký tự; viết lại truy vấn web chỉ dùng tin nhắn của người dùng; rerank hoặc follow-up lỗi không làm hỏng câu trả lời.</p>
+<p><strong>Chưa xem:</strong> <code>sql_guard.py</code>, <code>user_input.py</code>, <code>signals.py</code>, <code>scope.py</code>, bên trong <code>modules/search</code> (trọng số hybrid).</p>
+
+<h2>Sandbox và widget Generative UI</h2>
+<p>Review trên code; chưa chạy widget sandbox nào trong lần e2e này ngoài test bảng của <code>chat-real-model</code> (đạt).</p>
+
+<div class="card"><header><label><input type="checkbox" data-id="G1"><h3><span class="id">G1</span>File HTML xuất từ widget chạy code của model ngoài sandbox</h3></label><span class="tag mid">Vừa · bảo mật</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>"Tải HTML" và "Sao chép HTML" tạo một tài liệu độc lập không có CSP và không có sandbox. Mở file đó từ ổ đĩa thì JavaScript do model sinh chạy với toàn quyền mạng, và hàm mở liên kết trong file gọi thẳng <code>window.open</code> không hỏi.</dd>
+  <dt>Bằng chứng</dt><dd><code>generative-ui/sandbox/export-utils.ts:138-158</code>, <code>:24</code>; so với khung trong app ở <code>sandbox/frame-content.ts:36-39</code></dd>
+  <dt>Đề xuất</dt><dd>Chèn cùng thẻ CSP của khung vào tài liệu xuất. Một dòng.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G2"><h3><span class="id">G2</span>Nút "hỏi tiếp" trong widget bấm xong như không có gì xảy ra</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Prompt nói với model rằng <code>sendPrompt</code> sẽ nhờ trợ lý trả lời tiếp. Thực tế host chỉ điền chữ vào ô nhập (đúng chủ ý an toàn) nhưng không focus, không cuộn tới, không thông báo. Nếu ô nhập đang có chữ thì bị từ chối bằng một lỗi tiếng Anh chỉ widget thấy.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/generative_ui/prompt.py:110-116</code>; <code>bridge/prompt-bridge-hooks.ts:143-183</code>; <code>use-chat-session.ts:226-229</code></dd>
+  <dt>Đề xuất</dt><dd>Sửa câu trong prompt thành "điền vào ô nhập, người dùng tự gửi". Khi điền thì focus ô nhập và hiện một dòng trạng thái; khi ô nhập đang có chữ thì báo ở phía trang.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G3"><h3><span class="id">G3</span>Lưu template được nhưng không có nơi xem, dùng hay xoá</h3></label><span class="tag mid">Vừa · đã quyết</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Nút "Lưu làm template" hiện dưới mọi widget sandbox, nhưng thư viện template (danh sách, áp dụng, xoá) không được gắn ở đâu ngoài test. "Đã lưu" còn hiện ngay cả khi đồng bộ lên server thất bại, lúc đó model không thấy template.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-transcript.tsx:331-338</code>; <code>templates/template-library.tsx</code> chỉ được import trong test; <code>templates/template-store.ts:151-153</code>, <code>:165-181</code></dd>
+  <dt>Đề xuất</dt><dd><strong>Đã quyết: giữ tính năng, gắn vào menu +.</strong> Thêm mục "Template" vào menu + của composer, mở thư viện có sẵn (<code>TemplateLibrary</code>) trong một Dialog: xem danh sách, áp dụng vào cuộc trò chuyện, xoá. Nút "Lưu làm template" dưới widget chờ server lưu xong mới báo "Đã lưu"; lỗi thì báo lỗi và cho thử lại. Thư viện tải lười (làm cùng P5) để không tăng bundle.</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G4"><h3><span class="id">G4</span>Widget rộng hoặc cao quá bị cắt, không cuộn được</h3></label><span class="tag mid">Vừa · cần xác nhận lúc chạy</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Tài liệu trong khung đặt <code>overflow: hidden</code> cho cả trang và chiều cao bị chặn ở 4000px. Bảng rộng hơn cột 720px (hoặc 390px trên điện thoại) sẽ mất phần thừa.</dd>
+  <dt>Bằng chứng</dt><dd><code>sandbox/frame-content.ts:465</code>; <code>sandbox/renderer.tsx:27-28</code>, <code>:49-54</code></dd>
+  <dt>Đề xuất</dt><dd>Cho cuộn ngang trong khung; khi chạm trần chiều cao thì cho cuộn dọc.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G5"><h3><span class="id">G5</span>Ba lớp phủ đè lên nội dung widget</h3></label><span class="tag mid">Vừa · cần xác nhận lúc chạy</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Thanh công cụ (toàn màn hình, sao chép, tải) ở góc trên phải, nhãn "sandbox" ở góc dưới phải và chip trạng thái ở góc trên trái đều nằm đè lên khung, che nội dung model vẽ ở các góc.</dd>
+  <dt>Bằng chứng</dt><dd><code>sandbox/export-overlay.tsx:165</code>; <code>sandbox/renderer.tsx:363</code>, <code>:473-478</code></dd>
+  <dt>Đề xuất</dt><dd>Đưa thanh công cụ và nhãn ra một hàng tiêu đề mỏng phía trên khung, giống các widget native.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G6"><h3><span class="id">G6</span>Widget đang hiện dần rồi biến mất không lời giải thích</h3></label><span class="tag lo">Thấp · cần xác nhận lúc chạy</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Khi tham số widget sai schema, server yêu cầu model gọi lại và client gỡ widget đang hiển thị. Người dùng thấy nó hiện rồi biến mất.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/_worker/stream.py:250-254</code>; <code>_worker/tools.py:93-106</code>; <code>chat-live-state.ts:129</code></dd>
+  <dt>Đề xuất</dt><dd>Giữ khung với dòng "Đang dựng lại…" cho tới khi bản thay thế tới hoặc run kết thúc.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G7"><h3><span class="id">G7</span>Chuỗi tiếng Anh cứng và mô tả sai trong luồng sandbox</h3></label><span class="tag lo">Thấp</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Cụm chờ mặc định ở cả client và server là tiếng Anh; tiêu đề khung toàn màn hình nối cứng "fullscreen preview"; tài liệu khung và file xuất khai <code>lang="en"</code>. Prompt còn nói <code>loadImage</code> trả <code>blob:</code> trong khi host trả <code>data:</code>.</dd>
+  <dt>Bằng chứng</dt><dd><code>sandbox/renderer.tsx:32-40</code>; <code>sandbox/export-overlay.tsx:271</code>; <code>sandbox/frame-content.ts:459</code>; <code>generative_ui/prompt.py:149-154</code>, <code>:226-228</code></dd>
+  <dt>Đề xuất</dt><dd>Lấy chuỗi từ catalog có sẵn, truyền locale vào hàm dựng khung, sửa một từ trong prompt.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="G8"><h3><span class="id">G8</span>Code thừa trong cụm sandbox</h3></label><span class="tag lo">Thấp · xoá</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Khoảng 17 export chỉ còn được dùng trong file barrel và test (ví dụ <code>createSandboxController</code>, <code>assembleFrameHtml</code>, <code>OpenGenUIActivityRenderer</code>). Bridge còn nhận 5 kiểu message cũ mà khung không bao giờ gửi. Mỗi widget gắn thêm một listener và chiều cao bị kẹp hai lần ở hai nơi.</dd>
+  <dt>Bằng chứng</dt><dd><code>sandbox/websandbox-loader.ts:15-26</code>, <code>:148-179</code>; <code>sandbox/frame-content.ts:333-381</code>, <code>:486-509</code>; <code>bridge/sandbox-functions.ts:111-119</code>, <code>:197-200</code></dd>
+  <dt>Đề xuất</dt><dd>Xoá cùng test tương ứng, khoảng 150–200 dòng. Bỏ alias message cũ và nhánh resize trùng.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<p><strong>Đang làm tốt:</strong> khung luôn <code>sandbox="allow-scripts"</code>, không bao giờ <code>allow-same-origin</code>; message hai chiều được kiểm cửa sổ nguồn, origin và nonce theo từng khung; prompt từ widget chỉ được điền nháp, không tự gửi; mở liên kết luôn qua hộp xác nhận hiện đủ URL; ảnh chỉ đi qua proxy cùng origin, có giới hạn tần suất và kích thước; JavaScript của model chỉ chạy khi stream xong.</p>
+<p><strong>Chưa kiểm chứng:</strong> khung có tự điều hướng ra ngoài được không (suy từ CSP là không), và kênh WebRTC có dùng để rò dữ liệu được không.</p>
+
+<h2>Hiệu năng trang Chat</h2>
+<p>Số đo lấy từ bản build có sẵn sáng 2026-11-11 (chưa build lại). <code>/chat</code> = 797,2 KB gzip, 32 chunk. Phần lớn nhất: chunk riêng của trang 264,5 KB; React/Next dùng chung khoảng 160 KB; markdown và tô màu code 112 KB; zod 43 KB; template và sandbox 40 KB; catalog thông điệp 14 KB; DOMPurify 12,8 KB; QR 10,6 KB. Mức tiết kiệm ghi ở từng mục là ước tính, cần build lại để có số thật.</p>
+
+<div class="card"><header><label><input type="checkbox" data-id="P1"><h3><span class="id">P1</span>Trang Chat tải cả thư viện vẽ đồ thị và giao diện của ba module khác</h3></label><span class="tag hi">Cao</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Chat chỉ cần vài hàm API của các module knowledge, search, agents nhưng import qua file <code>index.ts</code>, vốn xuất cả component. Kết quả là chunk riêng của trang (264,5 KB gzip) chứa <code>@xyflow/react</code> (khoảng 31,5 KB), trang chi tiết thực thể, trang tìm kiếm và trang cài đặt agent.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-document-preview.tsx:7</code>; <code>chat-context-bar.tsx:13</code>; <code>use-chat-agent-runs.ts:3</code>; <code>use-chat-send.ts:8</code>. Số đo từ bản build sáng 2026-11-11 có sẵn trong <code>apps/web/.next</code>.</dd>
+  <dt>Đề xuất</dt><dd>Đổi bốn dòng import sang <code>@/modules/&lt;x&gt;/public-api</code> (các hàm đã được xuất ở đó; <code>core/command-palette.tsx:16-17</code> đã làm đúng mẫu này). Ước tính tiết kiệm 80–150 KB gzip, chắc chắn ít nhất 30 KB.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ — bốn dòng, rồi build lại để đo.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P2"><h3><span class="id">P2</span>Trang Chat chỉ cách ngưỡng bundle 3 KB</h3></label><span class="tag hi">Cao · quy trình</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd><code>/chat</code> đang là 797,2 KB gzip trên ngưỡng 800 KB, là route nặng nhất. Con số 666 KB ghi nhận trước đây không còn đúng. Gần như mọi thay đổi giao diện trong danh sách này sẽ làm CI đỏ.</dd>
+  <dt>Bằng chứng</dt><dd><code>apps/web/bundle-budget.json</code>; <code>docs/development.md:95</code></dd>
+  <dt>Đề xuất</dt><dd>Làm P1 trước mọi thay đổi khác, đo lại, rồi hạ ngưỡng về mức đo cộng 10% theo quy tắc ở <code>docs/development.md:102</code>.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P3"><h3><span class="id">P3</span>Khi stream, mỗi khung hình dựng lại markdown của toàn bộ câu trả lời</h3></label><span class="tag hi">Cao · cần trace để có số</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Bộ làm mượt chữ cập nhật mỗi khung hình. Mỗi lần như vậy toàn bộ câu trả lời được dựng lại markdown, tô màu lại mọi khối code, làm sạch HTML, thay toàn bộ DOM, rồi quét lại mọi khối code để gắn nút sao chép. Chi phí tăng theo bình phương độ dài câu trả lời.</dd>
+  <dt>Bằng chứng</dt><dd><code>use-smoothed-text.ts:28-38</code>; <code>chat-markdown.tsx:148-190</code>; <code>chat-transcript.tsx:605</code>, <code>:621</code></dd>
+  <dt>Đề xuất</dt><dd>Giới hạn tần suất cập nhật chữ còn 10–15 lần mỗi giây ngay trong bộ làm mượt (vài dòng). Ước tính giảm 4–6 lần công việc luồng chính khi stream.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P4"><h3><span class="id">P4</span>Mỗi mẩu chữ từ mạng làm toàn bộ hội thoại dựng lại hai lần</h3></label><span class="tag mid">Vừa · cần trace để có số</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Không tin nhắn nào được ghi nhớ kết quả render, nên mỗi delta làm header, các panel và mọi tin nhắn cũ render lại. Bộ theo dõi cuộn còn đặt state ngay trong lúc render, gây thêm một lượt nữa cho mỗi delta.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-live-state.ts:114</code>; <code>chat-transcript.tsx:723</code>, <code>:744-747</code>, <code>:789-809</code>; <code>use-chat-scroll.ts:183-185</code></dd>
+  <dt>Đề xuất</dt><dd>Bọc component tin nhắn bằng <code>React.memo</code>, ổn định hai hàm xử lý bằng <code>useCallback</code>, và chỉ ghi nhận tín hiệu "đã xem" khi người đọc rời đáy.</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P5"><h3><span class="id">P5</span>Toàn bộ bộ dựng widget nằm trong JavaScript tải lần đầu</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Transcript import tĩnh bộ dựng widget và nút lưu template, kéo theo zod (khoảng 43 KB), khung sandbox, stylesheet và thư viện template, kể cả khi hội thoại không có widget nào. Chỉ Recharts đã được tải lười.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-transcript.tsx:20-21</code>; <code>generative-ui/components/tool-rendering.tsx:8-25</code></dd>
+  <dt>Đề xuất</dt><dd>Dùng <code>next/dynamic</code> cho hai component này tại chỗ render widget. Ước tính tiết kiệm 70–100 KB gzip.</dd>
+  <dt>Công sức</dt><dd>Nhỏ; cần khung chờ để tránh nhảy layout.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P6"><h3><span class="id">P6</span>Bộ tô màu code tải ngay cả khi không có khối code</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>highlight.js (lõi và 10 ngôn ngữ) nằm chung một chunk 112 KB với bộ dựng markdown.</dd>
+  <dt>Bằng chứng</dt><dd><code>code-highlight.ts:1-22</code>; <code>chat-markdown.tsx:11</code>, <code>:60-67</code></dd>
+  <dt>Đề xuất</dt><dd>Tải bằng <code>import()</code> khi gặp khối code đầu tiên; trong lúc chờ hiển thị code chưa tô màu (đường dự phòng đã có). Ước tính 35–50 KB gzip.</dd>
+  <dt>Công sức</dt><dd>Nhỏ đến vừa.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P7"><h3><span class="id">P7</span>Hội thoại dài tải và dựng toàn bộ một lúc</h3></label><span class="tag mid">Vừa</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>API trả mọi tin nhắn kèm trích dẫn, suy luận và widget; không có phân trang. Mỗi lần gửi, khi xong và hai lần làm mới sau đó (4 giây và 10 giây) đều tải lại cả transcript.</dd>
+  <dt>Bằng chứng</dt><dd><code>modules/chat/routes.py:379-424</code>; <code>apps/web/src/modules/chat/api.ts:322-324</code>; <code>use-followup-refresh.ts:36-39</code></dd>
+  <dt>Đề xuất</dt><dd>Bước nhỏ nhất: <code>content-visibility: auto</code> trên khung mỗi tin nhắn để trình duyệt bỏ qua phần ngoài khung nhìn (thuần CSS). Phân trang chỉ làm khi đo thấy hội thoại thật đủ dài.</dd>
+  <dt>Công sức</dt><dd>Rất nhỏ cho CSS; phân trang hoãn.</dd>
+</dl></div>
+
+<div class="card"><header><label><input type="checkbox" data-id="P8"><h3><span class="id">P8</span>Vài lượt tải thừa lúc mở trang</h3></label><span class="tag lo">Thấp</span></header>
+<dl>
+  <dt>Hiện trạng</dt><dd>Hộp QR và thư viện <code>qrcode</code> (10,6 KB) tải ngay cho một nút hiếm dùng. Danh sách agent tải cả khi không dùng agent. Ba hook đọc cùng cài đặt AI với tuỳ chọn cache khác nhau. Danh sách chủ đề gợi ý dùng <code>fetch</code> thô, không cache.</dd>
+  <dt>Bằng chứng</dt><dd><code>chat-session-header.tsx:9</code>, <code>:131</code>; <code>use-chat-agent-runs.ts:19</code>; <code>model-picker.tsx:47</code>, <code>provider-gate.tsx:52-58</code>, <code>use-chat-web-search.ts:35-39</code>; <code>use-topic-names.ts:14-22</code></dd>
+  <dt>Đề xuất</dt><dd>Tải lười phần hộp QR; chỉ tải danh sách agent khi mở ô chọn; gom ba hook về một; chuyển danh sách chủ đề sang <code>useQuery</code>.</dd>
+  <dt>Công sức</dt><dd>Nhỏ.</dd>
+</dl></div>
+
+<p><strong>Đang làm tốt:</strong> Recharts và các thư viện nặng của sandbox (three, d3, chart.js, leaflet) không nằm trong bundle trang; chat nhanh tải lười ở lần mở đầu; có cổng budget trong CI; polling đều có điều kiện dừng.</p>
+<p><strong>Cần build hoặc trace mới kết luận:</strong> mức tiết kiệm thật của P1, P5, P6; chunk 264,5 KB còn gì khác; thời gian mỗi khung hình khi stream (P3, P4); hội thoại vài trăm tin (P7).</p>
+
+<h2>Thứ tự thực hiện đề xuất</h2>
+<table>
+  <tr><th>Đợt</th><th>Mục</th><th>Lý do gom</th></tr>
+  <tr><td>0 — mở khoảng trống bundle</td><td>P1, P2</td><td>Trang Chat cách ngưỡng 3 KB; không làm trước thì mọi đợt sau đỏ CI.</td></tr>
+  <tr><td>1 — sai hành vi</td><td>Q1, Q2, Q3, C1, C2, C3, C4, C7, C11, C17, G1</td><td>Lỗi người dùng thấy ngay hoặc sai kết quả. Q1 và Q3 cần truy nguyên nhân / tái hiện trước.</td></tr>
+  <tr><td>2 — gọn giao diện</td><td>C8, C10, C12, C14, C19, C20, U1–U6, G4, G5, G7, G8</td><td>Chủ yếu xoá bớt và gộp; rủi ro thấp, test cần cập nhật.</td></tr>
+  <tr><td>3 — theo quyết định đã chốt</td><td>C5, C6, C9, C13, C15, C16, Q10, G3</td><td>C15 và Q10 chạm backend. G3 làm cùng P5.</td></tr>
+  <tr><td>4 — chất lượng và hiệu năng</td><td>Q4, Q5, Q7, Q9, Q11, G2, G6, P3–P8</td><td>Sửa nhỏ, độc lập nhau.</td></tr>
+  <tr><td>5 — cần đo trước</td><td>Q6, Q8, Q12, Q13</td><td>Cần bộ câu hỏi mẫu Việt/Anh hoặc log đo trước; không nên sửa khi chưa có số.</td></tr>
+</table>
+
+<h2>Bảy quyết định — đã chốt ngày 2026-11-11</h2>
+<table>
+  <tr><th>Mục</th><th>Câu hỏi</th><th>Quyết định của chủ dự án</th></tr>
+  <tr><td>C5</td><td>Hỏi chia sẻ tệp với model mỗi lần đính kèm, hay nhớ lựa chọn?</td><td>Hỏi ở tệp đầu tiên, rồi nhớ trong phạm vi một cuộc trò chuyện.</td></tr>
+  <tr><td>C6</td><td>Công tắc tìm web giữ nguyên trong cuộc trò chuyện?</td><td>Giữ nguyên; chỉ đặt lại khi Chat mới.</td></tr>
+  <tr><td>C13</td><td>Đưa lại nút chat nhanh lên header?</td><td>Có.</td></tr>
+  <tr><td>C15</td><td>Thêm trường "đang chạy" vào API danh sách cuộc trò chuyện?</td><td>Có; làm cả backend và chấm chỉ báo ở lịch sử.</td></tr>
+  <tr><td>C16</td><td>Gợi ý ở màn hình trống: gửi ngay hay điền vào ô nhập?</td><td>Giữ gửi ngay; thêm nhãn phân biệt hai hàng nút.</td></tr>
+  <tr><td>Q10</td><td>Công cụ truy vấn dữ liệu: bỏ công tắc hay giữ tự bật theo từ khoá?</td><td>Bỏ công tắc; server luôn cấp công cụ khi có nguồn dữ liệu, xoá danh sách từ khoá.</td></tr>
+  <tr><td>G3</td><td>Thư viện template: gắn vào menu + hay bỏ?</td><td>Giữ; gắn thư viện (xem, áp dụng, xoá) vào menu + của composer.</td></tr>
+</table>
+
+<h2>Việc giữ lại sau review</h2>
+<ul>
+  <li>Spec tạm <code>tests/e2e/zz-chat-review.spec.ts</code> được giữ (không commit) để chụp lại cùng bộ ảnh sau khi sửa và so trước/sau.</li>
+  <li>Ảnh "trước" nằm ở <code>docs/audit/2026-11-11-chat-shots/</code>.</li>
+</ul>
+
+<h2>Ngoài phạm vi lần này</h2>
+<ul>
+  <li>Bên trong <code>modules/search</code> (trọng số hybrid, hợp nhất điểm).</li>
+  <li>Đo chất lượng câu trả lời bằng bộ câu hỏi mẫu Việt/Anh.</li>
+  <li>Build lại và trace hiệu năng.</li>
+</ul>
+</main>
+
+<div class="bar">
+  <button type="button" id="all">Chọn tất cả</button>
+  <button type="button" id="none">Bỏ chọn</button>
+  <button type="button" class="primary" id="copy">Sao chép danh sách đã duyệt</button>
+  <span id="out" role="status"></span>
+</div>
+<script>
+  const boxes = [...document.querySelectorAll('input[data-id]')];
+  const out = document.getElementById('out');
+  const picked = () => boxes.filter((b) => b.checked).map((b) => b.dataset.id);
+  const show = () => { out.textContent = picked().length ? 'Duyệt: ' + picked().join(', ') : ''; };
+  boxes.forEach((b) => b.addEventListener('change', show));
+  document.getElementById('all').onclick = () => { boxes.forEach((b) => { b.checked = true; }); show(); };
+  document.getElementById('none').onclick = () => { boxes.forEach((b) => { b.checked = false; }); show(); };
+  document.getElementById('copy').onclick = () => {
+    const text = 'Duyệt: ' + picked().join(', ');
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(
+      () => { out.textContent = 'Đã sao chép — ' + text; },
+      () => { out.textContent = text; },
+    );
+  };
+</script>
+</body>
+</html>

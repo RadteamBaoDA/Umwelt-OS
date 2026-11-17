@@ -1,61 +1,520 @@
 'use client';
 
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useInfiniteQuery, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { ChevronDown } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Upload } from '../ingestion/upload';
+import { CompatibleChips } from './compatible-chips';
 import { Button } from '@/components/ui/button';
-import { ApiError } from '@/core/api';
-import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { archiveSource, getOperation, listSources, purgeSource, sourceKeys, triggerCollection, updateSourceStatus } from './api';
-import { ConnectorSetup } from './connector-setup';
-import { SourceForm } from './source-form';
-import { SyncHistory } from './sync-history';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { useGuardedNavigation } from '@/core/guarded-navigation';
+import {
+  connectorKeys,
+  ConnectorConfiguration,
+  getConnectorActivation,
+  getMonotonicConnectorConfiguration,
+  listBuiltinSources,
+  listSources,
+  Source,
+  sourceKeys,
+} from './api';
+import { BuiltinResumeList, BuiltinWizard } from './builtin-sources';
+import { SourceWizard } from './source-wizard';
+import { StarterPackWizard } from './starter-pack-wizard';
+import { SourceEntry, scheduleLabel } from './source-entry';
+import { matchesFilter, SourceFilter, sourceRowState, SourcesTable } from './source-table';
+import { TablePagination, usePagination } from '@/components/ui/pagination';
+import { parseShapeFilter } from './shape-filter';
+import { templateName } from '@/core/renderer-labels';
+import { humanizeCode } from '../shared/humanize-code';
 
-function PurgeProgress({ operationId }: { operationId: string }) {
-  const operation = useQuery({ queryKey: ['operation', operationId], queryFn: () => getOperation(operationId), refetchInterval: (query) => ['succeeded', 'failed'].includes(query.state.data?.status ?? '') ? false : 1500 });
-  if (operation.isPending) return <p className="muted">Checking deletion…</p>;
-  if (operation.isError) return <p className="error" role="alert">Could not check deletion status.</p>;
-  return <p role="status">Deletion {operation.data.status}{operation.data.error_code ? ` · ${operation.data.error_code}` : ''}</p>;
-}
-
-export function SourceList() {
-  const { csrfToken } = useWorkspaceSession();
-  const queryClient = useQueryClient();
-  const [adding, setAdding] = useState(false);
-  const [addingConnector, setAddingConnector] = useState(false);
-  const [runs, setRuns] = useState<Record<string, string>>({});
-  const [noChanges, setNoChanges] = useState<Record<string, boolean>>({});
-  const [operations, setOperations] = useState<Record<string, string>>({});
-  const sources = useInfiniteQuery({ queryKey: sourceKeys.list, initialPageParam: undefined as string | undefined, queryFn: ({ pageParam }) => listSources(pageParam), getNextPageParam: (last) => last.next_cursor ?? undefined });
-  const refresh = () => queryClient.invalidateQueries({ queryKey: sourceKeys.all });
-  const archive = useMutation({ mutationFn: (id: string) => archiveSource(id, csrfToken), onSuccess: refresh });
-  const purge = useMutation({ mutationFn: (id: string) => purgeSource(id, csrfToken), onSuccess: (operation) => { setOperations((current) => ({ ...current, [operation.source_id]: operation.operation_id })); refresh(); } });
-  const status = useMutation({ mutationFn: ({ id, next }: { id: string; next: 'active' | 'paused' }) => updateSourceStatus(id, next, csrfToken), onSuccess: refresh });
-  const collect = useMutation({ mutationFn: (id: string) => triggerCollection(id, csrfToken), onSuccess: (result, id) => { if (result.run_id) { setRuns((current) => ({ ...current, [id]: result.run_id! })); setNoChanges((current) => ({ ...current, [id]: false })); } else { setNoChanges((current) => ({ ...current, [id]: true })); } } });
-  const items = sources.data?.pages.flatMap((page) => page.items) ?? [];
-
-  return <section className="content-panel">
-    <div className="section-heading"><div><span className="brand">Library</span><h1>Sources</h1><p className="muted">Connectors keep provider credentials in n8n. Source data remains local.</p></div>
-      <div className="form-actions"><Button onClick={() => { setAdding(false); setAddingConnector((value) => !value); }}>Set up connector</Button><Button className="secondary" onClick={() => { setAddingConnector(false); setAdding((value) => !value); }}>New manual source</Button></div>
+/** Banner naming the gadget renderer the Sources page is filtered for, with a clear action. */
+function ShapeFilterBanner({ renderer, onClear }: { renderer: string | null; onClear: () => void }) {
+  const t = useTranslations('sources');
+  const tg = useTranslations('gadgetSettings');
+  return (
+    <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted p-3 text-sm">
+      <span>{t('shape.filterBanner', { renderer: renderer ? templateName(renderer, tg) : '' })}</span>
+      <Button size="sm" variant="outline" onClick={onClear}>
+        {t('shape.filterClear')}
+      </Button>
     </div>
-    {adding && <section className="sub-panel"><h2>New manual source</h2><SourceForm onSaved={() => { setAdding(false); refresh(); }} /></section>}
-    {addingConnector && <ConnectorSetup onSaved={() => { setAddingConnector(false); refresh(); }} />}
-    {sources.isPending && <div className="skeleton" aria-label="Loading sources" />}
-    {sources.isError && <p className="error" role="alert">Could not load sources. <Button className="secondary" onClick={() => sources.refetch()}>Retry</Button></p>}
-    {sources.isSuccess && items.length === 0 && <p className="empty-state">No sources yet. Create a manual source or set up an RSS, web, or REST connector.</p>}
-    {items.length > 0 && <ul className="record-list">{items.map((source) => <li key={source.id} className="record-row"><div className="record-content">
-      <div><strong>{source.name}</strong><p className="muted">{source.type} · {source.status}{source.retired_at ? ` · retired ${new Date(source.retired_at).toLocaleString()}` : ''}</p>
-        <p className="muted">Collected: {source.collected_at ? new Date(source.collected_at).toLocaleString() : 'never'} · Indexed: {source.indexed_at ? new Date(source.indexed_at).toLocaleString() : 'not configured'} · Collection error: {source.collection_error_code ?? 'none'} · Processing error: {source.processing_error_code ?? 'none'}</p></div>
-      <div className="form-actions">
-        {source.status !== 'archived' && source.status !== 'paused' && source.type !== 'manual' && <Button className="secondary" disabled={collect.isPending} onClick={() => collect.mutate(source.id)}>Sync now</Button>}
-        {source.status !== 'archived' && <Button className="secondary" disabled={status.isPending} onClick={() => status.mutate({ id: source.id, next: source.status === 'paused' ? 'active' : 'paused' })}>{source.status === 'paused' ? 'Resume' : 'Pause'}</Button>}
-        {source.status !== 'archived' && <Button className="secondary" disabled={archive.isPending} onClick={() => { if (window.confirm(`Archive ${source.name}? Its data will be kept.`)) archive.mutate(source.id); }}>Archive</Button>}
-        <Button className="secondary" disabled={purge.isPending} onClick={() => { if (window.confirm(`Permanently delete ${source.name} and all of its documents and collected observations?`)) purge.mutate(source.id); }}>Delete all data</Button>
-      </div>
-      {runs[source.id] && <SyncHistory runId={runs[source.id]} />}
-      {noChanges[source.id] && <p className="muted" role="status">Sync completed; no new records.</p>}
-      {operations[source.id] && <PurgeProgress operationId={operations[source.id]} />}
-    </div></li>)}</ul>}
-    {(archive.error || purge.error || status.error || collect.error) && <p className="error" role="alert">{[archive.error, purge.error, status.error, collect.error].filter(Boolean).map((error) => error instanceof ApiError ? error.message : 'Source action failed.').join(' ')}</p>}
-    {sources.hasNextPage && <Button className="secondary" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>Load more</Button>}
-  </section>;
+  );
 }
+
+/** Which add/edit dialog is open on the sources page; null when only the table is shown. */
+type DialogState =
+  { kind: 'builtin' } | { kind: 'starter' } | { kind: 'upload' } | { kind: 'connector' } | { kind: 'edit'; source: Source } | null;
+
+/**
+ * Dialog open state with the dirty-draft guard. `transition` opens, switches or closes the dialog, first confirming that
+ * the sources document may be left and that a dirty connector draft may be discarded; each accepted transition bumps
+ * `editSession` so the wizard remounts with fresh state. `transitionGuard` is registered by the open wizard.
+ */
+function useDialogTransition() {
+  const { ensureSourcesDocument } = useGuardedNavigation();
+  const [dialog, setDialog] = useState<DialogState>(null);
+  const [editSession, setEditSession] = useState(0);
+  const transitionGuard = useRef<(() => boolean) | null>(null);
+  /** Opens, switches or closes the dialog, first confirming that a dirty connector draft may be discarded. */
+  const transition = useCallback(
+    (next: DialogState) => {
+      if (next !== null && !ensureSourcesDocument()) return;
+      if (transitionGuard.current && !transitionGuard.current()) return;
+      transitionGuard.current = null;
+      setEditSession((value) => value + 1);
+      setDialog(next);
+    },
+    [ensureSourcesDocument],
+  );
+  /** Lets the open wizard register (or clear) its dirty-draft guard. */
+  const registerTransitionGuard = (guard: (() => boolean) | null) => {
+    transitionGuard.current = guard;
+  };
+  return { dialog, editSession, transition, registerTransitionGuard };
+}
+
+/**
+ * Purge operations lifted out of the rows so rows with in-flight cleanup stay mounted under any filter. Entries for
+ * finished purges are pruned only after the row has left the (settled) refetched list.
+ */
+function usePurgeTracking(items: Source[], listSettled: boolean) {
+  const [operations, setOperations] = useState<Record<string, string>>({});
+  const [purged, setPurged] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!listSettled) return;
+    const listed = new Set(items.map((source) => source.id));
+    const gone = Object.keys(purged).filter((id) => !listed.has(id));
+    if (gone.length === 0) return;
+    const drop = (current: Record<string, unknown>) => Object.fromEntries(Object.entries(current).filter(([id]) => !gone.includes(id)));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prunes finished-purge entries once their rows have left the refetched list; no-op when none are gone
+    setOperations((current) => drop(current) as Record<string, string>);
+    setPurged((current) => drop(current) as Record<string, boolean>);
+  }, [items, purged, listSettled]);
+  return { operations, setOperations, purged, setPurged };
+}
+
+/**
+ * Opens `?source=<id>` once, when that source first appears in the loaded list. A missing param settles immediately;
+ * an unknown id keeps waiting for later pages.
+ */
+function useSourceDeepLink(items: Source[], loaded: boolean, open: (source: Source) => void) {
+  const deepLinkHandled = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandled.current || !loaded) return;
+    const id = new URLSearchParams(window.location.search).get('source');
+    if (!id) {
+      deepLinkHandled.current = true;
+      return;
+    }
+    const target = items.find((source) => source.id === id);
+    if (!target) return;
+    deepLinkHandled.current = true;
+    open(target);
+  }, [items, loaded, open]);
+}
+
+/** Per-connector configuration and activation queries (shared caches with the editor) keyed by source id. */
+function useConnectorDetails(connectors: Source[]) {
+  const queryClient = useQueryClient();
+  const configurations = useQueries({
+    queries: connectors.map((source) => ({
+      queryKey: connectorKeys.configuration(source.id),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getMonotonicConnectorConfiguration(source.id, signal, () => [
+          queryClient.getQueryData<ConnectorConfiguration>(connectorKeys.configuration(source.id)),
+        ]),
+    })),
+  });
+  const activations = useQueries({
+    queries: connectors.map((source) => ({
+      queryKey: connectorKeys.activation(source.id),
+      queryFn: () => getConnectorActivation(source.id),
+    })),
+  });
+  return {
+    configurationBySourceId: new Map(connectors.map((source, index) => [source.id, configurations[index]])),
+    activationBySourceId: new Map(connectors.map((source, index) => [source.id, activations[index]?.data])),
+  };
+}
+
+/** Add menu: starter packs button plus the Add datasource dropdown (built-in / connector / file upload). */
+function AddDatasourceMenu({
+  empty,
+  allBuiltinsAdded,
+  onSelect,
+}: {
+  empty: boolean;
+  allBuiltinsAdded: boolean;
+  onSelect: (kind: 'starter' | 'builtin' | 'connector' | 'upload') => void;
+}) {
+  const t = useTranslations('sources');
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('table.toolbar')}>
+      <Button size="sm" variant={empty ? 'default' : 'outline'} onClick={() => onSelect('starter')}>
+        {t('starter.packs')}
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm">
+            {t('add.datasource')}
+            <ChevronDown aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem disabled={allBuiltinsAdded} onSelect={() => onSelect('builtin')}>
+            <span className="flex flex-col">
+              <span>{t('menu.builtin')}</span>
+              <span className="text-xs text-muted-foreground">{allBuiltinsAdded ? t('add.builtinAllAdded') : t('menu.builtinHint')}</span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onSelect('connector')}>
+            <span className="flex flex-col">
+              <span>{t('menu.connector')}</span>
+              <span className="text-xs text-muted-foreground">{t('menu.connectorHint')}</span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onSelect('upload')}>
+            <span className="flex max-w-72 flex-col">
+              <span>{t('menu.upload')}</span>
+              <span className="text-xs text-muted-foreground">{t('menu.uploadHint')}</span>
+            </span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+/** Dialog wrapping the document upload form; refreshes the source list on close because a first upload creates the default Uploads source. */
+function UploadDialog({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+  const t = useTranslations('sources');
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          onChanged();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('upload.dialogTitle')}</DialogTitle>
+          <DialogDescription>{t('menu.uploadHint')}</DialogDescription>
+        </DialogHeader>
+        <Upload />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Banner shown once the just-created source (`sourceId`) is in the loaded list, listing the gadget templates it can power. */
+function CreatedSourceNote({ items, sourceId }: { items: Source[]; sourceId: string | null }) {
+  const source = sourceId ? items.find((item) => item.id === sourceId) : undefined;
+  if (!source) return null;
+  return (
+    <div role="status" className="rounded-md border border-border bg-muted p-3">
+      <CompatibleChips source={source} />
+    </div>
+  );
+}
+
+/** The single open add/edit dialog, if any; closing goes through the draft-guarded transition. */
+function SourceDialogs({
+  dialog,
+  editSession,
+  shapeFilter,
+  onClearFilter,
+  transition,
+  registerTransitionGuard,
+  refresh,
+  onCreated,
+  onBuildDashboard,
+}: {
+  dialog: DialogState;
+  editSession: number;
+  shapeFilter: ReturnType<typeof parseShapeFilter>['shapes'] | undefined;
+  onClearFilter: () => void;
+  transition: (next: DialogState) => void;
+  registerTransitionGuard: (guard: (() => boolean) | null) => void;
+  refresh: () => void;
+  onCreated: (sourceId: string) => void;
+  onBuildDashboard: () => void;
+}) {
+  const closeDialog = () => transition(null);
+  if (dialog?.kind === 'builtin')
+    return (
+      <BuiltinWizard
+        key={editSession}
+        shapeFilter={shapeFilter}
+        onClearFilter={onClearFilter}
+        onAddConnector={() => transition({ kind: 'connector' })}
+        onClose={closeDialog}
+        onChanged={refresh}
+      />
+    );
+  if (dialog?.kind === 'starter')
+    return (
+      <StarterPackWizard
+        key={editSession}
+        onBuildDashboard={onBuildDashboard}
+        onAddConnector={() => transition({ kind: 'connector' })}
+        onClose={closeDialog}
+        onChanged={refresh}
+      />
+    );
+  if (dialog?.kind === 'upload') return <UploadDialog onClose={closeDialog} onChanged={refresh} />;
+  if (!dialog) return null;
+  return (
+    <SourceWizard
+      key={editSession}
+      request={dialog}
+      shapeFilter={shapeFilter}
+      onClearFilter={onClearFilter}
+      registerTransitionGuard={registerTransitionGuard}
+      onChanged={refresh}
+      onClose={closeDialog}
+      onCreated={onCreated}
+    />
+  );
+}
+
+/**
+ * Per-filter row counts over all sources plus the rows visible under `filter`. A row with an in-flight purge operation
+ * stays visible (unless archived) so its cleanup progress is not lost when the owner switches filters.
+ */
+function filterSources(
+  items: Source[],
+  activationBySourceId: Map<string, Parameters<typeof sourceRowState>[1]>,
+  operations: Record<string, string>,
+  filter: SourceFilter,
+) {
+  const states = new Map(items.map((source) => [source.id, sourceRowState(source, activationBySourceId.get(source.id))]));
+  const counts: Record<SourceFilter, number> = { all: 0, active: 0, paused: 0, attention: 0, archived: 0 };
+  for (const state of states.values())
+    for (const key of Object.keys(counts) as SourceFilter[]) counts[key] += matchesFilter(state, key) ? 1 : 0;
+  const visible = items.filter((source) => {
+    const state = states.get(source.id) ?? 'active';
+    return (state !== 'archived' && Boolean(operations[source.id])) || matchesFilter(state, filter);
+  });
+  return { counts, visible };
+}
+
+/** Page title, description and the single Add datasource menu. `headingRef` lets callers move focus to the title after a row is removed. */
+function SourcesPageHeader({
+  headingRef,
+  empty,
+  allBuiltinsAdded,
+  onSelect,
+}: {
+  headingRef: RefObject<HTMLHeadingElement | null>;
+  empty: boolean;
+  allBuiltinsAdded: boolean;
+  onSelect: (kind: 'starter' | 'builtin' | 'connector' | 'upload') => void;
+}) {
+  const t = useTranslations('sources');
+  return (
+    <header className="sources-page-header">
+      <div className="min-w-0">
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="m-0 text-2xl font-semibold tracking-[-.02em] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {t('title')}
+        </h1>
+        <p className="mt-2 mb-0 text-sm text-muted-foreground">{t('description')}</p>
+      </div>
+      {/* One primary "Add datasource" menu replaces the former row of add buttons; each item opens its wizard via the draft-guarded transition. */}
+      <AddDatasourceMenu empty={empty} allBuiltinsAdded={allBuiltinsAdded} onSelect={onSelect} />
+    </header>
+  );
+}
+
+/** Loading skeleton, load-failure alert with retry, or the empty-state hint for the sources list query. */
+function SourcesLoadState({
+  isPending,
+  isError,
+  isSuccess,
+  isEmpty,
+  onRetry,
+}: {
+  isPending: boolean;
+  isError: boolean;
+  isSuccess: boolean;
+  isEmpty: boolean;
+  onRetry: () => void;
+}) {
+  const t = useTranslations('sources');
+  return (
+    <>
+      {isPending && <div className="skeleton" aria-label={t('loading')} />}
+      {isError && (
+        <p className="error" role="alert">
+          {t('loadFailed')}{' '}
+          <Button variant="outline" onClick={onRetry}>
+            {t('retry.label')}
+          </Button>
+        </p>
+      )}
+      {isSuccess && isEmpty && (
+        <p className="empty-state">
+          {t('empty')} {t('starter.emptyHint')}
+        </p>
+      )}
+    </>
+  );
+}
+
+type SourceConfiguration = ReturnType<typeof useConnectorDetails>['configurationBySourceId'] extends Map<string, infer V> ? V : never;
+
+type ConfiguredSourceEntryProps = {
+  source: Source;
+  configuration: SourceConfiguration | undefined;
+  operationId: string;
+  editingId: string | null;
+  purged: boolean;
+  onPurgeStarted: (id: string) => void;
+  onPurgeFinished: () => void;
+  onEdit: (source: Source) => void;
+  onChanged: () => void;
+  onRemoved: () => void;
+};
+
+/** One table row: derives the schedule label (loading/unknown while the configuration query has no data), timezone and realtime mode from the row's configuration query, then renders `SourceEntry`. */
+function ConfiguredSourceEntry({ source, configuration, ...rest }: ConfiguredSourceEntryProps) {
+  const t = useTranslations('sources');
+  return (
+    <SourceEntry
+      source={source}
+      schedule={
+        configuration?.data
+          ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t)
+          : configuration?.isPending
+            ? t('schedule.loading')
+            : t('schedule.unknown')
+      }
+      timezone={configuration?.data?.configuration.timezone ?? null}
+      realtimeMode={configuration?.data?.configuration.realtime_mode ?? null}
+      {...rest}
+    />
+  );
+}
+
+/**
+ * Sources page header and table, with the single Add datasource menu beside the title and paused built-ins above the list.
+ * Every add and edit flow runs in a full-screen wizard dialog; closing it goes through the active dirty-draft guard.
+ * `?source=<id>` opens that source's edit dialog once the list has loaded.
+ */
+export function SourceList() {
+  const t = useTranslations('sources');
+  const queryClient = useQueryClient();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // Dashboard tiles with no compatible source link here with ?shapes=&for=; the filter only narrows the add flows.
+  const { shapes, renderer } = useMemo(() => parseShapeFilter(searchParams), [searchParams]);
+  const shapeFilter = shapes.length ? shapes : undefined;
+  /** Drops both filter params from the URL. */
+  const clearFilter = useCallback(() => router.replace('/settings/sources'), [router]);
+  const { dialog, editSession, transition, registerTransitionGuard } = useDialogTransition();
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const sources = useInfiniteQuery({
+    queryKey: sourceKeys.list,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => listSources(pageParam),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+  const items = useMemo(() => sources.data?.pages.flatMap((page) => page.items) ?? [], [sources.data]);
+  const builtins = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal) });
+  // One source per built-in: with every built-in already added there is nothing left to pick.
+  const allBuiltinsAdded = Boolean(builtins.data?.length) && builtins.data!.every((item) => item.source_id !== null);
+  const connectors = items.filter((source) => ['rss', 'web', 'api'].includes(source.type));
+  const { configurationBySourceId, activationBySourceId } = useConnectorDetails(connectors);
+  const [filter, setFilter] = useState<SourceFilter>('all');
+  const { operations, setOperations, purged, setPurged } = usePurgeTracking(items, sources.isSuccess && !sources.isFetching);
+  const { counts, visible } = filterSources(items, activationBySourceId, operations, filter);
+  const pager = usePagination(visible);
+  /** Invalidates the source list query after a source mutation. */
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: sourceKeys.all });
+  };
+  useSourceDeepLink(items, sources.isSuccess, (target) => transition({ kind: 'edit', source: target }));
+
+  return (
+    <div className="sources-list">
+      <SourcesPageHeader
+        headingRef={headingRef}
+        empty={items.length === 0 && sources.isSuccess}
+        allBuiltinsAdded={allBuiltinsAdded}
+        onSelect={(kind) => transition({ kind })}
+      />
+      {shapeFilter && <ShapeFilterBanner renderer={renderer} onClear={clearFilter} />}
+      <BuiltinResumeList onChanged={refresh} />
+      <SourceDialogs
+        dialog={dialog}
+        editSession={editSession}
+        shapeFilter={shapeFilter}
+        onClearFilter={clearFilter}
+        transition={transition}
+        registerTransitionGuard={registerTransitionGuard}
+        refresh={refresh}
+        onCreated={setCreatedId}
+        onBuildDashboard={() => router.push('/dashboard?preset=monitor')}
+      />
+      <CreatedSourceNote items={items} sourceId={createdId} />
+      <SourcesLoadState
+        isPending={sources.isPending}
+        isError={sources.isError}
+        isSuccess={sources.isSuccess}
+        isEmpty={items.length === 0}
+        onRetry={() => sources.refetch()}
+      />
+      {items.length > 0 && (
+        <SourcesTable
+          filter={filter}
+          counts={counts}
+          onFilterChange={(next) => {
+            setFilter(next);
+            pager.setPage(1);
+          }}
+          pagination={<TablePagination {...pager} />}
+        >
+          {pager.pageItems.map((source) => (
+            <ConfiguredSourceEntry
+              key={source.id}
+              source={source}
+              configuration={configurationBySourceId.get(source.id)}
+              operationId={operations[source.id] ?? ''}
+              editingId={dialog?.kind === 'edit' ? dialog.source.id : null}
+              purged={Boolean(purged[source.id])}
+              onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))}
+              onPurgeFinished={() => {
+                if (purged[source.id]) return;
+                setPurged((current) => ({ ...current, [source.id]: true }));
+                refresh();
+              }}
+              onEdit={(value) => transition({ kind: 'edit', source: value })}
+              onChanged={refresh}
+              onRemoved={() => headingRef.current?.focus()}
+            />
+          ))}
+        </SourcesTable>
+      )}
+      {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}
+      {sources.hasNextPage && (
+        <Button variant="outline" disabled={sources.isFetchingNextPage} onClick={() => sources.fetchNextPage()}>
+          {t('loadMore')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Re-exported for existing importers; the implementation lives in `modules/shared/humanize-code`. */
+export { humanizeCode };

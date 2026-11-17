@@ -1,4 +1,5 @@
-.PHONY: setup dev stop migrate seed lint typecheck test build
+.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test e2e load-test build audit
+export WORKSPACE CONFIRM_FINGERPRINT
 
 setup:
 	uv sync --frozen
@@ -17,8 +18,28 @@ migrate:
 seed:
 	docker compose -f docker-compose.yml run --rm --build api python -m modules.knowledge.documents.seed
 
+workspace-up:
+	python scripts/dev_workspace.py up --name "$$WORKSPACE"
+
+workspace-stop:
+	python scripts/dev_workspace.py stop --name "$$WORKSPACE"
+
+workspace-seed:
+	python scripts/dev_workspace.py seed --name "$$WORKSPACE"
+
+reset-preview:
+	python scripts/dev_workspace.py reset-preview --name "$$WORKSPACE"
+
+reset:
+	python scripts/dev_workspace.py reset --name "$$WORKSPACE" --confirm "$$CONFIRM_FINGERPRINT"
+
 lint:
-	uv run ruff check core apps modules tests infrastructure/postgres/migrations
+	uv run ruff format --check core apps modules tests scripts
+	uv run ruff check core apps modules tests scripts infrastructure/postgres/migrations
+	uv run python scripts/check_genui_parity.py
+	uv run python scripts/check_function_length.py
+	uv run python scripts/check_file_size.py
+	@if [ -f .importlinter ]; then uv run lint-imports; fi
 	npm run lint
 
 typecheck:
@@ -27,6 +48,15 @@ typecheck:
 
 test:
 	PYTEST_TARGET="$(PYTEST_TARGET)" E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh
+
+e2e:
+	E2E_ONLY_RUN=1 E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh
+
+load-test:
+	bash scripts/load-test.sh
+
+audit:
+	bash scripts/audit.sh
 
 build:
 	npm run build

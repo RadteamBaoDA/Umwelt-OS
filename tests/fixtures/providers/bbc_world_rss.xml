@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel><title>BBC News - World</title><link>https://www.bbc.co.uk/news/world</link>
+<item><title>Market &amp;amp; policy</title><description><![CDATA[<p>Rates <b>hold</b></p><script>alert(1)</script>]]></description><link>https://www.bbc.co.uk/news/articles/c1?at_medium=RSS</link><guid isPermaLink="false">story-42</guid><pubDate>Wed, 07 Oct 2026 08:00:00 GMT</pubDate></item>
+<item><title>Second story</title><description>Plain summary</description><link>https://www.bbc.co.uk/news/articles/c2</link><guid isPermaLink="true">https://www.bbc.co.uk/news/articles/c2</guid><pubDate>Wed, 07 Oct 2026 09:30:00 +0100</pubDate></item>
+<item><title>Undated story</title><link>https://www.bbc.co.uk/news/articles/c3</link><guid>story-43</guid></item>
+<item><title>Script link story</title><link>javascript:alert(1)</link><guid>story-44</guid><pubDate>Wed, 07 Oct 2026 07:00:00 GMT</pubDate></item>
+<item><title>No id at all</title><link>http://insecure.example/x</link></item>
+</channel></rss>

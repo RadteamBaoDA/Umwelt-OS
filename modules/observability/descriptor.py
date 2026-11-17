@@ -1,0 +1,48 @@
+from dataclasses import dataclass
+
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
+
+@dataclass(frozen=True)
+class ObservabilityDescriptor(ModuleDescriptor):
+    """Declare owner-only bounded metrics and cross-module run inspection."""
+
+    id: str = "observability"
+    name: str = "Observability"
+    version: str = "1.0.0"
+    description: str = "Bounded metrics, run inspection and telemetry redaction."
+    enabled: bool = True
+    dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = (
+        "agents",
+        "automations",
+        "chat",
+        "connectors",
+        "ingestion",
+        "knowledge.documents",
+        "knowledge.entities",
+        "sources",
+        "tools",
+    )
+    provides: tuple[str, ...] = ("metrics", "run_inspection")
+    requires: tuple[str, ...] = ()
+    routes: tuple[str, ...] = (
+        "/api/v1/system/metrics",
+        "/api/v1/system/runs",
+        "/api/v1/system/history",
+        "/api/v1/system/history/settings",
+    )
+    emitted_events: tuple[str, ...] = ()
+    consumed_events: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ()
+    navigation: tuple[dict[str, str], ...] = ()
+    settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.observability.routes", 470),
+        RouterSpec("modules.observability.operations_routes", 480),
+    )
+    erasure_module: str | None = "modules.observability.erasure"
+    erasure_order: int = 160
+
+
+descriptor = ObservabilityDescriptor()

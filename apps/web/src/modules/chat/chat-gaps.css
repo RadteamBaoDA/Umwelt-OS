@@ -1,0 +1,93 @@
+/* Chat design-gap styles (Chat.dc.html): in-message citation chip. */
+@layer components {
+  .chat-markdown .cite {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    margin: 0 1px;
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    text-decoration: none;
+    vertical-align: super;
+  }
+  .chat-markdown .cite:hover,
+  .chat-markdown .cite:focus-visible {
+    background: var(--active);
+  }
+}
+
+/* Answer block reveal: blocks fade in once as they scroll into view; skipped for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-markdown > .reveal-pending {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  .chat-markdown > .reveal-block {
+    transition:
+      opacity 240ms ease-out,
+      transform 240ms ease-out;
+  }
+}
+
+/* Code blocks: language label and highlight.js scopes, colored only with semantic theme variables (light and dark). */
+@layer components {
+  .chat-markdown .chat-code-lang {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+    user-select: none;
+  }
+  .chat-markdown .hljs-comment,
+  .chat-markdown .hljs-quote,
+  .chat-markdown .hljs-meta {
+    color: var(--muted);
+    font-style: italic;
+  }
+  .chat-markdown .hljs-keyword,
+  .chat-markdown .hljs-selector-tag,
+  .chat-markdown .hljs-literal,
+  .chat-markdown .hljs-doctag {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .chat-markdown .hljs-string,
+  .chat-markdown .hljs-regexp,
+  .chat-markdown .hljs-symbol,
+  .chat-markdown .hljs-addition {
+    color: var(--status-success);
+  }
+  .chat-markdown .hljs-number,
+  .chat-markdown .hljs-built_in,
+  .chat-markdown .hljs-attr,
+  .chat-markdown .hljs-attribute,
+  .chat-markdown .hljs-variable,
+  .chat-markdown .hljs-template-variable {
+    color: var(--status-warning);
+  }
+  .chat-markdown .hljs-title,
+  .chat-markdown .hljs-section,
+  .chat-markdown .hljs-type,
+  .chat-markdown .hljs-name,
+  .chat-markdown .hljs-selector-id,
+  .chat-markdown .hljs-selector-class {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .chat-markdown .hljs-deletion {
+    color: var(--danger);
+  }
+  .chat-markdown .hljs-emphasis {
+    font-style: italic;
+  }
+  .chat-markdown .hljs-strong {
+    font-weight: 700;
+  }
+}

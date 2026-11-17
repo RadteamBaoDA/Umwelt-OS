@@ -1,0 +1,439 @@
+'use client';
+
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useFormatter, useTranslations } from 'next-intl';
+import { useState, type FormEvent } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
+import { apiFailureKey } from '@/core/api-failure-key';
+import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { workspaceKeys } from '@/core/query-keys';
+import { useWorkspace } from '@/core/workspace-context';
+import { SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
+
+export type InvitationRead = {
+  id: string;
+  email: string;
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  accepted_by_user_id: number | null;
+  revoked_at: string | null;
+};
+export type MemberRead = { user_id: number; email: string | null; role: 'owner' | 'member'; membership_revision: number };
+type Page<T, C> = { items: T[]; next_cursor: C | null };
+type Created = { invitation_id: string; invitation_url: string; expires_at: string };
+type Pending = { kind: 'revoke'; id: string } | { kind: 'remove'; id: number };
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/;
+
+/** Derives the display status of an invitation from its timestamps. */
+export function invitationStatus(row: InvitationRead, now = Date.now()): 'accepted' | 'revoked' | 'expired' | 'pending' {
+  if (row.accepted_at) return 'accepted';
+  if (row.revoked_at) return 'revoked';
+  return Date.parse(row.expires_at) <= now ? 'expired' : 'pending';
+}
+
+/** Owner-only invitation and member management for the selected workspace. */
+export function WorkspaceMembers() {
+  const s0 = useWorkspaceMembersData();
+  const { t, tShell, selection, isOwner } = s0;
+
+  if (!selection) return <section className="rounded-lg border bg-card p-6 skeleton" aria-label={t('loading')} />;
+  if (!isOwner) return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('ownerOnly')} />;
+
+  const s1 = buildWorkspaceMembersActions(s0);
+
+  const vm: WorkspaceMembersVm = s1;
+  return (
+    <div className="flex flex-col gap-5">
+      <WorkspaceMembersHeader vm={vm} />
+
+      <InviteForm vm={vm} />
+
+      <InviteLinkPanel vm={vm} />
+
+      <WorkspaceMembersError vm={vm} />
+
+      <InvitationsSection vm={vm} />
+
+      <MembersSection vm={vm} />
+
+      <MemberActionDialog vm={vm} />
+    </div>
+  );
+}
+
+type WorkspaceMembersVm = ReturnType<typeof buildWorkspaceMembersActions>;
+
+/** Settings page header. */
+function WorkspaceMembersHeader({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, tShell } = vm;
+  return <SettingsPageHeader eyebrow={tShell('settings')} title={t('title')} description={t('intro')} />;
+}
+
+/** Invite-by-email form with inline validation. */
+function InviteForm({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, create, email, setEmail, emailError, submit } = vm;
+  return (
+    <SettingsSection title={t('invite.heading')}>
+      <form className="grid gap-3" onSubmit={submit} noValidate>
+        <div className="field">
+          <Label htmlFor="invite-email">{t('emailLabel')}</Label>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              id="invite-email"
+              type="email"
+              className="min-w-0 flex-1 basis-56"
+              autoComplete="off"
+              value={email}
+              placeholder={t('emailPlaceholder')}
+              onChange={(e) => setEmail(e.target.value)}
+              aria-invalid={emailError || undefined}
+            />
+            <Button type="submit" disabled={create.isPending}>
+              {create.isPending ? t('creating') : t('createInvite')}
+            </Button>
+          </div>
+          {emailError && (
+            <span className="error" role="alert">
+              {t('invalidEmail')}
+            </span>
+          )}
+        </div>
+      </form>
+    </SettingsSection>
+  );
+}
+
+/** One-time invitation link with copy and dismiss actions. */
+function InviteLinkPanel({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, link, setLink, copied, copy } = vm;
+  return (
+    link && (
+      <div className="grid gap-2 rounded-lg border border-border bg-secondary p-4" role="status">
+        <h3 className="text-sm font-semibold">{t('linkHeading')}</h3>
+        <p className="text-muted-foreground text-xs">{t('linkHelp')}</p>
+        <div className="flex flex-wrap gap-2">
+          <Input readOnly value={link} aria-label={t('linkHeading')} className="min-w-0 flex-1" onFocus={(e) => e.currentTarget.select()} />
+          <Button type="button" variant="outline" onClick={() => void copy()}>
+            {copied === 'ok' ? t('copied') : t('copy')}
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => setLink(null)}>
+            {t('dismissLink')}
+          </Button>
+        </div>
+        {copied === 'failed' && (
+          <span className="error" role="alert">
+            {t('copyFailed')}
+          </span>
+        )}
+      </div>
+    )
+  );
+}
+
+/** Mutation failure notice. */
+function WorkspaceMembersError({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, errorKey } = vm;
+  return (
+    errorKey && (
+      <p className="error" role="alert">
+        {t(errorKey)}
+      </p>
+    )
+  );
+}
+
+/** Invitation list with revoke actions and pagination. */
+function InvitationsSection({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, format, invitations, setPending, listError, invitationRows, statusLabel } = vm;
+  return (
+    <SettingsSection title={t('invitationsHeading')}>
+      {invitations.isError ? (
+        listError(() => void invitations.refetch())
+      ) : invitations.isPending ? (
+        <p className="text-muted-foreground">{t('loading')}</p>
+      ) : invitationRows.length === 0 ? (
+        <p className="text-muted-foreground">{t('noInvitations')}</p>
+      ) : (
+        <ul className="grid gap-2">
+          {invitationRows.map((row) => {
+            const status = invitationStatus(row);
+            return (
+              <li key={row.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
+                <span className="min-w-0 flex-1 break-all text-sm font-medium">{row.email}</span>
+                <span className="text-muted-foreground text-xs">
+                  {statusLabel[status]}
+                  {status === 'pending'
+                    ? ` · ${t('expiresOn', { date: format.dateTime(new Date(row.expires_at), { dateStyle: 'medium' }) })}`
+                    : ''}
+                </span>
+                {status === 'pending' && (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'revoke', id: row.id })}>
+                    {t('revoke')}
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {invitations.hasNextPage && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-fit"
+          disabled={invitations.isFetchingNextPage}
+          onClick={() => void invitations.fetchNextPage()}
+        >
+          {invitations.isFetchingNextPage ? t('loading') : t('loadMore')}
+        </Button>
+      )}
+    </SettingsSection>
+  );
+}
+
+/** Member list with remove actions and pagination. */
+function MembersSection({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, members, setPending, listError, memberRows } = vm;
+  return (
+    <SettingsSection title={t('membersHeading')}>
+      {members.isError ? (
+        listError(() => void members.refetch())
+      ) : members.isPending ? (
+        <p className="text-muted-foreground">{t('loading')}</p>
+      ) : memberRows.length === 0 ? (
+        <p className="text-muted-foreground">{t('noMembers')}</p>
+      ) : (
+        <ul className="grid gap-2">
+          {memberRows.map((row) => (
+            <li key={row.user_id} className="flex flex-wrap items-center gap-3 rounded-lg border border-border px-4 py-3">
+              <span className="min-w-0 flex-1 break-all text-sm font-medium">
+                {row.email ?? (row.role === 'owner' ? t('localOwner') : t('unknownEmail'))}
+              </span>
+              <span className="text-muted-foreground text-xs">{row.role === 'owner' ? t('roleOwner') : t('roleMember')}</span>
+              {row.role === 'member' && (
+                <Button type="button" variant="outline" size="sm" onClick={() => setPending({ kind: 'remove', id: row.user_id })}>
+                  {t('remove')}
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {members.hasNextPage && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-fit"
+          disabled={members.isFetchingNextPage}
+          onClick={() => void members.fetchNextPage()}
+        >
+          {members.isFetchingNextPage ? t('loading') : t('loadMore')}
+        </Button>
+      )}
+    </SettingsSection>
+  );
+}
+
+/** Confirmation dialog for revoking an invitation or removing a member. */
+function MemberActionDialog({ vm }: { vm: WorkspaceMembersVm }) {
+  const { t, pending, setPending, confirmPending } = vm;
+  return (
+    <AlertDialog
+      open={pending !== null}
+      onOpenChange={(open) => {
+        if (!open) setPending(null);
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{pending?.kind === 'remove' ? t('removeTitle') : t('revokeTitle')}</AlertDialogTitle>
+          <AlertDialogDescription>{pending?.kind === 'remove' ? t('removeBody') : t('revokeBody')}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={confirmPending}>
+            {t('confirm')}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Cursor-paged invitation and member queries (50 per page) for one workspace; both stay disabled until `enabled`
+ * (a selected workspace the caller owns). Query keys sit under `workspaceKeys.all` so owner mutations invalidate them together.
+ */
+function useWorkspaceLists(workspaceId: string | null, base: string, enabled: boolean) {
+  const invitations = useInfiniteQuery({
+    queryKey: [...workspaceKeys.all, workspaceId, 'invitations'],
+    queryFn: ({ pageParam }) =>
+      apiRequest<Page<InvitationRead, string>>(`${base}/invitations?limit=50${pageParam ? `&cursor=${pageParam}` : ''}`),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled,
+  });
+  const members = useInfiniteQuery({
+    queryKey: [...workspaceKeys.all, workspaceId, 'members'],
+    queryFn: ({ pageParam }) => apiRequest<Page<MemberRead, number>>(`${base}/members?limit=50${pageParam ? `&cursor=${pageParam}` : ''}`),
+    initialPageParam: 0,
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled,
+  });
+  return { invitations, members };
+}
+
+/** Loads invitations and members of the selected workspace (owner only) and declares the create, revoke and remove mutations that refresh both lists. */
+function useWorkspaceMembersData() {
+  const t = useTranslations('workspaceMembers');
+  const tShell = useTranslations('shell');
+  const format = useFormatter();
+  const { csrfToken } = useWorkspaceSession();
+  const { selection, isOwner } = useWorkspace();
+  const client = useQueryClient();
+  const workspaceId = selection?.id ?? null;
+  const revision = selection?.revision ?? null;
+  const base = `/api/v1/workspaces/${workspaceId}`;
+
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
+  const [pending, setPending] = useState<Pending | null>(null);
+
+  const enabled = Boolean(workspaceId) && isOwner;
+  const { invitations, members } = useWorkspaceLists(workspaceId, base, enabled);
+  // Every owner mutation bumps the workspace revision, which is also the next If-Match / expected_revision.
+  const refresh = () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: [...workspaceKeys.all, workspaceId] }),
+      client.invalidateQueries({ queryKey: workspaceKeys.list() }),
+    ]);
+  const writeHeaders = (extra: Record<string, string> = {}) => ({ ...csrfHeaders(csrfToken), ...extra });
+
+  const create = useMutation({
+    mutationFn: () =>
+      apiRequest<Created>(`${base}/invitations`, {
+        method: 'POST',
+        headers: writeHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ email: email.trim(), expected_revision: revision }),
+      }),
+    onSuccess: (created) => {
+      setLink(created.invitation_url);
+      setCopied(null);
+      setEmail('');
+    },
+    onSettled: refresh,
+  });
+  const revoke = useMutation({
+    mutationFn: (id: string) =>
+      apiRequest<void>(`${base}/invitations/${id}`, { method: 'DELETE', headers: writeHeaders({ 'If-Match': `"${revision}"` }) }),
+    onSettled: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: (userId: number) =>
+      apiRequest<void>(`${base}/members/${userId}`, { method: 'DELETE', headers: writeHeaders({ 'If-Match': `"${revision}"` }) }),
+    onSettled: refresh,
+  });
+
+  function listError(onRetry: () => void) {
+    return (
+      <div role="alert" className="flex items-center gap-3">
+        <span className="error">{t('loadFailed')}</span>
+        <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+          {t('retry')}
+        </Button>
+      </div>
+    );
+  }
+
+  return {
+    t,
+    tShell,
+    format,
+    client,
+    workspaceId,
+    revision,
+    base,
+    enabled,
+    invitations,
+    members,
+    refresh,
+    writeHeaders,
+    create,
+    revoke,
+    remove,
+    email,
+    setEmail,
+    emailError,
+    setEmailError,
+    link,
+    setLink,
+    copied,
+    setCopied,
+    pending,
+    setPending,
+    csrfToken,
+    selection,
+    isOwner,
+    listError,
+  };
+}
+
+/** Maps failures to message keys and provides the invite submit, copy and confirm handlers plus the flattened rows. */
+function buildWorkspaceMembersActions(p: ReturnType<typeof useWorkspaceMembersData>) {
+  const { t, invitations, members, create, revoke, remove, email, setEmailError, link, setCopied, pending, setPending } = p;
+  const error = create.error ?? revoke.error ?? remove.error;
+  const errorKey = error ? failureText(error) : null;
+  function failureText(e: unknown): 'forbidden' | 'conflict' | 'invalidEmail' | 'notEnabled' | 'requestFailed' {
+    if (e instanceof ApiError && e.status === 422) return 'invalidEmail';
+    const key = apiFailureKey(e);
+    return key === 'forbidden' || key === 'conflict' ? key : 'requestFailed';
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    const valid = EMAIL_PATTERN.test(email.trim());
+    setEmailError(!valid);
+    if (valid) create.mutate();
+  }
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link ?? '');
+      setCopied('ok');
+    } catch {
+      setCopied('failed');
+    }
+  }
+  function confirmPending() {
+    if (pending?.kind === 'revoke') revoke.mutate(pending.id);
+    if (pending?.kind === 'remove') remove.mutate(pending.id);
+    setPending(null);
+  }
+
+  const invitationRows = invitations.data?.pages.flatMap((p) => p.items) ?? [];
+  const memberRows = members.data?.pages.flatMap((p) => p.items) ?? [];
+  const statusLabel = {
+    pending: t('status.pending'),
+    accepted: t('status.accepted'),
+    revoked: t('status.revoked'),
+    expired: t('status.expired'),
+  };
+
+  return { ...p, error, errorKey, invitationRows, memberRows, statusLabel, failureText, submit, copy, confirmPending };
+}

@@ -1,1 +1,1 @@
-"""BBD-OS runtime entry points."""
+"""Umwelt-OS runtime entry points."""
