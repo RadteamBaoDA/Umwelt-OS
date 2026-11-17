@@ -410,3 +410,76 @@ def test_fred_known_series_records_physical_units_as_provider_field() -> None:
         payload, datetime(2026, 11, 2, tzinfo=UTC), {"fred_series_id": "ABC123"}
     )
     assert "units" not in other.metadata["provider_record"]["world_data"]["provider_fields"]
+
+
+# ------------------------------------------------------------------ FRED series units from /fred/series
+
+
+class RoutedGate(Gate):
+    """Gate answering ``/fred/series?`` (metadata) and ``/observations`` with their own outcome."""
+
+    def __init__(self, meta):
+        super().__init__(json.dumps(BODIES["fred"]).encode())
+        self.meta = meta
+
+    async def fetch_bytes(self, url, **kwargs):
+        if "/fred/series?" not in url:
+            return await super().fetch_bytes(url, **kwargs)
+        self.calls.append((url, kwargs))
+        if isinstance(self.meta, Exception):
+            raise self.meta
+        return rest.Fetched(self.meta)
+
+
+def fred_units_run(monkeypatch, meta, sid="ABC123"):
+    run, accepted, _ = make_run(monkeypatch, "fred", (keyed.KEYED["fred"].placement, KEY))
+    run.attempt.source.configuration = {"fred_series_id": sid}
+    run.gate = RoutedGate(meta)
+    return run, accepted
+
+
+def accepted_units(accepted):
+    fields = accepted[0][0].metadata["provider_record"]["world_data"]["provider_fields"]
+    return fields.get("units")
+
+
+def meta_body(units):
+    return json.dumps({"seriess": [{"id": "ABC123", "units": units}]}).encode()
+
+
+async def test_fred_unknown_series_takes_units_from_series_metadata(monkeypatch):
+    run, accepted = fred_units_run(monkeypatch, meta_body("Billions of Dollars"))
+    await collection._run_keyed(run)
+    # Metadata goes first, so a quota deferral there spends nothing on the data send.
+    assert len(run.gate.calls) == 2 and "/fred/series?" in run.gate.calls[0][0]
+    assert accepted_units(accepted) == "Billions of Dollars"
+    assert KEY not in repr(accepted)
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [rest.ProviderHttpError(500), b"not json", b"{}", meta_body(["x"]), meta_body("x" * 81)]
+    + [meta_body("Per\ncent"), meta_body("")],
+)
+async def test_fred_bad_metadata_still_collects_without_units(monkeypatch, meta):
+    run, accepted = fred_units_run(monkeypatch, meta)
+    await collection._run_keyed(run)
+    assert accepted and accepted_units(accepted) is None
+
+
+async def test_fred_known_series_makes_no_metadata_send(monkeypatch):
+    run, accepted = fred_units_run(monkeypatch, meta_body("Wrong"), sid="DFF")
+    await collection._run_keyed(run)
+    assert len(run.gate.calls) == 1 and accepted_units(accepted) == "Percent"
+
+
+async def test_fred_metadata_quota_deferral_is_not_swallowed(monkeypatch):
+    from datetime import timedelta
+
+    from modules.connectors import quota
+
+    run, accepted = fred_units_run(monkeypatch, quota.QuotaDeferred("p", NOW + timedelta(hours=1)))
+    with pytest.raises(quota.QuotaDeferred):
+        await collection._run_keyed(run)
+    assert not accepted
+    assert all("/fred/series?" in call[0] for call in run.gate.calls)  # no data send before the deferral

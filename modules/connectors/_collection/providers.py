@@ -5,6 +5,7 @@ Private part of :mod:`modules.connectors.collection` (a pure move; that module r
 
 import asyncio
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -39,6 +40,8 @@ from modules.ingestion.public import (
     CollectionStateUpdate,
     IngestionRecord,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def _run_pure(run: Run) -> None:
@@ -262,20 +265,48 @@ async def _keyed_secret(run: Run) -> str:
     return secret
 
 
+async def _fred_units(run: Run, meta_request: Any) -> str | None:
+    """Second gated send: the series' physical unit from ``fred/series``, or ``None`` (best effort).
+
+    The send goes through the same gate as the main one (own authorization and quota debit), so quota
+    deferral, fence loss and timeouts propagate. Only a provider HTTP error or an unusable body is
+    swallowed (logged without the URL, which carries the key); the collection then simply has no unit.
+    """
+    from modules.connectors.providers.keyed import fred_meta_units
+    from modules.connectors.providers.macro import decode_json
+
+    try:
+        body = _require_body(await _get_body(run, meta_request, max_bytes=KEYED_MAX_BYTES))
+        return fred_meta_units(await _payload_async(decode_json, body))
+    except (rest.ProviderHttpError, ValueError) as exc:
+        logger.info("fred series units unavailable (%s)", type(exc).__name__)
+        return None
+
+
 async def _run_keyed(run: Run) -> None:
-    """Keyed free-tier providers: key read first (no lease and no send without it), one gated send.
+    """Keyed free-tier providers: key read first (no lease and no send without it), gated sends.
 
     Order matters: the credential and the request (which validates key shape and owner scope) are resolved
     before the lease so a missing key or bad scope fails closed without consuming quota or a lease.
+    One send for the data; a provider with ``meta_build`` (FRED) and no static unit for the series makes
+    one more gated send for its unit, handed to the mapper as ``cfg["_fred_units"]``.
     """
+    from modules.connectors.providers.keyed import FRED_UNITS
     from modules.connectors.providers.macro import decode_json
 
     provider = str(run.attempt.source.provider)
     row = KEYED[provider]
     cfg = getattr(run.attempt.source, "configuration", None) or {}
-    request = _payload(row.build, await _keyed_secret(run), cfg)
+    secret = await _keyed_secret(run)
+    request = _payload(row.build, secret, cfg)
+    meta_request = None
+    if row.meta_build is not None and cfg.get("fred_series_id") not in FRED_UNITS:
+        meta_request = _payload(row.meta_build, secret, cfg)
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
+    # Metadata first: if quota defers it, the run retries before the data send has spent any quota.
+    if meta_request is not None and (units := await _fred_units(run, meta_request)):
+        cfg = {**cfg, "_fred_units": units}
     fetched = await _get_body(run, request, max_bytes=KEYED_MAX_BYTES)
     body = _require_body(fetched)
     payload = body if row.binary else (await _payload_async(decode_json, body))
@@ -512,16 +543,29 @@ async def _run_tvmaze(run: Run) -> None:
     cfg: dict[str, Any] = source.configuration or {}
     now = datetime.now(UTC)
     web = cfg.get("tvmaze_mode") == "schedule_web"
-    country = ("" if cfg.get("tvmaze_global") else cfg.get("media_country")) if web else (cfg.get("media_country") or "US")
+    country = (
+        ("" if cfg.get("tvmaze_global") else cfg.get("media_country"))
+        if web
+        else (cfg.get("media_country") or "US")
+    )
     date = now.date().isoformat()
     url = tvmaze_schedule_url(country=country, date=date, web=web)
     fingerprint = sha256(url.encode("utf-8")).hexdigest()
     state = await _state(run)
-    headers = _conditional(state, run.attempt.connector_revision) if state.continuation_state == fingerprint else None
+    headers = (
+        _conditional(state, run.attempt.connector_revision)
+        if state.continuation_state == fingerprint
+        else None
+    )
     lease = await _lease(run)
     page = await collect_tvmaze_schedule(
-        run.gate.fetch_bytes, country=country, date=date, web=web, config=cfg,
-        collected_at=now, etag=(headers or {}).get("If-None-Match"),
+        run.gate.fetch_bytes,
+        country=country,
+        date=date,
+        web=web,
+        config=cfg,
+        collected_at=now,
+        etag=(headers or {}).get("If-None-Match"),
         last_modified=(headers or {}).get("If-Modified-Since"),
     )
     run.extras["native_fp"] = fingerprint
@@ -536,7 +580,9 @@ async def _run_tvmaze(run: Run) -> None:
         etag=None if backlog else page.etag,
         last_modified=None if backlog else page.last_modified,
     )
-    await _accept_native(run, lease, records, _coverage(records), now, update, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, _coverage(records), now, update, cursor_after=cursor_after
+    )
 
 
 async def _run_livechart(run: Run) -> None:
@@ -547,7 +593,11 @@ async def _run_livechart(run: Run) -> None:
     cfg = run.attempt.source.configuration or {}
     fingerprint = sha256(LIVECHART_URL.encode("utf-8")).hexdigest()
     state = await _state(run)
-    headers = _conditional(state, run.attempt.connector_revision) if state.continuation_state == fingerprint else None
+    headers = (
+        _conditional(state, run.attempt.connector_revision)
+        if state.continuation_state == fingerprint
+        else None
+    )
     lease = await _lease(run)
     page = await collect_livechart_feed(
         run.gate.fetch_bytes,
@@ -567,7 +617,9 @@ async def _run_livechart(run: Run) -> None:
         etag=None if backlog else page.etag,
         last_modified=None if backlog else page.last_modified,
     )
-    await _accept_native(run, lease, records, _coverage(records), now, update, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, _coverage(records), now, update, cursor_after=cursor_after
+    )
 
 
 _ANILIST_PACER = None
@@ -608,7 +660,11 @@ async def _run_anilist(run: Run) -> None:
     for _ in range(MAX_PAGES_PER_RUN):
         await _ANILIST_PACER.pace("anilist", 2.1)
         result = await collect_anilist(
-            run.gate.fetch_bytes, provider, config=cfg, collected_at=now, page=page_number,
+            run.gate.fetch_bytes,
+            provider,
+            config=cfg,
+            collected_at=now,
+            page=page_number,
             updated_after=watermark or None if mode == "updated" else None,
         )
         for record in result.records:
@@ -620,7 +676,11 @@ async def _run_anilist(run: Run) -> None:
         page_number += 1
     run.extras["native_fp"] = fingerprint
     await _accept_native(
-        run, lease, list(records_by_id.values()), _coverage(list(records_by_id.values())), now,
+        run,
+        lease,
+        list(records_by_id.values()),
+        _coverage(list(records_by_id.values())),
+        now,
         cursor_after=cursor_after,
     )
 
@@ -635,9 +695,13 @@ async def _run_openlibrary(run: Run) -> None:
     fingerprint = provider_options.native_fingerprint("openlibrary_books", cfg)
     state = await _state(run)
     cursor = lease.cursor_before if state.continuation_state == fingerprint else None
-    page = await collect_openlibrary(run.gate.fetch_bytes, config=cfg, collected_at=now, cursor=cursor)
+    page = await collect_openlibrary(
+        run.gate.fetch_bytes, config=cfg, collected_at=now, cursor=cursor
+    )
     run.extras["native_fp"] = fingerprint
-    await _accept_native(run, lease, page.records, _coverage(page.records), now, cursor_after=page.cursor)
+    await _accept_native(
+        run, lease, page.records, _coverage(page.records), now, cursor_after=page.cursor
+    )
 
 
 async def _run_gutendex(run: Run) -> None:
@@ -652,7 +716,9 @@ async def _run_gutendex(run: Run) -> None:
     cursor = lease.cursor_before if state.continuation_state == fingerprint else None
     page = await collect_gutendex(run.gate.fetch_bytes, config=cfg, collected_at=now, cursor=cursor)
     run.extras["native_fp"] = fingerprint
-    await _accept_native(run, lease, page.records, _coverage(page.records), now, cursor_after=page.cursor)
+    await _accept_native(
+        run, lease, page.records, _coverage(page.records), now, cursor_after=page.cursor
+    )
 
 
 def _media_scope_fingerprint(provider: str, config: dict[str, Any]) -> str:
@@ -717,7 +783,9 @@ async def _run_mangaupdates(run: Run) -> None:
     fingerprint = _media_scope_fingerprint("mangaupdates_releases", cfg)
     state = await _state(run)
     raw_page = lease.cursor_before if state.continuation_state == fingerprint else None
-    page_number = int(raw_page) if raw_page and raw_page.isdigit() and int(raw_page) <= 100_000 else 0
+    page_number = (
+        int(raw_page) if raw_page and raw_page.isdigit() and int(raw_page) <= 100_000 else 0
+    )
     await _MANGAUPDATES_PACER.pace("mangaupdates", 1.0)
     page = await collect_mangaupdates_releases(
         run.gate.fetch_bytes, collected_at=now, config=cfg, page=page_number
@@ -770,7 +838,11 @@ async def _run_apple_books(run: Run) -> None:
     lease = await _lease(run)
     fingerprint = _media_scope_fingerprint("apple_books_rss", cfg)
     state = await _state(run)
-    conditional = _conditional(state, run.attempt.connector_revision) if state.continuation_state == fingerprint else None
+    conditional = (
+        _conditional(state, run.attempt.connector_revision)
+        if state.continuation_state == fingerprint
+        else None
+    )
     page = await collect_apple_books(
         run.gate.fetch_bytes,
         country=cfg.get("country") or "US",
@@ -810,7 +882,9 @@ async def _run_podcast_rss(run: Run) -> None:
     page = await collect_podcast_rss(
         run.gate.fetch_bytes,
         feed_url=cfg.get("feed_url"),
-        itunes_id=str(cfg["itunes_podcast_id"]) if cfg.get("itunes_podcast_id") is not None else None,
+        itunes_id=str(cfg["itunes_podcast_id"])
+        if cfg.get("itunes_podcast_id") is not None
+        else None,
         collected_at=now,
         config=cfg,
         etag=(conditional or {}).get("If-None-Match"),
@@ -860,7 +934,11 @@ async def _run_letterboxd(run: Run) -> None:
     lease = await _lease(run)
     fingerprint = _media_scope_fingerprint("letterboxd_rss", cfg)
     state = await _state(run)
-    conditional = _conditional(state, run.attempt.connector_revision) if state.continuation_state == fingerprint else None
+    conditional = (
+        _conditional(state, run.attempt.connector_revision)
+        if state.continuation_state == fingerprint
+        else None
+    )
     page = await collect_letterboxd_rss(
         run.gate.fetch_bytes,
         username=str(cfg.get("letterboxd_username") or cfg.get("username") or ""),
