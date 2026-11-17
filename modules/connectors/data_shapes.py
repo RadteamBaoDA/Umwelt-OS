@@ -22,6 +22,7 @@ DataShape = Literal[
     "weather",
     "series",
     "job",
+    "media",
 ]
 
 # Providers outside the free-provider catalog (no FreeProviderSpec); health/home_assistant adapters
@@ -29,7 +30,7 @@ DataShape = Literal[
 _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
     {
         "telegram": frozenset({"messages"}),
-        "youtube": frozenset({"video"}),
+        "youtube": frozenset({"video", "media"}),
         "github": frozenset({"project_activity"}),
         "open_meteo": frozenset(
             {"measurement", "weather", "located"}

@@ -113,7 +113,7 @@ class FreeProviderSpec:
     runtime_verified: bool = False
     checked_on: str = CHECKED_ON
     secret_location: Literal["header", "query", "path"] | None = None
-    category: Literal["news", "economy", "hazards", "space", "security", "tech"] = "news"
+    category: Literal["news", "economy", "hazards", "space", "security", "tech", "media"] = "news"
     realtime_tier: Literal["realtime", "near_realtime"] = "near_realtime"
     skip_embedding: bool = True
     default_retention_days: int | None = 60

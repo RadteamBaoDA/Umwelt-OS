@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
@@ -158,7 +159,112 @@ IsoCountry = Literal[
     "TR",
     "NL",
     "CH",
+    "TW",
+    "HK",
+    "IE",
+    "NZ",
+    "SE",
+    "NO",
+    "DK",
+    "FI",
+    "PL",
+    "PT",
+    "BE",
+    "AT",
+    "AR",
 ]
+MediaGenre = Literal[
+    "action",
+    "adventure",
+    "sci_fi",
+    "fantasy",
+    "romance",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "mystery",
+    "documentary",
+    "animation",
+    "slice_of_life",
+    "history",
+    "music",
+    "sports",
+    "non_fiction",
+    "programming",
+    "rpg",
+    "strategy",
+]
+MediaLanguage = Literal[
+    "en",
+    "vi",
+    "ja",
+    "ko",
+    "zh",
+    "zh-hk",
+    "fr",
+    "de",
+    "es",
+    "pt",
+    "it",
+    "ru",
+    "id",
+    "th",
+]
+MediaFormat = Literal[
+    "tv",
+    "tv_short",
+    "movie",
+    "special",
+    "ova",
+    "ona",
+    "music",
+    "manga",
+    "manhwa",
+    "manhua",
+    "novel",
+    "one_shot",
+    "ebook",
+    "audiobook",
+    "magazine",
+    "scripted",
+    "animation",
+    "reality",
+    "talk_show",
+    "documentary",
+    "album",
+    "single",
+    "ep",
+    "episodic",
+    "serial",
+    "main_game",
+    "dlc",
+    "expansion",
+    "remake",
+    "remaster",
+]
+AnimeSeason = Literal["winter", "spring", "summer", "fall"]
+ContentRating = Literal["safe", "pg", "pg_13", "r", "suggestive", "mature", "explicit", "clean"]
+YoutubeFilter = Literal["all", "long_form", "shorts"]
+MAX_MEDIA_COUNTRIES = 24
+MAX_MEDIA_GENRES = 16
+MAX_MEDIA_LANGUAGES = 16
+MAX_MEDIA_FORMATS = 16
+MAX_CONTENT_RATINGS = 8
+MEDIA_OPTION_NAMES = frozenset(
+    {
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "release_year",
+        "anime_season",
+        "content_ratings",
+        "min_rating",
+        "exclude_adult",
+    }
+)
 WbIndicator = Literal["gdp", "gdp_growth", "inflation_cpi", "unemployment", "population", "fdi"]
 # Union of every currency any FX provider below lists; per-provider membership is checked in validate_options.
 FxCurrency = Literal[
@@ -465,6 +571,29 @@ def _ordered(literal: Any, chosen: Iterable[str]) -> list[str]:
     return [item for item in get_args(literal) if item in wanted]
 
 
+def _validate_media_options(cfg: Mapping[str, Any]) -> None:
+    """Validate bounded numeric media option ranges (``min_rating`` and ``release_year``).
+
+    Raises:
+        ValueError: when ``min_rating`` is non-finite or outside ``[0.0, 100.0]``, or ``release_year``
+            is not an integer inside ``[1800, 2100]``.
+    """
+    min_rating = cfg.get("min_rating")
+    if min_rating is not None:
+        if (
+            isinstance(min_rating, bool)
+            or not isinstance(min_rating, (int, float))
+            or not math.isfinite(float(min_rating))
+            or not 0.0 <= float(min_rating) <= 100.0
+        ):
+            raise ValueError("min_rating must be a finite number between 0 and 100")
+    release_year = cfg.get("release_year")
+    if release_year is not None and (
+        type(release_year) is not int or not 1800 <= release_year <= 2100
+    ):
+        raise ValueError("release_year must be between 1800 and 2100")
+
+
 def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     """Reject option combinations the field types alone cannot catch.
 
@@ -472,7 +601,8 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         ValueError: when ``max_items`` exceeds NVD's page size (only ``nvd`` rejects; other providers clamp
         their upstream request instead, which keeps previously valid saved sources valid), a multi-select
         repeats a value, an FX quote equals its base or is not listed by that provider (ECB publishes no VND,
-        so ``ecb`` accepts only its own reference set), or more than ``MAX_COINS`` coins are requested.
+        so ``ecb`` accepts only its own reference set), more than ``MAX_COINS`` coins are requested, or
+        media numeric bounds (``min_rating`` / ``release_year``) are violated.
     """
     if provider == "nvd" and (cfg.get("max_items") or 0) > UPSTREAM_CAPS["nvd"]:
         raise ValueError("NVD returns at most 20 CVEs per sync")
@@ -489,10 +619,16 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         "vn_symbols",
         "job_cities",
         "job_levels",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "content_ratings",
     ):
         values = cfg.get(name)
         if values is not None and len(set(values)) != len(values):
             raise ValueError("Selections must be unique")
+    _validate_media_options(cfg)
     keywords = [k.casefold() for k in cfg.get("job_keywords") or ()]
     if len(set(keywords)) != len(keywords):
         raise ValueError("Selections must be unique")
@@ -918,10 +1054,124 @@ def _severity_band(score: float | None) -> str | None:
     return "LOW" if score < 4 else "MEDIUM" if score < 7 else "HIGH" if score < 9 else "CRITICAL"
 
 
+def _match_media_dimension(
+    value: object, expected: object, *, keep_missing: bool, multi: bool = False
+) -> bool:
+    """Match one scalar or set-membership media metadata dimension against ``expected``."""
+    if expected is None:
+        return True
+    if value is None:
+        return keep_missing
+    if multi:
+        return isinstance(expected, (list, tuple, set, frozenset)) and value in set(expected)
+    return value == expected
+
+
+def _match_media_genres(
+    raw_genres: object, wanted: Sequence[str] | None, *, keep_missing: bool
+) -> bool:
+    """Return True when ``raw_genres`` intersects ``wanted`` (or when missing if ``keep_missing``)."""
+    if not wanted:
+        return True
+    if not isinstance(raw_genres, (list, tuple, set)) or not raw_genres:
+        return keep_missing
+    return bool(set(raw_genres) & set(wanted))
+
+
+def _match_media_numeric_and_season(
+    sf: Mapping[str, Any], cfg: Mapping[str, Any], *, keep_missing: bool
+) -> bool:
+    """Check ``release_year``, ``anime_season``, and ``min_rating`` on one ``source_fields`` mapping."""
+    release_year = cfg.get("release_year")
+    if release_year is not None:
+        actual_year = sf.get("release_year")
+        if actual_year is None:
+            if not keep_missing:
+                return False
+        elif type(actual_year) is not int or actual_year != release_year:
+            return False
+    anime_season = cfg.get("anime_season")
+    if anime_season is not None:
+        raw_season = sf.get("release_season")
+        if not isinstance(raw_season, str) or not raw_season.strip():
+            if not keep_missing:
+                return False
+        elif raw_season.strip().lower().split()[0] != str(anime_season).lower():
+            return False
+    min_rating = cfg.get("min_rating")
+    if min_rating is not None:
+        rating = sf.get("rating")
+        if rating is None:
+            return keep_missing
+        if (
+            isinstance(rating, bool)
+            or not isinstance(rating, (int, float))
+            or not math.isfinite(float(rating))
+            or float(rating) < float(min_rating)
+        ):
+            return False
+    return True
+
+
+def _record_matches_media_filters(
+    record: IngestionRecord, cfg: Mapping[str, Any], *, keep_missing: bool
+) -> bool:
+    """Evaluate all configured media filter options against ``record``'s ``source_fields``."""
+    provider_record = record.metadata.get("provider_record")
+    raw_sf = provider_record.get("source_fields") if isinstance(provider_record, Mapping) else None
+    sf: Mapping[str, Any] = raw_sf if isinstance(raw_sf, Mapping) else {}
+    if not _match_media_dimension(
+        sf.get("country"), cfg.get("media_country"), keep_missing=keep_missing
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("country"), cfg.get("media_countries"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if not _match_media_genres(sf.get("genres"), cfg.get("media_genres"), keep_missing=keep_missing):
+        return False
+    if not _match_media_dimension(
+        sf.get("language"), cfg.get("media_languages"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("format"), cfg.get("media_formats"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("content_rating"), cfg.get("content_ratings"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if cfg.get("exclude_adult") is True and sf.get("content_rating") in {"mature", "explicit"}:
+        return False
+    return _match_media_numeric_and_season(sf, cfg, keep_missing=keep_missing)
+
+
+def filter_media_records(
+    cfg: Mapping[str, Any],
+    records: Sequence[IngestionRecord],
+    *,
+    keep_missing: bool = False,
+) -> list[IngestionRecord]:
+    """Filter media ``IngestionRecord`` items post-fetch using configured ``MEDIA_OPTION_NAMES``.
+
+    Reads ``record.metadata["provider_record"]["source_fields"]`` without mutating records.
+    When ``keep_missing`` is False (default), records missing a filtered dimension are excluded;
+    sparse RSS adapters may opt into ``keep_missing=True`` so unannotated items are preserved.
+    """
+    if not any(cfg.get(k) is not None for k in MEDIA_OPTION_NAMES):
+        return list(records)
+    return [
+        record
+        for record in records
+        if _record_matches_media_filters(record, cfg, keep_missing=keep_missing)
+    ]
+
+
 def filter_records(
     provider: str, cfg: Mapping[str, Any], records: Sequence[IngestionRecord]
 ) -> list[IngestionRecord]:
-    """Apply the client-side per-type filters (region, KEV flag, NVD bands, FX quote subset, Kp and advisory thresholds).
+    """Apply the client-side per-type filters (region, KEV flag, NVD bands, FX quote subset, Kp, advisory, and media options).
 
     Runs on mapped records before incremental selection. With no relevant option the input is returned as is.
     """
@@ -982,4 +1232,6 @@ def filter_records(
             )
             in wanted
         ]
+    if any(cfg.get(k) is not None for k in MEDIA_OPTION_NAMES):
+        out = filter_media_records(cfg, out)
     return out

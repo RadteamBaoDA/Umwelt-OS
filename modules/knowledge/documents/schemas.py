@@ -1,6 +1,8 @@
 """Pydantic request/response contracts and provider-metadata validation for Documents."""
 
 import json
+import math
+import re
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -82,6 +84,13 @@ MEASUREMENT_PROVIDER_IDS = (
     "ioda",
     "nvd",
 )
+MEDIA_PROVIDER_IDS = (
+    "wikidata_movies", "itunes_movies", "letterboxd_rss", "anilist_anime", "livechart_episodes",
+    "ann_news", "anilist_manga", "mangaupdates_releases", "mangadex_releases", "openlibrary_books",
+    "gutendex_books", "apple_books_rss", "podcast_rss", "tvmaze_schedule", "listenbrainz_releases",
+    "steam_releases", "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime",
+    "mal_manga", "google_books", "hardcover_books", "youtube_api", "podcast_index", "igdb_games",
+)
 PROVIDER_IDS = (
     "youtube",
     "arxiv",
@@ -102,6 +111,7 @@ PROVIDER_IDS = (
     "home_assistant",
     *MEASUREMENT_PROVIDER_IDS,
     *NEWS_PROVIDER_IDS,
+    *MEDIA_PROVIDER_IDS,
 )
 # Bounded per-provider evidence keys retained beside the typed measurement (no arbitrary response mirroring).
 MEASUREMENT_PROVIDER_FIELDS = {
@@ -177,6 +187,12 @@ _FEED_FIELDS = {
     "provider_updated_at",
     "publisher",
     "image_url",
+}
+_MEDIA_FIELDS = _FEED_FIELDS | {
+    "media_type", "artwork_aspect", "country", "language", "genres", "format", "content_rating",
+    "release_status", "release_date", "release_year", "release_season", "rating", "creator",
+    "season", "episode", "chapter", "volume", "duration_seconds", "page_count", "external_ids",
+    "trailer_url", "attribution",
 }
 
 
@@ -373,6 +389,7 @@ _PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
     "telegram": set(),
     **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
     **dict.fromkeys((*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS), _FEED_FIELDS),
+    **dict.fromkeys(MEDIA_PROVIDER_IDS, _MEDIA_FIELDS),
     "bbc_world": _FEED_FIELDS,
     "vnexpress_business": _FEED_FIELDS,
     "tuoitre_news": _FEED_FIELDS,
@@ -459,9 +476,24 @@ _SOURCE_FIELD_STRING_LIMITS: dict[str, int] = {
     "state": 512,
     "unit_of_measurement": 64,
     "friendly_name": 512,
-    "latitude": 64,
-    "longitude": 64,
+    "latitude": 64, "longitude": 64, "media_type": 32, "artwork_aspect": 16, "country": 2,
+    "format": 32, "content_rating": 32, "release_status": 32, "release_date": 64,
+    "release_season": 32, "creator": 240, "season": 32, "episode": 32, "chapter": 32,
+    "volume": 32, "attribution": 160,
 }
+
+_MEDIA_TYPES = frozenset({
+    "movie", "anime", "manga", "manhwa", "manhua", "light_novel", "book", "audiobook",
+    "youtube", "tv", "podcast", "music", "game",
+})
+_ARTWORK_ASPECTS = frozenset({"poster", "square", "video"})
+_RELEASE_STATUSES = frozenset({"upcoming", "airing", "released", "completed", "hiatus"})
+_MEDIA_EXTERNAL_ID_KEYS = frozenset({
+    "tmdb", "imdb", "anilist", "mal", "kitsu", "mangadex", "mangaupdates", "isbn13",
+    "openlibrary", "mbid", "tvmaze", "youtube", "steam", "igdb", "wikidata", "itunes",
+    "trakt", "podcastindex",
+})
+_MEDIA_INT_BOUNDS = {"release_year": (1800, 2100), "duration_seconds": (0, 604800), "page_count": (0, 50000)}
 
 _TIMESTAMP_FIELDS = frozenset(
     {
@@ -557,30 +589,91 @@ def _validate_calendar_boundary(key: str, value: str) -> None:
         raise ValueError(f"Provider {key} timestamp must include a timezone")
 
 
+def _validate_media_genres(value: Any) -> None:
+    """Require at most 12 lowercase ``[a-z0-9_]+`` genre slugs, each 1..48 characters."""
+    if not isinstance(value, list) or len(value) > 12 or any(
+        not isinstance(item, str) or not 1 <= len(item) <= 48 or re.fullmatch(r"[a-z0-9_]+", item) is None
+        for item in value
+    ):
+        raise ValueError("Provider genres must be a bounded lowercase slug list")
+
+
+def _validate_bounded_int(key: str, value: Any) -> None:
+    """Require an exact ``int`` (not bool) inside ``_MEDIA_INT_BOUNDS[key]``."""
+    lo, hi = _MEDIA_INT_BOUNDS[key]
+    if type(value) is not int or not lo <= value <= hi:
+        raise ValueError(f"Provider {key} must be a bounded integer")
+
+
+def _validate_media_rating(value: Any) -> None:
+    """Require a finite number (int or float, not bool) normalized within ``[0.0, 100.0]``."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or not 0.0 <= float(value) <= 100.0
+    ):
+        raise ValueError("Provider rating must be a finite number between 0 and 100")
+
+
+def _validate_external_ids(value: Any) -> None:
+    """Require a bounded ``dict[str, str]`` (<= 16 entries) of allowlisted cross-provider IDs."""
+    if not isinstance(value, dict) or len(value) > 16 or any(
+        k not in _MEDIA_EXTERNAL_ID_KEYS or not isinstance(v, str) or not v.strip() or len(v) > 64
+        for k, v in value.items()
+    ):
+        raise ValueError("Provider external_ids must be a bounded identifier map")
+
+
 def _validate_bounded_string(key: str, value: Any) -> None:
-    """Require a string within the key's bound, plus timestamp/calendar format rules where they apply."""
+    """Require a string within the key's bound, plus timestamp/calendar/media enum format rules."""
     if not isinstance(value, str) or len(value) > _SOURCE_FIELD_STRING_LIMITS[key]:
         raise ValueError(f"Provider {key} must be a bounded string")
     if key in _TIMESTAMP_FIELDS:
         _validate_iso_timestamp(key, value)
     elif key in {"start", "end"}:
         _validate_calendar_boundary(key, value)
+    elif key == "release_date":
+        if re.fullmatch(r"\d{4}", value):
+            _validate_calendar_boundary(key, value + "-01-01")
+        elif re.fullmatch(r"\d{4}-\d{2}", value):
+            _validate_calendar_boundary(key, value + "-01")
+        elif re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?", value):
+            _validate_calendar_boundary(key, value)
+        else:
+            raise ValueError("Provider release_date must be an ISO date or timestamp")
+    elif key == "country" and re.fullmatch(r"[A-Z]{2}", value) is None:
+        raise ValueError("Provider country must be an ISO 3166-1 alpha-2 code")
+    elif key == "media_type" and value not in _MEDIA_TYPES:
+        raise ValueError("Provider media_type is unsupported")
+    elif key == "artwork_aspect" and value not in _ARTWORK_ASPECTS:
+        raise ValueError("Provider artwork_aspect is unsupported")
+    elif key == "release_status" and value not in _RELEASE_STATUSES:
+        raise ValueError("Provider release_status is unsupported")
 
 
 def _validate_source_field(key: str, value: Any) -> None:
     """Validate one allowlisted source field by its class; unknown keys are rejected.
 
     Dispatch order is significant and mirrors the original ``elif`` chain: lists, booleans,
-    integers, links, release URL, then bounded strings. Raises ``ValueError`` (surfaced by
-    pydantic as a validation error) with the exact field-class message.
+    integers, ratings, external IDs, links, release URL, then bounded strings. Raises ``ValueError``
+    (surfaced by pydantic as a validation error) with the exact field-class message.
     """
     if key in {"tags", "categories", "authors", "recurrence"}:
         _validate_string_list(key, value)
+    elif key == "genres":
+        _validate_media_genres(value)
     elif key in {"draft", "prerelease", "deleted", "dead"}:
         _validate_bool_field(key, value)
     elif key in {"time", "id", "cited_by_count"}:
         _validate_nonnegative_int(key, value)
-    elif key in {"canonical_url", "url", "web_view_link", "html_link", "image_url"}:
+    elif key in _MEDIA_INT_BOUNDS:
+        _validate_bounded_int(key, value)
+    elif key == "rating":
+        _validate_media_rating(value)
+    elif key == "external_ids":
+        _validate_external_ids(value)
+    elif key in {"canonical_url", "url", "web_view_link", "html_link", "image_url", "trailer_url"}:
         _validate_https_link(key, value)
     elif key == "html_url":
         _validate_release_url(key, value)
@@ -976,6 +1069,34 @@ class GadgetProviderMetadataRead(BaseModel):
     telegram: GadgetTelegramRecordRead | None = None
 
 
+class MediaProjectionRead(BaseModel):
+    """Typed media metadata projected onto dashboard gadget cards and calendar rows."""
+
+    model_config = ConfigDict(extra="forbid")
+    media_type: str
+    artwork_aspect: Literal["poster", "square", "video"] = "poster"
+    country: str | None = None
+    language: str | None = None
+    genres: list[str] = Field(default_factory=list)
+    release_year: int | None = None
+    release_season: str | None = None
+    format: str | None = None
+    content_rating: str | None = None
+    rating: float | None = None
+    release_status: str | None = None
+    release_date: str | None = None
+    creator: str | None = None
+    season: str | None = None
+    episode: str | None = None
+    chapter: str | None = None
+    volume: str | None = None
+    duration_seconds: int | None = None
+    page_count: int | None = None
+    trailer_url: str | None = None
+    attribution: str | None = None
+    external_ids: dict[str, str] = Field(default_factory=dict)
+
+
 class GadgetDocumentProjectionRead(BaseModel):
     """Bounded current-version document data for source-scoped dashboard consumers."""
 
@@ -997,6 +1118,7 @@ class GadgetDocumentProjectionRead(BaseModel):
     # Same-origin signed media-proxy path for the record's feed thumbnail; null when remote media is not permitted,
     # the host is not allowlisted or the record has no image.
     image_url: str | None = None
+    media: MediaProjectionRead | None = None
 
 
 class GadgetDocumentSelectionFence(BaseModel):

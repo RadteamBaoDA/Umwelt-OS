@@ -913,6 +913,7 @@
   "builtinCategory.space": "Space",
   "builtinCategory.security": "Security",
   "builtinCategory.tech": "Technology and research",
+  "builtinCategory.media": "Media",
   "builtin.experimental": "Experimental",
   "builtin.reviewClass": "Terms review",
   "builtin.dialogTitle": "Enable {name}?",

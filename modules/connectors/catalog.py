@@ -59,7 +59,9 @@ class CatalogEntry(BaseModel):
     terms_url: str | None = None
     terms_checked_on: str | None = None
     attribution: str | None = None
-    category: Literal["news", "economy", "hazards", "space", "security", "tech"] | None = None
+    category: Literal["news", "economy", "hazards", "space", "security", "tech", "media"] | None = (
+        None
+    )
     hosts: tuple[str, ...] = ()
     endpoints: tuple[str, ...] = ()
     execution: Literal["supported", "experimental", "research_only"] | None = None

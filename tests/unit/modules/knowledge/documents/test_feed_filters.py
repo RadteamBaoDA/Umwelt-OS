@@ -54,7 +54,9 @@ async def test_language_and_since_compose_with_privacy_filters() -> None:
 async def test_no_filters_leaves_language_unconstrained_so_unknown_matches_any() -> None:
     session = _session()
     await public.list_gadget_document_projections(session, source_ids=(uuid4(),), **KW)
-    assert "documents.language" not in _sql(session).split("WHERE")[1]
+    sql = _sql(session)
+    assert "documents.language" not in sql.split("WHERE")[1]
+    assert "normalized_version_provenance" not in sql
 
 
 @pytest.mark.asyncio
@@ -187,3 +189,148 @@ async def test_language_and_channel_ids_compose_in_one_where() -> None:
         and "sources.provider" in sql
         and "normalized_version_provenance" in sql
     )
+
+
+@pytest.mark.asyncio
+async def test_media_filters_compile_jsonb_predicates_and_release_date_sort() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session,
+        source_ids=(uuid4(),),
+        countries=("JP", "KR"),
+        genres=("action", "sci_fi"),
+        languages=("ja",),
+        media_types=("anime",),
+        formats=("tv",),
+        content_ratings=("pg_13",),
+        release_statuses=("airing",),
+        release_year=2026,
+        release_year_from=2025,
+        release_year_to=2027,
+        release_season="fall",
+        min_rating=80.0,
+        release_window_days=14,
+        sort="release_date_asc",
+        **KW,
+    )
+    sql = _sql(session)
+    assert "normalized_version_provenance" in sql
+    assert "jsonb_typeof" in sql
+    assert "pg_input_is_valid" in sql
+    assert "CASE WHEN (jsonb_typeof" in sql and " AS NUMERIC)" in sql
+    assert "@>" in sql
+    assert "ORDER BY" in sql and "ASC" in sql
+
+
+@pytest.mark.asyncio
+async def test_media_type_filter_includes_legacy_youtube_provider_fallback() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), media_types=("youtube",), **KW
+    )
+    compiled = session.execute.call_args.args[0].compile(dialect=postgresql.dialect())
+    assert "CASE WHEN" in str(compiled) and "jsonb_typeof" in str(compiled)
+    assert "provider" in compiled.params.values()
+    assert "youtube" in compiled.params.values()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_kwargs",
+    [
+        {"countries": ("USA",)},
+        {"genres": ("Bad-Genre",)},
+        {"release_year": 1799},
+        {"release_year_from": 2027, "release_year_to": 2025},
+        {"min_rating": 101.0},
+        {"release_window_days": 91},
+        {"sort": "rating_desc"},
+    ],
+)
+async def test_invalid_media_filters_raise_value_error(bad_kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        await public.list_gadget_document_projections(
+            _session(),
+            source_ids=(uuid4(),),
+            **bad_kwargs,
+            **KW,
+        )
+
+
+def test_cursor_fingerprint_changes_for_every_media_filter_and_sort() -> None:
+    base_kw: dict[str, Any] = {
+        "access_fence": FENCE,
+        "source_ids": (uuid4(),),
+        "observed_since": None,
+        "channel_ids": None,
+        "language": None,
+    }
+    base = public._news_projection_cursor_fingerprint(**base_kw)
+    for override in (
+        {"countries": ("JP",)},
+        {"genres": ("action",)},
+        {"languages": ("ja",)},
+        {"media_types": ("anime",)},
+        {"formats": ("tv",)},
+        {"content_ratings": ("pg_13",)},
+        {"release_statuses": ("airing",)},
+        {"release_year": 2026},
+        {"release_year_from": 2025},
+        {"release_year_to": 2027},
+        {"release_season": "fall"},
+        {"min_rating": 80.0},
+        {"release_window_days": 14},
+        {"sort": "release_date_asc"},
+    ):
+        assert public._news_projection_cursor_fingerprint(**base_kw, **override) != base
+
+
+def test_as_gadget_document_projection_populates_media_and_youtube() -> None:
+    now = datetime.now(UTC)
+
+    def item(provider: str, sf: dict[str, Any]) -> SimpleNamespace:
+        return SimpleNamespace(
+            document_id=uuid4(),
+            document_version_id=uuid4(),
+            version_number=1,
+            source_id=uuid4(),
+            title="Item",
+            canonical_url="https://example.com/1",
+            published_at=now,
+            observed_at=now,
+            chunks=[],
+            metadata_is_version_snapshot=True,
+            local_only=False,
+            provider_metadata=SimpleNamespace(provider=provider, source_fields=sf, telegram=None),
+        )
+
+    media_dto = public._as_gadget_document_projection(
+        item(
+            "anilist_anime",
+            {
+                "media_type": "anime",
+                "artwork_aspect": "poster",
+                "country": "JP",
+                "language": "ja",
+                "genres": ["action"],
+                "rating": 86.0,
+                "release_year": 2026,
+                "external_ids": {"anilist": "21"},
+            },
+        )
+    )
+    assert media_dto.media is not None
+    assert media_dto.media.media_type == "anime"
+    assert media_dto.media.country == "JP"
+    assert media_dto.media.rating == 86.0
+
+    yt_dto = public._as_gadget_document_projection(
+        item("youtube", {"author": "3Blue1Brown", "title": "Math"})
+    )
+    assert yt_dto.media is not None
+    assert yt_dto.media.media_type == "youtube"
+    assert yt_dto.media.artwork_aspect == "video"
+    assert yt_dto.media.creator == "3Blue1Brown"
+
+    news_dto = public._as_gadget_document_projection(item("bbc_world", {"title": "News"}))
+    assert news_dto.media is None

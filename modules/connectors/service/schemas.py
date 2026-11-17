@@ -29,9 +29,16 @@ from modules.connectors.backends import (
 from modules.connectors.provider_options import (
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_CONTENT_RATINGS,
     MAX_JOB_KEYWORDS,
+    MAX_MEDIA_COUNTRIES,
+    MAX_MEDIA_FORMATS,
+    MAX_MEDIA_GENRES,
+    MAX_MEDIA_LANGUAGES,
     MAX_VN_SYMBOLS,
+    AnimeSeason,
     CoinId,
+    ContentRating,
     CryptoPair,
     EonetCategory,
     EonetStatus,
@@ -46,6 +53,9 @@ from modules.connectors.provider_options import (
     JobCity,
     JobKeyword,
     JobLevel,
+    MediaFormat,
+    MediaGenre,
+    MediaLanguage,
     NvdSeverity,
     NwsArea,
     NwsSeverity,
@@ -57,6 +67,7 @@ from modules.connectors.provider_options import (
     VnSymbol,
     WbIndicator,
     WikiLanguage,
+    YoutubeFilter,
     clean_query,
 )
 from modules.connectors.sections import MAX_SECTIONS
@@ -345,6 +356,30 @@ class ConnectorConfig(BaseModel):
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
+    # Multi-dimensional media filter options & YouTube scope upgrades (all default to None).
+    media_country: IsoCountry | None = None
+    media_countries: tuple[IsoCountry, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_COUNTRIES
+    )
+    media_genres: tuple[MediaGenre, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_GENRES
+    )
+    media_languages: tuple[MediaLanguage, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_LANGUAGES
+    )
+    media_formats: tuple[MediaFormat, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_FORMATS
+    )
+    release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
+    anime_season: AnimeSeason | None = None
+    content_ratings: tuple[ContentRating, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_CONTENT_RATINGS
+    )
+    min_rating: float | None = Field(default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True)
+    exclude_adult: StrictBool | None = None
+    youtube_handles: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
+    youtube_playlist_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=32)
+    youtube_filter: YoutubeFilter | None = None
 
     @field_validator("gdelt_query", "nvd_keyword", mode="before")
     @classmethod

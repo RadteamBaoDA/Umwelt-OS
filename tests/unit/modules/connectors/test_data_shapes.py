@@ -27,8 +27,13 @@ def test_location_is_separate_from_event() -> None:
 
 def test_non_catalog_shapes() -> None:
     """Non-catalog and generic providers map to their fixed shapes."""
+    from typing import get_args
+
+    from modules.connectors.data_shapes import DataShape
+
+    assert "media" in get_args(DataShape)
     assert source_data_shapes("telegram", "api") == {"messages"}
-    assert source_data_shapes("youtube", "rss") == {"video"}
+    assert source_data_shapes("youtube", "rss") == {"video", "media"}
     assert source_data_shapes("github", "api") == {"project_activity"}
     assert {"measurement", "weather", "located"} <= source_data_shapes("open_meteo", "api")
     assert source_data_shapes(None, "rss") == {"news"}

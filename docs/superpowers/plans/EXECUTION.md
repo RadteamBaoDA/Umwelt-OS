@@ -1,3 +1,9 @@
+## 2026-11-17 - Media datasource phase 1 checkpoint
+
+- Continued `specs/new-datasource-v2.md` on `feature/more-datasource`: media contracts, bounded metadata and options, dashboard scope, projection filters and cursor fingerprints, shared normalization, and TypeScript contracts. Media renderers remain planned until phase 3; legacy YouTube records match the media type filter.
+- Focused validation: 707 backend tests and 238 frontend tests passed; the subsequent connector configuration regression suite passed 160 tests, the projection filter suite passed 34, TypeScript and focused Ruff passed. GitNexus reported critical overall change scope and HIGH impact on connector configuration; source review covered configuration, renderer validation, Tasks/Goals and projection fences. Its index was one commit behind.
+- PostgreSQL execution and Docker harness were not run; SQL tests compile statements only. Calendar window bounds move with each page request, so entries at a boundary can shift during pagination. Phase 2 TVMaze mapping is in progress separately and is not registered as an available source.
+
 ## 2026-11-07 - Public source catalog overview
 
 - Added an offline-readable, bilingual landing-page overview of source groups, including accounts, feeds, public providers and clearly identified manual imports. The action links to sign-in or source settings according to session state; catalog labels are a curated copy that must track `docs/connectors/provider-catalog.md`.

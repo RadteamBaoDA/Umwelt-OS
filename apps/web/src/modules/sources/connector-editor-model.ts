@@ -91,7 +91,7 @@ export function providerCredentialRequired(entry: ConnectorCatalogEntry | undefi
   return usesProviderCredential(entry) && (usesApiKey(entry) || requiresHeaderCredential(entry));
 }
 
-export const PROVIDER_GROUP_ORDER = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'other'] as const;
+export const PROVIDER_GROUP_ORDER = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'media', 'other'] as const;
 export type ProviderGroup = (typeof PROVIDER_GROUP_ORDER)[number];
 export const PROVIDER_GROUP_KEY = {
   news: 'builtinCategory.news',
@@ -100,6 +100,7 @@ export const PROVIDER_GROUP_KEY = {
   space: 'builtinCategory.space',
   security: 'builtinCategory.security',
   tech: 'builtinCategory.tech',
+  media: 'builtinCategory.media',
   other: 'provider.groupOther',
 } as const;
 

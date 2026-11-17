@@ -1,3 +1,7 @@
+## 2026-11-17 - Media datasource contracts
+
+Phase 1 of `specs/new-datasource-v2.md` has code and focused test evidence for media types, metadata, filters, projection and shared normalization. PostgreSQL runtime acceptance remains open; media renderers are planned pending phase 3. Phase 2 TVMaze implementation has started but is not yet registered or usable. See `docs/superpowers/plans/EXECUTION.md` for validation and the pagination limitation.
+
 <!-- audit-remediation-status:start -->
 ## Repository audit remediation - 2026-11-11, branch feature/fix-ui
 

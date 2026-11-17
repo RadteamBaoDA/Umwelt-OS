@@ -6,7 +6,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from modules.connectors.public import DataShape, provider_metrics, source_data_shapes
-from modules.dashboard.schemas import GadgetConfiguration, GadgetScope
+from modules.dashboard.schemas import GadgetConfiguration, GadgetFilters, GadgetScope
 
 
 class GadgetConfigError(ValueError):
@@ -201,6 +201,29 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
         ("github_project",),
         "single",
         frozenset({"project_activity"}),
+    ),
+    # Media shelf and release calendar stay planned in M1 until M3 UI renderers ship.
+    RendererDescriptor(
+        "media_feed",
+        1,
+        4,
+        4,
+        "planned",
+        ("media_feed",),
+        "multi",
+        frozenset({"media", "video"}),
+        32,
+    ),
+    RendererDescriptor(
+        "media_calendar",
+        1,
+        4,
+        4,
+        "planned",
+        ("media_calendar",),
+        "multi",
+        frozenset({"media", "video"}),
+        32,
     ),
 )
 
@@ -417,6 +440,8 @@ TEMPLATES: tuple[GadgetTemplate, ...] = (
     GadgetTemplate("weather", "weather"),
     GadgetTemplate("metric", "provider_observation"),
     GadgetTemplate("activity", "github_project"),
+    GadgetTemplate("media_shelf", "media_feed"),
+    GadgetTemplate("release_calendar", "media_calendar"),
 )
 
 _RENDERERS_BY_ID = {descriptor.id: descriptor for descriptor in RENDERERS}
@@ -444,6 +469,8 @@ DEFAULT_SIZES: Mapping[str, tuple[int, int]] = {
     "research": (5, 5),
     "github_project": (8, 6),
     "job_list": (10, 8),
+    "media_feed": (8, 6),
+    "media_calendar": (6, 6),
 }
 
 
@@ -471,22 +498,46 @@ def renderer_descriptor(renderer_id: str) -> RendererDescriptor:
     return _RENDERERS_BY_ID[renderer_id]
 
 
-def validate_renderer_configuration(
-    renderer_id: str, configuration: GadgetConfiguration
-) -> GadgetConfiguration:
-    """Reject selectors outside the renderer's narrow v1 scope while retaining validated filters.
-
-    Source and item selectors remain configuration only; this function performs no source lookup,
-    authorization, collector creation, or renderer execution. Map-only engine and precise-location
-    preferences are rejected on other renderer IDs, and layer IDs must belong to the fixed catalog.
-    """
-    renderer_descriptor(renderer_id)
-    allowed_scope = {
-        "telegram_feed": {"channel_ids"},
-        "finance_chart": {"symbols", "metrics", "regions", "lookback_days"},
-        "weather": {"metrics", "lookback_days"},
-        "provider_observation": {"metrics", "symbols", "lookback_days"},
-        "map": {
+_MEDIA_RENDERERS = frozenset({"media_feed", "media_calendar"})
+_MEDIA_SCOPE_FIELDS = frozenset(
+    {
+        "source_item_ids",
+        "media_types",
+        "countries",
+        "genres",
+        "languages",
+        "formats",
+        "content_ratings",
+        "release_year",
+        "release_season",
+        "min_rating",
+        "release_window_days",
+    }
+)
+_MEDIA_FILTER_FIELDS = (
+    "media_type",
+    "media_types",
+    "release_status",
+    "group_by",
+    "countries",
+    "genres",
+    "languages",
+    "formats",
+    "content_ratings",
+    "release_year",
+    "release_season",
+    "min_rating",
+)
+_MAP_LAYER_CATALOG = frozenset(
+    {"world_observations", "military", "economic", "disaster", "escalation"}
+)
+_ALLOWED_SCOPE_BY_RENDERER: dict[str, frozenset[str]] = {
+    "telegram_feed": frozenset({"channel_ids"}),
+    "finance_chart": frozenset({"symbols", "metrics", "regions", "lookback_days"}),
+    "weather": frozenset({"metrics", "lookback_days"}),
+    "provider_observation": frozenset({"metrics", "symbols", "lookback_days"}),
+    "map": frozenset(
+        {
             "regions",
             "map_layer_ids",
             "lookback_days",
@@ -495,34 +546,60 @@ def validate_renderer_configuration(
             "live_map_github_owner",
             "live_map_github_repo",
             "live_map_sec_cik",
-        },
-        "intelligence_panel": {"regions", "lookback_days", "cii_country_codes"},
-    }.get(renderer_id, {"source_item_ids"})
+        }
+    ),
+    "intelligence_panel": frozenset({"regions", "lookback_days", "cii_country_codes"}),
+    "media_feed": _MEDIA_SCOPE_FIELDS,
+    "media_calendar": _MEDIA_SCOPE_FIELDS,
+}
+
+
+def _has_non_default_media_filters(filters: GadgetFilters) -> bool:
+    """Return whether any media-specific filter field on ``GadgetFilters`` holds a non-default value.
+
+    Checks ``value is not None and value != []`` so ``min_rating=0.0`` counts as configured
+    instead of being treated as falsy.
+    """
+    for field_name in _MEDIA_FILTER_FIELDS:
+        value = getattr(filters, field_name)
+        if value is not None and value != []:
+            return True
+    return False
+
+
+def validate_renderer_configuration(
+    renderer_id: str, configuration: GadgetConfiguration
+) -> GadgetConfiguration:
+    """Reject selectors outside the renderer's narrow v1 scope while retaining validated filters.
+
+    Source and item selectors remain configuration only; this function performs no source lookup,
+    authorization, collector creation, or renderer execution. Map-only engine and precise-location
+    preferences are rejected on other renderer IDs, media-only selectors/filters are rejected on
+    non-media renderers, and layer IDs must belong to the fixed catalog.
+    """
+    renderer_descriptor(renderer_id)
+    allowed_scope = _ALLOWED_SCOPE_BY_RENDERER.get(renderer_id, frozenset({"source_item_ids"}))
     for field_name, values in configuration.scope.model_dump().items():
-        if field_name not in allowed_scope and values:
-            raise ValueError(f"{field_name} is not valid for renderer {renderer_id}")
-    if renderer_id == "map":
-        if set(configuration.scope.map_layer_ids) - {
-            "world_observations",
-            "military",
-            "economic",
-            "disaster",
-            "escalation",
-        }:
-            raise GadgetConfigError(
-                "Map layer is not in the bounded catalog",
-                code="map_layer_unavailable",
-                field="map_layer_ids",
-            )
-    if renderer_id == "intelligence_panel":
+        # Explicitly exclude None/[]/False rather than using truthiness so min_rating=0.0 is caught.
         if (
-            configuration.scope.map_layer_ids
-            or configuration.scope.metrics
-            or configuration.scope.symbols
+            field_name not in allowed_scope
+            and values is not None
+            and values != []
+            and values is not False
         ):
-            raise ValueError(
-                "Map and measurement selectors are not valid for the intelligence panel"
-            )
+            raise ValueError(f"{field_name} is not valid for renderer {renderer_id}")
+    if renderer_id == "map" and (set(configuration.scope.map_layer_ids) - _MAP_LAYER_CATALOG):
+        raise GadgetConfigError(
+            "Map layer is not in the bounded catalog",
+            code="map_layer_unavailable",
+            field="map_layer_ids",
+        )
+    if renderer_id == "intelligence_panel" and (
+        configuration.scope.map_layer_ids
+        or configuration.scope.metrics
+        or configuration.scope.symbols
+    ):
+        raise ValueError("Map and measurement selectors are not valid for the intelligence panel")
     if renderer_id != "map" and (
         configuration.filters.map_engine is not None
         or configuration.filters.show_precise_locations
@@ -530,6 +607,10 @@ def validate_renderer_configuration(
         or configuration.filters.map_weather_layer is not None
     ):
         raise ValueError("Map display preferences are only valid for the map renderer")
+    if renderer_id not in _MEDIA_RENDERERS and _has_non_default_media_filters(
+        configuration.filters
+    ):
+        raise ValueError("Media filters are only valid for media renderers")
     return configuration
 
 
