@@ -223,7 +223,8 @@ function useProviderFacts(draft: GadgetDraft, queries: ReturnType<typeof useEdit
 /**
  * Save mutation: creates a new definition or patches the saved one (revision guarded), invalidates the definition
  * list and reports the saved definition. Source ids are sent only when changed so a saved, now-incompatible source
- * never blocks unrelated edits; highlight rules only when touched.
+ * never blocks unrelated edits; highlight rules only when touched. Refreshes saved filter defaults with the revision
+ * before the follow-up callback, so a failed title/placement save can retry without restoring cleared overrides.
  */
 function useSaveDefinition(
   draft: GadgetDraft,
@@ -260,7 +261,7 @@ function useSaveDefinition(
     },
     onSuccess: async (saved) => {
       void client.invalidateQueries({ queryKey: dashboardKeys.definitions });
-      if (draft.base) patch({ base: saved });
+      if (draft.base) patch({ base: saved, mediaFilters: saved.filters });
       await onSaved(saved);
     },
   });

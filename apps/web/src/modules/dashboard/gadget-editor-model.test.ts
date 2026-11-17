@@ -244,6 +244,21 @@ describe('media editor contracts', () => {
     expect(isMediaDraftValid({ ...initialDraft(null), renderer: 'media_calendar', [key]: value })).toBe(false);
   });
 
+  it.each([
+    ['media_types', 13],
+    ['countries', 24],
+    ['genres', 16],
+    ['languages', 16],
+    ['formats', 16],
+    ['content_ratings', 8],
+  ] as const)('enforces the %s selector boundary in scope and filters', (field, limit) => {
+    const draft = { ...initialDraft(null), renderer: 'media_feed' };
+    const atLimit = Array.from({ length: limit }, (_, index) => String(index));
+    expect(isMediaDraftValid({ ...draft, mediaScope: { [field]: atLimit } })).toBe(true);
+    expect(isMediaDraftValid({ ...draft, mediaScope: { [field]: [...atLimit, 'overflow'] } })).toBe(false);
+    expect(isMediaDraftValid({ ...draft, mediaFilters: { [field]: [...atLimit, 'overflow'] } })).toBe(false);
+  });
+
   it('accepts optional values and bounds, and resets media state when changing templates', () => {
     expect(isMediaDraftValid({ ...initialDraft(null), renderer: 'media_calendar' })).toBe(true);
     expect(

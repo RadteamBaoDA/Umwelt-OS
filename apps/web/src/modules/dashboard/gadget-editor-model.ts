@@ -73,6 +73,15 @@ export type FieldKey =
   | 'rules';
 /** Media renderers share bounded selectors and list controls. */
 export const MEDIA_RENDERERS = ['media_feed', 'media_calendar'] as const;
+/** Per-selector API bounds shared by media controls and save validation. */
+export const MEDIA_SELECTOR_LIMITS = {
+  media_types: 13,
+  countries: 24,
+  genres: 16,
+  languages: 16,
+  formats: 16,
+  content_ratings: 8,
+} as const;
 const LIST_RENDERERS = ['news_feed', 'text_panel', 'table_panel', 'job_list', 'video_panel', 'telegram_feed', 'highlights', 'watch_rules'];
 
 /** Weather overlay choices of the live map. */
@@ -308,13 +317,19 @@ function mediaDraftFields(definition?: Pick<GadgetDefinition, 'scope' | 'filters
   };
 }
 
-/** Returns whether optional media numbers meet the API bounds; empty controls persist as null. */
+/** Checks media selector counts and optional numeric API bounds; empty numeric controls persist as null. */
 export function isMediaDraftValid(draft: GadgetDraft): boolean {
   if (!MEDIA_RENDERERS.some((item) => item === draft.renderer)) return true;
   const year = Number(draft.releaseYear);
   const rating = Number(draft.minRating);
   const window = Number(draft.releaseWindow);
+  const countsValid = (Object.keys(MEDIA_SELECTOR_LIMITS) as (keyof typeof MEDIA_SELECTOR_LIMITS)[]).every(
+    (field) =>
+      (draft.mediaScope[field]?.length ?? 0) <= MEDIA_SELECTOR_LIMITS[field] &&
+      (draft.mediaFilters[field]?.length ?? 0) <= MEDIA_SELECTOR_LIMITS[field],
+  );
   return (
+    countsValid &&
     (draft.releaseYear.trim() === '' || (Number.isInteger(year) && year >= 1800 && year <= 2100)) &&
     (draft.minRating.trim() === '' || (Number.isFinite(rating) && rating >= 0 && rating <= 100)) &&
     (draft.releaseWindow.trim() === '' || (Number.isInteger(window) && window >= 1 && window <= 90))

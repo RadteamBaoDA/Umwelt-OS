@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MediaMultiChipPicker } from './gadget-editor-pickers';
+import { MEDIA_SELECTOR_LIMITS } from './gadget-editor-model';
 import type { DraftAccess, SectionFacts } from './gadget-editor-sections';
 import type { GadgetScope } from './api';
 
@@ -255,6 +256,7 @@ export function MediaFiltersSection({ draft, set, facts }: DraftAccess & { facts
         <div key={field} data-field={field} className="space-y-1.5">
           <Label id={`${facts.nameId}-${field}-label`}>{t(MEDIA_FIELD_KEY[field])}</Label>
           <MediaMultiChipPicker
+            maxItems={MEDIA_SELECTOR_LIMITS[field]}
             value={draft.mediaScope[field] ?? []}
             options={options}
             label={label}

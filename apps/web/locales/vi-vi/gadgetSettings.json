@@ -352,11 +352,12 @@
   "media.search": "Tìm giá trị",
   "media.empty": "Không có giá trị phù hợp",
   "media.any": "Bất kỳ",
-  "media.invalid": "Nhập năm từ 1800–2100, điểm từ 0–100 và khoảng phát hành từ 1–90 ngày.",
+  "media.invalid": "Giữ số giá trị trong giới hạn của từng bộ chọn. Nhập năm từ 1800–2100, điểm từ 0–100 và khoảng phát hành từ 1–90 ngày.",
   "renderers.media_feed": "Bảng nội dung",
   "renderers.media_calendar": "Lịch phát hành",
   "templateTypes.media_shelf.name": "Kệ nội dung",
   "templateTypes.media_shelf.description": "Duyệt nội dung phát hành từ các nguồn của bạn.",
   "templateTypes.release_calendar.name": "Lịch phát hành",
-  "templateTypes.release_calendar.description": "Theo dõi nội dung sắp phát hành."
+  "templateTypes.release_calendar.description": "Theo dõi nội dung sắp phát hành.",
+  "media.limit": "Chọn tối đa {count} giá trị."
 }

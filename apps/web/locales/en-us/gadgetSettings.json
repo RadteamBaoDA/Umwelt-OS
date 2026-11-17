@@ -352,11 +352,12 @@
   "media.search": "Search values",
   "media.empty": "No matching values",
   "media.any": "Any",
-  "media.invalid": "Use a year from 1800–2100, a rating from 0–100, and a release window from 1–90 days.",
+  "media.invalid": "Keep each selector within its limit. Use a year from 1800–2100, a rating from 0–100, and a release window from 1–90 days.",
   "renderers.media_feed": "Media feed",
   "renderers.media_calendar": "Release calendar",
   "templateTypes.media_shelf.name": "Media shelf",
   "templateTypes.media_shelf.description": "Browse media releases from your sources.",
   "templateTypes.release_calendar.name": "Release calendar",
-  "templateTypes.release_calendar.description": "Follow upcoming media releases."
+  "templateTypes.release_calendar.description": "Follow upcoming media releases.",
+  "media.limit": "Choose up to {count} values."
 }

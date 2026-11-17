@@ -674,13 +674,14 @@ export function HighlightRulesField({ rules, onChange }: { rules: HighlightRule[
   );
 }
 
-/** Bounded media selector with removable chips; country codes may be supplied beyond the suggestions. */
+/** Limits media additions to the field's API bound while keeping saved chips removable, including over-limit lists. */
 export function MediaMultiChipPicker<T extends string>({
   value,
   options,
   label,
   onChange,
   labelId,
+  maxItems,
   country = false,
 }: {
   value: T[];
@@ -688,6 +689,7 @@ export function MediaMultiChipPicker<T extends string>({
   label: (value: T) => string;
   onChange: (next: T[]) => void;
   labelId: string;
+  maxItems: number;
   country?: boolean;
 }) {
   const t = useTranslations('gadgetSettings');
@@ -717,13 +719,14 @@ export function MediaMultiChipPicker<T extends string>({
         placeholder={t('media.select')}
         searchLabel={t('media.search')}
         emptyLabel={t('media.empty')}
-        disabled={value.length >= 32}
+        disabled={value.length >= maxItems}
         onValueChange={(raw) => {
           const next = (options.find((item) => label(item) === raw) ?? (country ? raw.trim().toUpperCase() : raw)) as T;
-          if (value.length < 32 && !value.includes(next) && (country ? /^[A-Z]{2}$/.test(next) : options.includes(next)))
+          if (value.length < maxItems && !value.includes(next) && (country ? /^[A-Z]{2}$/.test(next) : options.includes(next)))
             onChange([...value, next]);
         }}
       />
+      <p className="text-xs text-muted-foreground">{t('media.limit', { count: maxItems })}</p>
     </div>
   );
 }

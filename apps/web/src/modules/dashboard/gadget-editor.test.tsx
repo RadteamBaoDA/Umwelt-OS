@@ -42,6 +42,7 @@ import gadgetRenderers from '@/test/fixtures/gadget-renderers.json';
 import gadgetTemplates from '@/test/fixtures/gadget-templates.json';
 import metricCatalog from '@/test/fixtures/metric-catalog.json';
 import { GadgetEditor, fieldsFor, mergeCatalogEntries } from './gadget-editor';
+import { MediaMultiChipPicker } from './gadget-editor-pickers';
 
 /** Backend renderer descriptor snapshot (verified against `renderer_reads()` by pytest). */
 const backendRenderer = (id: string) => {
@@ -1130,6 +1131,32 @@ describe('media gadget editor', () => {
     });
   });
 
+  it('keeps saved media defaults when a follow-up title save fails and the owner retries', async () => {
+    const initial = prepareMediaEditor();
+    const definition = { ...initial, filters: { ...initial.filters, min_rating: 60, genres: ['drama' as const] } };
+    api.patchGadgetDefinition.mockImplementation(async (_id, payload) => ({
+      ...definition,
+      ...payload,
+      revision: payload.expected_revision + 1,
+    }));
+    onSaved.mockRejectedValueOnce(new Error('title save failed')).mockResolvedValueOnce(undefined);
+    wrap({ definition });
+    await userEvent.click(await screen.findByText('Advanced'));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove Drama' }));
+    await userEvent.clear(screen.getByLabelText('Minimum rating'));
+    await userEvent.type(screen.getByLabelText('Minimum rating'), '90');
+    const save = screen.getByRole('button', { name: 'Save to library' });
+    await userEvent.click(save);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(save).not.toBeDisabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
+    const first = api.patchGadgetDefinition.mock.calls[0][1];
+    const retry = api.patchGadgetDefinition.mock.calls[1][1];
+    expect(first).toMatchObject({ expected_revision: 1, scope: { genres: [], min_rating: 90 }, filters: { genres: [], min_rating: null } });
+    expect(retry).toMatchObject({ expected_revision: 2, scope: first.scope, filters: first.filters });
+  });
+
   it('blocks invalid media numbers and opens Advanced for field-tagged 422 failures', async () => {
     const definition = prepareMediaEditor();
     api.patchGadgetDefinition.mockRejectedValue(
@@ -1144,5 +1171,34 @@ describe('media gadget editor', () => {
     await userEvent.clear(screen.getByLabelText('Release year'));
     await userEvent.type(screen.getByLabelText('Release year'), '1799');
     expect(save).toBeDisabled();
+  });
+});
+
+describe('media picker bounds', () => {
+  it.each([13, 24, 16, 8])('allows reaching %i selections and disables additions beyond the limit', async (maxItems) => {
+    const options = Array.from({ length: maxItems + 1 }, (_, index) => `A${String.fromCharCode(65 + index)}`);
+    const changed = vi.fn();
+    /** Renders each selected-list size through the existing locale provider. */
+    const view = (value: string[]) => (
+      <NextIntlClientProvider locale="en-US" messages={messages}>
+        <MediaMultiChipPicker
+          value={value}
+          options={options}
+          label={(item) => item}
+          onChange={changed}
+          labelId="media-label"
+          country
+          maxItems={maxItems}
+        />
+      </NextIntlClientProvider>
+    );
+    const { rerender } = render(view(options.slice(0, maxItems - 1)));
+    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(await screen.findByRole('option', { name: options[maxItems - 1] }));
+    expect(changed).toHaveBeenLastCalledWith(options.slice(0, maxItems));
+    rerender(view(options.slice(0, maxItems)));
+    expect(screen.getByRole('combobox')).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: `Remove ${options[0]}` }));
+    expect(changed).toHaveBeenLastCalledWith(options.slice(1, maxItems));
   });
 });
