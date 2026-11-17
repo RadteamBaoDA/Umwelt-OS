@@ -298,14 +298,19 @@ class _QueryCollectedDataHandler:
         return MAX_SKILL_CALLS_PER_ROUND
 
     async def run(self, env: _ToolEnv, call: dict[str, str]) -> str:
-        """Execute the query in its own session; "done" is published even on error (no stale spinner)."""
-        c = env.c
+        """Execute the query in its own session; "done" is published even on error (no stale spinner).
+
+        Malformed (unparseable or non-object) argument JSON returns ``invalid_arguments: malformed JSON``
+        without running any query or publishing a status; an unparseable call must never become a default
+        unfiltered query. The owner timezone comes from the already-resolved turn setup (no per-call lookup).
+        """
         try:
             parsed_db_args = json.loads(call["arguments"] or "{}")
-            if not isinstance(parsed_db_args, dict):
-                parsed_db_args = {}
         except json.JSONDecodeError:
-            parsed_db_args = {}
+            parsed_db_args = None
+        if not isinstance(parsed_db_args, dict):
+            return json.dumps({"error": "invalid_arguments: malformed JSON", "rows": []})
+        c = env.c
         await _publish_status(c, TOOL_QUERY_COLLECTED_DATA, "running")
         web_run = env.turn.web_run
         # Web results hold the numbers right after the prompt's evidence; new DB evidence goes behind them.
@@ -328,6 +333,7 @@ class _QueryCollectedDataHandler:
                     evidence_list=cast(AnswerContext, env.turn.answer_context).evidence,
                     redis=c.redis,
                     web_numbering=web_numbering,
+                    timezone=env.setup.owner_timezone,
                 )
             outcome = _db_query_outcome(result)
             return result

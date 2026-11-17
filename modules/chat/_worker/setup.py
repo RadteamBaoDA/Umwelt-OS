@@ -477,6 +477,8 @@ class _ModelSetup:
     prior_messages: list[dict[str, str]]
     # Image-search hits listed to the model as img1..imgN (empty unless remote media is permitted this turn).
     web_images: tuple[web.WebImage, ...] = ()
+    # Owner IANA timezone (None when unset); reused by the db-query tool to read date-only filters.
+    owner_timezone: str | None = None
 
     def base_messages(self, with_ui_prompt: bool) -> list[dict[str, Any]]:
         """Initial chat messages; the Generative UI prompt is included only while tools are offered."""
@@ -850,6 +852,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         user_prompt=turn.user_prompt,
         prior_messages=turn.prior_messages,
         web_images=web_images,
+        owner_timezone=owner_timezone,
     )
 
 

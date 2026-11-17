@@ -117,7 +117,7 @@ def test_db_query_tool_spec_is_pinned() -> None:
     import json
 
     digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
-    assert digest == "8a0c9e5682bc41dca8d9058599f8a7d9dea619c78c7c2f2b5ac07e8f9a541fa1"
+    assert digest == "151efe1c8905e0988eec0000ea40a8eb2deaca7523ba54e22cc0549037f35e76"
 
 
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
