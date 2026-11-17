@@ -249,7 +249,12 @@ MediaStatus = Literal["finished", "releasing", "not_yet_released", "cancelled", 
 AniListMode = Literal["airing", "trending", "updated"]
 AniListMangaCountry = Literal["JP", "KR", "CN", "TW", "ALL"]
 AniListMediaId = Annotated[StrictInt, Field(gt=0)]
-MediaTag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$")]
+MediaTag = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$"
+    ),
+]
 ContentRating = Literal["safe", "pg", "pg_13", "r", "suggestive", "mature", "explicit", "clean"]
 YoutubeFilter = Literal["all", "long_form", "shorts"]
 MAX_MEDIA_COUNTRIES = 24
@@ -460,20 +465,125 @@ ISO_COUNTRY_PATTERN = r"^[A-Z]{2}$"
 
 # Provider-specific option names (the common selection filters are allowed separately by INCREMENTAL_PROVIDERS).
 OPTION_FIELDS: dict[str, tuple[str, ...]] = {
-    "tvmaze_schedule": ("tvmaze_mode", "tvmaze_global", "media_country", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
+    "tvmaze_schedule": (
+        "tvmaze_mode",
+        "tvmaze_global",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "release_year",
+        "min_rating",
+    ),
     "livechart_episodes": ("media_genres", "release_year"),
-    "openlibrary_books": ("openlibrary_mode", "openlibrary_subject", "openlibrary_query", "ebooks_only", "media_languages"),
-    "gutendex_books": ("media_languages", "gutendex_topic", "gutendex_search", "gutendex_copyright", "gutendex_mime_type", "gutendex_author_year_start", "gutendex_author_year_end", "media_genres"),
-    "anilist_anime": ("anilist_mode", "media_country", "media_countries", "media_genres", "media_tags", "media_formats", "release_year", "anime_season", "media_statuses", "min_rating", "exclude_adult"),
-    "anilist_manga": ("anilist_mode", "country_of_origin", "media_country", "media_countries", "media_genres", "media_tags", "media_formats", "release_year", "media_statuses", "min_rating", "exclude_adult"),
-    "ann_news": ("ann_mode", "ann_media_type", "ann_category", "ann_edition", "media_country", "media_countries", "media_genres", "media_languages", "release_year"),
-    "mangaupdates_releases": ("mangaupdates_types", "licensed_only", "release_year", "media_genres", "exclude_genre", "series_ids"),
-    "mangadex_releases": ("manga_ids", "original_languages", "available_translated_languages", "mangadex_content_ratings", "mangadex_statuses", "publication_demographic", "release_year", "updated_at_since", "media_genres", "excluded_tags"),
-    "apple_books_rss": ("country", "kind", "chart", "media_country", "media_genres", "media_languages"),
+    "openlibrary_books": (
+        "openlibrary_mode",
+        "openlibrary_subject",
+        "openlibrary_query",
+        "ebooks_only",
+        "media_languages",
+    ),
+    "gutendex_books": (
+        "media_languages",
+        "gutendex_topic",
+        "gutendex_search",
+        "gutendex_copyright",
+        "gutendex_mime_type",
+        "gutendex_author_year_start",
+        "gutendex_author_year_end",
+        "media_genres",
+    ),
+    "anilist_anime": (
+        "anilist_mode",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_tags",
+        "media_formats",
+        "release_year",
+        "anime_season",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "anilist_manga": (
+        "anilist_mode",
+        "country_of_origin",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_tags",
+        "media_formats",
+        "release_year",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "ann_news": (
+        "ann_mode",
+        "ann_media_type",
+        "ann_category",
+        "ann_edition",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+    ),
+    "mangaupdates_releases": (
+        "mangaupdates_types",
+        "licensed_only",
+        "release_year",
+        "media_genres",
+        "exclude_genre",
+        "series_ids",
+    ),
+    "mangadex_releases": (
+        "manga_ids",
+        "original_languages",
+        "available_translated_languages",
+        "mangadex_content_ratings",
+        "mangadex_statuses",
+        "publication_demographic",
+        "release_year",
+        "updated_at_since",
+        "media_genres",
+        "excluded_tags",
+    ),
+    "apple_books_rss": (
+        "country",
+        "kind",
+        "chart",
+        "media_country",
+        "media_genres",
+        "media_languages",
+    ),
     "podcast_rss": ("itunes_podcast_id", "media_country", "media_genres", "media_languages"),
-    "wikidata_movies": ("lookback_days", "genre_qids", "language", "media_country", "media_countries", "media_genres", "media_languages"),
-    "itunes_movies": ("search_terms", "country", "media_country", "media_genres", "media_languages"),
-    "letterboxd_rss": ("letterboxd_username", "media_country", "media_countries", "media_genres", "media_languages", "release_year"),
+    "wikidata_movies": (
+        "lookback_days",
+        "genre_qids",
+        "language",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+    ),
+    "itunes_movies": (
+        "search_terms",
+        "country",
+        "media_country",
+        "media_genres",
+        "media_languages",
+    ),
+    "letterboxd_rss": (
+        "letterboxd_username",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+    ),
     "hn_top": ("hn_list",),
     "gdelt_economy": ("gdelt_query", "gdelt_timespan", "gdelt_source_lang", "gdelt_source_country"),
     "usgs": ("usgs_min_magnitude", "usgs_period", "region"),
@@ -735,13 +845,17 @@ def _validate_openlibrary_options(cfg: Mapping[str, Any]) -> None:
         raise ValueError("Open Library accepts one search language")
     if mode == "subject":
         if not subject or query or languages:
-            raise ValueError("Subject mode requires a subject and does not accept query or language")
+            raise ValueError(
+                "Subject mode requires a subject and does not accept query or language"
+            )
     elif mode == "search":
         if not query or subject:
             raise ValueError("Search mode requires a query and does not accept a subject")
     elif mode == "recent":
         if subject or query or languages or cfg.get("ebooks_only"):
-            raise ValueError("Recent mode does not accept subject, query, language, or ebook filters")
+            raise ValueError(
+                "Recent mode does not accept subject, query, language, or ebook filters"
+            )
 
 
 def _validate_gutendex_options(cfg: Mapping[str, Any]) -> None:
@@ -749,6 +863,8 @@ def _validate_gutendex_options(cfg: Mapping[str, Any]) -> None:
     start, end = cfg.get("gutendex_author_year_start"), cfg.get("gutendex_author_year_end")
     if start is not None and end is not None and start > end:
         raise ValueError("Gutendex author year start must not exceed end")
+
+
 def _count(provider: str, cfg: Mapping[str, Any]) -> int:
     """Upstream item count: ``max_items`` clamped to the adapter cap, else the adapter default."""
     requested = cfg.get("max_items")
@@ -1233,7 +1349,9 @@ def _record_matches_media_filters(
         sf.get("country"), cfg.get("media_countries"), keep_missing=keep_missing, multi=True
     ):
         return False
-    if not _match_media_genres(sf.get("genres"), cfg.get("media_genres"), keep_missing=keep_missing):
+    if not _match_media_genres(
+        sf.get("genres"), cfg.get("media_genres"), keep_missing=keep_missing
+    ):
         return False
     if not _match_media_dimension(
         sf.get("language"), cfg.get("media_languages"), keep_missing=keep_missing, multi=True

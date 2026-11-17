@@ -388,12 +388,16 @@ class ConnectorConfig(BaseModel):
     media_ids: tuple[AniListMediaId, ...] | None = Field(default=None, min_length=1, max_length=50)
     anilist_mode: AniListMode | None = None
     openlibrary_mode: Literal["subject", "search", "recent"] | None = None
-    openlibrary_subject: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _-]+$")
+    openlibrary_subject: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _-]+$"
+    )
     openlibrary_query: str | None = Field(default=None, min_length=1, max_length=200)
     gutendex_topic: str | None = Field(default=None, min_length=1, max_length=120)
     gutendex_search: str | None = Field(default=None, min_length=1, max_length=200)
     gutendex_copyright: StrictBool | None = None
-    gutendex_mime_type: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$")
+    gutendex_mime_type: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$"
+    )
     gutendex_author_year_start: StrictInt | None = Field(default=None, ge=0, le=2100)
     gutendex_author_year_end: StrictInt | None = Field(default=None, ge=0, le=2100)
     ebooks_only: StrictBool | None = None
@@ -403,24 +407,42 @@ class ConnectorConfig(BaseModel):
     content_ratings: tuple[ContentRating, ...] | None = Field(
         default=None, min_length=1, max_length=MAX_CONTENT_RATINGS
     )
-    min_rating: float | None = Field(default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True)
+    min_rating: float | None = Field(
+        default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True
+    )
     exclude_adult: StrictBool | None = None
     tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
     tvmaze_global: StrictBool | None = None
     ann_mode: Literal["news", "encyclopedia"] | None = None
     ann_media_type: Literal["anime", "manga"] | None = None
-    ann_category: Literal["news", "review", "feature", "interview", "press-release", "all"] | None = None
+    ann_category: (
+        Literal["news", "review", "feature", "interview", "press-release", "all"] | None
+    ) = None
     ann_edition: Literal["us", "w"] | None = None
-    mangaupdates_types: tuple[Literal["Manga", "Manhwa", "Manhua", "Novel", "Doujinshi"], ...] | None = Field(default=None, min_length=1, max_length=5)
+    mangaupdates_types: (
+        tuple[Literal["Manga", "Manhwa", "Manhua", "Novel", "Doujinshi"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=5)
     licensed_only: StrictBool | None = None
     exclude_genre: tuple[MediaGenre, ...] | None = Field(default=None, min_length=1, max_length=16)
-    series_ids: tuple[PositiveSeriesId, ...] | None = Field(default=None, min_length=1, max_length=100)
+    series_ids: tuple[PositiveSeriesId, ...] | None = Field(
+        default=None, min_length=1, max_length=100
+    )
     manga_ids: tuple[UUID, ...] | None = Field(default=None, min_length=1, max_length=100)
-    original_languages: tuple[Literal["ja", "ko", "zh", "zh-hk"], ...] | None = Field(default=None, min_length=1, max_length=4)
-    available_translated_languages: tuple[Literal["en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"], ...] | None = Field(default=None, min_length=1, max_length=9)
-    mangadex_content_ratings: tuple[Literal["safe", "suggestive", "erotica", "pornographic"], ...] | None = Field(default=None, min_length=1, max_length=4)
-    mangadex_statuses: tuple[Literal["ongoing", "completed", "hiatus", "cancelled"], ...] | None = Field(default=None, min_length=1, max_length=4)
-    publication_demographic: tuple[Literal["shounen", "shoujo", "josei", "seinen", "none"], ...] | None = Field(default=None, min_length=1, max_length=5)
+    original_languages: tuple[Literal["ja", "ko", "zh", "zh-hk"], ...] | None = Field(
+        default=None, min_length=1, max_length=4
+    )
+    available_translated_languages: (
+        tuple[Literal["en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=9)
+    mangadex_content_ratings: (
+        tuple[Literal["safe", "suggestive", "erotica", "pornographic"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=4)
+    mangadex_statuses: tuple[Literal["ongoing", "completed", "hiatus", "cancelled"], ...] | None = (
+        Field(default=None, min_length=1, max_length=4)
+    )
+    publication_demographic: (
+        tuple[Literal["shounen", "shoujo", "josei", "seinen", "none"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=5)
     updated_at_since: AwareDatetime | None = None
     excluded_tags: tuple[UUID, ...] | None = Field(default=None, min_length=1, max_length=100)
     country: IsoCountry | None = None
@@ -431,7 +453,9 @@ class ConnectorConfig(BaseModel):
     genre_qids: tuple[WikidataQid, ...] | None = Field(default=None, min_length=1, max_length=12)
     language: TwoLetterLanguage | None = None
     search_terms: str | None = Field(default=None, min_length=1, max_length=100)
-    letterboxd_username: str | None = Field(default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$")
+    letterboxd_username: str | None = Field(
+        default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$"
+    )
     youtube_handles: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
     youtube_playlist_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
     youtube_filter: YoutubeFilter | None = None

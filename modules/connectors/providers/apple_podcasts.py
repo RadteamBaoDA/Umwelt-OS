@@ -78,17 +78,28 @@ def _apple_book_record(row: object, *, collected_at: datetime, kind: str) -> Ing
     if not isinstance(row, Mapping):
         return None
     item_id, raw_title = row.get("id"), row.get("name")
-    if not isinstance(item_id, (str, int)) or isinstance(item_id, bool) or not str(item_id).isdigit():
+    if (
+        not isinstance(item_id, (str, int))
+        or isinstance(item_id, bool)
+        or not str(item_id).isdigit()
+    ):
         return None
     if not isinstance(raw_title, str) or not raw_title.strip():
         return None
     title = news.plain_text(raw_title, 500)
     date_text, year, released = normalize_partial_date(row.get("releaseDate"))
     raw_genres = row.get("genres")
-    genres = normalize_genres([
-        genre["name"] for genre in raw_genres
-        if isinstance(genre, Mapping) and isinstance(genre.get("name"), str)
-    ]) if isinstance(raw_genres, list) else []
+    genres = (
+        normalize_genres(
+            [
+                genre["name"]
+                for genre in raw_genres
+                if isinstance(genre, Mapping) and isinstance(genre.get("name"), str)
+            ]
+        )
+        if isinstance(raw_genres, list)
+        else []
+    )
     artwork = normalize_cover_url(row.get("artworkUrl100") or row.get("artworkUrl600"))
     link = news.https_link(row.get("url"))
     artist = row.get("artistName")
@@ -121,19 +132,36 @@ def _apple_book_record(row: object, *, collected_at: datetime, kind: str) -> Ing
     if link:
         fields["canonical_url"] = link
     meta = ProviderRecordMetadata(
-        provider="apple_books_rss", identity=identity,
+        provider="apple_books_rss",
+        identity=identity,
         timestamp_basis="provider_published" if released else "collection",
-        coverage="returned_snapshot", content_truncated=False, source_fields=fields,
+        coverage="returned_snapshot",
+        content_truncated=False,
+        source_fields=fields,
     ).model_dump(mode="json", exclude_none=True)
     return IngestionRecord(
-        provider_id=identity, content=title, observed_at=released or collected_at, collected_at=collected_at,
-        metadata={"provider": "apple_books_rss", "title": title, "canonical_url": link, "provider_record": meta},
+        provider_id=identity,
+        content=title,
+        observed_at=released or collected_at,
+        collected_at=collected_at,
+        metadata={
+            "provider": "apple_books_rss",
+            "title": title,
+            "canonical_url": link,
+            "provider_record": meta,
+        },
     )
 
 
-def map_apple_books(payload: object, *, collected_at: datetime, config: Mapping[str, Any], kind: str) -> list[IngestionRecord]:
+def map_apple_books(
+    payload: object, *, collected_at: datetime, config: Mapping[str, Any], kind: str
+) -> list[IngestionRecord]:
     """Map at most 100 Apple chart entries into normalized book records and apply configured filters."""
-    if collected_at.tzinfo is None or collected_at.utcoffset() is None or kind not in {"books", "audio-books"}:
+    if (
+        collected_at.tzinfo is None
+        or collected_at.utcoffset() is None
+        or kind not in {"books", "audio-books"}
+    ):
         raise ValueError("apple_books_response_invalid")
     feed = payload.get("feed") if isinstance(payload, Mapping) else None
     rows = feed.get("results") if isinstance(feed, Mapping) else None
@@ -157,7 +185,11 @@ def _episode_date(raw: str, collected_at: datetime) -> datetime | None:
     if not raw or len(raw) > 64:
         return None
     try:
-        moment = parsedate_to_datetime(raw) if not re.match(r"^\d{4}-\d{2}-\d{2}", raw) else datetime.fromisoformat(raw)
+        moment = (
+            parsedate_to_datetime(raw)
+            if not re.match(r"^\d{4}-\d{2}-\d{2}", raw)
+            else datetime.fromisoformat(raw)
+        )
     except (ValueError, TypeError, OverflowError):
         return None
     if moment.tzinfo is None or moment.utcoffset() is None:
@@ -238,7 +270,9 @@ def _podcast_episode_record(
     image = next(iter(_xml_child(item, "image")), None)
     if image is None:
         image = next(iter(_xml_child(channel, "image")), None)
-    image_url = normalize_cover_url(image.get("href") or image.get("url") if image is not None else None)
+    image_url = normalize_cover_url(
+        image.get("href") or image.get("url") if image is not None else None
+    )
     if image_url:
         fields["image_url"] = image_url
     if canonical:
@@ -257,11 +291,18 @@ def _podcast_episode_record(
         content=raw_content[:20000],
         observed_at=released or collected_at,
         collected_at=collected_at,
-        metadata={"provider": "podcast_rss", "title": title, "canonical_url": canonical, "provider_record": meta},
+        metadata={
+            "provider": "podcast_rss",
+            "title": title,
+            "canonical_url": canonical,
+            "provider_record": meta,
+        },
     )
 
 
-def map_podcast_feed(body: bytes, *, collected_at: datetime, config: Mapping[str, Any]) -> list[IngestionRecord]:
+def map_podcast_feed(
+    body: bytes, *, collected_at: datetime, config: Mapping[str, Any]
+) -> list[IngestionRecord]:
     """Map a capped RSS feed using channel-level type/rating defaults and shared media filters."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must include a timezone")
@@ -296,7 +337,13 @@ def podcast_feed_url(raw: object) -> str:
         raise ValueError("podcast_feed_url_invalid")
     try:
         parts = urlsplit(raw)
-        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.fragment:
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.fragment
+        ):
             raise ValueError
         _ = parts.port
     except ValueError as exc:
@@ -306,16 +353,27 @@ def podcast_feed_url(raw: object) -> str:
 
 def itunes_podcast_lookup_url(raw: object) -> str:
     """Build Apple's fixed HTTPS lookup URL from a numeric podcast catalog ID."""
-    if isinstance(raw, bool) or not isinstance(raw, (str, int)) or not str(raw).isdigit() or len(str(raw)) > 16:
+    if (
+        isinstance(raw, bool)
+        or not isinstance(raw, (str, int))
+        or not str(raw).isdigit()
+        or len(str(raw)) > 16
+    ):
         raise ValueError("itunes_podcast_id_invalid")
     return f"{ITUNES_LOOKUP_BASE}?" + urlencode({"id": str(raw), "entity": "podcast"})
 
 
 async def _fetch_conditional(
-    fetch_bytes: Callable[..., Awaitable[Fetched]], url: str, *, etag: str | None, last_modified: str | None
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    url: str,
+    *,
+    etag: str | None,
+    last_modified: str | None,
 ) -> Fetched:
     """GET one fixed or validated podcast URL with bounded validators through the injected gated transport."""
-    headers = {"Accept": "application/rss+xml, application/atom+xml, application/xml, application/json"}
+    headers = {
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, application/json"
+    }
     if _header_value(etag):
         headers["If-None-Match"] = str(_header_value(etag))
     if _header_value(last_modified):
@@ -324,8 +382,15 @@ async def _fetch_conditional(
 
 
 async def collect_apple_books(
-    fetch_bytes: Callable[..., Awaitable[Fetched]], *, country: str, kind: str, chart: str,
-    collected_at: datetime, config: Mapping[str, Any], etag: str | None = None, last_modified: str | None = None,
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    country: str,
+    kind: str,
+    chart: str,
+    collected_at: datetime,
+    config: Mapping[str, Any],
+    etag: str | None = None,
+    last_modified: str | None = None,
 ) -> MediaFeedPage:
     """Fetch one canonical Apple chart with validators, map its bounded JSON response and apply filters."""
     url = apple_books_url(country, kind, chart)
@@ -335,24 +400,51 @@ async def collect_apple_books(
             raise ProviderHttpError(304)
         return MediaFeedPage((), True, etag, last_modified)
     return MediaFeedPage(
-        tuple(map_apple_books(_json_object(fetched.body), collected_at=collected_at, config=config, kind=kind)),
-        False, _header_value(fetched.etag), _header_value(fetched.last_modified),
+        tuple(
+            map_apple_books(
+                _json_object(fetched.body), collected_at=collected_at, config=config, kind=kind
+            )
+        ),
+        False,
+        _header_value(fetched.etag),
+        _header_value(fetched.last_modified),
     )
 
 
 async def collect_podcast_rss(
-    fetch_bytes: Callable[..., Awaitable[Fetched]], *, feed_url: str | None = None, itunes_id: str | None = None,
-    collected_at: datetime, config: Mapping[str, Any], etag: str | None = None, last_modified: str | None = None,
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    feed_url: str | None = None,
+    itunes_id: str | None = None,
+    collected_at: datetime,
+    config: Mapping[str, Any],
+    etag: str | None = None,
+    last_modified: str | None = None,
 ) -> MediaFeedPage:
     """Resolve an optional iTunes podcast ID and fetch one RSS feed with conditional caching and bounded mapping."""
     if (feed_url is None) == (itunes_id is None):
         raise ValueError("podcast_scope_invalid")
     if itunes_id is not None:
-        lookup = await fetch_bytes(itunes_podcast_lookup_url(itunes_id), headers={"Accept": "application/json"}, max_bytes=MAX_FEED_BYTES)
+        lookup = await fetch_bytes(
+            itunes_podcast_lookup_url(itunes_id),
+            headers={"Accept": "application/json"},
+            max_bytes=MAX_FEED_BYTES,
+        )
         if lookup.body is None:
             raise ProviderHttpError(304)
         results = _json_object(lookup.body).get("results")
-        resolved = next((row.get("feedUrl") for row in results if isinstance(row, Mapping) and isinstance(row.get("feedUrl"), str)), None) if isinstance(results, list) else None
+        resolved = (
+            next(
+                (
+                    row.get("feedUrl")
+                    for row in results
+                    if isinstance(row, Mapping) and isinstance(row.get("feedUrl"), str)
+                ),
+                None,
+            )
+            if isinstance(results, list)
+            else None
+        )
         feed_url = podcast_feed_url(resolved)
     url = podcast_feed_url(feed_url)
     fetched = await _fetch_conditional(fetch_bytes, url, etag=etag, last_modified=last_modified)
@@ -362,5 +454,7 @@ async def collect_podcast_rss(
         return MediaFeedPage((), True, etag, last_modified)
     return MediaFeedPage(
         tuple(map_podcast_feed(fetched.body, collected_at=collected_at, config=config)),
-        False, _header_value(fetched.etag), _header_value(fetched.last_modified),
+        False,
+        _header_value(fetched.etag),
+        _header_value(fetched.last_modified),
     )

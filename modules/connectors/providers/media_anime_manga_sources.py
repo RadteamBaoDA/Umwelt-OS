@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -72,10 +73,12 @@ def _record(
     clean_title = news.plain_text(title, 500)
     clean_summary = news.plain_text(summary, 8000)
     content = f"{clean_title}\n\n{clean_summary}".strip()[:12000]
-    fields.update({
-        "title": clean_title,
-        "attribution": MEDIA_ATTRIBUTIONS.get(provider, "Data via Anime News Network"),
-    })
+    fields.update(
+        {
+            "title": clean_title,
+            "attribution": MEDIA_ATTRIBUTIONS.get(provider, "Data via Anime News Network"),
+        }
+    )
     canonical = fields.get("canonical_url")
     provider_record = ProviderRecordMetadata(
         provider=provider,
@@ -126,8 +129,60 @@ def build_ann_encyclopedia_url(media_type: str, *, offset: int = 0) -> str:
     )
 
 
-def map_ann_news(body: bytes, *, collected_at: datetime, config: Mapping[str, Any]) -> list[IngestionRecord]:  # noqa: C901
-    """Map bounded ANN Atom entries and preserve sparse news rows through media filtering."""
+@dataclass(frozen=True)
+class _AnnEntry:
+    """Raw, unvalidated text read from one ANN Atom entry's child elements."""
+
+    title: str
+    summary: str
+    identifier: str
+    date_raw: str
+    categories: list[str]
+    link: str
+
+
+def _read_ann_entry(entry: ET.Element) -> _AnnEntry:
+    """Collect an Atom entry's title, summary, id, first date, categories and alternate link.
+
+    Missing elements yield empty strings. The first published/updated date wins; a later one is
+    ignored. Only a link with rel "alternate" (the default) is read. Pure, and never raises for
+    well-formed elements.
+    """
+    title = ""
+    summary = ""
+    identifier = ""
+    date_raw = ""
+    categories: list[str] = []
+    link = ""
+    for child in entry:
+        local = news._local(child.tag)
+        if local == "title":
+            title = child.text or ""
+        elif local in {"summary", "content"}:
+            summary = child.text or ""
+        elif local == "id":
+            identifier = child.text or ""
+        elif local in {"published", "updated"} and not date_raw:
+            date_raw = child.text or ""
+        elif local == "category":
+            term = child.attrib.get("term")
+            if term:
+                categories.append(term)
+        elif local == "link" and child.attrib.get("rel", "alternate") == "alternate":
+            link = child.attrib.get("href", "")
+    return _AnnEntry(title, summary, identifier, date_raw, categories, link)
+
+
+def map_ann_news(
+    body: bytes, *, collected_at: datetime, config: Mapping[str, Any]
+) -> list[IngestionRecord]:
+    """Map bounded ANN Atom entries and preserve sparse news rows through media filtering.
+
+    Raises ValueError for a naive collected_at, an invalid or oversized feed (more than
+    MAX_ITEMS entries). Entries without a title, id, or an https animenewsnetwork.com link are
+    skipped. Duplicate identities keep the first entry. Results are media-filtered with
+    keep_missing=True.
+    """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     root = news.safe_xml_root(body, max_bytes=news.MAX_FEED_BYTES)
@@ -136,35 +191,19 @@ def map_ann_news(body: bytes, *, collected_at: datetime, config: Mapping[str, An
         raise ValueError("ann_news_response_invalid")
     records: dict[str, IngestionRecord] = {}
     for entry in entries:
-        title = ""
-        summary = ""
-        identifier = ""
-        date_raw = ""
-        categories: list[str] = []
-        link = ""
-        for child in entry:
-            local = news._local(child.tag)
-            if local == "title":
-                title = child.text or ""
-            elif local in {"summary", "content"}:
-                summary = child.text or ""
-            elif local == "id":
-                identifier = child.text or ""
-            elif local in {"published", "updated"} and not date_raw:
-                date_raw = child.text or ""
-            elif local == "category":
-                term = child.attrib.get("term")
-                if term:
-                    categories.append(term)
-            elif local == "link" and child.attrib.get("rel", "alternate") == "alternate":
-                link = child.attrib.get("href", "")
-        title = news.plain_text(title, 500)
-        safe_link = news.https_link(link)
-        if not title or not identifier or not safe_link or not safe_link.startswith("https://www.animenewsnetwork.com/"):
+        parsed = _read_ann_entry(entry)
+        title = news.plain_text(parsed.title, 500)
+        safe_link = news.https_link(parsed.link)
+        if (
+            not title
+            or not parsed.identifier
+            or not safe_link
+            or not safe_link.startswith("https://www.animenewsnetwork.com/")
+        ):
             continue
-        published, year, observed = normalize_partial_date(date_raw)
-        genres = normalize_genres(categories)
-        kinds = " ".join(categories + [title]).lower()
+        published, year, observed = normalize_partial_date(parsed.date_raw)
+        genres = normalize_genres(parsed.categories)
+        kinds = " ".join(parsed.categories + [title]).lower()
         media_type = "manga" if "manga" in kinds else "anime"
         fields: dict[str, object] = {
             "media_type": media_type,
@@ -176,8 +215,19 @@ def map_ann_news(body: bytes, *, collected_at: datetime, config: Mapping[str, An
             fields["release_year"] = year
         if genres:
             fields["genres"] = genres
-        identity = build_media_identity("ann_news", identifier)
-        records.setdefault(identity, _record("ann_news", identity, title, summary, collected_at, fields, observed_at=observed))
+        identity = build_media_identity("ann_news", parsed.identifier)
+        records.setdefault(
+            identity,
+            _record(
+                "ann_news",
+                identity,
+                title,
+                parsed.summary,
+                collected_at,
+                fields,
+                observed_at=observed,
+            ),
+        )
     return filter_media_records(config, list(records.values()), keep_missing=True)
 
 
@@ -224,7 +274,12 @@ def map_ann_encyclopedia(
         if year:
             fields["release_year"] = year
         identity = build_media_identity("ann_news", entry_id)
-        records.setdefault(identity, _record("ann_news", identity, title, summary, collected_at, fields, observed_at=observed))
+        records.setdefault(
+            identity,
+            _record(
+                "ann_news", identity, title, summary, collected_at, fields, observed_at=observed
+            ),
+        )
     return filter_media_records(config, list(records.values()), keep_missing=True)
 
 
@@ -233,7 +288,9 @@ def mangaupdates_search_body(config: Mapping[str, Any], *, page: int = 1) -> byt
     if type(page) is not int or not 1 <= page <= 100_000:
         raise ValueError("mangaupdates_page_invalid")
     body: dict[str, object] = {"page": page, "perpage": MAX_ITEMS}
-    media_types = config.get("types") or config.get("mangaupdates_types") or config.get("media_formats")
+    media_types = (
+        config.get("types") or config.get("mangaupdates_types") or config.get("media_formats")
+    )
     if media_types:
         normalized_types = [
             {"manga": "Manga", "manhwa": "Manhwa", "manhua": "Manhua"}.get(str(item).lower(), item)
@@ -298,25 +355,42 @@ def _map_mangaupdates_release(
     chapter = release.get("chapter")
     chapter_number = chapter.get("number") if isinstance(chapter, Mapping) else chapter
     chapter_title = chapter.get("title") if isinstance(chapter, Mapping) else None
-    heading = f"{series_title.strip()} — Chapter {chapter_number}" if chapter_number is not None else series_title.strip()
+    heading = (
+        f"{series_title.strip()} — Chapter {chapter_number}"
+        if chapter_number is not None
+        else series_title.strip()
+    )
     if isinstance(chapter_title, str) and chapter_title.strip():
         heading += f": {chapter_title.strip()}"
     time_added = release.get("time_added")
-    date_value = time_added.get("as_rfc3339") or time_added.get("as_string") if isinstance(time_added, Mapping) else None
+    date_value = (
+        time_added.get("as_rfc3339") or time_added.get("as_string")
+        if isinstance(time_added, Mapping)
+        else None
+    )
     release_date, year, observed = normalize_partial_date(
         release.get("release_date") or date_value or release.get("date")
     )
     series_type = str(series.get("type") or "").lower()
-    selected_types = config.get("types") or config.get("mangaupdates_types") or config.get("media_formats")
+    selected_types = (
+        config.get("types") or config.get("mangaupdates_types") or config.get("media_formats")
+    )
     if selected_types and series_type not in {str(value).lower() for value in selected_types}:
         return None
     if config.get("licensed_only") is True and series.get("licensed") is not True:
         return None
     country = {"manga": "JP", "manhwa": "KR", "manhua": "CN"}.get(series_type)
     raw_genres = series.get("genres", [])
-    genres = normalize_genres(
-        [item.get("genre", item.get("name", "")) if isinstance(item, Mapping) else str(item) for item in raw_genres]
-    ) if isinstance(raw_genres, list) else []
+    genres = (
+        normalize_genres(
+            [
+                item.get("genre", item.get("name", "")) if isinstance(item, Mapping) else str(item)
+                for item in raw_genres
+            ]
+        )
+        if isinstance(raw_genres, list)
+        else []
+    )
     rating = normalize_rating(series.get("bayesian_rating"), scale=10)
     fields: dict[str, object] = {
         "media_type": "manga",
@@ -337,11 +411,21 @@ def _map_mangaupdates_release(
         fields["rating"] = rating
     if chapter_number is not None:
         fields["chapter"] = str(chapter_number)[:80]
-    identity = build_media_identity("mangaupdates", release.get("id") or f"{series_id}:{chapter_number}:{release_date}")
-    return _record("mangaupdates_releases", identity, heading, "", collected_at, fields, observed_at=observed)
+    identity = build_media_identity(
+        "mangaupdates", release.get("id") or f"{series_id}:{chapter_number}:{release_date}"
+    )
+    return _record(
+        "mangaupdates_releases", identity, heading, "", collected_at, fields, observed_at=observed
+    )
 
 
-def map_mangaupdates_releases(payload: object, *, collected_at: datetime, config: Mapping[str, Any], series_metadata: Mapping[str, Mapping[str, Any]] | None = None) -> list[IngestionRecord]:
+def map_mangaupdates_releases(
+    payload: object,
+    *,
+    collected_at: datetime,
+    config: Mapping[str, Any],
+    series_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[IngestionRecord]:
     """Normalize one bounded MangaUpdates releases response and apply configured media filters."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
@@ -352,9 +436,15 @@ def map_mangaupdates_releases(payload: object, *, collected_at: datetime, config
         raise ValueError("mangaupdates_response_invalid")
     records: dict[str, IngestionRecord] = {}
     for row in rows:
-        if isinstance(row, Mapping) and (record := _map_mangaupdates_release(
-            row, collected_at=collected_at, config=config, series_metadata=series_metadata
-        )) is not None:
+        if (
+            isinstance(row, Mapping)
+            and (
+                record := _map_mangaupdates_release(
+                    row, collected_at=collected_at, config=config, series_metadata=series_metadata
+                )
+            )
+            is not None
+        ):
             records.setdefault(record.provider_id, record)
     return filter_media_records(config, list(records.values()))
 
@@ -363,7 +453,12 @@ def build_mangadex_manga_url(config: Mapping[str, Any], *, offset: int = 0) -> s
     """Build one bounded MangaDex manga metadata query with validated URL parameters."""
     if type(offset) is not int or not 0 <= offset <= 1_000_000:
         raise ValueError("mangadex_offset_invalid")
-    query: list[tuple[str, str]] = [("limit", str(MAX_ITEMS)), ("offset", str(offset)), ("order[updatedAt]", "desc"), ("includes[]", "cover_art")]
+    query: list[tuple[str, str]] = [
+        ("limit", str(MAX_ITEMS)),
+        ("offset", str(offset)),
+        ("order[updatedAt]", "desc"),
+        ("includes[]", "cover_art"),
+    ]
     raw_ids = config.get("manga_ids") or ()
     if isinstance(raw_ids, str):
         raw_ids = (raw_ids,)
@@ -403,7 +498,11 @@ def build_mangadex_manga_url(config: Mapping[str, Any], *, offset: int = 0) -> s
     if type(config.get("release_year")) is int:
         query.append(("year", str(config["release_year"])))
     updated_since = config.get("updated_at_since")
-    if isinstance(updated_since, str) and len(updated_since) <= 32 and not any(ord(char) < 32 for char in updated_since):
+    if (
+        isinstance(updated_since, str)
+        and len(updated_since) <= 32
+        and not any(ord(char) < 32 for char in updated_since)
+    ):
         query.append(("updatedAtSince", updated_since))
     return f"{MANGADEX_URL}/manga?{urlencode(query)}"
 
@@ -425,19 +524,51 @@ def map_mangadex_manga(payload: object) -> dict[str, dict[str, Any]]:
         if not isinstance(attrs, Mapping):
             continue
         title_map = attrs.get("title")
-        title = next((value for value in title_map.values() if isinstance(value, str) and value.strip()), None) if isinstance(title_map, Mapping) else None
+        title = (
+            next(
+                (value for value in title_map.values() if isinstance(value, str) and value.strip()),
+                None,
+            )
+            if isinstance(title_map, Mapping)
+            else None
+        )
         if not title:
             continue
         tags = attrs.get("tags")
-        tag_names = [
-            tag.get("id", tag.get("attributes", {}).get("name", {}).get("en", ""))
-            for tag in tags
-            if isinstance(tag, Mapping) and isinstance(tag.get("attributes"), Mapping)
-        ] if isinstance(tags, list) else []
+        tag_names = (
+            [
+                tag.get("id", tag.get("attributes", {}).get("name", {}).get("en", ""))
+                for tag in tags
+                if isinstance(tag, Mapping) and isinstance(tag.get("attributes"), Mapping)
+            ]
+            if isinstance(tags, list)
+            else []
+        )
         relationships = row.get("relationships", [])
-        cover = next((item for item in relationships if isinstance(item, Mapping) and item.get("type") == "cover_art"), None) if isinstance(relationships, list) else None
-        filename = (cover.get("attributes") or {}).get("fileName") if isinstance(cover, Mapping) and isinstance(cover.get("attributes"), Mapping) else None
-        image = normalize_cover_url(f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg") if isinstance(filename, str) else None
+        cover = (
+            next(
+                (
+                    item
+                    for item in relationships
+                    if isinstance(item, Mapping) and item.get("type") == "cover_art"
+                ),
+                None,
+            )
+            if isinstance(relationships, list)
+            else None
+        )
+        filename = (
+            (cover.get("attributes") or {}).get("fileName")
+            if isinstance(cover, Mapping) and isinstance(cover.get("attributes"), Mapping)
+            else None
+        )
+        image = (
+            normalize_cover_url(
+                f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+            )
+            if isinstance(filename, str)
+            else None
+        )
         out[manga_id] = {
             "title": title,
             "attrs": attrs,
@@ -447,13 +578,24 @@ def map_mangadex_manga(payload: object) -> dict[str, dict[str, Any]]:
     return out
 
 
-def build_mangadex_chapters_url(config: Mapping[str, Any], manga: Mapping[str, Mapping[str, Any]], *, offset: int = 0) -> str:
+def build_mangadex_chapters_url(
+    config: Mapping[str, Any], manga: Mapping[str, Mapping[str, Any]], *, offset: int = 0
+) -> str:
     """Build one MangaDex chapter-feed URL; OR tag mode prevents accidental AND narrowing."""
     if type(offset) is not int or not 0 <= offset <= 1_000_000:
         raise ValueError("mangadex_offset_invalid")
-    query: list[tuple[str, str]] = [("limit", str(MAX_ITEMS)), ("offset", str(offset)), ("order[readableAt]", "desc"), ("includes[]", "scanlation_group")]
+    query: list[tuple[str, str]] = [
+        ("limit", str(MAX_ITEMS)),
+        ("offset", str(offset)),
+        ("order[readableAt]", "desc"),
+        ("includes[]", "scanlation_group"),
+    ]
     query.extend(("manga[]", identifier) for identifier in list(manga)[:100])
-    tag_ids = [MANGADEX_GENRE_TAGS[genre] for genre in config.get("media_genres") or () if genre in MANGADEX_GENRE_TAGS]
+    tag_ids = [
+        MANGADEX_GENRE_TAGS[genre]
+        for genre in config.get("media_genres") or ()
+        if genre in MANGADEX_GENRE_TAGS
+    ]
     if tag_ids:
         query.extend(("includedTags[]", value) for value in tag_ids)
         query.append(("includedTagsMode", "OR"))
@@ -467,16 +609,125 @@ def build_mangadex_chapters_url(config: Mapping[str, Any], manga: Mapping[str, M
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError("mangadex_excluded_tags_invalid") from exc
     query.extend(("excludedTags[]", value) for value in excluded_ids)
-    for language in config.get("available_translated_languages") or config.get("media_languages") or ():
+    for language in (
+        config.get("available_translated_languages") or config.get("media_languages") or ()
+    ):
         query.append(("translatedLanguage[]", str(language)))
     if config.get("release_year"):
         year = config["release_year"]
-        query.extend((("publishAtSince", f"{year}-01-01T00:00:00"), ("publishAtUntil", f"{year}-12-31T23:59:59")))
+        query.extend(
+            (
+                ("publishAtSince", f"{year}-01-01T00:00:00"),
+                ("publishAtUntil", f"{year}-12-31T23:59:59"),
+            )
+        )
     return f"{MANGADEX_URL}/chapter?{urlencode(query)}"
 
 
-def map_mangadex_chapters(payload: object, *, manga: Mapping[str, Mapping[str, Any]], collected_at: datetime, config: Mapping[str, Any]) -> list[IngestionRecord]:  # noqa: C901, PLR0912
-    """Map a bounded MangaDex chapter page with original-language country and poster metadata."""
+def _mangadex_chapter(row: object) -> tuple[str, Mapping[str, Any], list[Any]] | None:
+    """Validate one MangaDex chapter row; return (canonical chapter UUID, attributes, relations).
+
+    Returns None for a non-mapping row, a non-string or non-UUID id, or missing attributes or
+    relationships. The UUID is normalized with str(UUID(...)) so the identity is canonical.
+    """
+    if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+        return None
+    try:
+        chapter_id = str(UUID(row["id"]))
+    except ValueError:
+        return None
+    attrs = row.get("attributes")
+    relationships = row.get("relationships")
+    if not isinstance(attrs, Mapping) or not isinstance(relationships, list):
+        return None
+    return chapter_id, attrs, relationships
+
+
+def _mangadex_series(
+    relationships: list[Any], manga: Mapping[str, Mapping[str, Any]]
+) -> tuple[str, Mapping[str, Any]] | None:
+    """Find the first "manga" relation and its cached series info as (manga id, info).
+
+    Returns None when no manga relation exists, the id is not a string, or the id is not in
+    the prefetched manga map (or maps to an empty value).
+    """
+    series = next(
+        (
+            item
+            for item in relationships
+            if isinstance(item, Mapping) and item.get("type") == "manga"
+        ),
+        None,
+    )
+    manga_id = series.get("id") if isinstance(series, Mapping) else None
+    series_info = manga.get(manga_id) if isinstance(manga_id, str) else None
+    if not series_info or not isinstance(manga_id, str):
+        return None
+    return manga_id, series_info
+
+
+def _mangadex_fields(
+    attrs: Mapping[str, Any],
+    series_info: Mapping[str, Any],
+    *,
+    manga_id: str,
+    chapter_id: str,
+    release_date: str | None,
+    year: int | None,
+) -> dict[str, object]:
+    """Build the chapter's source fields: country and language come from the series' original language.
+
+    Key order is part of the stored source_fields shape. Chapter and volume are kept only when
+    they are non-blank strings, truncated to 80 characters. A pornographic series rating is
+    stored as "explicit".
+    """
+    manga_attrs = series_info["attrs"]
+    language = manga_attrs.get("originalLanguage")
+    country = {"ja": "JP", "ko": "KR", "zh": "CN", "zh-hk": "TW"}.get(language)
+    fields: dict[str, object] = {
+        "media_type": "manga",
+        "format": "manhwa" if country == "KR" else "manhua" if country in {"CN", "TW"} else "manga",
+        "canonical_url": f"https://mangadex.org/chapter/{chapter_id}",
+        "external_ids": build_external_ids({"mangadex": manga_id}),
+    }
+    if country:
+        fields["country"] = country
+    if language := normalize_language(language):
+        fields["language"] = language
+    if release_date:
+        fields["release_date"] = release_date
+    if year:
+        fields["release_year"] = year
+    if series_info.get("genres"):
+        fields["genres"] = series_info["genres"]
+    for key, target in (("chapter", "chapter"), ("volume", "volume")):
+        value = attrs.get(key)
+        if isinstance(value, str) and value.strip():
+            fields[target] = value[:80]
+    raw_rating = manga_attrs.get("contentRating")
+    content_rating = (
+        "explicit" if raw_rating == "pornographic" else normalize_content_rating(raw_rating)
+    )
+    if content_rating:
+        fields["content_rating"] = content_rating
+    if series_info.get("image_url"):
+        fields["image_url"] = series_info["image_url"]
+    return fields
+
+
+def map_mangadex_chapters(
+    payload: object,
+    *,
+    manga: Mapping[str, Mapping[str, Any]],
+    collected_at: datetime,
+    config: Mapping[str, Any],
+) -> list[IngestionRecord]:
+    """Map a bounded MangaDex chapter page with original-language country and poster metadata.
+
+    Raises ValueError for a naive collected_at, or a payload whose data is not a list of at most
+    MAX_ITEMS rows. Rows that are malformed, or whose series is not in the prefetched manga map,
+    are skipped. Duplicate chapter identities keep the first row.
+    """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     data = payload.get("data") if isinstance(payload, Mapping) else None
@@ -484,63 +735,51 @@ def map_mangadex_chapters(payload: object, *, manga: Mapping[str, Mapping[str, A
         raise ValueError("mangadex_response_invalid")
     records: dict[str, IngestionRecord] = {}
     for row in data:
-        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+        parsed = _mangadex_chapter(row)
+        if parsed is None:
             continue
-        try:
-            chapter_id = str(UUID(row["id"]))
-        except ValueError:
+        chapter_id, attrs, relationships = parsed
+        series = _mangadex_series(relationships, manga)
+        if series is None:
             continue
-        attrs = row.get("attributes")
-        relationships = row.get("relationships")
-        if not isinstance(attrs, Mapping) or not isinstance(relationships, list):
-            continue
-        series = next((item for item in relationships if isinstance(item, Mapping) and item.get("type") == "manga"), None)
-        manga_id = series.get("id") if isinstance(series, Mapping) else None
-        series_info = manga.get(manga_id) if isinstance(manga_id, str) else None
-        if not series_info:
-            continue
+        manga_id, series_info = series
         title = str(series_info["title"])
         chapter = attrs.get("chapter")
         heading = f"{title} — Chapter {chapter}" if chapter else title
         release_date, year, observed = normalize_partial_date(attrs.get("readableAt"))
-        manga_attrs = series_info["attrs"]
-        language = manga_attrs.get("originalLanguage")
-        country = {"ja": "JP", "ko": "KR", "zh": "CN", "zh-hk": "TW"}.get(language)
-        fields: dict[str, object] = {
-            "media_type": "manga",
-            "format": "manhwa" if country == "KR" else "manhua" if country in {"CN", "TW"} else "manga",
-            "canonical_url": f"https://mangadex.org/chapter/{chapter_id}",
-            "external_ids": build_external_ids({"mangadex": manga_id}),
-        }
-        if country:
-            fields["country"] = country
-        if language := normalize_language(language):
-            fields["language"] = language
-        if release_date:
-            fields["release_date"] = release_date
-        if year:
-            fields["release_year"] = year
-        if series_info.get("genres"):
-            fields["genres"] = series_info["genres"]
-        for key, target in (("chapter", "chapter"), ("volume", "volume")):
-            value = attrs.get(key)
-            if isinstance(value, str) and value.strip():
-                fields[target] = value[:80]
-        raw_rating = manga_attrs.get("contentRating")
-        content_rating = "explicit" if raw_rating == "pornographic" else normalize_content_rating(raw_rating)
-        if content_rating:
-            fields["content_rating"] = content_rating
-        if series_info.get("image_url"):
-            fields["image_url"] = series_info["image_url"]
+        fields = _mangadex_fields(
+            attrs,
+            series_info,
+            manga_id=manga_id,
+            chapter_id=chapter_id,
+            release_date=release_date,
+            year=year,
+        )
         identity = build_media_identity("mangadex", chapter_id)
         summary = attrs.get("title")
-        records.setdefault(identity, _record("mangadex_releases", identity, heading, summary if isinstance(summary, str) else "", collected_at, fields, observed_at=observed))
+        records.setdefault(
+            identity,
+            _record(
+                "mangadex_releases",
+                identity,
+                heading,
+                summary if isinstance(summary, str) else "",
+                collected_at,
+                fields,
+                observed_at=observed,
+            ),
+        )
     return filter_media_records(config, list(records.values()))
 
 
-async def _json(fetch_bytes: Callable[..., Awaitable[Fetched]], url: str, *, body: bytes | None = None) -> object:
+async def _json(
+    fetch_bytes: Callable[..., Awaitable[Fetched]], url: str, *, body: bytes | None = None
+) -> object:
     """Fetch one fixed-host bounded JSON response using the caller's SendGate callback."""
-    headers = {"Accept": "application/json", "User-Agent": "Umwelt-OS/1.0 (+https://github.com/umwelt-os)"}
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Umwelt-OS/1.0 (+https://github.com/umwelt-os)",
+    }
     fetched = await fetch_bytes(url, headers=headers, max_bytes=MAX_BYTES, json_body=body)
     if fetched.body is None:
         return None
@@ -550,10 +789,23 @@ async def _json(fetch_bytes: Callable[..., Awaitable[Fetched]], url: str, *, bod
         raise ValueError("media_response_invalid") from exc
 
 
-async def collect_ann_news(fetch_bytes: Callable[..., Awaitable[Fetched]], *, collected_at: datetime, config: Mapping[str, Any]) -> list[IngestionRecord]:
+async def collect_ann_news(
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    collected_at: datetime,
+    config: Mapping[str, Any],
+) -> list[IngestionRecord]:
     """Fetch the fixed ANN Atom source and map its bounded entries."""
-    fetched = await fetch_bytes(build_ann_news_url(config), headers={"Accept": "application/atom+xml, application/xml, text/xml"}, max_bytes=news.MAX_FEED_BYTES)
-    return [] if fetched.body is None else map_ann_news(fetched.body, collected_at=collected_at, config=config)
+    fetched = await fetch_bytes(
+        build_ann_news_url(config),
+        headers={"Accept": "application/atom+xml, application/xml, text/xml"},
+        max_bytes=news.MAX_FEED_BYTES,
+    )
+    return (
+        []
+        if fetched.body is None
+        else map_ann_news(fetched.body, collected_at=collected_at, config=config)
+    )
 
 
 async def collect_ann_encyclopedia(
@@ -568,7 +820,10 @@ async def collect_ann_encyclopedia(
     url = build_ann_encyclopedia_url(media_type, offset=offset)
     fetched = await fetch_bytes(
         url,
-        headers={"Accept": "application/xml, text/xml", "User-Agent": "Umwelt-OS/1.0 (+https://github.com/umwelt-os)"},
+        headers={
+            "Accept": "application/xml, text/xml",
+            "User-Agent": "Umwelt-OS/1.0 (+https://github.com/umwelt-os)",
+        },
         max_bytes=news.MAX_FEED_BYTES,
     )
     if fetched.body is None:
@@ -579,7 +834,11 @@ async def collect_ann_encyclopedia(
         collected_at=collected_at,
         config=config,
     )
-    items = [node for node in news.safe_xml_root(fetched.body, max_bytes=news.MAX_FEED_BYTES).iter() if news._local(node.tag) == "item"]
+    items = [
+        node
+        for node in news.safe_xml_root(fetched.body, max_bytes=news.MAX_FEED_BYTES).iter()
+        if news._local(node.tag) == "item"
+    ]
     next_offset = str(offset + len(items)) if len(items) == MAX_ITEMS else None
     return CursorPage(tuple(records), next_offset)
 
@@ -642,7 +901,9 @@ async def collect_mangadex_releases(
     manga = map_mangadex_manga(payload)
     if not manga:
         return CursorPage((), None)
-    chapters = await _json(fetch_bytes, build_mangadex_chapters_url(config, manga, offset=chapter_offset))
+    chapters = await _json(
+        fetch_bytes, build_mangadex_chapters_url(config, manga, offset=chapter_offset)
+    )
     records = map_mangadex_chapters(chapters, manga=manga, collected_at=collected_at, config=config)
     manga_rows = payload.get("data", []) if isinstance(payload, Mapping) else []
     chapter_rows = chapters.get("data", []) if isinstance(chapters, Mapping) else []

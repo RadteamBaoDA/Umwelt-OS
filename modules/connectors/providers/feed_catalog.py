@@ -170,8 +170,11 @@ def encode_youtube_validator_cursor(
         raise ValueError("youtube_cursor_invalid")
     bounded: dict[str, dict[str, str]] = {}
     for url, values in validators.items():
-        if not isinstance(url, str) or not isinstance(values, Mapping) or len(url) > 300 or not url.startswith(
-            "https://www.youtube.com/feeds/videos.xml?"
+        if (
+            not isinstance(url, str)
+            or not isinstance(values, Mapping)
+            or len(url) > 300
+            or not url.startswith("https://www.youtube.com/feeds/videos.xml?")
         ):
             raise ValueError("youtube_cursor_invalid")
         headers: dict[str, str] = {}
@@ -195,7 +198,9 @@ def encode_youtube_validator_cursor(
     return cursor
 
 
-def decode_youtube_validator_cursor(cursor: str | None, fingerprint: str) -> dict[str, dict[str, str]]:
+def decode_youtube_validator_cursor(
+    cursor: str | None, fingerprint: str
+) -> dict[str, dict[str, str]]:
     """Read only bounded validators for the exact current query scope; malformed or stale cursors reset safely."""
     if not cursor or len(cursor) > 4096:
         return {}
@@ -502,9 +507,7 @@ def _feed_canonical(entry: ElementTree.Element, provider: str, identity: str) ->
     return None
 
 
-def _same_youtube_channel(
-    feed_id: str | None, configured: str | frozenset[str] | None
-) -> bool:
+def _same_youtube_channel(feed_id: str | None, configured: str | frozenset[str] | None) -> bool:
     """Match one feed channel against a configured ID/set, or accept any channel for a playlist feed.
 
     The Atom feed's ``yt:channelId`` is sometimes the full ``UC``+22-char id and
@@ -574,7 +577,9 @@ def _youtube_entry(
     video_id = entry.findtext(f"{{{_YT}}}videoId")
     if not _same_youtube_channel(channel_id, scope) or not video_id or len(video_id) > 128:
         return None
-    canonical_channel = channel_id if channel_id and channel_id.startswith("UC") else f"UC{channel_id or ''}"
+    canonical_channel = (
+        channel_id if channel_id and channel_id.startswith("UC") else f"UC{channel_id or ''}"
+    )
     if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", canonical_channel):
         return None
     published_raw = entry.findtext(f"{{{_ATOM}}}published")
@@ -970,7 +975,11 @@ async def collect_youtube_snapshot(
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
     config = ConnectorConfig.model_validate(source.configuration)
-    if source.provider != "youtube" or source.type != "rss" or config.history_mode != "returned_snapshot":
+    if (
+        source.provider != "youtube"
+        or source.type != "rss"
+        or config.history_mode != "returned_snapshot"
+    ):
         raise ValueError("provider_scope_invalid")
     return await _collect_youtube_feeds(
         source,

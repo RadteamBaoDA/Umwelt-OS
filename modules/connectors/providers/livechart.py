@@ -37,7 +37,9 @@ def _text(item: ET.Element, name: str) -> str:
     return ""
 
 
-def map_livechart_feed(body: bytes, *, collected_at: datetime, config: Mapping[str, object]) -> list[IngestionRecord]:
+def map_livechart_feed(
+    body: bytes, *, collected_at: datetime, config: Mapping[str, object]
+) -> list[IngestionRecord]:
     """Parse bounded LiveChart RSS into deduplicable anime episode records and apply media filters."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must include a timezone")
@@ -51,14 +53,23 @@ def map_livechart_feed(body: bytes, *, collected_at: datetime, config: Mapping[s
         link = news.https_link(_text(item, "link")) or ""
         guid = _text(item, "guid") or link
         parsed_url = urlsplit(link)
-        if not title or not guid or parsed_url.scheme != "https" or parsed_url.hostname not in {"livechart.me", "www.livechart.me"}:
+        if (
+            not title
+            or not guid
+            or parsed_url.scheme != "https"
+            or parsed_url.hostname not in {"livechart.me", "www.livechart.me"}
+        ):
             continue
         date_text, year, air_time = normalize_partial_date(_text(item, "pubDate"))
         if not date_text or year is None:
             continue
         description = _text(item, "description")
         summary = news.plain_text(description, 4000)
-        safe_guid = guid if len(guid) <= 480 and not any(ord(char) < 32 for char in guid) else sha256(guid.encode()).hexdigest()
+        safe_guid = (
+            guid
+            if len(guid) <= 480 and not any(ord(char) < 32 for char in guid)
+            else sha256(guid.encode()).hexdigest()
+        )
         identity = f"livechart:{safe_guid}"
         fields: dict[str, object] = {
             "title": title,
@@ -70,7 +81,9 @@ def map_livechart_feed(body: bytes, *, collected_at: datetime, config: Mapping[s
             "attribution": "Data via LiveChart.me",
             "canonical_url": link,
         }
-        genres = normalize_genres([child.text or "" for child in item if _local(child.tag) == "category"])
+        genres = normalize_genres(
+            [child.text or "" for child in item if _local(child.tag) == "category"]
+        )
         if genres:
             fields["genres"] = genres
         raw_content = f"{title}\n\n{summary}".strip()
@@ -82,13 +95,21 @@ def map_livechart_feed(body: bytes, *, collected_at: datetime, config: Mapping[s
             content_truncated=len(raw_content) > 4000,
             source_fields=fields,
         ).model_dump(mode="json", exclude_none=True)
-        records.setdefault(identity, IngestionRecord(
-            provider_id=identity,
-            content=raw_content[:4000],
-            observed_at=air_time or collected_at,
-            collected_at=collected_at,
-            metadata={"provider": "livechart_episodes", "title": title, "canonical_url": link, "provider_record": metadata},
-        ))
+        records.setdefault(
+            identity,
+            IngestionRecord(
+                provider_id=identity,
+                content=raw_content[:4000],
+                observed_at=air_time or collected_at,
+                collected_at=collected_at,
+                metadata={
+                    "provider": "livechart_episodes",
+                    "title": title,
+                    "canonical_url": link,
+                    "provider_record": metadata,
+                },
+            ),
+        )
     return filter_media_records(config, list(records.values()), keep_missing=True)
 
 
@@ -113,4 +134,6 @@ async def collect_livechart_feed(
             raise ProviderHttpError(304)
         return LiveChartPage((), True, etag, last_modified)
     records = map_livechart_feed(fetched.body, collected_at=collected_at, config=config)
-    return LiveChartPage(tuple(records), False, _header_value(fetched.etag), _header_value(fetched.last_modified))
+    return LiveChartPage(
+        tuple(records), False, _header_value(fetched.etag), _header_value(fetched.last_modified)
+    )

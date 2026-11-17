@@ -28,9 +28,20 @@ MAX_RECENT_OFFSET = 10_000
 RECENT_OVERLAP = 2
 MAX_BODY = 4 * 1024 * 1024
 _LANGUAGE = {
-    "en": "eng", "ja": "jpn", "fr": "fre", "vi": "vie", "zh": "chi", "ko": "kor",
-    "de": "ger", "es": "spa", "pt": "por", "it": "ita", "ru": "rus", "id": "ind",
-    "th": "tha", "zh-hk": "chi",
+    "en": "eng",
+    "ja": "jpn",
+    "fr": "fre",
+    "vi": "vie",
+    "zh": "chi",
+    "ko": "kor",
+    "de": "ger",
+    "es": "spa",
+    "pt": "por",
+    "it": "ita",
+    "ru": "rus",
+    "id": "ind",
+    "th": "tha",
+    "zh-hk": "chi",
 }
 _WORK = re.compile(r"^/works/OL[1-9][0-9]*W$")
 _PACER: asyncio.Lock | None = None
@@ -95,7 +106,11 @@ def _work(row: object, collected_at: datetime) -> IngestionRecord | None:
         return None
     work_id = key.rsplit("/", 1)[-1]
     isbns = row.get("isbn")
-    isbn13 = next((v for v in isbns if isinstance(v, str) and len(v) == 13 and v.isdigit()), None) if isinstance(isbns, list) else None
+    isbn13 = (
+        next((v for v in isbns if isinstance(v, str) and len(v) == 13 and v.isdigit()), None)
+        if isinstance(isbns, list)
+        else None
+    )
     year = row.get("first_publish_year")
     if type(year) is not int or not 1800 <= year <= 2100:
         year = None
@@ -105,18 +120,30 @@ def _work(row: object, collected_at: datetime) -> IngestionRecord | None:
         candidate_year = int(normalized_date[:4])
         year = candidate_year if 1800 <= candidate_year <= 2100 else None
     languages = row.get("language")
-    language = normalize_language(languages[0]) if isinstance(languages, list) and languages and isinstance(languages[0], str) else None
+    language = (
+        normalize_language(languages[0])
+        if isinstance(languages, list) and languages and isinstance(languages[0], str)
+        else None
+    )
     rating = row.get("ratings_average")
-    rating = round(float(rating) * 20, 2) if isinstance(rating, (int, float)) and 0 <= rating <= 5 else None
+    rating = (
+        round(float(rating) * 20, 2)
+        if isinstance(rating, (int, float)) and 0 <= rating <= 5
+        else None
+    )
     raw_subjects = row.get("subject", row.get("subjects", []))
     subjects = normalize_genres(raw_subjects[:30]) if isinstance(raw_subjects, list) else []
     cover = row.get("cover_i")
     if cover is None and isinstance(row.get("covers"), list) and row["covers"]:
         cover = row["covers"][0]
     fields: dict[str, object] = {
-        "title": title.strip()[:500], "media_type": "book", "format": "ebook" if row.get("ebook_access") in {"public", "borrowable"} else "novel",
-        "attribution": "Data via Open Library (CC0 1.0)", "canonical_url": f"https://openlibrary.org{key}",
-        "external_ids": build_external_ids({"openlibrary": work_id, "isbn13": isbn13}), "artwork_aspect": "poster",
+        "title": title.strip()[:500],
+        "media_type": "book",
+        "format": "ebook" if row.get("ebook_access") in {"public", "borrowable"} else "novel",
+        "attribution": "Data via Open Library (CC0 1.0)",
+        "canonical_url": f"https://openlibrary.org{key}",
+        "external_ids": build_external_ids({"openlibrary": work_id, "isbn13": isbn13}),
+        "artwork_aspect": "poster",
     }
     if year:
         fields["release_year"] = year
@@ -130,11 +157,36 @@ def _work(row: object, collected_at: datetime) -> IngestionRecord | None:
         fields["genres"] = subjects
     if type(cover) is int and cover > 0:
         fields["image_url"] = f"https://covers.openlibrary.org/b/id/{cover}-L.jpg"
-    metadata = ProviderRecordMetadata(provider="openlibrary_books", identity=f"openlibrary:{work_id}", timestamp_basis="collection", coverage="returned_snapshot", content_truncated=False, source_fields=fields).model_dump(mode="json", exclude_none=True)
-    return IngestionRecord(provider_id=f"openlibrary:{work_id}", content=title.strip()[:500], observed_at=collected_at, collected_at=collected_at, metadata={"provider": "openlibrary_books", "title": title.strip()[:500], "canonical_url": fields["canonical_url"], "provider_record": metadata})
+    metadata = ProviderRecordMetadata(
+        provider="openlibrary_books",
+        identity=f"openlibrary:{work_id}",
+        timestamp_basis="collection",
+        coverage="returned_snapshot",
+        content_truncated=False,
+        source_fields=fields,
+    ).model_dump(mode="json", exclude_none=True)
+    return IngestionRecord(
+        provider_id=f"openlibrary:{work_id}",
+        content=title.strip()[:500],
+        observed_at=collected_at,
+        collected_at=collected_at,
+        metadata={
+            "provider": "openlibrary_books",
+            "title": title.strip()[:500],
+            "canonical_url": fields["canonical_url"],
+            "provider_record": metadata,
+        },
+    )
 
 
-def map_openlibrary(body: bytes, *, mode: str, config: Mapping[str, object], collected_at: datetime, cursor: str | None = None) -> OpenLibraryPage:
+def map_openlibrary(
+    body: bytes,
+    *,
+    mode: str,
+    config: Mapping[str, object],
+    collected_at: datetime,
+    cursor: str | None = None,
+) -> OpenLibraryPage:
     """Parse a size-bounded response, deduplicate normalized works, and filter configured media options."""
     if len(body) > MAX_BODY:
         raise ValueError("openlibrary_response_invalid")
@@ -147,15 +199,30 @@ def map_openlibrary(body: bytes, *, mode: str, config: Mapping[str, object], col
     rows = payload.get("docs", []) if mode == "search" else payload.get("works", [])
     if not isinstance(rows, list) or len(rows) > MAX_RESULTS:
         raise ValueError("openlibrary_response_invalid")
-    records = {_id: item for item in (_work(row, collected_at) for row in rows) if item is not None for _id in [item.provider_id]}
+    records = {
+        _id: item
+        for item in (_work(row, collected_at) for row in rows)
+        if item is not None
+        for _id in [item.provider_id]
+    }
     filtered = filter_media_records(config, list(records.values()), keep_missing=True)
     return OpenLibraryPage(tuple(filtered), None)
 
 
-async def collect_openlibrary(fetch_bytes: Callable[..., Awaitable[Fetched]], *, config: Mapping[str, object], collected_at: datetime, cursor: str | None = None) -> OpenLibraryPage:
+async def collect_openlibrary(
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    config: Mapping[str, object],
+    collected_at: datetime,
+    cursor: str | None = None,
+) -> OpenLibraryPage:
     """Fetch one bounded Open Library response through the caller's SendGate transport."""
     mode = str(config.get("openlibrary_mode") or "subject")
-    fetched = await fetch_bytes(openlibrary_request(config, cursor), headers={"Accept": "application/json"}, max_bytes=MAX_BODY)
+    fetched = await fetch_bytes(
+        openlibrary_request(config, cursor),
+        headers={"Accept": "application/json"},
+        max_bytes=MAX_BODY,
+    )
     if fetched.body is None:
         raise ProviderHttpError(304)
     if mode == "recent":
@@ -173,10 +240,15 @@ async def collect_openlibrary(fetch_bytes: Callable[..., Awaitable[Fetched]], *,
         for change in changes:
             if not isinstance(change, Mapping) or not isinstance(change.get("changes"), list):
                 raise ValueError("openlibrary_response_invalid")
-            keys = list(dict.fromkeys(
-                entry["key"] for entry in change["changes"]
-                if isinstance(entry, Mapping) and isinstance(entry.get("key"), str) and _WORK.fullmatch(entry["key"])
-            ))
+            keys = list(
+                dict.fromkeys(
+                    entry["key"]
+                    for entry in change["changes"]
+                    if isinstance(entry, Mapping)
+                    and isinstance(entry.get("key"), str)
+                    and _WORK.fullmatch(entry["key"])
+                )
+            )
             change_keys.append(keys)
         keys = list(dict.fromkeys(key for row_keys in change_keys for key in row_keys))
         if len(keys) > MAX_RECENT:
@@ -188,7 +260,9 @@ async def collect_openlibrary(fetch_bytes: Callable[..., Awaitable[Fetched]], *,
                 if _LAST_SEND and delay > 0:
                     await asyncio.sleep(delay)
                 _LAST_SEND = loop.time()
-            detail = await fetch_bytes(f"{BASE}{key}.json", headers={"Accept": "application/json"}, max_bytes=256 * 1024)
+            detail = await fetch_bytes(
+                f"{BASE}{key}.json", headers={"Accept": "application/json"}, max_bytes=256 * 1024
+            )
             if detail.body is None:
                 raise ProviderHttpError(502)
             try:
@@ -199,13 +273,22 @@ async def collect_openlibrary(fetch_bytes: Callable[..., Awaitable[Fetched]], *,
                 raise ValueError("openlibrary_work_invalid")
             works.setdefault(key, row)
         rows = list(works.values())
-        records = tuple(filter_media_records(config, [item for item in (_work(row, collected_at) for row in rows) if item is not None], keep_missing=True))
+        records = tuple(
+            filter_media_records(
+                config,
+                [item for item in (_work(row, collected_at) for row in rows) if item is not None],
+                keep_missing=True,
+            )
+        )
         offset = _recent_offset(cursor)
         request_offset = max(0, offset - RECENT_OVERLAP)
         next_offset = request_offset + len(changes)
         next_cursor = (
-            "0" if len(changes) < MAX_RECENT or next_offset >= MAX_RECENT_OFFSET
+            "0"
+            if len(changes) < MAX_RECENT or next_offset >= MAX_RECENT_OFFSET
             else str(next_offset)
         )
         return OpenLibraryPage(records, next_cursor)
-    return map_openlibrary(fetched.body, mode=mode, config=config, collected_at=collected_at, cursor=cursor)
+    return map_openlibrary(
+        fetched.body, mode=mode, config=config, collected_at=collected_at, cursor=cursor
+    )

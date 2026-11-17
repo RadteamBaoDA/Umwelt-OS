@@ -348,7 +348,9 @@ _CONTENT_RATING_ALIASES: dict[str, str] = {
     "false": "clean",
 }
 
-_ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$")
+_ISO_TS_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$"
+)
 _ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _ISO_YM_RE = re.compile(r"^(\d{4})-(\d{2})$")
 _ISO_YEAR_RE = re.compile(r"^(\d{4})$")
@@ -498,7 +500,11 @@ def normalize_partial_date(raw: object) -> tuple[str | None, int | None, datetim
             return None, None, None
         if not _valid_year(parsed_d.year):
             return None, None, None
-        return text, parsed_d.year, datetime(parsed_d.year, parsed_d.month, parsed_d.day, tzinfo=UTC)
+        return (
+            text,
+            parsed_d.year,
+            datetime(parsed_d.year, parsed_d.month, parsed_d.day, tzinfo=UTC),
+        )
     return _normalize_full_datetime(text)
 
 

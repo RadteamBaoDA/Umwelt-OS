@@ -77,15 +77,18 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
 # with extra mandatory scope adds one row here; ``_validate_provider_source`` never changes.
 _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] = {
     "youtube": (
-        lambda c: sum(
-            bool(value)
-            for value in (
-                c.youtube_channel_id,
-                c.youtube_channels,
-                c.youtube_handles,
-                c.youtube_playlist_ids,
+        lambda c: (
+            sum(
+                bool(value)
+                for value in (
+                    c.youtube_channel_id,
+                    c.youtube_channels,
+                    c.youtube_handles,
+                    c.youtube_playlist_ids,
+                )
             )
-        ) != 1,
+            != 1
+        ),
         "Choose exactly one YouTube channel, channel list, handle list, or playlist list",
     ),
     "github_releases": (

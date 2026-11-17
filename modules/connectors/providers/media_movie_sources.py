@@ -52,8 +52,10 @@ def wikidata_query_url(config: Mapping[str, object], now: datetime) -> str:
     if type(raw_days) is not int or not 1 <= raw_days <= 3650:
         raise ValueError("wikidata_scope_invalid")
     genres = config.get("genre_qids", ())
-    if not isinstance(genres, (list, tuple)) or len(genres) > 12 or any(
-        not isinstance(qid, str) or not _QID.fullmatch(qid) for qid in genres
+    if (
+        not isinstance(genres, (list, tuple))
+        or len(genres) > 12
+        or any(not isinstance(qid, str) or not _QID.fullmatch(qid) for qid in genres)
     ):
         raise ValueError("wikidata_scope_invalid")
     language = config.get("language")
@@ -69,9 +71,7 @@ def wikidata_query_url(config: Mapping[str, object], now: datetime) -> str:
         if genres
         else "OPTIONAL { ?item wdt:P136 ?genre. }\n"
     )
-    language_clause = (
-        f'FILTER(?languageCode = "{language.lower()}")\n' if language else ""
-    )
+    language_clause = f'FILTER(?languageCode = "{language.lower()}")\n' if language else ""
     query = f"""
 SELECT ?item ?itemLabel ?description ?date ?genreLabel ?countryCode ?languageCode ?imdb ?tmdb ?image WHERE {{
   ?item wdt:P31 wd:Q11424; wdt:P577 ?date.
@@ -107,11 +107,14 @@ def _movie_record(
     fields.setdefault("title", title[:500])
     fields.setdefault("media_type", "movie")
     fields.setdefault("artwork_aspect", "poster")
-    fields.setdefault("attribution", {
-        "wikidata_movies": "Data via Wikidata (CC0 1.0)",
-        "itunes_movies": "Data via Apple iTunes Search API",
-        "letterboxd_rss": "Data via Letterboxd RSS",
-    }[provider])
+    fields.setdefault(
+        "attribution",
+        {
+            "wikidata_movies": "Data via Wikidata (CC0 1.0)",
+            "itunes_movies": "Data via Apple iTunes Search API",
+            "letterboxd_rss": "Data via Letterboxd RSS",
+        }[provider],
+    )
     if canonical_url:
         fields["canonical_url"] = canonical_url
     envelope = ProviderRecordMetadata(
@@ -145,7 +148,9 @@ def _sparql_value(row: Mapping[str, object], name: str) -> str | None:
     return raw if isinstance(raw, str) else None
 
 
-def _map_wikidata_row(row: object, collected_at: datetime) -> tuple[IngestionRecord, str | None] | None:
+def _map_wikidata_row(
+    row: object, collected_at: datetime
+) -> tuple[IngestionRecord, str | None] | None:
     """Map one SPARQL row, returning its normalized genre separately for duplicate folding."""
     if not isinstance(row, Mapping):
         return None
@@ -185,14 +190,19 @@ def _map_wikidata_row(row: object, collected_at: datetime) -> tuple[IngestionRec
     image = _sparql_value(row, "image")
     cover = normalize_cover_url(
         f"https://commons.wikimedia.org/wiki/Special:FilePath/{quote(image, safe='')}"
-        if image and len(image) <= 240 else None
+        if image and len(image) <= 240
+        else None
     )
     if cover:
         fields["image_url"] = cover
     summary = _sparql_value(row, "description") or ""
     record = _movie_record(
-        provider="wikidata_movies", identity=f"wikidata:{qid}", title=title.strip(),
-        collected_at=collected_at, fields=fields, summary=summary,
+        provider="wikidata_movies",
+        identity=f"wikidata:{qid}",
+        title=title.strip(),
+        collected_at=collected_at,
+        fields=fields,
+        summary=summary,
         canonical_url=f"https://www.wikidata.org/wiki/{qid}",
     )
     return record, genres[0] if genres else None
@@ -238,10 +248,20 @@ def itunes_movies_url(config: Mapping[str, object]) -> str:
         raise ValueError("itunes_scope_invalid")
     if not isinstance(country, str) or not _ISO2.fullmatch(country):
         raise ValueError("itunes_scope_invalid")
-    return ITUNES_ENDPOINT + "?" + urlencode({
-        "term": term.strip(), "country": country.lower(), "media": "movie",
-        "entity": "movie", "lang": "en_us", "limit": 200,
-    })
+    return (
+        ITUNES_ENDPOINT
+        + "?"
+        + urlencode(
+            {
+                "term": term.strip(),
+                "country": country.lower(),
+                "media": "movie",
+                "entity": "movie",
+                "lang": "en_us",
+                "limit": 200,
+            }
+        )
+    )
 
 
 def map_itunes_movies(
@@ -257,7 +277,11 @@ def map_itunes_movies(
         raise ValueError("itunes_response_invalid")
     records: dict[str, IngestionRecord] = {}
     for row in rows:
-        if not isinstance(row, Mapping) or type(row.get("trackId")) is not int or row["trackId"] <= 0:
+        if (
+            not isinstance(row, Mapping)
+            or type(row.get("trackId")) is not int
+            or row["trackId"] <= 0
+        ):
             continue
         title, track_url = row.get("trackName"), row.get("trackViewUrl")
         if not isinstance(title, str) or not title.strip():
@@ -268,7 +292,9 @@ def map_itunes_movies(
         }
         if date_text and year:
             fields.update(release_date=date_text, release_year=year)
-            fields["release_status"] = "upcoming" if release_dt and release_dt > collected_at else "released"
+            fields["release_status"] = (
+                "upcoming" if release_dt and release_dt > collected_at else "released"
+            )
         country = normalize_country(config.get("country"))
         if country:
             fields["country"] = country
@@ -285,11 +311,18 @@ def map_itunes_movies(
         if cover:
             fields["image_url"] = cover
         summary = row.get("longDescription") or row.get("shortDescription") or ""
-        safe_url = track_url if isinstance(track_url, str) and track_url.startswith("https://itunes.apple.com/") else None
+        safe_url = (
+            track_url
+            if isinstance(track_url, str) and track_url.startswith("https://itunes.apple.com/")
+            else None
+        )
         identity = f"itunes:{row['trackId']}"
         records[identity] = _movie_record(
-            provider="itunes_movies", identity=identity, title=title.strip(),
-            collected_at=collected_at, fields=fields,
+            provider="itunes_movies",
+            identity=identity,
+            title=title.strip(),
+            collected_at=collected_at,
+            fields=fields,
             summary=summary if isinstance(summary, str) else "",
             canonical_url=safe_url,
         )
@@ -347,21 +380,33 @@ def map_letterboxd_rss(
         date_text, _, observed_at = normalize_partial_date(pubdate)
         desc = _xml_text(item, "description") or ""
         records[identity] = _movie_record(
-            provider="letterboxd_rss", identity=identity, title=title[:500],
-            collected_at=collected_at, fields=fields, summary=_plain_text(desc),
-            canonical_url=link, observed_at=observed_at if date_text else None,
+            provider="letterboxd_rss",
+            identity=identity,
+            title=title[:500],
+            collected_at=collected_at,
+            fields=fields,
+            summary=_plain_text(desc),
+            canonical_url=link,
+            observed_at=observed_at if date_text else None,
             coverage=coverage,
         )
     return filter_media_records(config, list(records.values()), keep_missing=True)
 
 
 async def collect_wikidata_movies(
-    fetch_bytes: Callable[..., Awaitable[Fetched]], *, config: Mapping[str, object], collected_at: datetime
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    config: Mapping[str, object],
+    collected_at: datetime,
 ) -> list[IngestionRecord]:
     """Fetch Wikidata through the injected gated GET transport and map its bounded SPARQL JSON body."""
     url = wikidata_query_url(config, collected_at)
     fetched = await fetch_bytes(
-        url, headers={"Accept": "application/sparql-results+json", "User-Agent": media_user_agent("Wikidata")},
+        url,
+        headers={
+            "Accept": "application/sparql-results+json",
+            "User-Agent": media_user_agent("Wikidata"),
+        },
         max_bytes=2 * 1024 * 1024,
     )
     if fetched.body is None:
@@ -374,7 +419,10 @@ async def collect_wikidata_movies(
 
 
 async def collect_itunes_movies(
-    fetch_bytes: Callable[..., Awaitable[Fetched]], *, config: Mapping[str, object], collected_at: datetime
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    config: Mapping[str, object],
+    collected_at: datetime,
 ) -> list[IngestionRecord]:
     """Fetch one bounded iTunes search result page and map it without provider-controlled URLs."""
     fetched = await fetch_bytes(
@@ -390,9 +438,13 @@ async def collect_itunes_movies(
 
 
 async def collect_letterboxd_rss(
-    fetch_bytes: Callable[..., Awaitable[Fetched]], *, username: str,
-    config: Mapping[str, object], collected_at: datetime,
-    etag: str | None = None, last_modified: str | None = None,
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    username: str,
+    config: Mapping[str, object],
+    collected_at: datetime,
+    etag: str | None = None,
+    last_modified: str | None = None,
 ) -> LetterboxdPage:
     """Fetch one username's RSS with conditional validators and retain prior records on a valid 304."""
     url = letterboxd_rss_url(username)
@@ -407,4 +459,9 @@ async def collect_letterboxd_rss(
             raise ProviderHttpError(304)
         return LetterboxdPage((), True, etag, last_modified)
     records = map_letterboxd_rss(fetched.body, collected_at=collected_at, config=config)
-    return LetterboxdPage(records=tuple(records), not_modified=False, etag=fetched.etag, last_modified=fetched.last_modified)
+    return LetterboxdPage(
+        records=tuple(records),
+        not_modified=False,
+        etag=fetched.etag,
+        last_modified=fetched.last_modified,
+    )
