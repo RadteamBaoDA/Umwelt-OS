@@ -8,6 +8,8 @@ vi.mock('./gadgets/brief-gadget', () => ({
 }));
 
 const RENDERERS = [
+  'media_feed',
+  'media_calendar',
   'daily_brief',
   'tasks',
   'goals',

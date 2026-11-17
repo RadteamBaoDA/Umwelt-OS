@@ -923,12 +923,12 @@ def test_media_gadget_filters_defaults_and_valid_bounds() -> None:
     assert GadgetScope(release_year=2026, release_window_days=14).release_window_days == 14
 
 
-def test_media_renderers_and_templates_registered_as_planned() -> None:
-    """media_feed and media_calendar renderers and templates register as planned in M1."""
+def test_media_renderers_and_templates_registered_as_available() -> None:
+    """Media shelf and release calendar expose their implemented multi-source renderers."""
     reads = {r.id: r for r in public.renderer_reads()}
     for renderer_id in ("media_feed", "media_calendar"):
         read = reads[renderer_id]
-        assert read.runtime_state == "planned"
+        assert read.runtime_state == "available"
         assert read.source_mode == "multi"
         assert read.accepted_shapes == ["media", "video"]
         assert read.max_sources == 32

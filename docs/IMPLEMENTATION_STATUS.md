@@ -14,7 +14,9 @@ Grounding is a numeric heuristic: derived values are flagged and near-matches pa
 
 ## 2026-11-17 - Media datasource contracts
 
-Phase 1 of `specs/new-datasource-v2.md` has code and focused test evidence for media types, metadata, filters, projection and shared normalization. PostgreSQL runtime acceptance remains open; media renderers are planned pending phase 3. Phase 2 TVMaze implementation has started but is not yet registered or usable. See `docs/superpowers/plans/EXECUTION.md` for validation and the pagination limitation.
+Phase 1 of `specs/new-datasource-v2.md` has code and focused test evidence for media types, metadata, filters, projection and shared normalization. PostgreSQL runtime acceptance remains open. Phase 3 Tasks 1 and 2 deliver the media editor, available `media_feed` and `media_calendar` renderers, lazy registration, adaptive artwork, bounded multi-dimensional filters, source selection/grouping, cursor pagination, localized release buckets, attribution and privacy notice, and owner-only interaction/identity-only Ask AI actions. Expanded state uses the existing stable renderer host. Source configuration and general video/feed upgrades remain later Phase 3 tasks. See `docs/superpowers/plans/EXECUTION.md` for phase progress and existing collection limitations.
+
+Task 2 validation covers media shelf/calendar rendering, timezone and DST buckets, numeric filter edits, effective scope/filter precedence, server sort/window/cursor queries, source changes, remote-media settings, immutable chat identities, ownership, interactions and expanded-state preservation. Focused feed/video, dashboard API/lazy registry, locale and renderer/template parity results are recorded in the Task 2 handoff. Browser, Docker/E2E, live-provider and production-build acceptance remain unrun for this task. The unrelated metric-catalog fixture has formatting differences and lacks the existing `cisa_kev`, `ioda`, `nasa_eonet` and `nvd` catalog entries.
 
 <!-- audit-remediation-status:start -->
 ## Repository audit remediation - 2026-11-11, branch feature/fix-ui
