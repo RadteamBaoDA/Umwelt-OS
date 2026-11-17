@@ -4,7 +4,9 @@ Ticker providers make every collection a new revision of ONE series point, so th
 predicate left a single tick per series and chat SQL could not average or list history. The view now hides a
 row only when a LATER readable row of the same series point exists (same provider, metric, symbol, region,
 unit, currency, latitude, longitude and ``observed_at``; ties by ``accepted_at`` then ``ingestion_observation_id``
-text), the same rule as the dashboard history. Competing rows must pass the same fence (``query_fence`` and
+text), the same rule as the dashboard history. Nullable key columns compare as ``coalesce(a, sentinel) =
+coalesce(b, sentinel)`` (chr(31) / NaN never occur as values): a hashable equality, unlike ``IS NOT DISTINCT
+FROM``, so the anti-join can hash on the whole key. Competing rows must pass the same fence (``query_fence`` and
 ``query_fence_scope``), so a hidden row never hides a visible one. Columns, joins and grants are unchanged and
 the ``is_current`` column stays. Downgrade recreates the exact 0025 view.
 """
@@ -31,9 +33,12 @@ AND NOT EXISTS (
   WHERE n.workspace_id = f.workspace_id AND n.source_id = ANY(f.source_ids)
     AND n.provider_scope_discriminator IS NOT DISTINCT FROM ns.discriminator
     AND n.provider = o.provider AND n.metric = o.metric AND n.observed_at = o.observed_at
-    AND n.symbol IS NOT DISTINCT FROM o.symbol AND n.region IS NOT DISTINCT FROM o.region
-    AND n.unit IS NOT DISTINCT FROM o.unit AND n.currency IS NOT DISTINCT FROM o.currency
-    AND n.latitude IS NOT DISTINCT FROM o.latitude AND n.longitude IS NOT DISTINCT FROM o.longitude
+    AND n.unit = o.unit
+    AND coalesce(n.symbol, chr(31)) = coalesce(o.symbol, chr(31))
+    AND coalesce(n.region, chr(31)) = coalesce(o.region, chr(31))
+    AND coalesce(n.currency, chr(31)) = coalesce(o.currency, chr(31))
+    AND coalesce(n.latitude, 'NaN'::float8) = coalesce(o.latitude, 'NaN'::float8)
+    AND coalesce(n.longitude, 'NaN'::float8) = coalesce(o.longitude, 'NaN'::float8)
     AND (n.accepted_at, n.ingestion_observation_id::text) > (o.accepted_at, o.ingestion_observation_id::text)
 )"""
 

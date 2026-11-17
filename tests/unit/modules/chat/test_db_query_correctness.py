@@ -231,7 +231,7 @@ class _AggSession:
 @pytest.mark.asyncio
 async def test_aggregates_expose_region_nulls_first_seen_and_newest_citation() -> None:
     """Aggregates group by region, report null_values/first_observed_at, and cite the newest observation."""
-    doc_new, ver_new, ver_old = uuid4(), uuid4(), uuid4()
+    doc_new, ver_new = uuid4(), uuid4()
     t0, t1 = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC)
     row = SimpleNamespace(
         provider="world_bank",
@@ -248,13 +248,15 @@ async def test_aggregates_expose_region_nulls_first_seen_and_newest_citation() -
         sum_value=6.0,
         first_observed_at=t0,
         latest_observed_at=t1,
-        document_ids=[doc_new, uuid4()],
-        version_ids=[ver_new, ver_old],
+        document_id=doc_new,
+        document_version_id=ver_new,
     )
     session = _AggSession([row])
     rows = await _observation_aggregates(session, [], 5)  # type: ignore[arg-type]
     compiled = str(session.stmt.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
     assert "region" in compiled.split("GROUP BY")[1]
+    # Citation comes from a LATERAL newest-row probe, not an ordered array_agg over every row.
+    assert "array_agg" not in compiled and "LATERAL" in compiled
     assert rows[0]["region"] == "VN" and rows[0]["null_values"] == 1
     assert rows[0]["first_observed_at"] == t0.isoformat()
     _apply_aggregate_citations(rows, {ver_new: 4})

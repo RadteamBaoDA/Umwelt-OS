@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import String, and_, case, false, or_, select, tuple_
+from sqlalchemy import String, and_, case, false, func, literal_column, or_, select, tuple_
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -95,6 +95,26 @@ def observation_scope_predicates(
     return preds
 
 
+# Null-safe key columns compared as ``coalesce(a, s) = coalesce(b, s)``: unlike ``IS NOT DISTINCT FROM`` this
+# is a hashable equality, so the anti-join hashes on the full series key instead of filtering millions of
+# provider/metric/observed_at collisions (1.2 s -> see test_chat_collected_data_volume.py). The sentinels
+# (unit separator, NaN) never occur as real values, so NULL still matches only NULL.
+_TEXT_NULL: Any = literal_column("chr(31)")
+_FLOAT_NULL: Any = literal_column("'NaN'::float8")
+_NULLABLE_KEY_SENTINELS = (
+    ("symbol", _TEXT_NULL),
+    ("region", _TEXT_NULL),
+    ("currency", _TEXT_NULL),
+    ("latitude", _FLOAT_NULL),
+    ("longitude", _FLOAT_NULL),
+)
+
+
+def _null_safe_eq(left: Any, right: Any, sentinel: Any) -> Any:
+    """Hashable null-safe equality: ``coalesce(left, sentinel) = coalesce(right, sentinel)`` (pure)."""
+    return func.coalesce(left, sentinel) == func.coalesce(right, sentinel)
+
+
 def not_superseded_across_sources(
     *,
     workspace_id: UUID,
@@ -120,8 +140,6 @@ def not_superseded_across_sources(
     and ``provider``) but bound the anti-join's inner side: without them an aggregate hashed the whole
     table (1.8 s on 2M rows) whatever its window.
     """
-    # ponytail: the null-safe key columns are not hashable, so an unfiltered all-source aggregate still runs
-    # ~0.9 s SQL on 2M rows (default work_mem); coalesce-based hash keys or a dedup column if that matters.
     newer = aliased(Observation)
     bounds: list[Any] = []
     if observed_from is not None:
@@ -143,13 +161,12 @@ def not_superseded_across_sources(
             newer.provider == Observation.provider,
             newer.metric == Observation.metric,
             newer.observed_at == Observation.observed_at,
-            newer.symbol.is_not_distinct_from(Observation.symbol),
-            newer.region.is_not_distinct_from(Observation.region),
             # Only a full dashboard series-key match competes, so distinct series are never merged.
-            newer.unit.is_not_distinct_from(Observation.unit),
-            newer.currency.is_not_distinct_from(Observation.currency),
-            newer.latitude.is_not_distinct_from(Observation.latitude),
-            newer.longitude.is_not_distinct_from(Observation.longitude),
+            newer.unit == Observation.unit,  # NOT NULL
+            *(
+                _null_safe_eq(getattr(newer, col), getattr(Observation, col), sentinel)
+                for col, sentinel in _NULLABLE_KEY_SENTINELS
+            ),
             tuple_(newer.accepted_at, sql_cast(newer.ingestion_observation_id, String))
             > tuple_(
                 Observation.accepted_at, sql_cast(Observation.ingestion_observation_id, String)

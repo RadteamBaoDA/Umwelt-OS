@@ -25,7 +25,6 @@ from sqlalchemy import (
     select,
     text,
 )
-from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
@@ -33,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
+from modules.chat._db_aggregates import _observation_aggregates
 from modules.chat._db_attributes import (
     available_series,
     bound_attributes,
@@ -810,7 +810,9 @@ def _with_flags(raw: str, flags: dict[str, Any]) -> str:
 
 
 CHAT_SQL_LOGIN_ROLE = "umwelt_chat_sql_login"
-_READER_POOL_SIZE = 4
+_READER_POOL_SIZE = (
+    2  # 4 per chat-worker: role CONNECTION LIMIT 8 fits two replicas (docs/deployment.md)
+)
 _READER_MAX_OVERFLOW = 2
 _READER_STATEMENT_TIMEOUT_MS = 2000
 _reader_engines: dict[str, AsyncEngine] = {}
@@ -1112,80 +1114,6 @@ def _observation_filters(
     if date_to is not None:
         obs_filters.append(Observation.observed_at < date_to)
     return obs_filters
-
-
-async def _observation_aggregates(
-    session: AsyncSession, obs_filters: list[Any], limit: int
-) -> list[dict[str, Any]]:
-    """Run the grouped observation aggregate query and return JSON-ready aggregate rows.
-
-    Read-only; one SELECT on ``session`` ordered by latest observation, fetching ``limit + 1`` groups (the
-    caller trims and flags truncation). Groups are keyed by provider, metric, symbol, region, unit and
-    currency. ``null_values`` counts rows whose value is NULL (excluded from avg/min/max/sum). Each row
-    carries private ``_document_id``/``_version_id`` of its NEWEST observation, which the caller turns into
-    a ``citation`` and removes (see ``_apply_aggregate_citations``).
-    """
-    newest = Observation.observed_at.desc()
-    agg_rows = (
-        await session.execute(
-            select(
-                Observation.provider,
-                Observation.metric,
-                Observation.symbol,
-                Observation.region,
-                Observation.unit,
-                Observation.currency,
-                func.count(Observation.id).label("row_count"),
-                (func.count(Observation.id) - func.count(Observation.value)).label("null_count"),
-                func.avg(Observation.value).label("avg_value"),
-                func.min(Observation.value).label("min_value"),
-                func.max(Observation.value).label("max_value"),
-                func.sum(Observation.value).label("sum_value"),
-                func.min(Observation.observed_at).label("first_observed_at"),
-                func.max(Observation.observed_at).label("latest_observed_at"),
-                func.array_agg(aggregate_order_by(Observation.document_id, newest)).label(
-                    "document_ids"
-                ),
-                func.array_agg(aggregate_order_by(Observation.document_version_id, newest)).label(
-                    "version_ids"
-                ),
-            )
-            .where(*obs_filters)
-            .group_by(
-                Observation.provider,
-                Observation.metric,
-                Observation.symbol,
-                Observation.region,
-                Observation.unit,
-                Observation.currency,
-            )
-            .order_by(desc(func.max(Observation.observed_at)))
-            .limit(limit + 1)
-        )
-    ).all()
-    return [
-        {
-            "provider": r.provider,
-            "metric": r.metric,
-            "symbol": r.symbol,
-            "region": r.region,
-            "unit": r.unit,
-            "currency": r.currency,
-            "count": int(r.row_count or 0),
-            "null_values": int(r.null_count or 0),
-            "avg": float(r.avg_value) if r.avg_value is not None else None,
-            "min": float(r.min_value) if r.min_value is not None else None,
-            "max": float(r.max_value) if r.max_value is not None else None,
-            "sum": float(r.sum_value) if r.sum_value is not None else None,
-            "first_observed_at": r.first_observed_at.isoformat() if r.first_observed_at else None,
-            "latest_observed_at": r.latest_observed_at.isoformat()
-            if r.latest_observed_at
-            else None,
-            "_document_id": (r.document_ids or [None])[0],
-            "_version_id": (r.version_ids or [None])[0],
-        }
-        for r in agg_rows
-    ]
 
 
 def _apply_aggregate_citations(

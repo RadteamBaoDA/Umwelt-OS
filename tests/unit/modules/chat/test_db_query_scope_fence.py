@@ -86,8 +86,13 @@ def test_dedup_uses_full_series_key_from_any_readable_source() -> None:
     assert "source_id !=" not in sql and "is_current" not in sql
     assert "observations_1.observed_at = observations.observed_at" in sql
     assert "observations_1.workspace_id" in sql and "observations_1.source_id IN" in sql
-    for col in ("unit", "currency", "latitude", "longitude"):
-        assert f"observations_1.{col} IS NOT DISTINCT FROM observations.{col}" in sql
+    # Hashable null-safe equality (coalesce to a sentinel), so the anti-join can hash the full key.
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "observations_1.unit = observations.unit" in sql
+    for col in ("symbol", "region", "currency"):
+        assert f"coalesce(observations_1.{col}, chr(31)) = coalesce(observations.{col}, chr(31))" in sql
+    for col in ("latitude", "longitude"):
+        assert f"coalesce(observations_1.{col}, 'NaN'::float8) = coalesce(observations.{col}" in sql
 
 
 def test_cross_source_dedup_bounds_competing_rows_by_caller_window_and_providers() -> None:
