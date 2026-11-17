@@ -81,7 +81,7 @@ _MAX_ALLOWED_SOURCES = 100  # newest allowed sources honoured (flagged sources_t
 _CHAT_READABLE_STATUSES = ("active", "paused")  # archived sources are never read by chat
 _DATA_SEMANTICS_NOTE = (
     "observed_at is UTC business time (the period start for daily/annual series); "
-    "is_current=false rows are superseded revisions of the same data point; "
+    "a series point is one observed_at (earlier ticks of a price series are history, not superseded); "
     "date-only date_from/date_to are the owner's local days (date_to includes the whole day); "
     "value may be NULL for event rows."
 )
@@ -190,7 +190,7 @@ def _db_query_base_properties() -> dict[str, Any]:
         },
         "current_only": {
             "type": "boolean",
-            "description": "When true (default), return only the current revision of each observation; is_current=false rows are superseded revisions. Aggregations always use current revisions only.",
+            "description": "When true (default), hide a row only when a newer revision of the same series point (same observed_at) exists, so every observed_at of a price or rate series stays visible as history. Set false to also return superseded revisions. Aggregations always use this rule.",
         },
         "aggregation": {
             "type": "string",
@@ -256,7 +256,7 @@ def build_db_query_tool_spec(*, sql_enabled: bool = True) -> dict[str, Any]:
                 "(columns: id, source_id, provider, metric, symbol, region, value, unit, currency, "
                 "observed_at, published_at, quality, is_current, document_id, document_version_id, "
                 "latitude, longitude, attributes; "
-                "it contains only current revisions, so is_current is always true) "
+                "a row is hidden only when a newer revision of the same observed_at exists) "
                 "and `scoped_documents` "
                 "(columns: id, source_id, provider, title, canonical_url, published_at, observed_at, "
                 "language, content_excerpt, document_version_id, attributes). "
@@ -501,7 +501,7 @@ def _citation_number(index: int, web_numbering: tuple[int, int] | None) -> int:
 
 async def _register_evidence_for_versions(
     session: AsyncSession,
-    version_pairs: list[tuple[UUID, UUID]],
+    version_pairs: list[tuple[UUID | None, UUID]],
     existing_evidence: list[EvidenceItem],
     web_numbering: tuple[int, int] | None = None,
     *,
@@ -513,7 +513,8 @@ async def _register_evidence_for_versions(
 
     Args:
         session: Active asynchronous database session.
-        version_pairs: Pairs of ``(document_id, document_version_id)`` from query rows.
+        version_pairs: Pairs of ``(document_id, document_version_id)`` from query rows; only the version id
+            is used (the document is looked up), so the document id may be None.
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
         workspace_id: Workspace the turn runs in.
         allowed_source_ids: Sources this turn may read (already local-only filtered by ``_allowed_sources``).
@@ -997,12 +998,12 @@ async def _execute_sql_mode(
     )
     truncated = len(mappings) > limit
     mappings = mappings[:limit]
-    version_pairs: list[tuple[UUID, UUID]] = []
-    for row in mappings:
-        doc_id = row.get("document_id") or row.get("id")
-        ver_id = row.get("document_version_id")
-        if isinstance(doc_id, UUID) and isinstance(ver_id, UUID):
-            version_pairs.append((doc_id, ver_id))
+    # The version id alone identifies the cited record: a model SELECT need not include document_id.
+    version_pairs: list[tuple[UUID | None, UUID]] = [
+        (None, ver_id)
+        for row in mappings
+        if isinstance(ver_id := row.get("document_version_id"), UUID)
+    ]
     citation_map = await _register_evidence_for_versions(
         session,
         version_pairs,
@@ -1059,9 +1060,9 @@ def _observation_filters(
     Pure: builds expressions only, no I/O. ``date_to`` is an EXCLUSIVE upper bound (see ``_parse_bound``). The workspace and allowed-source predicates are
     always first so the permission boundary can never be dropped by an optional filter.
 
-    ``is_current=false`` rows are superseded revisions of the same data point (ingestion inserts a new
-    revision and flips the previous current row to false), so aggregates always filter ``is_current=true``:
-    averaging or counting across revisions would double-count one measurement. Provider is matched
+    A row is hidden when a newer readable row of the same series point (same key incl. ``observed_at``)
+    exists, so restatements and cross-source duplicates count once while every distinct ``observed_at`` of
+    a ticker series stays visible as history (``is_current`` is not used: it keeps only the latest tick). Provider is matched
     exactly against lower-cased input (the DB CHECK enforces lower-case ids). Metric and symbol are
     compared case-insensitively on both sides because ingestion does not normalise their case;
     ``region`` likewise.
@@ -1069,7 +1070,7 @@ def _observation_filters(
     ``source_scopes`` (current-scope discriminator per source) restricts each source to rows collected under
     its current configuration. Whenever only current rows are read, cross-source duplicates of one series
     point are removed (see :func:`not_superseded_across_sources`), so rows and aggregates share one deduped
-    set. With ``current_only=False`` revisions are the point, so that dedup is skipped.
+    set. With ``current_only=False`` every revision is returned, so that dedup is skipped.
     """
     obs_filters = observation_scope_predicates(
         Observation,
@@ -1078,7 +1079,6 @@ def _observation_filters(
         source_scopes=source_scopes,
     )
     if args.current_only or args.aggregation != "none":
-        obs_filters.append(Observation.is_current.is_(True))
         obs_filters.append(
             not_superseded_across_sources(
                 workspace_id=workspace_id,
@@ -1423,7 +1423,7 @@ async def _execute_structured_mode(
         "aggregation": args.aggregation,
         "citation_rule": CITATION_RULE,
     }
-    version_pairs: list[tuple[UUID, UUID]] = []
+    version_pairs: list[tuple[UUID | None, UUID]] = []
     want_obs = args.target in ("observations", "both")
     requested = {p.strip().lower() for p in args.providers or [] if p.strip()}
     want_docs = args.target in ("documents", "both") or bool(

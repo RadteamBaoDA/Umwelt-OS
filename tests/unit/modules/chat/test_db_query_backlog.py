@@ -80,7 +80,7 @@ def test_aggregates_always_use_current_revisions(
             date_to=None,
         )
     )
-    assert ("is_current IS true" in sql) is expects_current
+    assert ("NOT (EXISTS" in sql) is expects_current and "is_current" not in sql
 
 
 def test_text_query_uses_stored_tsv_and_no_content_ilike() -> None:

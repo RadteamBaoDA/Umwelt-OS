@@ -33,10 +33,10 @@ def test_observations_match_source_and_discriminator_pairs_and_skip_unscoped() -
     sql = " AND ".join(_sql(f) for f in _filters({a: "a" * 64, b: "b" * 64, none_src: None}))
     assert f"'{'a' * 64}'" in sql and f"'{'b' * 64}'" in sql
     assert (
-        str(none_src) not in sql.split("provider_scope_discriminator", 1)[1].split("is_current")[0]
+        str(none_src) not in sql.split("provider_scope_discriminator", 1)[1].split("NOT (EXISTS")[0]
     )
     assert "NOT (EXISTS" in sql and "accepted_at" in sql  # cross-source dedup
-    assert "is_current IS true" in sql
+    assert "is_current" not in sql  # history rule replaces is_current
 
 
 def test_no_scoped_sources_matches_nothing() -> None:
@@ -74,14 +74,18 @@ def test_readable_statuses_include_paused_but_not_archived() -> None:
     assert db_query._CHAT_READABLE_STATUSES == ("active", "paused")
 
 
-def test_cross_source_dedup_uses_full_series_key_and_other_sources_only() -> None:
+def test_dedup_uses_full_series_key_from_any_readable_source() -> None:
     from modules.chat._db_scope import not_superseded_across_sources
 
     clause = not_superseded_across_sources(
         workspace_id=uuid4(), allowed_source_ids=[uuid4()], source_scopes=None
     )
     sql = str(clause.compile(dialect=postgresql.dialect()))
-    assert "observations_1.source_id != observations.source_id" in sql
+    # Same-source rows compete too and competitors need not be current: ticks with distinct
+    # observed_at stay visible, restatements of one observed_at count once.
+    assert "source_id !=" not in sql and "is_current" not in sql
+    assert "observations_1.observed_at = observations.observed_at" in sql
+    assert "observations_1.workspace_id" in sql and "observations_1.source_id IN" in sql
     for col in ("unit", "currency", "latitude", "longitude"):
         assert f"observations_1.{col} IS NOT DISTINCT FROM observations.{col}" in sql
 

@@ -157,3 +157,32 @@ def test_summary_caps_examples() -> None:
     report = g.GroundingReport(tuple(str(1000 + i) for i in range(25)), False, frozenset())
     assert report.summary()["count"] == 25
     assert len(report.summary()["examples"]) == g.MAX_EXAMPLES
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "As of November 2026 it moved",
+        "On 16 November 2026 it moved",
+        "On Nov 16, 2026 it moved",
+        "Vào ngày 16 tháng 11 năm 2026 nó đổi",
+        "Ngày 16/11/2026 nó đổi",
+        "Trong tháng 11/2026 nó đổi",
+    ],
+)
+def test_date_forms_leave_no_stray_numbers(text: str) -> None:
+    """Month/day/year forms (en and vi) are removed whole, never split into 20 + 26 or 16 + 26."""
+    assert g.extract_numbers(text) == []
+
+
+def test_coordinate_label_makes_both_halves_known() -> None:
+    """A "lat,lon" label in tool rows grounds 10.82 and 106.63, also in vi decimal-comma form."""
+    known = _known({"rows": [{"label": "10.82,106.63"}, {"label": "21,03,105,85"}]})
+    assert _unverified("Lat 10.82 and lon 106.63 and 21,03 and 105,85", known) == []
+
+
+def test_numbers_inside_urls_are_not_checked() -> None:
+    """Digits of a URL in the answer are not data claims."""
+    known = _known()
+    answer = "See https://example.com/a/98765?id=12345 and www.site.org/4567/89."
+    assert _unverified(answer, known) == []

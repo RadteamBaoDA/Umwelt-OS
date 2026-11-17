@@ -78,6 +78,7 @@ class Matrix:
 
 
 _MATRIX: Matrix | None = None
+_SEED_ERROR: str | None = None
 
 
 def _ts_ms(moment: datetime) -> int:
@@ -217,7 +218,9 @@ async def _ingest(
         source_id=source_id,
         source_generation=generation,
     )
-    payload = ReceiveBatch(
+    # The trusted native-collection path carries provider_record metadata; ReceiveBatch's validator rejects it
+    # only for untrusted API input, so the simulated trusted path skips validation.
+    payload = ReceiveBatch.model_construct(
         source_id=source_id,
         source_generation=generation,
         batch_key=f"matrix-{uuid4().hex}",
@@ -298,19 +301,22 @@ async def _create_source(
     configuration: dict[str, Any] | None = None,
 ) -> None:
     """Create a connector source through the API and set its configuration directly (as other harness tests do)."""
+    # Built-in providers allow one API-created source per workspace (409 builtin_already_added) and the
+    # matrix needs several per provider, so create a manual source and retype it.
     created = await client.post(
-        "/api/v1/sources",
-        json={"type": source_type, "name": f"matrix-{key}-{uuid4().hex[:6]}", "provider": provider},
+        "/api/v1/sources", json={"type": "manual", "name": f"matrix-{key}-{uuid4().hex[:6]}"}
     )
     created.raise_for_status()
     source_id = UUID(created.json()["id"])
     matrix.sources[key] = source_id
-    if configuration:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("UPDATE sources SET configuration = CAST(:c AS jsonb) WHERE id = :i"),
-                {"c": json.dumps(configuration), "i": source_id},
-            )
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE sources SET type = :t, provider = :p, local_only = false, "
+                "configuration = configuration || CAST(:c AS jsonb) WHERE id = :i"
+            ),
+            {"t": source_type, "p": provider, "c": json.dumps(configuration or {}), "i": source_id},
+        )
 
 
 async def _set(engine: AsyncEngine, matrix: Matrix, key: str, sql_set: str) -> None:
@@ -328,8 +334,8 @@ async def _seed(client: AsyncClient, engine: AsyncEngine) -> Matrix:
         ws, owner = (
             await conn.execute(
                 text(
-                    "SELECT w.id, w.owner_user_id FROM workspaces w "
-                    "JOIN sources s ON s.workspace_id = w.id ORDER BY s.created_at LIMIT 1"
+                    # A fresh disposable DB has no sources yet: take the owner's (first) workspace.
+                    "SELECT id, owner_user_id FROM workspaces ORDER BY created_at LIMIT 1"
                 )
             )
         ).one()
@@ -450,9 +456,15 @@ async def _seed(client: AsyncClient, engine: AsyncEngine) -> Matrix:
 @pytest.fixture
 async def matrix(ready_owner_client: AsyncClient, committed_engine: AsyncEngine) -> Matrix:
     """The seeded matrix; the first test pays for seeding, later tests reuse the committed rows."""
-    global _MATRIX  # per-session cache: committed rows persist between tests
+    global _MATRIX, _SEED_ERROR  # per-session cache: committed rows persist between tests
+    if _SEED_ERROR is not None:
+        pytest.fail(f"matrix seeding failed earlier: {_SEED_ERROR}")
     if _MATRIX is None:
-        _MATRIX = await _seed(ready_owner_client, committed_engine)
+        try:
+            _MATRIX = await _seed(ready_owner_client, committed_engine)
+        except Exception as exc:  # seed once: later cases fail fast instead of re-seeding
+            _SEED_ERROR = f"{type(exc).__name__}: {exc}"
+            raise
     return _MATRIX
 
 
@@ -556,6 +568,45 @@ CASES: list[tuple[str, list[str], dict[str, Any], Callable[[dict[str, Any]], boo
             "date_from": "2026-11-01",
         },
         lambda d: d["observation_aggregates"][0]["count"] <= 2,
+    ),
+    (
+        "market_ticks_with_distinct_observed_at_are_all_history",
+        ["bn_a"],
+        {"providers": ["binance"], "target": "observations"},
+        lambda d: sorted(float(r["value"]) for r in _obs(d)) == [67123.45, 67500.0],
+    ),
+    (
+        "market_aggregate_counts_every_tick_in_window",
+        ["bn_a"],
+        {
+            "providers": ["binance"],
+            "target": "observations",
+            "aggregation": "count",
+            "date_from": "2026-11-01",
+        },
+        lambda d: d["observation_aggregates"][0]["count"] == 2,
+    ),
+    (
+        "market_aggregate_avg_spans_ticks",
+        ["bn_a"],
+        {
+            "providers": ["binance"],
+            "target": "observations",
+            "aggregation": "avg",
+            "date_from": "2026-11-01",
+        },
+        lambda d: abs(d["observation_aggregates"][0]["avg"] - (67123.45 + 67500.0) / 2) < 1e-6,
+    ),
+    (
+        "market_two_sources_aggregate_counts_each_point_once",
+        ["bn_a", "bn_b"],
+        {
+            "providers": ["binance"],
+            "target": "observations",
+            "aggregation": "count",
+            "date_from": "2026-11-01",
+        },
+        lambda d: d["observation_aggregates"][0]["count"] == 2,
     ),
     (
         "market_aggregate_has_citation",
@@ -808,13 +859,13 @@ CASES: list[tuple[str, list[str], dict[str, Any], Callable[[dict[str, Any]], boo
         "event_docs_only_in_documents",
         ["emsc"],
         {"providers": ["emsc_quakes"], "limit": 5},
-        lambda d: len(_docs(d)) == 5 and _obs(d) == [],
+        lambda d: len(_docs(d)) == 3 and _obs(d) == [],  # the emsc fixture holds 3 events
     ),
     (
         "event_docs_truncated_flag_when_over_limit",
         ["emsc"],
-        {"providers": ["emsc_quakes"], "limit": 3},
-        lambda d: d.get("truncated") is True and len(_docs(d)) == 3 and "hint" in d,
+        {"providers": ["emsc_quakes"], "limit": 2},
+        lambda d: d.get("truncated") is True and len(_docs(d)) == 2 and "hint" in d,
     ),
     (
         "event_docs_have_citations",
@@ -997,7 +1048,7 @@ async def test_sql_view_exposes_attributes_and_depth(call: Call, reader: None) -
 
 
 async def test_sql_view_hides_superseded_revisions(call: Call, reader: None) -> None:
-    """The view carries only the current revision (and ``'...:...'`` literals survive ``text()``)."""
+    """The view hides a restated point's older revision (and ``'...:...'`` literals survive ``text()``)."""
     data = await call(
         {
             "mode": "sql",
@@ -1007,6 +1058,18 @@ async def test_sql_view_hides_superseded_revisions(call: Call, reader: None) -> 
         ["wb"],
     )
     assert data["rows"] == [{"n": 1, "cur": True}]
+
+
+async def test_sql_view_keeps_ticker_history_and_dedupes_sources(call: Call, reader: None) -> None:
+    """Ticks with distinct observed_at are all visible; the same point from two sources counts once."""
+    data = await call(
+        {
+            "mode": "sql",
+            "sql_query": "SELECT count(*) AS n FROM scoped_observations WHERE provider = 'binance'",
+        },
+        ["bn_a", "bn_b"],
+    )
+    assert data["rows"] == [{"n": 2}]
 
 
 async def test_sql_view_hides_rows_after_config_change(call: Call, reader: None) -> None:
@@ -1023,19 +1086,6 @@ async def test_sql_view_reads_paused_source(call: Call, reader: None) -> None:
         {"mode": "sql", "sql_query": "SELECT count(*) AS n FROM scoped_observations"}, ["bn_paused"]
     )
     assert data["rows"][0]["n"] >= 1
-
-
-async def test_sql_view_dedupes_two_sources_for_one_point(call: Call, reader: None) -> None:
-    """Same provider/metric/symbol/observed_at from two sources appears once in SQL mode too."""
-    data = await call(
-        {
-            "mode": "sql",
-            "sql_query": "SELECT count(*) AS n FROM scoped_observations "
-            "WHERE provider = 'binance' AND observed_at = '2026-11-16T03:00:00+00:00'",
-        },
-        ["bn_a", "bn_b"],
-    )
-    assert data["rows"] == [{"n": 1}]
 
 
 async def test_sql_view_has_coordinates(call: Call, reader: None) -> None:
@@ -1082,9 +1132,9 @@ async def test_sql_rejects_base_tables(call: Call, reader: None) -> None:
 async def test_sql_row_limit_sets_truncated(call: Call, reader: None) -> None:
     """More rows than ``limit`` flags ``truncated`` in SQL mode."""
     data = await call(
-        {"mode": "sql", "sql_query": "SELECT id FROM scoped_documents", "limit": 3}, ["emsc"]
+        {"mode": "sql", "sql_query": "SELECT id FROM scoped_documents", "limit": 2}, ["emsc"]
     )
-    assert data["truncated"] is True and data["row_count"] == 3
+    assert data["truncated"] is True and data["row_count"] == 2
 
 
 async def test_sql_statement_timeout_maps_to_query_timeout(call: Call, reader: None) -> None:

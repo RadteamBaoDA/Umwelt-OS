@@ -149,5 +149,5 @@ def test_observation_filters_always_start_with_permission_predicates() -> None:
         date_from=datetime(2026, 1, 1, tzinfo=UTC),
         date_to=None,  # type: ignore[arg-type]
     )
-    # workspace, source, is_current, cross-source dedup, provider, date_from
-    assert len(filters) == 6
+    # workspace, source, newer-row dedup, provider, date_from
+    assert len(filters) == 5

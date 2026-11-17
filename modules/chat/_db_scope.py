@@ -104,16 +104,16 @@ def not_superseded_across_sources(
     observed_to: datetime | None = None,
     providers: list[str] | None = None,
 ) -> Any:
-    """``NOT EXISTS`` clause keeping one current row per cross-source series point.
+    """``NOT EXISTS`` clause hiding a row only when a LATER readable row of the same series point exists.
 
     The series key is (provider, metric, symbol, region, unit, currency, latitude, longitude, observed_at),
-    mirroring the dashboard key; only rows of a DIFFERENT source compete (same-source revisions are settled
-    by ``is_current``).
+    mirroring the dashboard history rule: a ticker series with distinct ``observed_at`` stays fully visible,
+    while a restatement (same ``observed_at``) or a duplicate collected by another source counts once.
 
-    Two sources can collect the same series point; the row with the latest ``accepted_at`` wins, ties broken
-    by ``str(ingestion_observation_id)`` (the same key the dashboard history dedup and ``is_current`` use).
-    Competing rows must themselves be current and inside the readable scope, so a hidden row never hides a
-    visible one.
+    The row with the latest ``accepted_at`` wins, ties broken by ``str(ingestion_observation_id)`` (the key
+    the dashboard history dedup uses). Competitors may come from ANY readable source, same source included,
+    and need not be ``is_current`` (transitivity keeps the newest one visible). They must pass the same
+    workspace, allowed-source and current-scope predicates, so a hidden row never hides a visible one.
 
     ``observed_from`` / ``observed_to`` (exclusive) and ``providers`` repeat the caller's own window and
     provider filters on the competing side. They change no result (the key already equates ``observed_at``
@@ -139,16 +139,13 @@ def not_superseded_across_sources(
                 allowed_source_ids=allowed_source_ids,
                 source_scopes=source_scopes,
             ),
-            newer.is_current.is_(True),
             *bounds,
             newer.provider == Observation.provider,
             newer.metric == Observation.metric,
             newer.observed_at == Observation.observed_at,
             newer.symbol.is_not_distinct_from(Observation.symbol),
             newer.region.is_not_distinct_from(Observation.region),
-            # Same-source revisions are already resolved by is_current; only OTHER sources compete, and only
-            # when the whole dashboard series key matches so distinct series are never merged.
-            newer.source_id != Observation.source_id,
+            # Only a full dashboard series-key match competes, so distinct series are never merged.
             newer.unit.is_not_distinct_from(Observation.unit),
             newer.currency.is_not_distinct_from(Observation.currency),
             newer.latitude.is_not_distinct_from(Observation.latitude),

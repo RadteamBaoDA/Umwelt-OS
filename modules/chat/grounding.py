@@ -56,12 +56,15 @@ _MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
 _COMMON_SKIPS = [
     re.compile(p, re.IGNORECASE)
     for p in (
+        r"(?:https?://|www\.)[^\s<>)\]]+",  # URLs: ids, dates and ports in a link are not claims
         r"\[\d+(?:\s*[,\-–]\s*\d+)*\]",  # citation markers
         r"\d{4}-\d{1,2}-\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?",
         r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}",
         r"\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]m)?",
-        rf"\b{_MONTHS}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?",
+        # Day-first before month-first so "16 November 2026" goes whole instead of leaving "16".
         rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:\s+\d{{4}})?",
+        # "Nov 16, 2026" / "November 2026": (?!\d) stops a 4-digit year splitting into day "20" + "26".
+        rf"\b{_MONTHS}\s+(?:\d{{1,2}}(?!\d)(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{4}})",
         r"(?:ngày|tháng|năm|quý)\s+\d{1,4}(?:\s*[/-]\s*\d{1,4})?",
         r"\b\d+(?:st|nd|rd|th)\b",
     )
@@ -71,6 +74,8 @@ _PROSE_SKIPS = [
     re.compile(r"`[^`\n]*`"),  # inline code
     re.compile(r"^[ \t]*\d+[.)][ \t]", re.MULTILINE),  # ordered-list markers
 ]
+# "10.82,106.63" / "10,82,106,63": a latitude,longitude label, which _NUM_RE reads as one unparseable token.
+_COORD_RE = re.compile(r"(?<![\w.,])(-?\d{1,3}[.,]\d+)\s*,\s*(-?\d{1,3}[.,]\d+)(?![\w.,])")
 _SENTENCES = re.compile(r"(?<=[.!?])\s+|\n+")
 _MARKER = re.compile(r"\[\d+\]")
 
@@ -194,7 +199,7 @@ def _strip(text: str, *, prose: bool) -> str:
 def extract_numbers(text: str, *, prose: bool = True) -> list[_Number]:
     """Numbers a text states, skipping citation markers, dates/times, ordinals, code and trivial values.
 
-    Skipped as non-claims: bare integers 0-10 and standalone integers 1900-2100 (years). ``prose=False``
+    Skipped as non-claims: URLs, bare integers 0-10 and standalone integers 1900-2100 (years). ``prose=False``
     (table cells) keeps the date/time skips but not the code/list-marker ones.
     """
     found: list[_Number] = []
@@ -232,7 +237,13 @@ class KnownNumbers:
             self._sorted = False
 
     def add_text(self, text: str) -> None:
-        """Remember every number in free text (no skips: dates/ids only add harmless known values)."""
+        """Remember every number in free text (no skips: dates/ids only add harmless known values).
+
+        A ``lat,lon`` coordinate label also adds both halves (en-US "10.82" and vi-VN "10,82" forms).
+        """
+        for coord in _COORD_RE.finditer(text[:_MAX_TEXT]):
+            for half in coord.groups():
+                self.add_value(float(half.replace(",", ".")))
         for m in _NUM_RE.finditer(text[:_MAX_TEXT]):
             for value, _tol in _readings(m.group("body"), m.group("suf")):
                 self.add_value(value)

@@ -78,3 +78,19 @@ def test_downgrade_drops_views_before_recreate_and_regrants() -> None:
         grant = stmts.index(f"GRANT SELECT ON chat_sql.{name} TO umwelt_chat_sql_login")
         assert drop < create < grant
         assert f"REVOKE ALL ON chat_sql.{name} FROM PUBLIC" in stmts
+
+
+def test_0026_history_view_replaces_is_current_and_downgrade_restores_0025() -> None:
+    """0026 swaps ``o.is_current`` for a fenced newer-row anti-join and downgrade emits the 0025 view."""
+    m26 = _load("0026_chat_sql_history_antijoin")
+    assert m26.down_revision == m25.revision
+    up = m26._history_view()
+    assert "AND o.is_current" not in up and "o.is_current," in up  # column kept, predicate gone
+    assert "NOT EXISTS" in up and "chat_sql.query_fence_scope ns" in up
+    assert "n.source_id = ANY(f.source_ids)" in up and "n.observed_at = o.observed_at" in up
+    assert "n.source_id <>" not in up and "n.is_current" not in up
+    assert "chat_sql.query_fence f" in up and "chat_sql.query_fence_scope fs" in up
+    expected = m25._observations_view(
+        f", o.latitude, o.longitude, {m25._attributes('o.document_version_id')}"
+    )
+    assert m26._0025_view() == expected
