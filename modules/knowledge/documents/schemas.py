@@ -164,7 +164,7 @@ MEASUREMENT_PROVIDER_FIELDS = {
         "magnitude_unit",
         "decimal_value",
     },
-    "fred": {"series_id", "date", "decimal_value"},
+    "fred": {"series_id", "date", "decimal_value", "units"},
     "openweathermap": {"dt", "place", "decimal_value"},
     "openaq": {"location_id", "sensor_id", "datetime", "decimal_value"},
     "nasa_firms": {"acq", "confidence", "satellite", "daynight", "decimal_value"},

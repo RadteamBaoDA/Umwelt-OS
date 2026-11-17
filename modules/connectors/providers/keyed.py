@@ -207,6 +207,29 @@ def _error_kind(code: object, message: object) -> Literal["credential", "rate_li
 # --------------------------------------------------------------------------- FRED
 
 FRED_URL = "https://api.stlouisfed.org/fred/series/observations?file_type=json&sort_order=desc&limit=5&series_id={sid}"
+# Physical units of common series (FRED's own labels; stable per series). The observations endpoint carries
+# none, so other series keep only the generic column unit. Stored as provider field ``units`` (shown to chat
+# as an attribute), not in the ``unit`` column, so existing series keys and dashboard history stay intact.
+FRED_UNITS = {
+    "DFF": "Percent",
+    "FEDFUNDS": "Percent",
+    "DGS2": "Percent",
+    "DGS10": "Percent",
+    "T10Y2Y": "Percent",
+    "MORTGAGE30US": "Percent",
+    "UNRATE": "Percent",
+    "CPIAUCSL": "Index 1982-1984=100",
+    "CPILFESL": "Index 1982-1984=100",
+    "PCEPI": "Index 2017=100",
+    "INDPRO": "Index 2017=100",
+    "GDP": "Billions of Dollars",
+    "GDPC1": "Billions of Chained 2017 Dollars",
+    "M2SL": "Billions of Dollars",
+    "PAYEMS": "Thousands of Persons",
+    "HOUST": "Thousands of Units",
+    "DEXUSEU": "U.S. Dollars to One Euro",
+    "DCOILWTICO": "Dollars per Barrel",
+}
 
 
 def build_fred(secret: str, cfg: Mapping[str, Any]) -> ProviderRequest:
@@ -219,6 +242,8 @@ def map_fred(
     payload: object, collected_at: datetime, cfg: Mapping[str, Any]
 ) -> list[IngestionRecord]:
     """Map observations to one measurement per date; ``.`` (FRED's missing marker) rows are skipped.
+
+    Known series (``FRED_UNITS``) also record their physical unit as provider field ``units``.
 
     An ``error_code`` body is classified (bad key -> credential). No numeric observation raises ``incomplete``.
     """
@@ -257,7 +282,8 @@ def map_fred(
                 unit="series units",
                 symbol=sid,
                 quality="provider_reported",
-                provider_fields={"series_id": sid, "date": iso},
+                provider_fields={"series_id": sid, "date": iso}
+                | ({"units": FRED_UNITS[sid]} if sid in FRED_UNITS else {}),
             )
         )
     if not records:

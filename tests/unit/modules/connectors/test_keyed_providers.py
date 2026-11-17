@@ -396,3 +396,17 @@ def test_keyed_import_pins_http_loggers_to_warning() -> None:
 
     for name in ("httpx", "httpcore"):
         assert logging.getLogger(name).level == logging.WARNING
+
+
+def test_fred_known_series_records_physical_units_as_provider_field() -> None:
+    """DFF carries units=Percent in provider fields; the unit column (series key) is unchanged."""
+    from datetime import UTC, datetime
+
+    payload = {"observations": [{"date": "2026-11-01", "value": "4.33"}]}
+    [record] = keyed.map_fred(payload, datetime(2026, 11, 2, tzinfo=UTC), {"fred_series_id": "DFF"})
+    world = record.metadata["provider_record"]["world_data"]
+    assert world["provider_fields"]["units"] == "Percent" and world["unit"] == "series units"
+    [other] = keyed.map_fred(
+        payload, datetime(2026, 11, 2, tzinfo=UTC), {"fred_series_id": "ABC123"}
+    )
+    assert "units" not in other.metadata["provider_record"]["world_data"]["provider_fields"]
