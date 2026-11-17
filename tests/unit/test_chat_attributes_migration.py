@@ -56,3 +56,25 @@ def test_new_views_append_columns_and_strip_secrets() -> None:
     assert "chat_sql.query_fence_scope fs" in tail
     doc = m25._documents_view(f", {m25._attributes('dv.id')}")
     assert doc.index("dv.id AS document_version_id") < doc.index("AS attributes")
+
+
+def test_downgrade_drops_views_before_recreate_and_regrants() -> None:
+    """CREATE OR REPLACE cannot drop columns: downgrade must DROP VIEW, recreate, then re-grant."""
+    from unittest.mock import patch
+
+    stmts: list[str] = []
+    with (
+        patch.object(m25.op, "execute", side_effect=stmts.append),
+        patch.object(m25, "drop_index_concurrently"),
+    ):
+        m25.downgrade()
+    for name in ("scoped_observations", "scoped_documents"):
+        drop = stmts.index(f"DROP VIEW chat_sql.{name}")
+        create = next(
+            i
+            for i, s in enumerate(stmts)
+            if s.startswith(f"CREATE OR REPLACE VIEW chat_sql.{name}")
+        )
+        grant = stmts.index(f"GRANT SELECT ON chat_sql.{name} TO umwelt_chat_sql_login")
+        assert drop < create < grant
+        assert f"REVOKE ALL ON chat_sql.{name} FROM PUBLIC" in stmts

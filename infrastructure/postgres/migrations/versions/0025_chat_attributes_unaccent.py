@@ -13,7 +13,7 @@
   decision here and the SQL guard allowlist does not include ``f_unaccent``.
 
 ``CREATE EXTENSION unaccent`` is a trusted extension (PostgreSQL 13+), so the database owner may create it.
-Downgrade restores the exact 0024 view bodies, drops the index and the wrapper, and keeps the extension.
+Downgrade drops and recreates the views with the exact 0024 bodies and re-grants the reader, drops the index and the wrapper, and keeps the extension.
 """
 
 from collections.abc import Sequence
@@ -27,6 +27,7 @@ down_revision: str | Sequence[str] | None = "0024_chat_sql_scope_fence"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+_ROLE = "umwelt_chat_sql_login"
 _INDEX = "ix_document_chunks_content_unaccent_tsv"
 
 _OBSERVATIONS_COLUMNS = """SELECT o.id, o.source_id, o.provider, o.metric, o.symbol, o.region, o.value, o.unit, o.currency,
@@ -55,7 +56,7 @@ _DOC_WHERE = (
 
 
 def _attributes(version_id: str) -> str:
-    """SQL scalar subquery: bounded-by-the-cell-cap jsonb of the version's provider facts, secrets stripped."""
+    """SQL scalar subquery: jsonb (bounded later by the chat tool, not here) of the version's provider facts, secrets stripped."""
     obj = "CASE WHEN jsonb_typeof({x}) = 'object' THEN {x} ELSE '{{}}'::jsonb END"
     source = obj.format(x="p.provenance #> '{provider_record,source_fields}'")
     measured = obj.format(x="p.provenance #> '{provider_record,world_data,provider_fields}'")
@@ -111,8 +112,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Restore the 0024 view bodies, then drop the index and the wrapper (the extension stays)."""
-    op.execute(_observations_view(""))
-    op.execute(_documents_view(""))
+    """Restore the 0024 view bodies, then drop the index and the wrapper (the extension stays).
+
+    ``CREATE OR REPLACE VIEW`` cannot drop columns, so each view is dropped and recreated; the drop discards
+    its grants, so the 0017 grants (PUBLIC revoked, SELECT to the reader login) are re-applied.
+    """
+    for name, ddl in (
+        ("scoped_observations", _observations_view("")),
+        ("scoped_documents", _documents_view("")),
+    ):
+        op.execute(f"DROP VIEW chat_sql.{name}")
+        op.execute(ddl)
+        op.execute(f"REVOKE ALL ON chat_sql.{name} FROM PUBLIC")
+        op.execute(f"GRANT SELECT ON chat_sql.{name} TO {_ROLE}")
     drop_index_concurrently(_INDEX)
     op.execute("DROP FUNCTION IF EXISTS public.f_unaccent(text)")

@@ -95,7 +95,11 @@ def not_superseded_across_sources(
     allowed_source_ids: list[UUID],
     source_scopes: SourceScopes | None,
 ) -> Any:
-    """``NOT EXISTS`` clause keeping one current row per (provider, metric, symbol, region, observed_at).
+    """``NOT EXISTS`` clause keeping one current row per cross-source series point.
+
+    The series key is (provider, metric, symbol, region, unit, currency, latitude, longitude, observed_at),
+    mirroring the dashboard key; only rows of a DIFFERENT source compete (same-source revisions are settled
+    by ``is_current``).
 
     Two sources can collect the same series point; the row with the latest ``accepted_at`` wins, ties broken
     by ``str(ingestion_observation_id)`` (the same key the dashboard history dedup and ``is_current`` use).
@@ -118,6 +122,13 @@ def not_superseded_across_sources(
             newer.observed_at == Observation.observed_at,
             newer.symbol.is_not_distinct_from(Observation.symbol),
             newer.region.is_not_distinct_from(Observation.region),
+            # Same-source revisions are already resolved by is_current; only OTHER sources compete, and only
+            # when the whole dashboard series key matches so distinct series are never merged.
+            newer.source_id != Observation.source_id,
+            newer.unit.is_not_distinct_from(Observation.unit),
+            newer.currency.is_not_distinct_from(Observation.currency),
+            newer.latitude.is_not_distinct_from(Observation.latitude),
+            newer.longitude.is_not_distinct_from(Observation.longitude),
             tuple_(newer.accepted_at, sql_cast(newer.ingestion_observation_id, String))
             > tuple_(
                 Observation.accepted_at, sql_cast(Observation.ingestion_observation_id, String)

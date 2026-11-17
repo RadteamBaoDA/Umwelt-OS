@@ -64,3 +64,15 @@ def test_document_scope_filter_uses_null_safe_provenance_match() -> None:
 def test_readable_statuses_include_paused_but_not_archived() -> None:
     """Chat reads active and paused sources only."""
     assert db_query._CHAT_READABLE_STATUSES == ("active", "paused")
+
+
+def test_cross_source_dedup_uses_full_series_key_and_other_sources_only() -> None:
+    from modules.chat._db_scope import not_superseded_across_sources
+
+    clause = not_superseded_across_sources(
+        workspace_id=uuid4(), allowed_source_ids=[uuid4()], source_scopes=None
+    )
+    sql = str(clause.compile(dialect=postgresql.dialect()))
+    assert "observations_1.source_id != observations.source_id" in sql
+    for col in ("unit", "currency", "latitude", "longitude"):
+        assert f"observations_1.{col} IS NOT DISTINCT FROM observations.{col}" in sql

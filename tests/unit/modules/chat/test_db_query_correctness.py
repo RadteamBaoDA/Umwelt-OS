@@ -387,3 +387,100 @@ async def test_handler_rejects_malformed_json_without_querying() -> None:
             {"name": "query_collected_data", "arguments": bad},
         )
         assert json.loads(out) == {"error": "invalid_arguments: malformed JSON", "rows": []}
+
+
+@pytest.mark.asyncio
+async def test_aggregation_with_truncated_raw_rows_is_not_flagged_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1 group + 30 raw rows at limit 25: no top-level truncated/hint, only observations_truncated."""
+
+    async def _aggs(*_a: object, **_k: object) -> list[dict[str, object]]:
+        return [{"metric": "m", "count": 30}]
+
+    monkeypatch.setattr(db_query, "_observation_aggregates", _aggs)
+
+    class _Res:
+        def scalars(self) -> _Res:
+            return self
+
+        def all(self) -> list[object]:
+            return [SimpleNamespace(id=i) for i in range(26)]  # limit + 1 fetched
+
+    class _S:
+        async def execute(self, _stmt: object) -> _Res:
+            return _Res()
+
+    out: dict[str, object] = {}
+    aggs, rows, truncated = await db_query._collect_observations(
+        _S(),  # type: ignore[arg-type]
+        _args(target="observations", aggregation="count", limit=25, date_from="2026-01-01"),
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+        date_from=None,
+        date_to=None,
+        out=out,
+    )
+    assert len(aggs) == 1 and len(rows) == 25 and truncated is False
+    assert out["observations_truncated"] is True
+
+
+def test_compact_date_is_a_whole_local_day() -> None:
+    start = _parse_bound("20260305", _HCM, name="date_from", end=False)
+    end = _parse_bound("20260305", _HCM, name="date_to", end=True)
+    assert start == datetime(2026, 3, 4, 17, 0, tzinfo=UTC)
+    assert end == datetime(2026, 3, 5, 17, 0, tzinfo=UTC)
+
+
+def test_json_cells_are_bounded() -> None:
+    attrs = {f"k{i}": "v" * 5000 for i in range(200)}
+    got = db_query._bound_json_cell("attributes", attrs)
+    assert len(json.dumps(got)) <= 4000 and "k0" in got
+    other = db_query._bound_json_cell("blob", {"a": "x" * 9000})
+    assert isinstance(other, str) and len(other) == db_query.MAX_SQL_CELL_CHARS
+
+
+@pytest.mark.asyncio
+async def test_fence_cleanup_runs_when_rollback_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    deleted: list[object] = []
+
+    class _Conn:
+        async def execute(self, stmt: object, params: object = None) -> object:
+            return SimpleNamespace(
+                scalar_one=lambda: 42, mappings=lambda: SimpleNamespace(all=lambda: [])
+            )
+
+        async def rollback(self) -> None:
+            raise RuntimeError("rollback failed")
+
+    class _Ctx:
+        def __init__(self, obj: object) -> None:
+            self.obj = obj
+
+        async def __aenter__(self) -> object:
+            return self.obj
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+    class _App:
+        async def execute(self, stmt: object, params: object = None) -> None:
+            deleted.append(stmt)
+
+    class _Engine:
+        def connect(self) -> _Ctx:
+            return _Ctx(_Conn())
+
+        def begin(self) -> _Ctx:
+            return _Ctx(_App())
+
+    monkeypatch.setattr(db_query, "_reader_engine", lambda: _Engine())
+    with pytest.raises(RuntimeError, match="rollback failed"):
+        await db_query._run_sql_as_reader(
+            "SELECT 1",
+            app_engine=_Engine(),  # type: ignore[arg-type]
+            workspace_id=uuid4(),
+            allowed_source_ids=[],
+            max_rows=1,
+        )
+    assert db_query._DELETE_FENCE in deleted and db_query._DELETE_FENCE_SCOPE in deleted
