@@ -71,6 +71,11 @@ def test_non_claims_are_skipped() -> None:
     assert _unverified(answer, _known({"rows": []})) == []
 
 
+def test_elapsed_durations_are_not_claims() -> None:
+    answer = "It is 35 hours old; nothing in the last 90 days, 6 tuần, or 90 ngày. Only 4821 hourly readings."
+    assert _unverified(answer, _known({"rows": []})) == ["4821"]
+
+
 def test_partially_uncited_needs_a_citation_and_an_uncited_unverified_sentence() -> None:
     known = _known({"rows": [{"v": 100.5}]})
     answer = "Price was 100.5 [1]. Volume rose to 987,654 shares. Next line 55.5 [1]."
@@ -196,7 +201,7 @@ def test_precise_derivations_of_two_data_values_are_reported_as_derived() -> Non
     answer = "BTC rose 376,55 USDT (0,56%) to 67.500 [1]. It is 14 hours old."
     report = check_grounding(answer, [], known, has_citation=True)
     assert set(report.derived) == {"376,55", "0,56%"}
-    assert report.unverified == ("14",)
+    assert report.unverified == ()  # an elapsed duration is not a data claim
     assert report.summary()["derived"] == 2
 
 

@@ -376,6 +376,8 @@ async def test_sql_mode_fetches_one_extra_row_and_flags_truncation(
     )
     assert asked["max_rows"] == 3 and out["row_count"] == 2
     assert out["truncated"] is True and out["hint"] == TRUNCATION_HINT
+    # No document_version_id selected: nothing is citable, so the model is told how to fix the SELECT.
+    assert out["citation_hint"] == db_query.SQL_UNCITED_HINT
 
 
 @pytest.mark.asyncio

@@ -78,6 +78,12 @@ _PROSE_SKIPS = [
     re.compile(r"```.*?(?:```|$)", re.DOTALL),  # fenced code
     re.compile(r"`[^`\n]*`"),  # inline code
     re.compile(r"^[ \t]*\d+[.)][ \t]", re.MULTILINE),  # ordered-list markers
+    # "35 hours old" / "last 90 days" / "90 ngày": elapsed spans the model works out from timestamps or the
+    # query window, not values read from a row. ponytail: also skips a duration that IS a data value.
+    re.compile(
+        r"\b\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
+        re.IGNORECASE,
+    ),
 ]
 # "10.82,106.63" / "10,82,106,63": a latitude,longitude label, which _NUM_RE reads as one unparseable token.
 _COORD_RE = re.compile(r"(?<![\w.,])(-?\d{1,3}[.,]\d+)\s*,\s*(-?\d{1,3}[.,]\d+)(?![\w.,])")

@@ -268,6 +268,9 @@ def map_fred(
         except (KeyError, ValueError) as exc:
             raise ProviderPayloadError("fred_value_invalid") from exc
         iso, text = day.isoformat(), decimal_text(value)
+        fields: dict[str, str | float | int | None] = {"series_id": sid, "date": iso}
+        if sid in FRED_UNITS:
+            fields["units"] = FRED_UNITS[sid]
         records.append(
             build_record(
                 provider="fred",
@@ -282,8 +285,7 @@ def map_fred(
                 unit="series units",
                 symbol=sid,
                 quality="provider_reported",
-                provider_fields={"series_id": sid, "date": iso}
-                | ({"units": FRED_UNITS[sid]} if sid in FRED_UNITS else {}),
+                provider_fields=fields,
             )
         )
     if not records:
