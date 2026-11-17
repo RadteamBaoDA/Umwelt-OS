@@ -6,6 +6,10 @@ its table/chart widgets state. It only reports: the answer is never rewritten.
 
 A precise number (relative precision 1% or better) that is not in the data but equals the difference, sum,
 mean or percentage change of two data values is reported separately as ``derived``, not as unverified.
+A number that is not in the data but appeared in an earlier assistant answer, next to a correction cue
+("earlier", "đính chính"), is ``restated``: the model is retracting it. Without the cue it stays unverified.
+A number that is in the data but only in a row other than the one(s) its sentence cites with ``[n]`` is
+``misattributed`` (a citation-level check; the meaning of the figure within its row is not judged).
 
 Known limits (a number that cannot be matched is reported as unverified even when it is right): other
 derivations (averages of many rows, rankings, rounded or low-precision results), unit conversions,
@@ -30,6 +34,14 @@ _MAX_KNOWN = 200_000  # bound on remembered values (tool results are already row
 _MAX_TEXT = 100_000  # bound on one scanned text
 _MAX_DERIVATION_BASE = 60  # numeric tool values tried pairwise for derived figures (60*59/2 pairs)
 _DERIVED_MAX_REL_TOL = 0.01  # only numbers stated to 1% precision or better may count as derived
+_MAX_ROWS = 200  # cited tool rows remembered for the per-citation check
+_ROW_CITE = re.compile(r"\[\d+\]")
+# A sentence (or the one before it) that retracts an earlier answer. Misses fail safe: no cue = unverified.
+_CORRECTION = re.compile(
+    r"earlier|previous|before|correct|retract|mistake|wrong|not based|should not have|"
+    r"trước|đính chính|sửa lại|nhầm|sai|không dựa|không có trong dữ liệu",
+    re.IGNORECASE,
+)
 _SKIP_KEYS = frozenset(
     {"citation", "citation_rule", "hint", "citations", "id", "url", "canonical_url", "timezone"}
 )
@@ -77,7 +89,7 @@ _COMMON_SKIPS = [
         # Last, after the time/date forms ("21:34 ngày 17/11" must not lose "34 ngày"): elapsed spans such
         # as "35 hours old" or "90 ngày" are worked out from timestamps or the query window, not read from
         # a row. ponytail: also skips a duration that IS a data value.
-        r"\b\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
+        r"\b\d+[\s-]+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
     )
 ]
 _PROSE_SKIPS = [
@@ -111,6 +123,8 @@ class GroundingReport:
     partially_uncited: bool
     bad_widgets: frozenset[int]
     derived: tuple[str, ...] = ()
+    restated: tuple[str, ...] = ()
+    misattributed: tuple[str, ...] = ()
 
     @property
     def count(self) -> int:
@@ -123,8 +137,18 @@ class GroundingReport:
         return list(dict.fromkeys(self.unverified))[:MAX_EXAMPLES]
 
     def summary(self) -> dict[str, Any]:
-        """``{"count", "examples", "derived"}`` as stored in message metadata and the done event."""
-        return {"count": self.count, "examples": self.examples, "derived": len(self.derived)}
+        """Counts and examples as stored in message metadata and the done event.
+
+        ``count``/``examples`` are unverified numbers only; ``derived``, ``restated`` and ``misattributed``
+        are counts of the separately reported groups.
+        """
+        return {
+            "count": self.count,
+            "examples": self.examples,
+            "derived": len(self.derived),
+            "restated": len(self.restated),
+            "misattributed": len(self.misattributed),
+        }
 
 
 def _parse_body(body: str) -> list[tuple[float, int]]:
@@ -237,11 +261,16 @@ def _is_skipped_key(key: Any) -> bool:
 class KnownNumbers:
     """Sorted set of magnitudes seen in the turn's data; ``contains`` is a tolerance lookup."""
 
-    def __init__(self) -> None:
-        """Start empty."""
+    def __init__(self, *, track_rows: bool = True) -> None:
+        """Start empty; ``track_rows=False`` for a per-row instance (rows never nest)."""
         self._values: list[float] = []
         self._sorted = True
         self._data: list[float] = []  # first numeric tool values, the operands of derived figures
+        self._track_rows = track_rows
+        # Numbers of each cited tool row, keyed by its marker ("[1]"); bounded by ``_MAX_ROWS``.
+        self.rows: dict[str, KnownNumbers] = {}
+        # Numbers of earlier assistant answers in the conversation (restated-figure check).
+        self.prior = KnownNumbers(track_rows=False) if track_rows else None
 
     def add_value(self, value: float) -> None:
         """Remember one magnitude (sign ignored); silently bounded by ``_MAX_KNOWN``."""
@@ -280,12 +309,41 @@ class KnownNumbers:
         elif isinstance(node, str):
             self.add_text(_strip(node, prose=False))
         elif isinstance(node, Mapping):
+            self._add_row(node, depth)
             for key, child in node.items():
                 if not _is_skipped_key(key):
                     self.add_json(child, depth=depth + 1)
         elif isinstance(node, list):
             for child in node:
                 self.add_json(child, depth=depth + 1)
+
+    def _add_row(self, node: Mapping[str, Any], depth: int) -> None:
+        """Remember a tool row's own numbers under its ``citation`` marker (no-op for any other mapping).
+
+        Bounded by ``_MAX_ROWS``; several rows with the same marker (an aggregate and an observation of
+        one version) share one entry.
+        """
+        marker = node.get("citation")
+        if not (self._track_rows and isinstance(marker, str) and _ROW_CITE.fullmatch(marker)):
+            return
+        if marker not in self.rows and len(self.rows) >= _MAX_ROWS:
+            return
+        row = self.rows.setdefault(marker, KnownNumbers(track_rows=False))
+        for key, child in node.items():
+            if not _is_skipped_key(key):
+                row.add_json(child, depth=depth + 1)
+
+    def misattributed(self, number: _Number, cited: Sequence[str]) -> bool:
+        """True when ``number`` is in some other cited row but in none of the rows ``cited`` points to.
+
+        Only decided when every marker in ``cited`` is a known tool row (an evidence or web marker has no
+        row to compare, so the sentence is left alone).
+        """
+        if not cited or any(c not in self.rows for c in cited):
+            return False
+        if any(self.rows[c].contains(number) for c in cited):
+            return False
+        return any(row.contains(number) for key, row in self.rows.items() if key not in cited)
 
     def contains(self, number: _Number) -> bool:
         """True when any reading of ``number`` lies within its tolerance of a known magnitude."""
@@ -342,9 +400,21 @@ def query_result_contents(messages: Sequence[Mapping[str, Any]]) -> list[str]:
     ]
 
 
-def build_known(tool_results: Iterable[str], texts: Iterable[str], user_text: str) -> KnownNumbers:
-    """Collect known numbers from tool-result JSON, evidence/web texts and the user's message."""
+def build_known(
+    tool_results: Iterable[str],
+    texts: Iterable[str],
+    user_text: str,
+    prior_answers: Iterable[str] = (),
+) -> KnownNumbers:
+    """Collect known numbers from tool-result JSON, evidence/web texts and the user's message.
+
+    ``prior_answers`` (earlier assistant messages) fill ``known.prior`` only: they never verify a number,
+    they just let ``check_grounding`` tell a retracted old figure from a new unverified one.
+    """
     known = KnownNumbers()
+    if known.prior is not None:
+        for answer in prior_answers:
+            known.prior.add_text(_strip(answer, prose=True))
     for raw in tool_results:
         try:
             known.add_json(json.loads(raw))
@@ -386,20 +456,37 @@ def check_grounding(
 
     ``partially_uncited`` needs ``has_citation`` (the answer kept at least one valid citation) and at least
     one sentence with an unverified number but no ``[n]`` marker. Answer numbers explained as a derivation of
-    two data values go to ``derived`` (widget cells must match the data directly). A widget is "bad" when it is non-sample and
-    holds at least one unverified value.
+    two data values go to ``derived`` (widget cells must match the data directly). A number from an earlier
+    answer next to a correction cue in its sentence or the one before goes to ``restated``. A number that is
+    in the data but only in another row than the ones its sentence cites goes to ``misattributed``. A widget
+    is "bad" when it is non-sample and holds at least one unverified value.
     """
     unverified: list[str] = []
     derived: list[str] = []
+    restated: list[str] = []
+    misattributed: list[str] = []
     partial = False
+    previous = ""
     for sentence in _SENTENCES.split(strip_prose(answer)):
         missing: list[str] = []
+        cited = _ROW_CITE.findall(sentence)
         for n in extract_numbers(sentence, prose=False):
             if known.contains(n):
-                continue
-            (derived if known.derivable(n) else missing).append(n.raw)
+                if known.misattributed(n, cited):
+                    misattributed.append(n.raw)
+            elif known.derivable(n):
+                derived.append(n.raw)
+            elif (
+                known.prior is not None
+                and known.prior.contains(n)
+                and _CORRECTION.search(f"{previous} {sentence}")
+            ):
+                restated.append(n.raw)
+            else:
+                missing.append(n.raw)
         unverified.extend(missing)
         partial = partial or bool(missing and not _MARKER.search(sentence))
+        previous = sentence
     bad: set[int] = set()
     for index, part in enumerate(widgets):
         nums, checked = _widget_numbers(part)
@@ -408,7 +495,12 @@ def check_grounding(
             bad.add(index)
             unverified.extend(missing)
     return GroundingReport(
-        tuple(unverified), has_citation and partial, frozenset(bad), tuple(derived)
+        tuple(unverified),
+        has_citation and partial,
+        frozenset(bad),
+        tuple(derived),
+        tuple(restated),
+        tuple(misattributed),
     )
 
 

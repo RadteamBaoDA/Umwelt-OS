@@ -28,7 +28,9 @@ def _env(tool_result: str | None, evidence: list[str] | None = None) -> Any:
     ctx = SimpleNamespace(evidence=[SimpleNamespace(content=c) for c in evidence or []])
     return SimpleNamespace(
         ts=SimpleNamespace(messages_payload=messages),
-        turn=SimpleNamespace(answer_context=ctx, web_run=None, user_prompt="price?"),
+        turn=SimpleNamespace(
+            answer_context=ctx, web_run=None, user_prompt="price?", prior_messages=[]
+        ),
     )
 
 
@@ -158,3 +160,26 @@ def test_record_db_query_logs_and_counts(caplog: pytest.LogCaptureFixture) -> No
         )
     assert counter._value.get() == before + 1  # type: ignore[attr-defined]
     assert "query_collected_data" in caplog.text and "outcome=ok" in caplog.text
+
+
+def test_prior_answers_and_misattribution_reach_report_and_metadata() -> None:
+    """Earlier assistant answers feed the restated check; a wrong-row citation lands in the metadata."""
+    rows = json.dumps(
+        {
+            "rows": [
+                {"value": 67500, "citation": "[1]"},
+                {"value": 3201.5, "citation": "[2]"},
+            ]
+        }
+    )
+    env = _env(rows)
+    env.turn.prior_messages = [
+        {"role": "user", "content": "rate?"},
+        {"role": "assistant", "content": "It is 25,000 VND."},
+    ]
+    answer = "Eth is 67.500 [2]. I should correct my earlier answer of 25,000 VND."
+    report, _ = _grounding_for(env, answer, [{"c": 1}], [])
+    assert report is not None and report.count == 0
+    assert report.restated == ("25,000",) and report.misattributed == ("67.500",)
+    meta = _assistant_metadata(_StreamState(), [], None, False, report)["metadata_json"]
+    assert meta["misattributed_numbers"] == ["67.500"] and "unverified_numbers" not in meta

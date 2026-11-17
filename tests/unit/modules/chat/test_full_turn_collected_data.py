@@ -163,6 +163,7 @@ async def _run_turn(model: Any, prompt: str = "BTC price?") -> SimpleNamespace:
         answer_context=answer_context,
         answer_request=AnswerContextRequest(query=prompt),
         web_run=None,
+        prior_messages=[],
     )
     ts = _TurnState(
         messages_payload=messages,

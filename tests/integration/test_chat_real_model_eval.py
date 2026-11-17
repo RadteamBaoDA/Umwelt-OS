@@ -635,6 +635,7 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
         answer_context=answer_context,
         answer_request=AnswerContextRequest(query=case.q),
         web_run=None,
+        prior_messages=[{"role": "assistant", "content": a} for _u, a in case.history],
     )
     ts = _TurnState(
         messages_payload=messages,

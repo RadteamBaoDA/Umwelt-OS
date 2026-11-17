@@ -39,6 +39,7 @@ from modules.chat.generative_ui import (
 )
 from modules.chat.generative_ui.tool_specs import TOOL_ANSWER
 from modules.chat.grounding import (
+    MAX_EXAMPLES,
     GroundingReport,
     build_known,
     check_grounding,
@@ -371,11 +372,13 @@ def _assistant_metadata(
     """Message ``metadata_json`` kwargs: reasoning, UI parts, ``uncited``, grounding flags and the router audit trail (pure).
 
     ``grounding`` (None when the check did not run) adds ``unverified_numbers`` (count and examples) when any
-    number was unmatched and ``partially_uncited`` when set. Returns ``{}`` when there is nothing to store so
-    the column keeps its default.
+    number was unmatched, ``misattributed_numbers`` (examples) when a figure sits under another row's
+    citation, and ``partially_uncited`` when set. Returns ``{}`` when there is nothing to store so the
+    column keeps its default.
     """
     unverified = grounding is not None and grounding.count > 0
     partial = grounding is not None and grounding.partially_uncited
+    misattributed = grounding is not None and bool(grounding.misattributed)
     generative_ui = (
         generative_uis[0] if generative_uis else None
     )  # first part, kept for older clients
@@ -386,6 +389,7 @@ def _assistant_metadata(
         and not uncited
         and not unverified
         and not partial
+        and not misattributed
     ):
         return {}
     return {
@@ -406,6 +410,15 @@ def _assistant_metadata(
             **({"uncited": True} if uncited else {}),
             **({"unverified_numbers": grounding.summary()} if grounding and unverified else {}),
             **({"partially_uncited": True} if partial else {}),
+            **(
+                {
+                    "misattributed_numbers": list(dict.fromkeys(grounding.misattributed))[
+                        :MAX_EXAMPLES
+                    ]
+                }
+                if grounding and misattributed
+                else {}
+            ),
             # Audit trail of the external router's choice (category + renderer only, no content).
             **(
                 {
@@ -443,7 +456,8 @@ def _grounding_for(
         web_texts = [f"{r.title} {r.snippet}" for r in web.results] if web is not None else []
         if not (results or evidence or web_texts):
             return None, generative_uis
-        known = build_known(results, [*evidence, *web_texts], turn.user_prompt)
+        prior = [m.get("content", "") for m in turn.prior_messages if m.get("role") == "assistant"]
+        known = build_known(results, [*evidence, *web_texts], turn.user_prompt, prior)
         report = check_grounding(
             final_answer, generative_uis, known, has_citation=bool(valid_citations)
         )
@@ -528,6 +542,10 @@ async def _persist_final(
         if grounding is not None:
             done_payload["unverified_numbers"] = grounding.summary()
             done_payload["partially_uncited"] = grounding.partially_uncited
+            if grounding.misattributed:
+                done_payload["misattributed_numbers"] = list(
+                    dict.fromkeys(grounding.misattributed)
+                )[:MAX_EXAMPLES]
         if generative_uis:
             done_payload["generative_ui"] = generative_uis[0]
             done_payload["generative_ui_parts"] = generative_uis

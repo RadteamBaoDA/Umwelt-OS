@@ -177,6 +177,7 @@ def test_summary_caps_examples() -> None:
         "(21:35 ngày 17/11), từ 14/11 hoặc từ 17/11",
         "No prices for 1–14 November",
         "It reflects only 15 and 16 November",
+        "Only the default 90-day window and a 7-day average",
     ],
 )
 def test_date_forms_leave_no_stray_numbers(text: str) -> None:
@@ -216,3 +217,59 @@ def test_made_up_precise_number_is_not_derivable() -> None:
     known = build_known(['{"rows": [{"value": 67123.45}, {"value": 67500}]}'], [], "")
     report = check_grounding("Change was 412.07 USDT [1].", [], known, has_citation=True)
     assert report.unverified == ("412.07",) and report.derived == ()
+
+
+_ROWS = (
+    '{"rows": [{"symbol": "BTCUSDT", "value": 67500, "citation": "[1]"},'
+    ' {"symbol": "ETHUSDT", "value": 3201.5, "citation": "[2]"}]}'
+)
+
+
+def test_number_cited_to_the_wrong_row_is_misattributed() -> None:
+    """A value that exists in the data but belongs to another cited row is flagged, not unverified."""
+    from modules.chat.grounding import build_known, check_grounding
+
+    known = build_known([_ROWS], [], "")
+    report = check_grounding("ETHUSDT is 67.500 USDT [2].", [], known, has_citation=True)
+    assert report.misattributed == ("67.500",) and report.unverified == ()
+    assert report.summary()["misattributed"] == 1
+
+
+def test_number_cited_to_its_own_row_or_uncited_or_non_row_citation_is_fine() -> None:
+    """Right row, several markers, no marker, or a marker without a row (evidence) never misattribute."""
+    from modules.chat.grounding import build_known, check_grounding
+
+    known = build_known([_ROWS], [], "")
+    for answer in (
+        "BTCUSDT is 67.500 USDT [1].",
+        "BTC 67.500 USDT, ETH 3.201,5 USDT [1][2].",
+        "ETHUSDT 67.500 USDT.",
+        "ETHUSDT 67.500 USDT [7].",
+        "ETHUSDT 3.201,5 USDT [2].",
+    ):
+        report = check_grounding(answer, [], known, has_citation=True)
+        assert report.misattributed == (), answer
+
+
+def test_prior_answer_number_in_a_correction_is_restated_not_unverified() -> None:
+    """A figure from an earlier answer, quoted next to a correction cue, is reported as restated."""
+    from modules.chat.grounding import build_known, check_grounding
+
+    known = build_known(
+        ['{"rows": [{"value": 26312.5}]}'], [], "", prior_answers=["It is 25,000 VND."]
+    )
+    answer = "Latest is 26,312.5 VND [1]. I need to correct my earlier answer. I said 25,000 VND."
+    report = check_grounding(answer, [], known, has_citation=True)
+    assert report.restated == ("25,000",) and report.unverified == ()
+    assert report.summary()["restated"] == 1
+
+
+def test_prior_answer_number_without_a_correction_cue_stays_unverified() -> None:
+    """Restating an old figure as if current is exactly what the check must keep flagging."""
+    from modules.chat.grounding import build_known, check_grounding
+
+    known = build_known(
+        ['{"rows": [{"value": 26312.5}]}'], [], "", prior_answers=["It is 25,000 VND."]
+    )
+    report = check_grounding("The rate today is 25,000 VND.", [], known, has_citation=False)
+    assert report.unverified == ("25,000",) and report.restated == ()
