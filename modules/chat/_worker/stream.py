@@ -295,7 +295,8 @@ def _query_rounds_used(ts: _TurnState) -> int:
     """Continuing rounds so far in this turn that carried a ``query_collected_data`` call (pure read).
 
     Derived from the transcript the answer step appends for every continuing round, so it needs no separate
-    counter on the turn state. A round that is stopped by the budget is not appended and so is not counted.
+    counter on the turn state. Only rounds that ran are appended before the budget check; the over-budget round
+    is appended later by the synthesis path, after which ``synth_done`` ends the loop, so it never affects a check.
     """
     return sum(
         1
