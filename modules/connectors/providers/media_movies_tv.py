@@ -58,6 +58,28 @@ def tvmaze_schedule_url(*, country: str | None, date: str, web: bool = False) ->
     return f"https://api.tvmaze.com/schedule{'/web' if web else ''}?{urlencode(query)}"
 
 
+def _add_tvmaze_show_fields(
+    fields: dict[str, Any], row: Mapping[str, Any], show: Mapping[str, Any]
+) -> None:
+    """Add the optional format, season, episode and cover fields to ``fields`` in place.
+
+    Unknown show types, out-of-range numbers and unsafe cover URLs are skipped silently.
+    """
+    show_type = show.get("type")
+    if isinstance(show_type, str):
+        normalized_type = show_type.lower().replace(" ", "_")
+        if normalized_type in {"scripted", "animation", "reality", "talk_show", "documentary"}:
+            fields["format"] = normalized_type
+    for key in ("season", "episode"):
+        value = row.get("number" if key == "episode" else key)
+        if type(value) is int and 0 <= value <= 99999:
+            fields[key] = str(value)
+    image = show.get("image")
+    cover = normalize_cover_url(image.get("medium")) if isinstance(image, Mapping) else None
+    if cover:
+        fields["image_url"] = cover
+
+
 def _tvmaze_record(row: object, collected_at: datetime) -> IngestionRecord | None:
     """Map one valid TVMaze episode to bounded provenance; skip incomplete rows."""
     if not isinstance(row, Mapping):
@@ -122,19 +144,7 @@ def _tvmaze_record(row: object, collected_at: datetime) -> IngestionRecord | Non
         fields["genres"] = genres
     if rating is not None:
         fields["rating"] = rating
-    show_type = show.get("type")
-    if isinstance(show_type, str):
-        normalized_type = show_type.lower().replace(" ", "_")
-        if normalized_type in {"scripted", "animation", "reality", "talk_show", "documentary"}:
-            fields["format"] = normalized_type
-    for key in ("season", "episode"):
-        value = row.get("number" if key == "episode" else key)
-        if type(value) is int and 0 <= value <= 99999:
-            fields[key] = str(value)
-    image = show.get("image")
-    cover = normalize_cover_url(image.get("medium")) if isinstance(image, Mapping) else None
-    if cover:
-        fields["image_url"] = cover
+    _add_tvmaze_show_fields(fields, row, show)
     identity = f"tvmaze:{episode_id}"
     raw_content = f"{heading}\n\n{summary}"
     content = raw_content[:20000]

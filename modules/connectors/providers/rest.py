@@ -17,7 +17,7 @@ from hashlib import sha256
 from ipaddress import ip_address
 from socket import getaddrinfo
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import SplitResult, urljoin, urlsplit
 
 import httpx
 
@@ -142,6 +142,27 @@ async def _authorize_hop(budget: asyncio.Timeout, before_send: BeforeSend, *, fi
         await recheck()
 
 
+async def _resolve_hop(current: str, resolve: Resolver) -> tuple[SplitResult, list[str]]:
+    """Validate one hop URL and resolve it to public addresses.
+
+    Raises ``UnsafeDestination`` for a non-http(s) scheme, missing host, embedded credentials,
+    or any resolved address that is not public. Every hop is re-resolved and re-checked.
+    """
+    parts = urlsplit(current)
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+    ):
+        raise UnsafeDestination("url_not_allowed")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    addresses = await resolve(parts.hostname, port)
+    if not addresses or any(not is_public_address(ip_address(address)) for address in addresses):
+        raise UnsafeDestination("non_public_destination")
+    return parts, addresses
+
+
 async def fetch_bounded(
     url: str,
     *,
@@ -186,21 +207,7 @@ async def fetch_bounded(
         ) as client,
     ):
         for hop in range(MAX_REDIRECTS + 1):
-            parts = urlsplit(current)
-            if (
-                parts.scheme not in {"http", "https"}
-                or not parts.hostname
-                or parts.username
-                or parts.password
-            ):
-                raise UnsafeDestination("url_not_allowed")
-            port = parts.port or (443 if parts.scheme == "https" else 80)
-            # Every hop is re-resolved and re-checked, then pinned to a validated address.
-            addresses = await resolve(parts.hostname, port)
-            if not addresses or any(
-                not is_public_address(ip_address(address)) for address in addresses
-            ):
-                raise UnsafeDestination("non_public_destination")
+            parts, addresses = await _resolve_hop(current, resolve)
             hop_headers = merged
             if _origin(current) != first_origin:
                 # Allowlist: never forward unknown (possibly secret-bearing) headers to a different origin.
