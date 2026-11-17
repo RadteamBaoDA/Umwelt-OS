@@ -227,6 +227,8 @@ export const BUILTINS: [id: string, label: string][] = [
   ['itviec_jobs', 'ITviec jobs (crawled)'],
   ['github_trending', 'GitHub Trending (mirror)'],
   ['wwr_jobs', 'We Work Remotely jobs'],
+  ['livechart_episodes', 'LiveChart anime episodes'],
+  ['tvmaze_schedule', 'TVMaze schedule'],
 ];
 
 /** Opens the "Add datasource" > "Connect an API" wizard dialog from the sources settings page. */
