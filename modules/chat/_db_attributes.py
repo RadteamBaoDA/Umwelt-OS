@@ -114,12 +114,21 @@ async def fetch_attributes(
 
 
 def serialize_observations(
-    obs_rows: Any, citation_map: dict[UUID, int], attributes: dict[UUID, dict[str, Any]]
+    obs_rows: Any,
+    citation_map: dict[UUID, int],
+    attributes: dict[UUID, dict[str, Any]],
+    source_names: dict[UUID, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Serialise observation rows with ``[n]`` citation markers, coordinates and bounded ``attributes``."""
+    """Serialise observation rows with ``[n]`` citation markers, coordinates and bounded ``attributes``.
+
+    ``source_name`` is the owner's label for the row's source; it is often the only place-name a
+    coordinate- or station-keyed series carries (open_meteo ``lat,lon``, openaq ``location <id>``).
+    """
+    names: dict[Any, str] = dict(source_names or {})
     return [
         {
             "provider": obs.provider,
+            "source_name": names.get(getattr(obs, "source_id", None)),
             "metric": obs.metric,
             "symbol": obs.symbol,
             "region": obs.region,

@@ -129,3 +129,28 @@ async def test_available_series_query_is_scoped_current_and_capped() -> None:
     sql = str(captured[0].compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
     assert "workspace_id" in sql and "is_current" in sql and "GROUP BY" in sql
     assert "LIMIT" in sql
+
+
+def test_serialize_observations_labels_rows_with_source_name() -> None:
+    """A coordinate-keyed series (open_meteo) is findable by the owner's source name ("Hà Nội")."""
+    from datetime import UTC, datetime
+
+    src, version = uuid4(), uuid4()
+    row = SimpleNamespace(
+        provider="open_meteo",
+        metric="temperature_2m",
+        symbol=None,
+        region="21.03,105.85",
+        value=31.2,
+        unit="°C",
+        currency=None,
+        latitude=21.03,
+        longitude=105.85,
+        observed_at=datetime(2026, 11, 17, tzinfo=UTC),
+        is_current=True,
+        document_version_id=version,
+        source_id=src,
+    )
+    [out] = attrs.serialize_observations([row], {version: 2}, {}, {src: "Hà Nội"})
+    assert out["source_name"] == "Hà Nội" and out["citation"] == "[2]"
+    assert attrs.serialize_observations([row], {}, {})[0]["source_name"] is None

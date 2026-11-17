@@ -155,7 +155,7 @@ def _db_query_base_properties() -> dict[str, Any]:
         "target": {
             "type": "string",
             "enum": ["observations", "documents", "both"],
-            "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider. Each row carries `attributes` (provider facts such as quake depth, CVE vendor, score, season/episode, OHLC), and observations carry `latitude`/`longitude`. An empty observation result lists `available_series` to retry with valid provider/metric/symbol/region.",
+            "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider. Each row carries `attributes` (provider facts such as quake depth, CVE vendor, score, season/episode, OHLC), and observations carry `latitude`/`longitude` and `source_name` (the owner's label, often the only place name). For TV/media rows the air or release time is `attributes.release_date`, not `observed_at` (collection time). An empty observation result lists `available_series` to retry with valid provider/metric/symbol/region.",
         },
         "providers": {
             "type": "array",
@@ -773,6 +773,7 @@ async def _run_query(
                 redis=redis,
                 web_numbering=web_numbering,
                 available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
+                source_names={i: n for i, _p, n in allowed},
             )
         return cap_tool_output(_with_flags(raw, extras))
 
@@ -1403,6 +1404,7 @@ async def _execute_structured_mode(
     available_providers: list[str] | None = None,
     web_numbering: tuple[int, int] | None = None,
     source_scopes: SourceScopes | None = None,
+    source_names: dict[UUID, str] | None = None,
 ) -> str:
     """Execute parameterized SQLAlchemy queries for observations and/or documents.
 
@@ -1410,7 +1412,8 @@ async def _execute_structured_mode(
     store documents only). ``available_providers`` lets the model retry with a valid id. Order: optional
     aggregate, observation rows, document rows, evidence registration, best-effort Redis hot cache.
     Read-only, no commit. ``source_scopes`` fences observations, documents and evidence to each source's
-    current scope. Returns the JSON payload string.
+    current scope. ``source_names`` labels observation rows with their source's name. Returns the JSON
+    payload string.
     """
     out: dict[str, Any] = {
         "mode": "structured",
@@ -1471,7 +1474,9 @@ async def _execute_structured_mode(
         _apply_aggregate_citations(aggregates, citation_map)
         out["observation_aggregates"] = aggregates
     if want_obs:
-        out["observations"] = serialize_observations(obs_rows, citation_map, attributes)
+        out["observations"] = serialize_observations(
+            obs_rows, citation_map, attributes, source_names
+        )
         if not obs_rows and not aggregates:
             out["available_series"] = await available_series(
                 session,
