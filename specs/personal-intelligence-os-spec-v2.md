@@ -181,6 +181,8 @@ Agents must not:
 - bypass permission checks;
 - modify internal state outside supported APIs.
 
+**Narrow exception (chat collected-data tool).** The chat tool `query_collected_data` (mode `sql`, `modules/chat/db_query.py`) may run one read-only `SELECT` written by the model, and only over `chat_sql.scoped_observations` and `chat_sql.scoped_documents`. It is enforced by three layers: the `pglast` parser allowlist (`modules/chat/sql_guard.py`); the dedicated `umwelt_chat_sql_login` role, which has no base-table privileges, is read-only, has a 2 s statement timeout and a connection limit; and the per-backend fence (`chat_sql.query_fence` and `query_fence_scope`), which limits rows to the turn's allowed sources and their current configuration scope. This exception does not extend to other agents, tools or APIs, which keep the rule above.
+
 ---
 
 ## 2.6 Human control

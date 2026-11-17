@@ -1,3 +1,15 @@
+## 2026-11-17 - Chat collected-data correctness
+
+Chat answers from collected data through `query_collected_data` (`modules/chat/db_query.py`). Correctness fixes are committed on `feature/more-datasource`; the scope fence is migration `0024_chat_sql_scope_fence`.
+
+| State | Work |
+| --- | --- |
+| Done | `3c902f5a` tool input contract (malformed JSON and unknown keys rejected, owner-timezone dates, truncation flag, aggregate region/citation, untrusted `data_notice`, bind-colon escaping); `8d25190b` readable record titles and open_meteo/openaq/ioda/cisa_kev/nvd/nasa_eonet metric catalog entries; `784a5d2c` separate round budget for collected-data queries; `b840584f` current-configuration scope fence (migration 0024, `chat_sql.query_fence_scope`, current revisions only, paused sources readable); `fd476c6f` deterministic grounding check (`unverified_numbers`, `partially_uncited`, widget relabel); `f5e1797c` scripted full-turn tests through the real tool loop |
+| In progress | Structured results and views: `attributes` (bounded provider fields) and latitude/longitude; accent-insensitive `text_query` (migration `0025_chat_attributes_unaccent`, not yet committed); metric ids in the prompt hint |
+| Pending | Integration and migration tests (`tests/integration/test_chat_sql_reader_role.py`, `tests/test_migrations.py`) not yet run on Docker (owner approval for the harness); real-model evaluation (owner approval, live provider calls); performance benchmark of the views and fence at 2-5M rows (owner approval); reader role `CONNECTION LIMIT 8` allows one chat-worker replica (see `docs/deployment.md`) |
+
+Evidence so far is unit tests and the scripted full-turn tests only. Grounding is a numeric heuristic: derived values are flagged and near-matches pass.
+
 ## 2026-11-17 - Media datasource contracts
 
 Phase 1 of `specs/new-datasource-v2.md` has code and focused test evidence for media types, metadata, filters, projection and shared normalization. PostgreSQL runtime acceptance remains open; media renderers are planned pending phase 3. Phase 2 TVMaze implementation has started but is not yet registered or usable. See `docs/superpowers/plans/EXECUTION.md` for validation and the pagination limitation.

@@ -57,10 +57,12 @@ PostgreSQL has `max_connections=120`. Without a pooler every process owns its SQ
 | API | `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW + 2 reader)` = 2 x 22 = 44 |
 | worker | 7 + 10 = 17, plus up to 6 direct connections (agent checkpoints and leases) = 23 |
 | cron-worker | 9 + 5 = 14 |
-| chat-worker | 10 + 10 + 2 reader = 22 |
+| chat-worker | 10 + 10 + 6 reader = 26 (reader pool `_READER_POOL_SIZE` 4 + `_READER_MAX_OVERFLOW` 2, `modules/chat/db_query.py`) |
 | model-worker | 5 + 5 = 10 |
 
-Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `44N + 23W + 14C + 22 + 10 + 5` (admin/migrate). One of each is 118 and fits; **a second API replica (162), a second worker replica (141) or a second cron-worker replica (132) exceeds `max_connections`** (and a second API replica also exceeds the reader role's limit of 8). This is why the stack ships as a single replica of each service.
+Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `44N + 23W + 14C + 26 + 10 + 5` (admin/migrate). One of each is 122, which is **2 above `max_connections=120`** once the chat reader pool is counted at its real size of 6; the 118 previously shown assumed 2. Reduce pools or raise `max_connections` before relying on the single-replica stack. A second API replica (166), a second worker replica (145) or a second cron-worker replica (136) exceeds `max_connections` as well.
+
+**Chat reader role limit.** The reader login `umwelt_chat_sql_login` has `CONNECTION LIMIT 8` (Alembic `0017_chat_sql_login_role`). Each chat-worker process opens up to 6 reader connections (4 pool + 2 overflow), so the role allows **one chat-worker replica** (6 connections; two replicas need 12). To run more chat-worker replicas, first raise the limit with `ALTER ROLE umwelt_chat_sql_login CONNECTION LIMIT <n>`, where `n >= 6 x replicas`, and account for the extra connections in the `max_connections` budget above. Note that a second API replica also exceeds the reader limit if the API opens reader connections. This is why the stack ships as a single replica of each service.
 
 With the PgBouncer overlay (`docker compose -f docker-compose.yml -f docker-compose.pgbouncer.yml up -d`) the application pools become *client* pools. PostgreSQL only sees the pooler's server connections, which are fixed per database alias and do not grow with replicas:
 
