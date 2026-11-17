@@ -9,7 +9,12 @@ from modules.connectors.backends import (
     PROVIDER_SOURCE_TYPES,
     is_native_provider,
 )
-from modules.connectors.provider_options import ALL_OPTION_NAMES, option_fields, validate_options
+from modules.connectors.provider_options import (
+    ALL_OPTION_NAMES,
+    MEDIA_OPTION_NAMES,
+    option_fields,
+    validate_options,
+)
 from modules.connectors.provider_specs import (
     COLLECTION_FILTER_FIELDS,
     INCREMENTAL_PROVIDERS,
@@ -71,6 +76,21 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
 # Provider -> (predicate that is True when the scope is INCOMPLETE, error message). A provider
 # with extra mandatory scope adds one row here; ``_validate_provider_source`` never changes.
 _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] = {
+    "youtube": (
+        lambda c: (
+            sum(
+                bool(value)
+                for value in (
+                    c.youtube_channel_id,
+                    c.youtube_channels,
+                    c.youtube_handles,
+                    c.youtube_playlist_ids,
+                )
+            )
+            != 1
+        ),
+        "Choose exactly one YouTube channel, channel list, handle list, or playlist list",
+    ),
     "github_releases": (
         lambda c: not c.github_owner or not c.github_repository,
         "GitHub owner and repository are required",
@@ -192,7 +212,11 @@ def _validate_generic_source(source: ConnectorSource) -> dict[str, Any]:
         | {
             "feed_sections",
             *sorted(ALL_OPTION_NAMES - COLLECTION_FILTER_FIELDS),
+            *sorted(MEDIA_OPTION_NAMES),
             "youtube_channel_id",
+            "youtube_handles",
+            "youtube_playlist_ids",
+            "youtube_filter",
             "arxiv_category",
             "huggingface_author",
             "bluesky_actor",

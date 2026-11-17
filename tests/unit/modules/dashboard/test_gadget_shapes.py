@@ -834,3 +834,203 @@ def test_validate_measurement_scopes() -> None:
             scopes("finance_chart", providers, scope)
     scopes("weather", ["open_meteo", "open_meteo"], GadgetScope(metrics=["temperature_2m"]))
     scopes("provider_observation", ["alternative_me", "frankfurter"], GadgetScope())
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("media_types", ["anime", "anime"]),
+        ("countries", ["JP", "JP"]),
+        ("genres", ["action", "action"]),
+        ("languages", ["ja", "ja"]),
+        ("formats", ["tv", "tv"]),
+        ("content_ratings", ["pg", "pg"]),
+    ],
+)
+def test_media_gadget_scope_rejects_duplicates(field: str, values: list[str]) -> None:
+    """Media list selectors on GadgetScope reject duplicate items."""
+    with pytest.raises(ValueError, match="distinct values"):
+        GadgetScope.model_validate({field: values})
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("media_types", ["anime", "anime"]),
+        ("countries", ["JP", "JP"]),
+        ("genres", ["action", "action"]),
+        ("languages", ["ja", "ja"]),
+        ("formats", ["tv", "tv"]),
+        ("content_ratings", ["pg", "pg"]),
+    ],
+)
+def test_media_gadget_filters_rejects_duplicates(field: str, values: list[str]) -> None:
+    """Media multi-select fields on GadgetFilters reject duplicate items."""
+    from modules.dashboard.schemas import GadgetFilters
+
+    with pytest.raises(ValueError, match="distinct values"):
+        GadgetFilters.model_validate({field: values})
+
+
+@pytest.mark.parametrize(
+    "bad_rating",
+    [True, False, float("nan"), float("inf"), float("-inf"), -0.1, 100.1],
+)
+def test_media_min_rating_rejects_bool_non_finite_and_out_of_range(bad_rating: object) -> None:
+    """Both GadgetScope and GadgetFilters reject booleans, non-finite floats, and out-of-range ratings."""
+    from modules.dashboard.schemas import GadgetFilters
+
+    with pytest.raises(ValueError):
+        GadgetScope.model_validate({"min_rating": bad_rating})
+    with pytest.raises(ValueError):
+        GadgetFilters.model_validate({"min_rating": bad_rating})
+
+
+def test_media_gadget_filters_defaults_and_valid_bounds() -> None:
+    """Media GadgetFilters scalar defaults stay None, lists stay [], and valid edge values parse cleanly."""
+    from modules.dashboard.schemas import GadgetFilters
+
+    defaults = GadgetFilters()
+    for scalar in (
+        "media_type",
+        "release_status",
+        "group_by",
+        "release_year",
+        "release_season",
+        "min_rating",
+    ):
+        assert getattr(defaults, scalar) is None
+    for lst in (
+        "media_types",
+        "countries",
+        "genres",
+        "languages",
+        "formats",
+        "content_ratings",
+    ):
+        assert getattr(defaults, lst) == []
+
+    for rating in (0, 0.0, 85.5, 100.0):
+        assert GadgetScope(min_rating=rating).min_rating == float(rating)
+        assert GadgetFilters(min_rating=rating).min_rating == float(rating)
+
+    with pytest.raises(ValueError):
+        GadgetScope(countries=["jp"])
+    with pytest.raises(ValueError):
+        GadgetScope(release_year=1799)
+    with pytest.raises(ValueError):
+        GadgetScope(release_window_days=91)
+    assert GadgetScope(release_year=2026, release_window_days=14).release_window_days == 14
+
+
+def test_media_renderers_and_templates_registered_as_planned() -> None:
+    """media_feed and media_calendar renderers and templates register as planned in M1."""
+    reads = {r.id: r for r in public.renderer_reads()}
+    for renderer_id in ("media_feed", "media_calendar"):
+        read = reads[renderer_id]
+        assert read.runtime_state == "planned"
+        assert read.source_mode == "multi"
+        assert read.accepted_shapes == ["media", "video"]
+        assert read.max_sources == 32
+        assert (read.minimum_width, read.minimum_height) == (4, 4)
+
+    templates = {t.id: t for t in public.list_templates()}
+    assert templates["media_shelf"].renderer == "media_feed"
+    assert templates["release_calendar"].renderer == "media_calendar"
+    assert public.preset_definition_name("media_feed") == "Media shelf"
+    assert public.preset_definition_name("media_calendar") == "Release calendar"
+
+
+@pytest.mark.parametrize("renderer_id", ["media_feed", "media_calendar"])
+def test_validate_renderer_configuration_accepts_media_scope_and_filters(renderer_id: str) -> None:
+    """Media renderers accept all media GadgetScope and GadgetFilters fields, including min_rating=0.0."""
+    from modules.dashboard.schemas import GadgetFilters
+
+    cfg = GadgetConfiguration(
+        scope=GadgetScope(
+            source_item_ids=[uuid4()],
+            media_types=["anime", "movie"],
+            countries=["JP", "US"],
+            genres=["action", "sci_fi"],
+            languages=["ja", "en"],
+            formats=["tv", "movie"],
+            content_ratings=["pg_13"],
+            release_year=2026,
+            release_season="fall",
+            min_rating=0.0,
+            release_window_days=14,
+        ),
+        filters=GadgetFilters(
+            media_type="anime",
+            media_types=["anime"],
+            release_status="airing",
+            group_by="date",
+            countries=["JP"],
+            genres=["sci_fi"],
+            languages=["ja"],
+            formats=["tv"],
+            content_ratings=["pg_13"],
+            release_year=2026,
+            release_season="fall",
+            min_rating=0.0,
+        ),
+    )
+    assert gadgets.validate_renderer_configuration(renderer_id, cfg) is cfg
+
+    with pytest.raises(ValueError, match="not valid for renderer"):
+        gadgets.validate_renderer_configuration(
+            renderer_id,
+            GadgetConfiguration(scope=GadgetScope(symbols=["NVDA"])),
+        )
+
+
+@pytest.mark.parametrize(
+    "scope_kwargs",
+    [
+        {"media_types": ["anime"]},
+        {"countries": ["JP"]},
+        {"genres": ["action"]},
+        {"languages": ["ja"]},
+        {"formats": ["tv"]},
+        {"content_ratings": ["pg"]},
+        {"release_year": 2026},
+        {"release_season": "spring"},
+        {"min_rating": 0.0},
+        {"release_window_days": 14},
+    ],
+)
+def test_validate_renderer_configuration_rejects_media_scope_on_non_media_renderer(
+    scope_kwargs: dict[str, object],
+) -> None:
+    """Non-media renderers reject media scope selectors, including falsy min_rating=0.0."""
+    cfg = GadgetConfiguration(scope=GadgetScope.model_validate(scope_kwargs))
+    with pytest.raises(ValueError, match="not valid for renderer news_feed"):
+        gadgets.validate_renderer_configuration("news_feed", cfg)
+
+
+@pytest.mark.parametrize(
+    "filter_kwargs",
+    [
+        {"media_type": "anime"},
+        {"media_types": ["movie"]},
+        {"release_status": "upcoming"},
+        {"group_by": "date"},
+        {"countries": ["JP"]},
+        {"genres": ["sci_fi"]},
+        {"languages": ["ja"]},
+        {"formats": ["tv"]},
+        {"content_ratings": ["pg_13"]},
+        {"release_year": 2026},
+        {"release_season": "fall"},
+        {"min_rating": 0.0},
+    ],
+)
+def test_validate_renderer_configuration_rejects_media_filters_on_non_media_renderer(
+    filter_kwargs: dict[str, object],
+) -> None:
+    """Non-media renderers reject non-default media filters, including min_rating=0.0."""
+    from modules.dashboard.schemas import GadgetFilters
+
+    cfg = GadgetConfiguration(filters=GadgetFilters.model_validate(filter_kwargs))
+    with pytest.raises(ValueError, match="Media filters are only valid for media renderers"):
+        gadgets.validate_renderer_configuration("news_feed", cfg)

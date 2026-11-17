@@ -62,12 +62,44 @@ def register_native_provider(
 
 
 async def _native_feed(call: NativeCall) -> Any:
-    """YouTube/arXiv catalogue feeds; returns the page for the generic accept path."""
+    """Collect YouTube with atomic validator state; leave arXiv on its shared legacy feed flow."""
     from modules.connectors.providers.feed_catalog import collect_provider_feed
 
     run = call.run
+    source = run.attempt.source
+    if source.provider == "youtube":
+        from modules.connectors.providers.feed_catalog import (
+            collect_youtube_snapshot,
+            decode_youtube_validator_cursor,
+            encode_youtube_validator_cursor,
+            youtube_query_fingerprint,
+        )
+
+        config = connectors.ConnectorConfig.model_validate(source.configuration)
+        fingerprint = youtube_query_fingerprint(config)
+        validators = decode_youtube_validator_cursor(call.lease.cursor_before, fingerprint)
+        page = await collect_youtube_snapshot(
+            source,
+            collected_at=call.collected_at,
+            before_request=run.gate,
+            validators=validators,
+        )
+        if page.next_eligible_at is not None:
+            run.next_eligible_at = page.next_eligible_at
+            raise connectors.ProviderRateLimited(page.next_eligible_at)
+        run.extras["native_fp"] = fingerprint
+        cursor_after = encode_youtube_validator_cursor(fingerprint, page.validators)
+        await _accept_native(
+            run,
+            call.lease,
+            page.records,
+            page.coverage,
+            call.collected_at,
+            cursor_after=cursor_after,
+        )
+        return None
     return await collect_provider_feed(
-        run.attempt.source,
+        source,
         collected_at=call.collected_at,
         session_factory=run.factory,
         before_request=run.gate,

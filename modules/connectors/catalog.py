@@ -59,7 +59,9 @@ class CatalogEntry(BaseModel):
     terms_url: str | None = None
     terms_checked_on: str | None = None
     attribution: str | None = None
-    category: Literal["news", "economy", "hazards", "space", "security", "tech"] | None = None
+    category: Literal["news", "economy", "hazards", "space", "security", "tech", "media"] | None = (
+        None
+    )
     hosts: tuple[str, ...] = ()
     endpoints: tuple[str, ...] = ()
     execution: Literal["supported", "experimental", "research_only"] | None = None
@@ -454,15 +456,26 @@ _ENTRIES = (
         provider_id="youtube",
         label="YouTube feeds",
         auth_methods=("none",),
-        scope_fields=("youtube_channel_id", "history_mode"),
+        scope_fields=(
+            "youtube_channel_id",
+            "youtube_channels",
+            "youtube_handles",
+            "youtube_playlist_ids",
+            "youtube_filter",
+            "history_mode",
+        ),
         configuration_fields=(
             "youtube_channel_id",
+            "youtube_channels",
+            "youtube_handles",
+            "youtube_playlist_ids",
+            "youtube_filter",
             "history_mode",
             "timezone",
             "schedule_interval_minutes",
         ),
-        quota_limits={"requests_per_trigger": 1, "records_per_trigger": 500},
-        history_description="Entries returned by the current YouTube channel feed.",
+        quota_limits={"requests_per_trigger": 16, "records_per_trigger": 500},
+        history_description="Entries returned by the configured YouTube channel, handle, or playlist feeds.",
         collection_modes=("scheduled", "manual"),
         supports_history=True,
         supports_edit=False,
@@ -652,6 +665,90 @@ _NEWS = {
     "published_at": "2026-01-01T08:00:00Z",
 }
 SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
+    "anilist_anime": {
+        "title": "Example anime",
+        "url": "https://anilist.co/anime/1",
+        "media_type": "anime",
+        "attribution": "Data via AniList",
+    },
+    "anilist_manga": {
+        "title": "Example manga",
+        "url": "https://anilist.co/manga/1",
+        "media_type": "manga",
+        "attribution": "Data via AniList",
+    },
+    "livechart_episodes": {
+        "title": "Example anime episode",
+        "url": "https://www.livechart.me/episodes/1",
+        "media_type": "anime",
+        "release_date": "2026-01-01T08:00:00Z",
+        "attribution": "Data via LiveChart.me",
+    },
+    "tvmaze_schedule": {
+        "title": "Example series — Example episode",
+        "url": "https://www.tvmaze.com/episodes/1/example-episode",
+        "media_type": "tv",
+        "release_date": "2026-01-01T08:00:00Z",
+        "attribution": "Data via TVMaze (CC BY-SA 4.0)",
+    },
+    "openlibrary_books": {
+        "media_type": "book",
+        "attribution": "Data via Open Library (CC0 1.0)",
+    },
+    "gutendex_books": {
+        "title": "Example public domain ebook",
+        "url": "https://www.gutenberg.org/ebooks/1",
+        "media_type": "book",
+        "attribution": "Data via Project Gutenberg / Gutendex",
+    },
+    "ann_news": {
+        "title": "Example anime news entry",
+        "url": "https://www.animenewsnetwork.com/news/1",
+        "media_type": "anime",
+        "attribution": "Data via Anime News Network",
+    },
+    "mangaupdates_releases": {
+        "title": "Example manga chapter release",
+        "url": "https://www.mangaupdates.com/series/1",
+        "media_type": "manga",
+        "attribution": "Data via MangaUpdates",
+    },
+    "mangadex_releases": {
+        "title": "Example MangaDex chapter",
+        "url": "https://mangadex.org/chapter/00000000-0000-4000-8000-000000000001",
+        "media_type": "manga",
+        "attribution": "Data via MangaDex",
+    },
+    "apple_books_rss": {
+        "title": "Example Apple Books release",
+        "url": "https://books.apple.com/us/book/example/id1",
+        "media_type": "book",
+        "attribution": "Data via Apple Books",
+    },
+    "podcast_rss": {
+        "title": "Example podcast episode",
+        "url": "https://example.org/episode/1",
+        "media_type": "podcast",
+        "attribution": "Data via podcast RSS",
+    },
+    "wikidata_movies": {
+        "title": "Example Wikidata movie",
+        "url": "https://www.wikidata.org/wiki/Q1",
+        "media_type": "movie",
+        "attribution": "Wikidata is CC0",
+    },
+    "itunes_movies": {
+        "title": "Example iTunes movie",
+        "url": "https://itunes.apple.com/movie/id1",
+        "media_type": "movie",
+        "attribution": "Data via Apple iTunes",
+    },
+    "letterboxd_rss": {
+        "title": "Example Letterboxd diary film",
+        "url": "https://letterboxd.com/film/example/",
+        "media_type": "movie",
+        "attribution": "Data via Letterboxd",
+    },
     "bbc_world": _NEWS,
     "vnexpress_business": _NEWS,
     "tuoitre_news": _NEWS,

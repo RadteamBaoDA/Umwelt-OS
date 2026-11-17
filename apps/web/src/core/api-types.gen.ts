@@ -7556,8 +7556,12 @@ export interface components {
         BuiltinEnableRequest: {
             /** Advisory Min Level */
             advisory_min_level?: number | null;
+            /** Anime Season */
+            anime_season?: ("winter" | "spring" | "summer" | "fall") | null;
             /** Coin Ids */
             coin_ids?: ("btc-bitcoin" | "eth-ethereum" | "bnb-binance-coin" | "sol-solana" | "xrp-xrp" | "ada-cardano" | "doge-dogecoin" | "ltc-litecoin" | "dot-polkadot" | "trx-tron")[] | null;
+            /** Content Ratings */
+            content_ratings?: ("safe" | "pg" | "pg_13" | "r" | "suggestive" | "mature" | "explicit" | "clean")[] | null;
             /** Crypto Symbols */
             crypto_symbols?: ("BTCUSDT" | "ETHUSDT" | "BNBUSDT" | "SOLUSDT" | "XRPUSDT" | "ADAUSDT" | "DOGEUSDT" | "TRXUSDT" | "LINKUSDT" | "DOTUSDT" | "LTCUSDT" | "AVAXUSDT")[] | null;
             /**
@@ -7567,13 +7571,15 @@ export interface components {
              */
             declared_use: "personal" | "noncommercial" | "commercial" | "unknown";
             /** Disease Country */
-            disease_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH") | null;
+            disease_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
             /** Eonet Categories */
             eonet_categories?: ("drought" | "dustHaze" | "earthquakes" | "floods" | "landslides" | "manmade" | "seaLakeIce" | "severeStorms" | "snow" | "tempExtremes" | "volcanoes" | "waterColor" | "wildfires")[] | null;
             /** Eonet Days */
             eonet_days?: number | null;
             /** Eonet Status */
             eonet_status?: ("open" | "all") | null;
+            /** Exclude Adult */
+            exclude_adult?: boolean | null;
             /** Exclude Keywords */
             exclude_keywords?: string[] | null;
             /** Feed Sections */
@@ -7618,8 +7624,20 @@ export interface components {
             max_age_days?: number | null;
             /** Max Items */
             max_items?: number | null;
+            /** Media Countries */
+            media_countries?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR")[] | null;
+            /** Media Country */
+            media_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
+            /** Media Formats */
+            media_formats?: ("tv" | "tv_short" | "movie" | "special" | "ova" | "ona" | "music" | "manga" | "manhwa" | "manhua" | "novel" | "one_shot" | "ebook" | "audiobook" | "magazine" | "scripted" | "animation" | "reality" | "talk_show" | "documentary" | "album" | "single" | "ep" | "episodic" | "serial" | "main_game" | "dlc" | "expansion" | "remake" | "remaster")[] | null;
+            /** Media Genres */
+            media_genres?: ("action" | "adventure" | "sci_fi" | "fantasy" | "romance" | "thriller" | "horror" | "comedy" | "drama" | "mystery" | "documentary" | "animation" | "slice_of_life" | "history" | "music" | "sports" | "non_fiction" | "programming" | "rpg" | "strategy")[] | null;
+            /** Media Languages */
+            media_languages?: ("en" | "vi" | "ja" | "ko" | "zh" | "zh-hk" | "fr" | "de" | "es" | "pt" | "it" | "ru" | "id" | "th")[] | null;
             /** Min Magnitude */
             min_magnitude?: number | null;
+            /** Min Rating */
+            min_rating?: number | null;
             /** Name */
             name?: string | null;
             /** Nvd Keyword */
@@ -7640,6 +7658,8 @@ export interface components {
             realtime_mode?: ("realtime" | "near_realtime") | null;
             /** Region */
             region?: ("world" | "southeast_asia" | "vietnam" | "east_asia" | "south_asia" | "europe" | "north_america" | "south_america" | "africa" | "oceania" | "middle_east") | null;
+            /** Release Year */
+            release_year?: number | null;
             /** Satnogs Status */
             satnogs_status?: ("good" | "bad" | "unknown") | null;
             /** Schedule Interval Minutes */
@@ -7651,7 +7671,7 @@ export interface components {
             /** Vn Symbols */
             vn_symbols?: string[] | null;
             /** Wb Country */
-            wb_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH") | null;
+            wb_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
             /** Wb Indicator */
             wb_indicator?: ("gdp" | "gdp_growth" | "inflation_cpi" | "unemployment" | "population" | "fdi") | null;
             /** Wiki Language */
@@ -7675,7 +7695,7 @@ export interface components {
              * Data Shapes
              * @default []
              */
-            data_shapes: ("news" | "measurement" | "event" | "located" | "messages" | "video" | "project_activity" | "weather" | "series" | "job")[];
+            data_shapes: ("news" | "measurement" | "event" | "located" | "messages" | "video" | "project_activity" | "weather" | "series" | "job" | "media")[];
             /** Default Section */
             default_section?: string | null;
             /** Eligibility */
@@ -7830,7 +7850,7 @@ export interface components {
             /** Availability Reason */
             availability_reason?: string | null;
             /** Category */
-            category?: ("news" | "economy" | "hazards" | "space" | "security" | "tech") | null;
+            category?: ("news" | "economy" | "hazards" | "space" | "security" | "tech" | "media") | null;
             /**
              * Code Available
              * @description Report an adapter actually wired to collection, independently of credentials or runtime readiness.
@@ -7850,7 +7870,7 @@ export interface components {
              * Data Shapes
              * @description Report the data shapes this provider emits (sorted, never empty) for renderer compatibility.
              */
-            readonly data_shapes: ("news" | "measurement" | "event" | "located" | "messages" | "video" | "project_activity" | "weather" | "series" | "job")[];
+            readonly data_shapes: ("news" | "measurement" | "event" | "located" | "messages" | "video" | "project_activity" | "weather" | "series" | "job" | "media")[];
             /** Default Interval Minutes */
             default_interval_minutes?: number | null;
             /**
@@ -8376,6 +8396,8 @@ export interface components {
         ConnectorConfig: {
             /** Advisory Min Level */
             advisory_min_level?: number | null;
+            /** Anime Season */
+            anime_season?: ("winter" | "spring" | "summer" | "fall") | null;
             /** Arxiv Category */
             arxiv_category?: string | null;
             /** Bluesky Actor */
@@ -8386,16 +8408,20 @@ export interface components {
             coingecko_assets?: components["schemas"]["CoinGeckoAsset"][] | null;
             /** Content Field */
             content_field?: string | null;
+            /** Content Ratings */
+            content_ratings?: ("safe" | "pg" | "pg_13" | "r" | "suggestive" | "mature" | "explicit" | "clean")[] | null;
             /** Crypto Symbols */
             crypto_symbols?: ("BTCUSDT" | "ETHUSDT" | "BNBUSDT" | "SOLUSDT" | "XRPUSDT" | "ADAUSDT" | "DOGEUSDT" | "TRXUSDT" | "LINKUSDT" | "DOTUSDT" | "LTCUSDT" | "AVAXUSDT")[] | null;
             /** Disease Country */
-            disease_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH") | null;
+            disease_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
             /** Eonet Categories */
             eonet_categories?: ("drought" | "dustHaze" | "earthquakes" | "floods" | "landslides" | "manmade" | "seaLakeIce" | "severeStorms" | "snow" | "tempExtremes" | "volcanoes" | "waterColor" | "wildfires")[] | null;
             /** Eonet Days */
             eonet_days?: number | null;
             /** Eonet Status */
             eonet_status?: ("open" | "all") | null;
+            /** Exclude Adult */
+            exclude_adult?: boolean | null;
             /** Exclude Keywords */
             exclude_keywords?: string[] | null;
             /** Feed Sections */
@@ -8527,8 +8553,20 @@ export interface components {
              * @default 10
              */
             max_pages: number;
+            /** Media Countries */
+            media_countries?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR")[] | null;
+            /** Media Country */
+            media_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
+            /** Media Formats */
+            media_formats?: ("tv" | "tv_short" | "movie" | "special" | "ova" | "ona" | "music" | "manga" | "manhwa" | "manhua" | "novel" | "one_shot" | "ebook" | "audiobook" | "magazine" | "scripted" | "animation" | "reality" | "talk_show" | "documentary" | "album" | "single" | "ep" | "episodic" | "serial" | "main_game" | "dlc" | "expansion" | "remake" | "remaster")[] | null;
+            /** Media Genres */
+            media_genres?: ("action" | "adventure" | "sci_fi" | "fantasy" | "romance" | "thriller" | "horror" | "comedy" | "drama" | "mystery" | "documentary" | "animation" | "slice_of_life" | "history" | "music" | "sports" | "non_fiction" | "programming" | "rpg" | "strategy")[] | null;
+            /** Media Languages */
+            media_languages?: ("en" | "vi" | "ja" | "ko" | "zh" | "zh-hk" | "fr" | "de" | "es" | "pt" | "it" | "ru" | "id" | "th")[] | null;
             /** Min Magnitude */
             min_magnitude?: number | null;
+            /** Min Rating */
+            min_rating?: number | null;
             /** News Locale */
             news_locale?: ("vi-VN" | "en-US") | null;
             /** News Query */
@@ -8561,6 +8599,8 @@ export interface components {
             reddit_subreddit?: string | null;
             /** Region */
             region?: ("world" | "southeast_asia" | "vietnam" | "east_asia" | "south_asia" | "europe" | "north_america" | "south_america" | "africa" | "oceania" | "middle_east") | null;
+            /** Release Year */
+            release_year?: number | null;
             /** Retention Days */
             retention_days?: number | null;
             /** Satnogs Status */
@@ -8602,7 +8642,7 @@ export interface components {
             /** Vn Symbols */
             vn_symbols?: string[] | null;
             /** Wb Country */
-            wb_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH") | null;
+            wb_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
             /** Wb Indicator */
             wb_indicator?: ("gdp" | "gdp_growth" | "inflation_cpi" | "unemployment" | "population" | "fdi") | null;
             /** Weather Latitude */
@@ -8621,6 +8661,12 @@ export interface components {
             x_query?: string | null;
             /** Youtube Channel Id */
             youtube_channel_id?: string | null;
+            /** Youtube Filter */
+            youtube_filter?: ("all" | "long_form" | "shorts") | null;
+            /** Youtube Handles */
+            youtube_handles?: string[] | null;
+            /** Youtube Playlist Ids */
+            youtube_playlist_ids?: string[] | null;
         };
         /**
          * ConnectorConfigurationRead
@@ -10926,6 +10972,7 @@ export interface components {
             excerpt: string;
             /** Image Url */
             image_url?: string | null;
+            media?: components["schemas"]["MediaProjectionRead"] | null;
             /** Metadata Is Version Snapshot */
             metadata_is_version_snapshot: boolean;
             /**
@@ -10950,16 +10997,30 @@ export interface components {
         };
         /**
          * GadgetFilters
-         * @description Persist bounded text filters and map display preferences, never executable queries.
+         * @description Persist bounded text, map display, and media filters, never executable queries.
          *
          *     ``map_engine`` and ``show_precise_locations`` are renderer preferences only;
          *     map data authorization and source/date/region bounds are validated separately.
+         *     All scalar media filters default to ``None`` and list filters default to ``[]`` so
+         *     non-media list gadgets ignore them until explicitly configured.
          */
         GadgetFilters: {
+            /** Content Ratings */
+            content_ratings?: ("safe" | "pg" | "pg_13" | "r" | "suggestive" | "mature" | "explicit" | "clean")[];
+            /** Countries */
+            countries?: string[];
             /** Exclude Keywords */
             exclude_keywords?: string[];
+            /** Formats */
+            formats?: ("tv" | "tv_short" | "movie" | "special" | "ova" | "ona" | "music" | "manga" | "manhwa" | "manhua" | "novel" | "one_shot" | "ebook" | "audiobook" | "magazine" | "scripted" | "animation" | "reality" | "talk_show" | "documentary" | "album" | "single" | "ep" | "episodic" | "serial" | "main_game" | "dlc" | "expansion" | "remake" | "remaster")[];
+            /** Genres */
+            genres?: ("action" | "adventure" | "sci_fi" | "fantasy" | "romance" | "thriller" | "horror" | "comedy" | "drama" | "mystery" | "documentary" | "animation" | "slice_of_life" | "history" | "music" | "sports" | "non_fiction" | "programming" | "rpg" | "strategy")[];
+            /** Group By */
+            group_by?: ("none" | "date" | "media_type" | "source") | null;
             /** Keywords */
             keywords?: string[];
+            /** Languages */
+            languages?: ("en" | "vi" | "ja" | "ko" | "zh" | "zh-hk" | "fr" | "de" | "es" | "pt" | "it" | "ru" | "id" | "th")[];
             /**
              * Limit
              * @default 25
@@ -10971,6 +11032,18 @@ export interface components {
             map_mode?: ("live" | "selected_sources") | null;
             /** Map Weather Layer */
             map_weather_layer?: ("temperature" | "precipitation" | "wind" | "clouds") | null;
+            /** Media Type */
+            media_type?: ("movie" | "anime" | "manga" | "manhwa" | "manhua" | "light_novel" | "book" | "audiobook" | "youtube" | "tv" | "podcast" | "music" | "game") | null;
+            /** Media Types */
+            media_types?: ("movie" | "anime" | "manga" | "manhwa" | "manhua" | "light_novel" | "book" | "audiobook" | "youtube" | "tv" | "podcast" | "music" | "game")[];
+            /** Min Rating */
+            min_rating?: number | null;
+            /** Release Season */
+            release_season?: ("winter" | "spring" | "summer" | "fall") | null;
+            /** Release Status */
+            release_status?: ("all" | "upcoming" | "airing" | "released" | "completed" | "hiatus") | null;
+            /** Release Year */
+            release_year?: number | null;
             /**
              * Show Precise Locations
              * @default false
@@ -11025,6 +11098,16 @@ export interface components {
             channel_ids?: string[];
             /** Cii Country Codes */
             cii_country_codes?: string[];
+            /** Content Ratings */
+            content_ratings?: ("safe" | "pg" | "pg_13" | "r" | "suggestive" | "mature" | "explicit" | "clean")[];
+            /** Countries */
+            countries?: string[];
+            /** Formats */
+            formats?: ("tv" | "tv_short" | "movie" | "special" | "ova" | "ona" | "music" | "manga" | "manhwa" | "manhua" | "novel" | "one_shot" | "ebook" | "audiobook" | "magazine" | "scripted" | "animation" | "reality" | "talk_show" | "documentary" | "album" | "single" | "ep" | "episodic" | "serial" | "main_game" | "dlc" | "expansion" | "remake" | "remaster")[];
+            /** Genres */
+            genres?: ("action" | "adventure" | "sci_fi" | "fantasy" | "romance" | "thriller" | "horror" | "comedy" | "drama" | "mystery" | "documentary" | "animation" | "slice_of_life" | "history" | "music" | "sports" | "non_fiction" | "programming" | "rpg" | "strategy")[];
+            /** Languages */
+            languages?: ("en" | "vi" | "ja" | "ko" | "zh" | "zh-hk" | "fr" | "de" | "es" | "pt" | "it" | "ru" | "id" | "th")[];
             /** Live Map Country */
             live_map_country?: string | null;
             /** Live Map Github Owner */
@@ -11039,10 +11122,20 @@ export interface components {
             lookback_days?: number | null;
             /** Map Layer Ids */
             map_layer_ids?: string[];
+            /** Media Types */
+            media_types?: ("movie" | "anime" | "manga" | "manhwa" | "manhua" | "light_novel" | "book" | "audiobook" | "youtube" | "tv" | "podcast" | "music" | "game")[];
             /** Metrics */
             metrics?: string[];
+            /** Min Rating */
+            min_rating?: number | null;
             /** Regions */
             regions?: string[];
+            /** Release Season */
+            release_season?: ("winter" | "spring" | "summer" | "fall") | null;
+            /** Release Window Days */
+            release_window_days?: number | null;
+            /** Release Year */
+            release_year?: number | null;
             /** Source Item Ids */
             source_item_ids?: string[];
             /** Symbols */
@@ -12508,6 +12601,62 @@ export interface components {
          * @enum {string}
          */
         McpTransport: "streamable_http" | "stdio";
+        /**
+         * MediaProjectionRead
+         * @description Typed media metadata projected onto dashboard gadget cards and calendar rows.
+         */
+        MediaProjectionRead: {
+            /**
+             * Artwork Aspect
+             * @default poster
+             * @enum {string}
+             */
+            artwork_aspect: "poster" | "square" | "video";
+            /** Attribution */
+            attribution?: string | null;
+            /** Chapter */
+            chapter?: string | null;
+            /** Content Rating */
+            content_rating?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Creator */
+            creator?: string | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Episode */
+            episode?: string | null;
+            /** External Ids */
+            external_ids?: {
+                [key: string]: string;
+            };
+            /** Format */
+            format?: string | null;
+            /** Genres */
+            genres?: string[];
+            /** Language */
+            language?: string | null;
+            /** Media Type */
+            media_type: string;
+            /** Page Count */
+            page_count?: number | null;
+            /** Rating */
+            rating?: number | null;
+            /** Release Date */
+            release_date?: string | null;
+            /** Release Season */
+            release_season?: string | null;
+            /** Release Status */
+            release_status?: string | null;
+            /** Release Year */
+            release_year?: number | null;
+            /** Season */
+            season?: string | null;
+            /** Trailer Url */
+            trailer_url?: string | null;
+            /** Volume */
+            volume?: string | null;
+        };
         /**
          * MemberDocumentList
          * @description Bounded member page of shared Documents.
@@ -22412,6 +22561,20 @@ export interface operations {
                 language?: string | null;
                 since?: string | null;
                 include_dismissed?: boolean;
+                countries?: string[] | null;
+                genres?: string[] | null;
+                languages?: string[] | null;
+                media_types?: string[] | null;
+                formats?: string[] | null;
+                content_ratings?: string[] | null;
+                release_statuses?: string[] | null;
+                release_year?: number | null;
+                release_year_from?: number | null;
+                release_year_to?: number | null;
+                release_season?: string | null;
+                min_rating?: number | null;
+                release_window_days?: number | null;
+                sort?: "created_at_desc" | "release_date_asc";
             };
             header?: {
                 "X-Workspace-ID"?: string | null;

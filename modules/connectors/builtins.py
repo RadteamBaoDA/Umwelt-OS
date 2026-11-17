@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import is_instance_operator
@@ -28,9 +28,18 @@ from modules.connectors.provider_options import (
     ALL_OPTION_NAMES,
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_CONTENT_RATINGS,
     MAX_JOB_KEYWORDS,
+    MAX_MEDIA_COUNTRIES,
+    MAX_MEDIA_FORMATS,
+    MAX_MEDIA_GENRES,
+    MAX_MEDIA_LANGUAGES,
     MAX_VN_SYMBOLS,
+    AniListMangaCountry,
+    AniListMode,
+    AnimeSeason,
     CoinId,
+    ContentRating,
     CryptoPair,
     EonetCategory,
     EonetStatus,
@@ -45,6 +54,11 @@ from modules.connectors.provider_options import (
     JobCity,
     JobKeyword,
     JobLevel,
+    MediaFormat,
+    MediaGenre,
+    MediaLanguage,
+    MediaStatus,
+    MediaTag,
     NvdSeverity,
     NwsArea,
     NwsSeverity,
@@ -77,6 +91,7 @@ from modules.connectors.public import (
     source_data_shapes,
 )
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
+from modules.connectors.service.schemas import PositiveSeriesId, TwoLetterLanguage, WikidataQid
 from modules.settings.public import module_dependency
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceCreate, SourcePatch
@@ -195,6 +210,95 @@ class BuiltinEnableRequest(BaseModel):
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
+    # Multi-dimensional media filter options (mirrored from ConnectorConfig; all default to None).
+    media_country: IsoCountry | None = None
+    media_countries: tuple[IsoCountry, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_COUNTRIES
+    )
+    media_genres: tuple[MediaGenre, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_GENRES
+    )
+    media_languages: tuple[MediaLanguage, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_LANGUAGES
+    )
+    # Open Library's scoped query fields are retained for built-in update compatibility.
+    openlibrary_mode: Literal["subject", "search", "recent"] | None = None
+    openlibrary_subject: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _-]+$"
+    )
+    openlibrary_query: str | None = Field(default=None, min_length=1, max_length=200)
+    ebooks_only: StrictBool | None = None
+    gutendex_topic: str | None = Field(default=None, min_length=1, max_length=120)
+    gutendex_search: str | None = Field(default=None, min_length=1, max_length=200)
+    gutendex_copyright: StrictBool | None = None
+    gutendex_mime_type: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$"
+    )
+    gutendex_author_year_start: StrictInt | None = Field(default=None, ge=0, le=2100)
+    gutendex_author_year_end: StrictInt | None = Field(default=None, ge=0, le=2100)
+    media_formats: tuple[MediaFormat, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_FORMATS
+    )
+    release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
+    anime_season: AnimeSeason | None = None
+    anilist_mode: AniListMode | None = None
+    country_of_origin: AniListMangaCountry | None = None
+    media_tags: tuple[MediaTag, ...] | None = Field(default=None, min_length=1, max_length=16)
+    media_statuses: tuple[MediaStatus, ...] | None = Field(default=None, min_length=1, max_length=5)
+    content_ratings: tuple[ContentRating, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_CONTENT_RATINGS
+    )
+    min_rating: float | None = Field(
+        default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True
+    )
+    exclude_adult: StrictBool | None = None
+    tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
+    ann_mode: Literal["news", "encyclopedia"] | None = None
+    ann_media_type: Literal["anime", "manga"] | None = None
+    ann_category: (
+        Literal["news", "review", "feature", "interview", "press-release", "all"] | None
+    ) = None
+    ann_edition: Literal["us", "w"] | None = None
+    tvmaze_global: StrictBool | None = None
+    # Keyless media source options (mirrored from ConnectorConfig): every name in OPTION_FIELDS must exist here,
+    # because ``_desired_configuration`` reads each one off the request.
+    mangaupdates_types: (
+        tuple[Literal["Manga", "Manhwa", "Manhua", "Novel", "Doujinshi"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=5)
+    licensed_only: StrictBool | None = None
+    exclude_genre: tuple[MediaGenre, ...] | None = Field(default=None, min_length=1, max_length=16)
+    series_ids: tuple[PositiveSeriesId, ...] | None = Field(
+        default=None, min_length=1, max_length=100
+    )
+    manga_ids: tuple[UUID, ...] | None = Field(default=None, min_length=1, max_length=100)
+    original_languages: tuple[Literal["ja", "ko", "zh", "zh-hk"], ...] | None = Field(
+        default=None, min_length=1, max_length=4
+    )
+    available_translated_languages: (
+        tuple[Literal["en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=9)
+    mangadex_content_ratings: (
+        tuple[Literal["safe", "suggestive", "erotica", "pornographic"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=4)
+    mangadex_statuses: tuple[Literal["ongoing", "completed", "hiatus", "cancelled"], ...] | None = (
+        Field(default=None, min_length=1, max_length=4)
+    )
+    publication_demographic: (
+        tuple[Literal["shounen", "shoujo", "josei", "seinen", "none"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=5)
+    updated_at_since: AwareDatetime | None = None
+    excluded_tags: tuple[UUID, ...] | None = Field(default=None, min_length=1, max_length=100)
+    country: IsoCountry | None = None
+    kind: Literal["books", "audio-books"] | None = None
+    chart: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$")
+    itunes_podcast_id: StrictInt | None = Field(default=None, ge=1, le=9_999_999_999_999_999)
+    lookback_days: StrictInt | None = Field(default=None, ge=1, le=3650)
+    genre_qids: tuple[WikidataQid, ...] | None = Field(default=None, min_length=1, max_length=12)
+    language: TwoLetterLanguage | None = None
+    search_terms: str | None = Field(default=None, min_length=1, max_length=100)
+    letterboxd_username: str | None = Field(
+        default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$"
+    )
 
 
 _DEFAULT_ENABLE = BuiltinEnableRequest()  # body is optional; the model is never mutated
@@ -600,12 +704,14 @@ def _desired_configuration(
             status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes"
         )
     try:
-        config = ConnectorConfig(
-            timeout_seconds=30,
-            history_mode="returned_snapshot",
-            schedule_interval_minutes=interval,
-            realtime_mode=pick("realtime_mode"),
-            **options,
+        config = ConnectorConfig.model_validate(
+            {
+                "timeout_seconds": 30,
+                "history_mode": "returned_snapshot",
+                "schedule_interval_minutes": interval,
+                "realtime_mode": pick("realtime_mode"),
+                **options,
+            }
         )
         source_configuration = serialize_source_configuration(source, config)
         registry.validate(source.model_copy(update={"configuration": source_configuration}))

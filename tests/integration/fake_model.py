@@ -391,3 +391,92 @@ app = Starlette(
         Route("/_fake/received", received),
     ]
 )
+
+
+# --- Scripted rounds for in-process turn tests (no server, no network) -------------------------------
+# A round is the list of raw SSE lines one streamed model reply produces (``data: {...}`` lines), in the
+# same shape ``_chunk`` and ``_tool_chunk`` emit above. ``ScriptedModel`` plays rounds back in order and
+# records every ``open_stream`` call so a test can inspect the transcript and the ``tool_choice`` it sent.
+
+
+def sse_text_round(text: str, piece: int = 20) -> list[str]:
+    """Raw SSE lines streaming ``text`` in ``piece``-character chunks, then a stop chunk and ``[DONE]``."""
+    lines = [_chunk(text[i : i + piece]).strip() for i in range(0, len(text), piece)]
+    return [*lines, _chunk(None, "stop").strip(), "data: [DONE]"]
+
+
+def sse_tool_calls_round(calls: list[tuple[str, str, str]]) -> list[str]:
+    """Raw SSE lines of one reply with several tool calls, given as ``(name, arguments, call_id)`` triples.
+
+    Each call gets its own ``index``: its name first, then its arguments in 40-character fragments, as the
+    gateway streams them. The reply ends with a ``tool_calls`` finish reason and ``[DONE]``.
+    """
+    lines: list[str] = []
+    for index, (name, arguments, call_id) in enumerate(calls):
+        lines.append(
+            _tool_chunk(
+                {
+                    "tool_calls": [
+                        {
+                            "index": index,
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": ""},
+                        }
+                    ]
+                }
+            ).strip()
+        )
+        for i in range(0, len(arguments), 40):
+            lines.append(
+                _tool_chunk(
+                    {
+                        "tool_calls": [
+                            {"index": index, "function": {"arguments": arguments[i : i + 40]}}
+                        ]
+                    }
+                ).strip()
+            )
+    lines.append(_tool_chunk({}, "tool_calls").strip())
+    lines.append("data: [DONE]")
+    return lines
+
+
+def sse_tool_round(name: str, arguments: str, call_id: str = "call_q") -> list[str]:
+    """Raw SSE lines of one reply with a single tool call (see ``sse_tool_calls_round``)."""
+    return sse_tool_calls_round([(name, arguments, call_id)])
+
+
+def ui_table_arguments() -> str:
+    """JSON arguments of the fake ``render_table`` widget (the same payload the ``table`` marker streams)."""
+    return json.dumps(_UI_TOOLS["table"][1])
+
+
+class ScriptedModel:
+    """Plays back scripted rounds: ``open_stream`` returns the next round's SSE lines as an async iterator.
+
+    ``calls`` records ``(messages copy, tool_choice)`` for every round opened, so tests can check what the
+    model was shown and whether the closing synthesis round was sent with ``tool_choice="none"``.
+    """
+
+    def __init__(self, rounds: list[list[str]]) -> None:
+        self._rounds = list(rounds)
+        self.calls: list[tuple[list[dict[str, object]], str | None]] = []
+
+    def open_stream(
+        self,
+        messages: list[dict[str, object]],
+        tools: object = None,
+        tool_choice: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Open the next scripted round; raises if the turn asks for more rounds than were scripted."""
+        if not self._rounds:
+            raise AssertionError("ScriptedModel: the turn opened more rounds than were scripted")
+        self.calls.append(([dict(m) for m in messages], tool_choice))
+        lines = self._rounds.pop(0)
+
+        async def stream() -> AsyncIterator[str]:
+            for line in lines:
+                yield line
+
+        return stream()

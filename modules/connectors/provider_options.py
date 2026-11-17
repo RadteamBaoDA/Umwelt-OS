@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 from urllib.parse import quote, urlencode
 
-from pydantic import StringConstraints
+from pydantic import Field, StrictInt, StringConstraints
 
 if TYPE_CHECKING:
     # Annotation-only: a runtime import would close an import cycle between public contracts.
@@ -158,7 +159,125 @@ IsoCountry = Literal[
     "TR",
     "NL",
     "CH",
+    "TW",
+    "HK",
+    "IE",
+    "NZ",
+    "SE",
+    "NO",
+    "DK",
+    "FI",
+    "PL",
+    "PT",
+    "BE",
+    "AT",
+    "AR",
 ]
+MediaGenre = Literal[
+    "action",
+    "adventure",
+    "sci_fi",
+    "fantasy",
+    "romance",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "mystery",
+    "documentary",
+    "animation",
+    "slice_of_life",
+    "history",
+    "music",
+    "sports",
+    "non_fiction",
+    "programming",
+    "rpg",
+    "strategy",
+]
+MediaLanguage = Literal[
+    "en",
+    "vi",
+    "ja",
+    "ko",
+    "zh",
+    "zh-hk",
+    "fr",
+    "de",
+    "es",
+    "pt",
+    "it",
+    "ru",
+    "id",
+    "th",
+]
+MediaFormat = Literal[
+    "tv",
+    "tv_short",
+    "movie",
+    "special",
+    "ova",
+    "ona",
+    "music",
+    "manga",
+    "manhwa",
+    "manhua",
+    "novel",
+    "one_shot",
+    "ebook",
+    "audiobook",
+    "magazine",
+    "scripted",
+    "animation",
+    "reality",
+    "talk_show",
+    "documentary",
+    "album",
+    "single",
+    "ep",
+    "episodic",
+    "serial",
+    "main_game",
+    "dlc",
+    "expansion",
+    "remake",
+    "remaster",
+]
+AnimeSeason = Literal["winter", "spring", "summer", "fall"]
+OpenLibraryMode = Literal["subject", "search", "recent"]
+MediaStatus = Literal["finished", "releasing", "not_yet_released", "cancelled", "hiatus"]
+AniListMode = Literal["airing", "trending", "updated"]
+AniListMangaCountry = Literal["JP", "KR", "CN", "TW", "ALL"]
+AniListMediaId = Annotated[StrictInt, Field(gt=0)]
+MediaTag = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$"
+    ),
+]
+ContentRating = Literal["safe", "pg", "pg_13", "r", "suggestive", "mature", "explicit", "clean"]
+YoutubeFilter = Literal["all", "long_form", "shorts"]
+MAX_MEDIA_COUNTRIES = 24
+MAX_MEDIA_GENRES = 16
+MAX_MEDIA_LANGUAGES = 16
+MAX_MEDIA_FORMATS = 16
+MAX_CONTENT_RATINGS = 8
+MEDIA_OPTION_NAMES = frozenset(
+    {
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "media_tags",
+        "release_year",
+        "anime_season",
+        "content_ratings",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    }
+)
 WbIndicator = Literal["gdp", "gdp_growth", "inflation_cpi", "unemployment", "population", "fdi"]
 # Union of every currency any FX provider below lists; per-provider membership is checked in validate_options.
 FxCurrency = Literal[
@@ -346,6 +465,125 @@ ISO_COUNTRY_PATTERN = r"^[A-Z]{2}$"
 
 # Provider-specific option names (the common selection filters are allowed separately by INCREMENTAL_PROVIDERS).
 OPTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "tvmaze_schedule": (
+        "tvmaze_mode",
+        "tvmaze_global",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "release_year",
+        "min_rating",
+    ),
+    "livechart_episodes": ("media_genres", "release_year"),
+    "openlibrary_books": (
+        "openlibrary_mode",
+        "openlibrary_subject",
+        "openlibrary_query",
+        "ebooks_only",
+        "media_languages",
+    ),
+    "gutendex_books": (
+        "media_languages",
+        "gutendex_topic",
+        "gutendex_search",
+        "gutendex_copyright",
+        "gutendex_mime_type",
+        "gutendex_author_year_start",
+        "gutendex_author_year_end",
+        "media_genres",
+    ),
+    "anilist_anime": (
+        "anilist_mode",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_tags",
+        "media_formats",
+        "release_year",
+        "anime_season",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "anilist_manga": (
+        "anilist_mode",
+        "country_of_origin",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_tags",
+        "media_formats",
+        "release_year",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "ann_news": (
+        "ann_mode",
+        "ann_media_type",
+        "ann_category",
+        "ann_edition",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+    ),
+    "mangaupdates_releases": (
+        "mangaupdates_types",
+        "licensed_only",
+        "release_year",
+        "media_genres",
+        "exclude_genre",
+        "series_ids",
+    ),
+    "mangadex_releases": (
+        "manga_ids",
+        "original_languages",
+        "available_translated_languages",
+        "mangadex_content_ratings",
+        "mangadex_statuses",
+        "publication_demographic",
+        "release_year",
+        "updated_at_since",
+        "media_genres",
+        "excluded_tags",
+    ),
+    "apple_books_rss": (
+        "country",
+        "kind",
+        "chart",
+        "media_country",
+        "media_genres",
+        "media_languages",
+    ),
+    "podcast_rss": ("itunes_podcast_id", "media_country", "media_genres", "media_languages"),
+    "wikidata_movies": (
+        "lookback_days",
+        "genre_qids",
+        "language",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+    ),
+    "itunes_movies": (
+        "search_terms",
+        "country",
+        "media_country",
+        "media_genres",
+        "media_languages",
+    ),
+    "letterboxd_rss": (
+        "letterboxd_username",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+    ),
     "hn_top": ("hn_list",),
     "gdelt_economy": ("gdelt_query", "gdelt_timespan", "gdelt_source_lang", "gdelt_source_country"),
     "usgs": ("usgs_min_magnitude", "usgs_period", "region"),
@@ -465,6 +703,29 @@ def _ordered(literal: Any, chosen: Iterable[str]) -> list[str]:
     return [item for item in get_args(literal) if item in wanted]
 
 
+def _validate_media_options(cfg: Mapping[str, Any]) -> None:
+    """Validate bounded numeric media option ranges (``min_rating`` and ``release_year``).
+
+    Raises:
+        ValueError: when ``min_rating`` is non-finite or outside ``[0.0, 100.0]``, or ``release_year``
+            is not an integer inside ``[1800, 2100]``.
+    """
+    min_rating = cfg.get("min_rating")
+    if min_rating is not None:
+        if (
+            isinstance(min_rating, bool)
+            or not isinstance(min_rating, (int, float))
+            or not math.isfinite(float(min_rating))
+            or not 0.0 <= float(min_rating) <= 100.0
+        ):
+            raise ValueError("min_rating must be a finite number between 0 and 100")
+    release_year = cfg.get("release_year")
+    if release_year is not None and (
+        type(release_year) is not int or not 1800 <= release_year <= 2100
+    ):
+        raise ValueError("release_year must be between 1800 and 2100")
+
+
 def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     """Reject option combinations the field types alone cannot catch.
 
@@ -472,10 +733,15 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         ValueError: when ``max_items`` exceeds NVD's page size (only ``nvd`` rejects; other providers clamp
         their upstream request instead, which keeps previously valid saved sources valid), a multi-select
         repeats a value, an FX quote equals its base or is not listed by that provider (ECB publishes no VND,
-        so ``ecb`` accepts only its own reference set), or more than ``MAX_COINS`` coins are requested.
+        so ``ecb`` accepts only its own reference set), more than ``MAX_COINS`` coins are requested, or
+        media numeric bounds (``min_rating`` / ``release_year``) are violated. Podcast sources must select
+        exactly one HTTPS feed or iTunes ID, and iTunes movie searches require bounded search terms.
     """
     if provider == "nvd" and (cfg.get("max_items") or 0) > UPSTREAM_CAPS["nvd"]:
         raise ValueError("NVD returns at most 20 CVEs per sync")
+    if provider == "tvmaze_schedule" and cfg.get("tvmaze_global"):
+        if cfg.get("tvmaze_mode") != "schedule_web" or cfg.get("media_country") is not None:
+            raise ValueError("Global channels require web schedule without a country")
     for name in (
         "eonet_categories",
         "gdacs_event_types",
@@ -489,10 +755,35 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         "vn_symbols",
         "job_cities",
         "job_levels",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "media_tags",
+        "content_ratings",
+        "mangaupdates_types",
+        "exclude_genre",
+        "series_ids",
+        "manga_ids",
+        "excluded_tags",
+        "original_languages",
+        "available_translated_languages",
+        "mangadex_content_ratings",
+        "mangadex_statuses",
+        "publication_demographic",
+        "genre_qids",
     ):
         values = cfg.get(name)
         if values is not None and len(set(values)) != len(values):
             raise ValueError("Selections must be unique")
+    _validate_media_options(cfg)
+    validator = {
+        "openlibrary_books": _validate_openlibrary_options,
+        "gutendex_books": _validate_gutendex_options,
+    }.get(provider)
+    if validator is not None:
+        validator(cfg)
+    _validate_media_provider_options(provider, cfg)
     keywords = [k.casefold() for k in cfg.get("job_keywords") or ()]
     if len(set(keywords)) != len(keywords):
         raise ValueError("Selections must be unique")
@@ -518,6 +809,60 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
                 raise ValueError(f"{currency} is not offered by this provider")
         if (cfg.get("fx_base") or ("EUR" if provider == "ecb" else "USD")) in quotes:
             raise ValueError("A quote currency cannot equal the base")
+
+
+def _validate_media_provider_options(provider: str, cfg: Mapping[str, Any]) -> None:
+    """Reject incomplete or incompatible scoped values for keyless media collectors before persistence."""
+    if provider == "ann_news":
+        mode = cfg.get("ann_mode") or "news"
+        if mode == "news" and cfg.get("ann_media_type") is not None:
+            raise ValueError("ANN media type is only valid in encyclopedia mode")
+    elif provider == "mangadex_releases":
+        languages = set(cfg.get("original_languages") or ())
+        if not languages <= {"ja", "ko", "zh", "zh-hk"}:
+            raise ValueError("MangaDex original language is unsupported")
+        translated = set(cfg.get("available_translated_languages") or ())
+        if not translated <= {"en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"}:
+            raise ValueError("MangaDex translated language is unsupported")
+    elif provider == "podcast_rss":
+        if bool(cfg.get("feed_url")) == bool(cfg.get("itunes_podcast_id")):
+            raise ValueError("Choose exactly one podcast feed URL or iTunes podcast ID")
+        feed_url = cfg.get("feed_url")
+        if feed_url is not None and not str(feed_url).startswith("https://"):
+            raise ValueError("Podcast feed URLs must use HTTPS")
+    elif provider == "itunes_movies":
+        terms = cfg.get("search_terms")
+        if not isinstance(terms, str) or not 1 <= len(terms.strip()) <= 100:
+            raise ValueError("iTunes movie search terms are required")
+
+
+def _validate_openlibrary_options(cfg: Mapping[str, Any]) -> None:
+    """Require only scope options supported by the selected Open Library endpoint."""
+    mode = cfg.get("openlibrary_mode") or "subject"
+    subject, query = cfg.get("openlibrary_subject"), cfg.get("openlibrary_query")
+    languages = cfg.get("media_languages") or ()
+    if len(languages) > 1:
+        raise ValueError("Open Library accepts one search language")
+    if mode == "subject":
+        if not subject or query or languages:
+            raise ValueError(
+                "Subject mode requires a subject and does not accept query or language"
+            )
+    elif mode == "search":
+        if not query or subject:
+            raise ValueError("Search mode requires a query and does not accept a subject")
+    elif mode == "recent":
+        if subject or query or languages or cfg.get("ebooks_only"):
+            raise ValueError(
+                "Recent mode does not accept subject, query, language, or ebook filters"
+            )
+
+
+def _validate_gutendex_options(cfg: Mapping[str, Any]) -> None:
+    """Reject Gutendex author year ranges whose lower bound exceeds the upper bound."""
+    start, end = cfg.get("gutendex_author_year_start"), cfg.get("gutendex_author_year_end")
+    if start is not None and end is not None and start > end:
+        raise ValueError("Gutendex author year start must not exceed end")
 
 
 def _count(provider: str, cfg: Mapping[str, Any]) -> int:
@@ -610,6 +955,14 @@ def build_url(
             if listing in (None, "top")
             else f"https://hacker-news.firebaseio.com/v0/{listing}stories.json"
         )
+    if provider == "openlibrary_books":
+        from modules.connectors.providers.openlibrary import openlibrary_request
+
+        return openlibrary_request(cfg, cursor)
+    if provider == "gutendex_books":
+        from modules.connectors.providers.gutendex import gutendex_request
+
+        return gutendex_request(cfg, cursor)
     if provider == "gdelt_economy":
         return _gdelt_url(cfg, cursor)
     if provider == "usgs":
@@ -867,6 +1220,10 @@ def native_fingerprint(provider: str, cfg: Mapping[str, Any]) -> str | None:
             "s": _ordered(NwsSeverity, cfg.get("nws_severity") or ("Extreme", "Severe")),
             "a": cfg.get("nws_area"),
         }
+    elif provider == "openlibrary_books":
+        params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
+    elif provider == "gutendex_books":
+        params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
     elif provider == "satnogs_observations":
         params = {"s": cfg.get("satnogs_status") or "good"}
     else:
@@ -918,10 +1275,126 @@ def _severity_band(score: float | None) -> str | None:
     return "LOW" if score < 4 else "MEDIUM" if score < 7 else "HIGH" if score < 9 else "CRITICAL"
 
 
+def _match_media_dimension(
+    value: object, expected: object, *, keep_missing: bool, multi: bool = False
+) -> bool:
+    """Match one scalar or set-membership media metadata dimension against ``expected``."""
+    if expected is None:
+        return True
+    if value is None:
+        return keep_missing
+    if multi:
+        return isinstance(expected, (list, tuple, set, frozenset)) and value in set(expected)
+    return value == expected
+
+
+def _match_media_genres(
+    raw_genres: object, wanted: Sequence[str] | None, *, keep_missing: bool
+) -> bool:
+    """Return True when ``raw_genres`` intersects ``wanted`` (or when missing if ``keep_missing``)."""
+    if not wanted:
+        return True
+    if not isinstance(raw_genres, (list, tuple, set)) or not raw_genres:
+        return keep_missing
+    return bool(set(raw_genres) & set(wanted))
+
+
+def _match_media_numeric_and_season(
+    sf: Mapping[str, Any], cfg: Mapping[str, Any], *, keep_missing: bool
+) -> bool:
+    """Check ``release_year``, ``anime_season``, and ``min_rating`` on one ``source_fields`` mapping."""
+    release_year = cfg.get("release_year")
+    if release_year is not None:
+        actual_year = sf.get("release_year")
+        if actual_year is None:
+            if not keep_missing:
+                return False
+        elif type(actual_year) is not int or actual_year != release_year:
+            return False
+    anime_season = cfg.get("anime_season")
+    if anime_season is not None:
+        raw_season = sf.get("release_season")
+        if not isinstance(raw_season, str) or not raw_season.strip():
+            if not keep_missing:
+                return False
+        elif raw_season.strip().lower().split()[0] != str(anime_season).lower():
+            return False
+    min_rating = cfg.get("min_rating")
+    if min_rating is not None:
+        rating = sf.get("rating")
+        if rating is None:
+            return keep_missing
+        if (
+            isinstance(rating, bool)
+            or not isinstance(rating, (int, float))
+            or not math.isfinite(float(rating))
+            or float(rating) < float(min_rating)
+        ):
+            return False
+    return True
+
+
+def _record_matches_media_filters(
+    record: IngestionRecord, cfg: Mapping[str, Any], *, keep_missing: bool
+) -> bool:
+    """Evaluate all configured media filter options against ``record``'s ``source_fields``."""
+    provider_record = record.metadata.get("provider_record")
+    raw_sf = provider_record.get("source_fields") if isinstance(provider_record, Mapping) else None
+    sf: Mapping[str, Any] = raw_sf if isinstance(raw_sf, Mapping) else {}
+    if not _match_media_dimension(
+        sf.get("country"), cfg.get("media_country"), keep_missing=keep_missing
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("country"), cfg.get("media_countries"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if not _match_media_genres(
+        sf.get("genres"), cfg.get("media_genres"), keep_missing=keep_missing
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("language"), cfg.get("media_languages"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("format"), cfg.get("media_formats"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if not _match_media_dimension(
+        sf.get("content_rating"), cfg.get("content_ratings"), keep_missing=keep_missing, multi=True
+    ):
+        return False
+    if cfg.get("exclude_adult") is True and sf.get("content_rating") in {"mature", "explicit"}:
+        return False
+    return _match_media_numeric_and_season(sf, cfg, keep_missing=keep_missing)
+
+
+def filter_media_records(
+    cfg: Mapping[str, Any],
+    records: Sequence[IngestionRecord],
+    *,
+    keep_missing: bool = False,
+) -> list[IngestionRecord]:
+    """Filter media ``IngestionRecord`` items post-fetch using configured ``MEDIA_OPTION_NAMES``.
+
+    Reads ``record.metadata["provider_record"]["source_fields"]`` without mutating records.
+    When ``keep_missing`` is False (default), records missing a filtered dimension are excluded;
+    sparse RSS adapters may opt into ``keep_missing=True`` so unannotated items are preserved.
+    """
+    if not any(cfg.get(k) is not None for k in MEDIA_OPTION_NAMES):
+        return list(records)
+    return [
+        record
+        for record in records
+        if _record_matches_media_filters(record, cfg, keep_missing=keep_missing)
+    ]
+
+
 def filter_records(
     provider: str, cfg: Mapping[str, Any], records: Sequence[IngestionRecord]
 ) -> list[IngestionRecord]:
-    """Apply the client-side per-type filters (region, KEV flag, NVD bands, FX quote subset, Kp and advisory thresholds).
+    """Apply the client-side per-type filters (region, KEV flag, NVD bands, FX quote subset, Kp, advisory, and media options).
 
     Runs on mapped records before incremental selection. With no relevant option the input is returned as is.
     """
@@ -982,4 +1455,6 @@ def filter_records(
             )
             in wanted
         ]
+    if any(cfg.get(k) is not None for k in MEDIA_OPTION_NAMES):
+        out = filter_media_records(cfg, out)
     return out

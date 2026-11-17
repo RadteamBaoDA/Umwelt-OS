@@ -1,3 +1,26 @@
+## 2026-11-17 - Chat collected-data correctness
+
+Chat answers from collected data through `query_collected_data` (`modules/chat/db_query.py`). Correctness fixes are committed on `feature/more-datasource`; the scope fence is migration `0024_chat_sql_scope_fence`.
+
+| State | Work |
+| --- | --- |
+| Done | `3c902f5a` tool input contract (malformed JSON and unknown keys rejected, owner-timezone dates, truncation flag, aggregate region/citation, untrusted `data_notice`, bind-colon escaping); `8d25190b` readable record titles and open_meteo/openaq/ioda/cisa_kev/nvd/nasa_eonet metric catalog entries; `784a5d2c` separate round budget for collected-data queries; `b840584f` current-configuration scope fence (migration 0024, `chat_sql.query_fence_scope`, current revisions only, paused sources readable); `fd476c6f` deterministic grounding check (`unverified_numbers`, `partially_uncited`, widget relabel); `f5e1797c` scripted full-turn tests through the real tool loop |
+| Done | `44a94a18` `attributes`, coordinates and accent-insensitive `text_query` (migration `0025_chat_attributes_unaccent`); `0aabf4d1` `source_name` on observation rows; `dacf2001` bounded dedup anti-join and single-lookup document scope; `b355cdbf` series history instead of `is_current` (migration `0026_chat_sql_history`), SQL rows cited by version id, grounding date/URL/coordinate false positives |
+| Verified on Docker | `test_chat_sql_reader_role.py`, `test_p12_migrations.py` (0024-0026 down to base and back), `test_chat_collected_data_matrix.py` (72 passed, 1 skipped), `test_chat_collected_data_volume.py` at 2M observations / 50k documents: latest 0.15/0.21 s, 90-day all-source aggregate 0.53/0.72 s, SQL daily average 0.36/0.38 s, unaccent search 0.19/0.21 s (p50/p95, compose Postgres settings) |
+| Real-model eval | `test_chat_real_model_eval.py` (opt-in, 45 en/vi questions, claude-haiku-5-5): numbers correct 100%, empty/no-data 6/6, 7 flagged numbers all model-derived (differences, percentages) or corrected stale follow-up values, citation markers missing in 18% of answers (flagged `partially_uncited`) |
+| Done (later) | Hashable null-safe dedup keys and unordered aggregates with a LATERAL newest-row citation (`modules/chat/_db_aggregates.py`); chat SQL reader pool 2 + 2, so the connection budget is 116 of 120 and the reader role fits two chat-worker replicas |
+| Done (later) | `04d4ac2a` grounding reports precise differences, sums, means and % changes of two data values as `derived` instead of unverified; `b58a69be` prompt asks the model to query before answering and to cite in the same sentence; `aaf93fc0` FRED `attributes.units` for common series; `1222f633`/`b108a218` SQL results with no citable row return a `citation_hint` and the prompt asks for `document_version_id`; `e316aaf0` elapsed durations, year-less dates and day ranges are not checked as data claims |
+| Real-model eval (rerun) | After the prompt, `citation_hint` and grounding date fixes: numbers correct 100%, citation validity 100% (was 81.6%), empty/no-data 6/6, grounded 95.6%, 41/45 cases pass every criterion. The 4 others are expected behaviour the rubric scores strictly: two follow-ups quote the earlier wrong figure while correcting it, and two calendar questions are declined without a tool call because no calendar source exists |
+| Done (later) | `ef357960` FRED series outside `FRED_UNITS` take their physical unit from `fred/series` (one extra gated send before the data send; a metadata failure collects without a unit) |
+| Done (later) | Grounding reports a retracted earlier-answer figure (next to a correction cue) as `restated`, and a figure that exists in the data but only under another row than its sentence's `[n]` as `misattributed` (stored in `misattributed_numbers`); a restated-looking figure with no correction cue stays unverified |
+| Open | Grounding is a deterministic heuristic, not proof: it cannot see a wrong figure whose value sits in the row it cites (for example "highest" for the lowest value), a sentence with no `[n]`, or an evidence/web marker; the correction cue list is English and Vietnamese only |
+
+Grounding is a numeric heuristic: derived values are flagged and near-matches pass.
+
+## 2026-11-17 - Media datasource contracts
+
+Phase 1 of `specs/new-datasource-v2.md` has code and focused test evidence for media types, metadata, filters, projection and shared normalization. PostgreSQL runtime acceptance remains open; media renderers are planned pending phase 3. Phase 2 TVMaze implementation has started but is not yet registered or usable. See `docs/superpowers/plans/EXECUTION.md` for validation and the pagination limitation.
+
 <!-- audit-remediation-status:start -->
 ## Repository audit remediation - 2026-11-11, branch feature/fix-ui
 

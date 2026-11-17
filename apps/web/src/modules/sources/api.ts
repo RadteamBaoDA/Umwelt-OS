@@ -85,6 +85,10 @@ export type ConnectorConfig = {
   timezone: string;
   schedule_interval_minutes: 15 | 30 | 60 | 360 | 1440;
   youtube_channel_id?: string;
+  youtube_channels?: string[];
+  youtube_handles?: string[];
+  youtube_playlist_ids?: string[];
+  youtube_filter?: 'all' | 'long_form' | 'shorts';
   bluesky_actor?: string;
   mastodon_instance_url?: string;
   mastodon_account?: string;
@@ -208,6 +212,17 @@ export type BuiltinTypeOptions = {
   coin_ids?: string[];
   kp_min?: number;
   advisory_min_level?: 1 | 2 | 3 | 4;
+  /** Multi-dimensional media filter options (validated against provider `OPTION_FIELDS`). */
+  media_country?: string;
+  media_countries?: string[];
+  media_genres?: string[];
+  media_languages?: string[];
+  media_formats?: string[];
+  release_year?: number;
+  anime_season?: 'winter' | 'spring' | 'summer' | 'fall';
+  content_ratings?: ('safe' | 'pg' | 'pg_13' | 'r' | 'suggestive' | 'mature' | 'explicit' | 'clean')[];
+  min_rating?: number;
+  exclude_adult?: boolean;
 };
 export type CoinGeckoCoin = { id: string; symbol: string; name: string; series_symbol?: string };
 export type ConnectorSettings = {
@@ -259,7 +274,7 @@ export type DraftValidation = {
   verified_bot_id?: string | null;
   scope_verified?: boolean | null;
 };
-export type BuiltinCategory = 'news' | 'economy' | 'hazards' | 'space' | 'security' | 'tech';
+export type BuiltinCategory = 'news' | 'economy' | 'hazards' | 'space' | 'security' | 'tech' | 'media';
 export type ConnectorCatalogEntry = {
   provider_id: string;
   kind?: 'connector' | 'group' | 'preset';

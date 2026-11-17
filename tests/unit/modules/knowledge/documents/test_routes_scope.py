@@ -51,6 +51,52 @@ async def test_dashboard_projections_route_passes_scope_not_owner_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dashboard_projections_route_forwards_media_filters_and_sort() -> None:
+    owner_call = AsyncMock(return_value="ok")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    multi_workspace_enabled=False,
+                    csrf_signing_secret=SimpleNamespace(get_secret_value=lambda: "s"),
+                ),
+                redis=None,
+            )
+        )
+    )
+    with (
+        patch.object(routes.public, "list_gadget_document_projections", owner_call),
+        patch.object(
+            routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)
+        ),
+    ):
+        await routes.list_dashboard_projections(
+            session=object(),
+            request=request,
+            workspace=SCOPE,
+            source_ids=[uuid4()],
+            countries=["JP", "KR"],
+            genres=["action"],
+            languages=["ja"],
+            media_types=["anime"],
+            formats=["tv"],
+            content_ratings=["pg_13"],
+            release_statuses=["airing"],
+            release_year=2026,
+            release_season="fall",
+            min_rating=80.0,
+            release_window_days=14,
+            sort="release_date_asc",
+        )
+    kw = owner_call.await_args.kwargs
+    assert kw["countries"] == ("JP", "KR")
+    assert kw["genres"] == ("action",)
+    assert kw["min_rating"] == 80.0
+    assert kw["release_window_days"] == 14
+    assert kw["sort"] == "release_date_asc"
+
+
+@pytest.mark.asyncio
 async def test_interaction_put_locks_request_then_passes_scope() -> None:
     order: list[str] = []
     lock = AsyncMock(side_effect=lambda *a, **k: order.append("lock"))
@@ -71,6 +117,38 @@ async def test_interaction_put_locks_request_then_passes_scope() -> None:
     assert owner_call.await_args.kwargs["scope"] == SCOPE
     assert owner_call.await_args.kwargs["multi_workspace_enabled"] is False
     assert "owner_id" not in owner_call.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_dashboard_projections_route_maps_value_error_to_422() -> None:
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    multi_workspace_enabled=False,
+                    csrf_signing_secret=SimpleNamespace(get_secret_value=lambda: "s"),
+                ),
+                redis=None,
+            )
+        )
+    )
+    with (
+        patch.object(
+            routes.public, "list_gadget_document_projections", AsyncMock(side_effect=ValueError("bad"))
+        ),
+        patch.object(
+            routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)
+        ),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await routes.list_dashboard_projections(
+            session=object(),
+            request=request,
+            workspace=SCOPE,
+            source_ids=[uuid4()],
+            countries=["JP"],
+        )
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.asyncio

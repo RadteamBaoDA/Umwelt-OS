@@ -11,6 +11,7 @@ from urllib.parse import quote, urlencode
 
 from modules.connectors.providers import social_walk
 from modules.connectors.providers.rest import Fetched
+from modules.connectors.providers.social_walk import post_title
 from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 
@@ -53,9 +54,10 @@ def _text_record(
     author: str | None,
     version: str | None = None,
 ) -> IngestionRecord:
-    """Build a Bluesky record with bounded text and validated typed provenance."""
+    """Build a Bluesky record with bounded text, a first-line title and validated typed provenance."""
     truncated = len(content) > _MAX_TEXT
     metadata: dict[str, object] = {
+        "title": post_title(content),
         "provider": "bluesky",
         "source_id": identity[:512],
         "author": author[:255] if author else None,

@@ -239,6 +239,7 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         PROVIDER_SOURCE_TYPES,
         native_dispatch_supported,
     )
+    from modules.connectors.service.scope import OPTIONAL_SCOPE_FIELDS
     from modules.sources.schemas import SourceCreate
 
     source_type = PROVIDER_SOURCE_TYPES[provider]
@@ -269,10 +270,17 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "openaq": {"openaq_location_id": 8118},
         "nasa_firms": {"firms_country": "VNM"},
         "coingecko": {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}]},
+        "apple_books_rss": {"chart": "top-free", "country": "US", "kind": "books"},
+        "itunes_movies": {"country": "US", "search_terms": "matrix"},
+        "letterboxd_rss": {"letterboxd_username": "alice"},
+        "openlibrary_books": {"openlibrary_mode": "subject", "openlibrary_subject": "science"},
+        "podcast_rss": {"itunes_podcast_id": 123},
     }.get(provider, {})
-    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[
-        provider
-    ] == frozenset(scope)
+    # Optional scope fields (OPTIONAL_SCOPE_FIELDS: media filters, one-of choices) may be sampled; every
+    # required one must be, and no sample key may fall outside the provider's scope.
+    required = PROVIDER_SCOPE_FIELDS[provider] - frozenset(OPTIONAL_SCOPE_FIELDS.get(provider, ()))
+    assert native_dispatch_supported(source_type, provider)
+    assert required <= frozenset(scope) <= PROVIDER_SCOPE_FIELDS[provider]
     source = SimpleNamespace(
         id=uuid4(),
         status="active",
@@ -287,5 +295,7 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         **scope,
         "feed_url": "https://x.example/f",
     }
+    if "feed_url" in PROVIDER_SCOPE_FIELDS[provider]:
+        return  # the owner's feed URL is this provider's own scope (podcast_rss)
     with pytest.raises(ValueError):
         registry.validate(source)  # owner-supplied scope is refused for fixed endpoints

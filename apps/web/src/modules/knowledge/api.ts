@@ -69,6 +69,52 @@ export type DocumentDeletionReceipt = {
   error_code: string | null;
   copied_error_code: string | null;
 };
+/** Typed media metadata projected onto dashboard gadget cards and release calendar rows. */
+export type MediaProjection = {
+  media_type: string;
+  artwork_aspect: 'poster' | 'square' | 'video';
+  country: string | null;
+  language: string | null;
+  genres: string[];
+  release_year: number | null;
+  release_season: string | null;
+  format: string | null;
+  content_rating: string | null;
+  rating: number | null;
+  release_status: string | null;
+  release_date: string | null;
+  creator: string | null;
+  season: string | null;
+  episode: string | null;
+  chapter: string | null;
+  volume: string | null;
+  duration_seconds: number | null;
+  page_count: number | null;
+  trailer_url: string | null;
+  attribution: string | null;
+  external_ids: Record<string, string>;
+};
+
+/** Multi-dimensional projection query parameters supported by `listGadgetDocumentProjections`. */
+export type GadgetProjectionFilters = {
+  language?: string;
+  since?: string;
+  countries?: string[];
+  genres?: string[];
+  languages?: string[];
+  media_types?: string[];
+  formats?: string[];
+  content_ratings?: string[];
+  release_statuses?: string[];
+  release_year?: number;
+  release_year_from?: number;
+  release_year_to?: number;
+  release_season?: string;
+  min_rating?: number;
+  release_window_days?: number;
+  sort?: 'created_at_desc' | 'release_date_asc';
+};
+
 export type GadgetDocumentProjection = {
   document_id: string;
   document_version_id: string;
@@ -82,6 +128,8 @@ export type GadgetDocumentProjection = {
   metadata_is_version_snapshot: boolean;
   /** Same-origin signed media proxy path, or null (remote media off / no image). */
   image_url?: string | null;
+  /** Typed media metadata when the record comes from a media collector or YouTube. */
+  media?: MediaProjection | null;
   read_at: string | null;
   bookmarked_at: string | null;
   dismissed_at: string | null;
@@ -224,12 +272,44 @@ export function listDocuments(cursor?: string, sourceId?: string, excludeMeasure
   if (excludeMeasurements) query.set('exclude_measurements', 'true');
   return apiRequest<DocumentPage>(`/api/v1/documents?${query}`);
 }
-/** Reads current active source records through the owner-validated dashboard projection. */
+/** Appends deduplicated multi-dimensional media query parameters onto a dashboard-projections request. */
+function appendMediaProjectionFilters(query: URLSearchParams, filters: GadgetProjectionFilters): void {
+  for (const [param, value] of [
+    ['release_year', filters.release_year],
+    ['release_year_from', filters.release_year_from],
+    ['release_year_to', filters.release_year_to],
+    // Check != null explicitly so a 0 rating floor is not skipped as falsy.
+    ['min_rating', filters.min_rating],
+    ['release_window_days', filters.release_window_days],
+  ] as const) {
+    if (value != null) query.set(param, String(value));
+  }
+  if (filters.release_season) query.set('release_season', filters.release_season);
+  if (filters.sort) query.set('sort', filters.sort);
+  for (const [param, values] of [
+    ['countries', filters.countries],
+    ['genres', filters.genres],
+    ['languages', filters.languages],
+    ['media_types', filters.media_types],
+    ['formats', filters.formats],
+    ['content_ratings', filters.content_ratings],
+    ['release_statuses', filters.release_statuses],
+  ] as const) {
+    if (!values?.length) continue;
+    for (const value of [...new Set(values)]) query.append(param, value);
+  }
+}
+
+/**
+ * Reads current active source records through the owner-validated dashboard projection.
+ * Serializes deduplicated multi-dimensional media array filters via repeated query params and scalar
+ * filters with `!= null` checks so `min_rating: 0` is preserved.
+ */
 export function listGadgetDocumentProjections(
   sourceIds: string[],
   channelIds: string[] = [],
   cursor?: string,
-  filters: { language?: string; since?: string } = {},
+  filters: GadgetProjectionFilters = {},
 ) {
   const query = new URLSearchParams({ limit: '100' });
   if (filters.language) query.set('language', filters.language);
@@ -237,6 +317,7 @@ export function listGadgetDocumentProjections(
   if (cursor) query.set('cursor', cursor);
   for (const sourceId of [...new Set(sourceIds)].slice(0, 32)) query.append('source_ids', sourceId);
   for (const channelId of [...new Set(channelIds)].slice(0, 32)) query.append('channel_ids', channelId);
+  appendMediaProjectionFilters(query, filters);
   return apiRequest<{ items: GadgetDocumentProjection[]; next_cursor: string | null }>(`/api/v1/documents/dashboard-projections?${query}`);
 }
 /** Persist read/bookmark state for one current immutable version. */

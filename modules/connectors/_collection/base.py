@@ -1051,7 +1051,16 @@ SOCIAL_WALK_PROVIDERS = frozenset(
     {"bluesky", "reddit", "mastodon", "x"}
 )  # catch-up walk (providers/social_walk.py)
 DEDUP_ONLY_PROVIDERS = frozenset(
-    {"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs"}
+    {
+        "hn_top",
+        "google_news",
+        "vietnamworks_jobs",
+        "itviec_jobs",
+        "tvmaze_schedule",
+        "livechart_episodes",
+        "anilist_anime",
+        "anilist_manga",
+    }
 )  # late-surfacing feeds: a cursor floor would drop items
 
 

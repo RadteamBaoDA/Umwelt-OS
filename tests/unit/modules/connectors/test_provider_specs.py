@@ -161,6 +161,13 @@ def test_unknown_official_caps_are_counted_not_invented() -> None:
     assert {"official_calls_per_minute", "official_call_credits_per_month"} <= keys
 
 
+def test_tvmaze_has_a_shared_short_window_pilot_quota() -> None:
+    spec = get_provider_spec("tvmaze_schedule")
+    assert spec is not None
+    minute = next(window for window in spec.quota if window.window == "minute")
+    assert minute.budget_kind == "provider" and minute.limit_units == 1
+
+
 def test_catalog_exposes_all_specs_additively_and_honestly() -> None:
     catalog_ids = {entry.provider_id for entry in list_catalog()}
     assert {spec.id for spec in FREE_PROVIDER_SPECS} <= catalog_ids

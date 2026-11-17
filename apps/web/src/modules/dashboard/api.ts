@@ -38,7 +38,94 @@ export type GadgetDefinition = {
   warnings?: DashboardWarning[];
 };
 
-/** Bounded source, channel, symbol, region, and map-layer selectors stored as configuration. */
+/** Media category identifiers matching backend `modules.dashboard.schemas.MediaType`. */
+export type MediaType =
+  | 'movie'
+  | 'anime'
+  | 'manga'
+  | 'manhwa'
+  | 'manhua'
+  | 'light_novel'
+  | 'book'
+  | 'audiobook'
+  | 'youtube'
+  | 'tv'
+  | 'podcast'
+  | 'music'
+  | 'game';
+
+/** Canonical media genre slugs matching backend `MediaGenre`. */
+export type MediaGenre =
+  | 'action'
+  | 'adventure'
+  | 'sci_fi'
+  | 'fantasy'
+  | 'romance'
+  | 'thriller'
+  | 'horror'
+  | 'comedy'
+  | 'drama'
+  | 'mystery'
+  | 'documentary'
+  | 'animation'
+  | 'slice_of_life'
+  | 'history'
+  | 'music'
+  | 'sports'
+  | 'non_fiction'
+  | 'programming'
+  | 'rpg'
+  | 'strategy';
+
+/** Canonical media language codes matching backend `MediaLanguage`. */
+export type MediaLanguage = 'en' | 'vi' | 'ja' | 'ko' | 'zh' | 'zh-hk' | 'fr' | 'de' | 'es' | 'pt' | 'it' | 'ru' | 'id' | 'th';
+
+/** Canonical media format / sub-type slugs matching backend `MediaFormat`. */
+export type MediaFormat =
+  | 'tv'
+  | 'tv_short'
+  | 'movie'
+  | 'special'
+  | 'ova'
+  | 'ona'
+  | 'music'
+  | 'manga'
+  | 'manhwa'
+  | 'manhua'
+  | 'novel'
+  | 'one_shot'
+  | 'ebook'
+  | 'audiobook'
+  | 'magazine'
+  | 'scripted'
+  | 'animation'
+  | 'reality'
+  | 'talk_show'
+  | 'documentary'
+  | 'album'
+  | 'single'
+  | 'ep'
+  | 'episodic'
+  | 'serial'
+  | 'main_game'
+  | 'dlc'
+  | 'expansion'
+  | 'remake'
+  | 'remaster';
+
+/** Anime release season filter matching backend `AnimeSeason`. */
+export type AnimeSeason = 'winter' | 'spring' | 'summer' | 'fall';
+
+/** Normalized content rating filter matching backend `ContentRating`. */
+export type ContentRating = 'safe' | 'pg' | 'pg_13' | 'r' | 'suggestive' | 'mature' | 'explicit' | 'clean';
+
+/** Release status filter option matching backend `GadgetReleaseStatusFilter`. */
+export type GadgetReleaseStatusFilter = 'all' | 'upcoming' | 'airing' | 'released' | 'completed' | 'hiatus';
+
+/** Media gadget grouping option matching backend `GadgetGroupBy`. */
+export type GadgetGroupBy = 'none' | 'date' | 'media_type' | 'source';
+
+/** Bounded source, channel, symbol, region, map-layer, and media selectors stored as configuration. */
 export type GadgetScope = {
   source_item_ids?: string[];
   channel_ids?: string[];
@@ -53,6 +140,16 @@ export type GadgetScope = {
   cii_country_codes?: string[];
   metrics?: string[];
   lookback_days?: number | null;
+  media_types?: MediaType[];
+  countries?: string[];
+  genres?: MediaGenre[];
+  languages?: MediaLanguage[];
+  formats?: MediaFormat[];
+  content_ratings?: ContentRating[];
+  release_year?: number | null;
+  release_season?: AnimeSeason | null;
+  min_rating?: number | null;
+  release_window_days?: number | null;
 };
 
 /** Explainable match against one immutable current document version. */
@@ -69,7 +166,7 @@ export type DashboardHighlightMatch = {
   reason: string;
 };
 
-/** Simple bounded text filters and strict integer item limit. */
+/** Simple bounded text filters, map display preferences, and media filter options. */
 export type GadgetFilters = {
   keywords?: string[];
   exclude_keywords?: string[];
@@ -78,6 +175,18 @@ export type GadgetFilters = {
   map_mode?: 'live' | 'selected_sources' | null;
   map_weather_layer?: 'temperature' | 'precipitation' | 'wind' | 'clouds' | null;
   show_precise_locations?: boolean;
+  media_type?: MediaType | null;
+  media_types?: MediaType[];
+  release_status?: GadgetReleaseStatusFilter | null;
+  group_by?: GadgetGroupBy | null;
+  countries?: string[];
+  genres?: MediaGenre[];
+  languages?: MediaLanguage[];
+  formats?: MediaFormat[];
+  content_ratings?: ContentRating[];
+  release_year?: number | null;
+  release_season?: AnimeSeason | null;
+  min_rating?: number | null;
 };
 
 /**

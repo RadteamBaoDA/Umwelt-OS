@@ -123,7 +123,6 @@ from modules.connectors.provider_options import (
     GdeltLang,
     GdeltTimespan,
     HnList,
-    IsoCountry,
     JobCity,
     JobKeyword,
     JobLevel,
@@ -140,6 +139,48 @@ from modules.connectors.provider_options import (
     WikiLanguage,
     clean_query,
     option_fields,
+)
+from modules.connectors.provider_options import (
+    MAX_CONTENT_RATINGS as MAX_CONTENT_RATINGS,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_COUNTRIES as MAX_MEDIA_COUNTRIES,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_FORMATS as MAX_MEDIA_FORMATS,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_GENRES as MAX_MEDIA_GENRES,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_LANGUAGES as MAX_MEDIA_LANGUAGES,
+)
+from modules.connectors.provider_options import (
+    MEDIA_OPTION_NAMES as MEDIA_OPTION_NAMES,
+)
+from modules.connectors.provider_options import (
+    AnimeSeason as AnimeSeason,
+)
+from modules.connectors.provider_options import (
+    ContentRating as ContentRating,
+)
+from modules.connectors.provider_options import (
+    IsoCountry as IsoCountry,
+)
+from modules.connectors.provider_options import (
+    MediaFormat as MediaFormat,
+)
+from modules.connectors.provider_options import (
+    MediaGenre as MediaGenre,
+)
+from modules.connectors.provider_options import (
+    MediaLanguage as MediaLanguage,
+)
+from modules.connectors.provider_options import (
+    YoutubeFilter as YoutubeFilter,
+)
+from modules.connectors.provider_options import (
+    filter_media_records as filter_media_records,
 )
 from modules.connectors.provider_specs import (
     BUILTIN_PROVIDERS as BUILTIN_PROVIDERS,
@@ -491,6 +532,9 @@ from modules.connectors.service.scope import (
 )
 from modules.connectors.service.scope import (
     agent_browser_target_in_scope as agent_browser_target_in_scope,
+)
+from modules.connectors.service.scope import (
+    chat_scope_discriminators as chat_scope_discriminators,
 )
 from modules.connectors.service.scope import (
     cii_v8_availability as cii_v8_availability,

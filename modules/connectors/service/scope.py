@@ -8,7 +8,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from ipaddress import ip_address
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import (
@@ -40,6 +40,9 @@ from modules.connectors.service.schemas import (
     ProviderScopeSnapshot,
 )
 
+if TYPE_CHECKING:
+    from modules.sources.public import ConnectorSource
+
 
 def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
     """Expose the CII provider's truthful unavailable v8 projection through the connector owner."""
@@ -50,6 +53,9 @@ def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
 
 # Providers whose scope is exactly one of several alternative fields (enforced by registry.validate).
 _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
+    "youtube": frozenset(
+        {"youtube_channel_id", "youtube_channels", "youtube_handles", "youtube_playlist_ids"}
+    ),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
 }
@@ -58,12 +64,112 @@ _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
 # Single source of truth for catalog scope fields that may be absent from a stored configuration. Lives here (not in
 # registry.py, which imports this module) to avoid an import cycle; registry.validate imports it too.
 OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
+    "youtube": frozenset(
+        {
+            "youtube_channel_id",
+            "youtube_channels",
+            "youtube_handles",
+            "youtube_playlist_ids",
+            "youtube_filter",
+        }
+    ),
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
     "coingecko": frozenset(
         {"coingecko_assets"}
     ),  # absent on legacy BTC/USD sources (collection falls back to BTC)
+    "anilist_anime": frozenset({"media_ids"}),
+    "openlibrary_books": frozenset(
+        {
+            "openlibrary_mode",
+            "openlibrary_subject",
+            "openlibrary_query",
+            "ebooks_only",
+            "media_languages",
+        }
+    ),
+    "gutendex_books": frozenset(
+        {
+            "media_languages",
+            "gutendex_topic",
+            "gutendex_search",
+            "gutendex_copyright",
+            "gutendex_mime_type",
+            "gutendex_author_year_start",
+            "gutendex_author_year_end",
+            "media_genres",
+        }
+    ),
+    "anilist_manga": frozenset({"media_ids"}),
+    "ann_news": frozenset(
+        {
+            "ann_mode",
+            "ann_media_type",
+            "ann_category",
+            "ann_edition",
+            "media_country",
+            "media_countries",
+            "media_genres",
+            "media_languages",
+            "media_formats",
+            "release_year",
+            "min_rating",
+        }
+    ),
+    "mangaupdates_releases": frozenset(
+        {
+            "mangaupdates_types",
+            "licensed_only",
+            "exclude_genre",
+            "series_ids",
+            "release_year",
+            "media_genres",
+        }
+    ),
+    "mangadex_releases": frozenset(
+        {
+            "manga_ids",
+            "original_languages",
+            "available_translated_languages",
+            "mangadex_content_ratings",
+            "mangadex_statuses",
+            "publication_demographic",
+            "release_year",
+            "updated_at_since",
+            "media_genres",
+            "excluded_tags",
+        }
+    ),
+    "apple_books_rss": frozenset({"media_country", "media_genres", "media_languages"}),
+    "podcast_rss": frozenset(
+        {"feed_url", "itunes_podcast_id", "media_country", "media_genres", "media_languages"}
+    ),
+    "wikidata_movies": frozenset(
+        {
+            "lookback_days",
+            "genre_qids",
+            "language",
+            "media_country",
+            "media_countries",
+            "media_genres",
+            "media_languages",
+            "release_year",
+        }
+    ),
+    "itunes_movies": frozenset(
+        {"media_country", "media_genres", "media_languages", "release_year", "min_rating"}
+    ),
+    "letterboxd_rss": frozenset(
+        {
+            "media_country",
+            "media_countries",
+            "media_genres",
+            "media_languages",
+            "release_year",
+            "min_rating",
+        }
+    ),
 }
 
 
@@ -90,32 +196,15 @@ def _scope_values(
     return values
 
 
-async def get_current_provider_scope(
-    session: AsyncSession,
-    source_id: UUID,
-    expected_source_generation: int,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> ProviderScopeSnapshot | None:
-    """Hash validated non-secret scope fields for supported active providers only.
+def _scope_snapshot(source: "ConnectorSource") -> ProviderScopeSnapshot | None:
+    """Hash the validated non-secret scope fields of one source's CURRENT configuration.
 
-    The result contains no connector configuration values. Unsupported providers,
-    inactive sources, invalid config, and stale generations fail closed as None.
+    Pure apart from reading the provider catalog/registry. Returns None (fail closed) for an unsupported
+    or unavailable provider, an invalid configuration, or a missing required scope field. Status is NOT
+    checked here: callers apply their own lifecycle rule. The result holds no configuration values.
     """
     from modules.connectors.catalog import get_catalog_entry
-    from modules.sources import public as sources
 
-    fence = await sources.get_source_fence(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-    )
-    if fence is None or fence.status != "active" or fence.generation != expected_source_generation:
-        return None
-    source = await sources.get_connector_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-    )
-    if source is None or source.status != fence.status or source.generation != fence.generation:
-        return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
     entry = get_catalog_entry(provider_id) if provider_id else None
     if (
@@ -143,6 +232,67 @@ async def get_current_provider_scope(
         provider_id=provider_id,
         discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
     )
+
+
+async def get_current_provider_scope(
+    session: AsyncSession,
+    source_id: UUID,
+    expected_source_generation: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> ProviderScopeSnapshot | None:
+    """Hash validated non-secret scope fields for supported active providers only.
+
+    The result contains no connector configuration values. Unsupported providers,
+    inactive sources, invalid config, and stale generations fail closed as None.
+    """
+    from modules.sources import public as sources
+
+    fence = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if fence is None or fence.status != "active" or fence.generation != expected_source_generation:
+        return None
+    source = await sources.get_connector_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if source is None or source.status != fence.status or source.generation != fence.generation:
+        return None
+    return _scope_snapshot(source)
+
+
+async def chat_scope_discriminators(
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> dict[UUID, str | None]:
+    """Map each readable chat source to the scope discriminator of its CURRENT configuration.
+
+    Read-only, one admitted batch read (at most 200 ids, enforced by the sources owner). Only sources in
+    the scope's workspace with status ``active`` or ``paused`` appear in the result; archived, unknown
+    and foreign ids are omitted (fail closed for the caller). The value is None when the provider has no
+    verifiable scope (unsupported provider, invalid config, missing required field). Unlike
+    :func:`get_current_provider_scope` the generation is not compared, because pause/resume bumps it
+    while the data collected under the same scope fields stays valid for chat.
+    """
+    from modules.sources import public as sources
+
+    found = await sources.get_connector_sources(
+        session,
+        frozenset(source_ids),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    result: dict[UUID, str | None] = {}
+    for source_id, source in found.items():
+        if source.status not in ("active", "paused"):
+            continue
+        snapshot = _scope_snapshot(source)
+        result[source_id] = snapshot.discriminator if snapshot is not None else None
+    return result
 
 
 async def export_provider_scope(

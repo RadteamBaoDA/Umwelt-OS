@@ -172,3 +172,63 @@ def test_slack_optional_ids_may_be_null_but_others_may_not() -> None:
     assert _meta("slack", {"thread_ts": None, "user_id": None, "channel_id": "C1"}).source_fields
     _rejects("slack", {"channel_id": None}, "Provider channel_id must be a bounded string")
     _rejects("slack", {"message_ts": None}, "Provider message_ts must be a bounded string")
+
+
+def test_media_providers_and_media_field_validation() -> None:
+    from modules.knowledge.documents.public import MEDIA_PROVIDER_IDS
+
+    assert len(MEDIA_PROVIDER_IDS) == 27
+    assert "youtube" not in MEDIA_PROVIDER_IDS
+    for provider in MEDIA_PROVIDER_IDS:
+        ok = {
+            "title": "Dandadan",
+            "media_type": "anime",
+            "artwork_aspect": "poster",
+            "country": "JP",
+            "language": "ja",
+            "genres": ["action", "sci_fi"],
+            "format": "tv",
+            "content_rating": "pg_13",
+            "release_status": "airing",
+            "release_date": "2026-10-01",
+            "release_year": 2026,
+            "release_season": "Fall 2026",
+            "rating": 87.5,
+            "creator": "Science SARU",
+            "season": "2",
+            "episode": "1",
+            "duration_seconds": 1440,
+            "external_ids": {"anilist": "171018", "mal": "57334"},
+            "trailer_url": "https://www.youtube.com/watch?v=abc",
+            "attribution": "Data via AniList",
+        }
+        assert _meta(provider, ok).source_fields["rating"] == 87.5
+
+    _rejects("anilist_anime", {"genres": ["Action"]}, "lowercase slug list")
+    _rejects("anilist_anime", {"genres": ["a"] * 13}, "lowercase slug list")
+    _rejects("anilist_anime", {"genres": ["x" * 49]}, "lowercase slug list")
+    _rejects("anilist_anime", {"release_year": 1799}, "bounded integer")
+    _rejects("anilist_anime", {"release_year": True}, "bounded integer")
+    _rejects("anilist_anime", {"duration_seconds": 604801}, "bounded integer")
+    _rejects("openlibrary_books", {"page_count": 50001}, "bounded integer")
+    _rejects("tmdb_movies", {"rating": True}, "finite number between 0 and 100")
+    _rejects("tmdb_movies", {"rating": float("nan")}, "finite number between 0 and 100")
+    _rejects("tmdb_movies", {"rating": 101.0}, "finite number between 0 and 100")
+    _rejects("tmdb_movies", {"external_ids": {"bad_key": "1"}}, "bounded identifier map")
+    _rejects("tmdb_movies", {"external_ids": {"tmdb": " "}}, "bounded identifier map")
+    _rejects("tmdb_movies", {"trailer_url": "http://example.com/t"}, "HTTPS link without credentials")
+    _rejects("tmdb_movies", {"country": "USA"}, "bounded string")
+    _rejects("tmdb_movies", {"country": "us"}, "ISO 3166-1 alpha-2")
+    _rejects("tmdb_movies", {"media_type": "invalid"}, "media_type is unsupported")
+    _rejects("tmdb_movies", {"artwork_aspect": "wide"}, "artwork_aspect is unsupported")
+    _rejects("tmdb_movies", {"release_status": "unknown"}, "release_status is unsupported")
+    # Existing non-media providers preserve 64-char language limit (e.g. "English").
+    assert _meta("gdelt_economy", {"language": "English", "sourcecountry": "US"}).source_fields["language"] == "English"
+
+
+def test_media_release_dates_accept_partial_dates_and_reject_invalid_calendar_values() -> None:
+    for value in ("2026", "2026-02", "2024-02-29", "2026-01-01T12:30:00Z"):
+        assert _meta("anilist_anime", {"release_date": value}).source_fields["release_date"] == value
+    for value in ("2026-99-99", "2026-02-29", "2026-13", "2026-01-01T25:00:00Z", "2026-01-01T12:00:00"):
+        with pytest.raises(ValueError):
+            _meta("anilist_anime", {"release_date": value})
