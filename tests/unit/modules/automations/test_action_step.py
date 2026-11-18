@@ -632,3 +632,184 @@ async def test_delete_brief_task_deletes_thread_releases_slot(
         multi_workspace_enabled=False,
     )
     assert events == ["release", "delete:True:True", "commit"]
+
+
+@pytest.mark.parametrize("deliver_chat", [True, False])
+@pytest.mark.asyncio
+async def test_sync_slot_release_disables_internal_cron_only_for_tasks(
+    monkeypatch: pytest.MonkeyPatch, deliver_chat: bool
+) -> None:
+    """Pausing a Daily brief task must not revive the internal cron; a legacy rule keeps it."""
+    from modules.automations import public
+
+    seen: list[Any] = []
+
+    async def release(*_a: Any, **kwargs: Any) -> None:
+        seen.append(kwargs["disable_internal"])
+
+    monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
+    parts = (
+        {"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
+        [],
+        [{"type": "generate_brief", "deliver_chat": deliver_chat}],
+    )
+    await public._sync_brief_slot(
+        None,  # type: ignore[arg-type]
+        SimpleNamespace(id=uuid4(), enabled=False),  # type: ignore[arg-type]
+        parts,
+        explicit_enable=False,
+        was_owner_candidate=True,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert seen == [deliver_chat]
+
+
+@pytest.mark.parametrize("deliver_chat", [True, False])
+@pytest.mark.asyncio
+async def test_delete_releases_slot_with_internal_disabled_only_for_tasks(
+    monkeypatch: pytest.MonkeyPatch, deliver_chat: bool
+) -> None:
+    from modules.automations import public
+
+    seen: list[Any] = []
+    head = SimpleNamespace(id=uuid4(), revision=1, enabled=True, deleted_at=None)
+    cur = SimpleNamespace(
+        trigger={"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
+        conditions=[],
+        actions=[{"type": "generate_brief", "deliver_chat": deliver_chat}],
+    )
+
+    async def noop(*_a: Any, **_k: Any) -> Any:
+        return None
+
+    async def owned(*_a: Any, **_k: Any) -> Any:
+        return head
+
+    async def current(*_a: Any, **_k: Any) -> Any:
+        return cur
+
+    async def release(*_a: Any, **kwargs: Any) -> None:
+        seen.append(kwargs["disable_internal"])
+
+    monkeypatch.setattr(public, "_admit", noop)
+    monkeypatch.setattr(public, "_owned_head", owned)
+    monkeypatch.setattr(public, "_current_revision", current)
+    monkeypatch.setattr(public, "_append_revision", lambda *_a: None)
+    monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
+    monkeypatch.setattr(public.chat, "delete_automation_conversation", noop)
+    monkeypatch.setattr(public, "commit_with_replay", noop)
+    await public.delete_automation(
+        None,  # type: ignore[arg-type]
+        head.id,
+        1,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert seen == [deliver_chat]
+
+
+@pytest.mark.parametrize("disable_internal", [True, False])
+@pytest.mark.asyncio
+async def test_release_brief_slot_internal_schedule_enabled_state(
+    monkeypatch: pytest.MonkeyPatch, disable_internal: bool
+) -> None:
+    """The internal schedule row ends disabled after a task release; unchanged otherwise."""
+    from modules.dashboard import briefs
+
+    automation_id = uuid4()
+    row = SimpleNamespace(schedule_owner="automation", automation_id=automation_id, enabled=True)
+    other = SimpleNamespace(schedule_owner="automation", automation_id=uuid4(), enabled=True)
+
+    class Sess:
+        def __init__(self, found: Any) -> None:
+            self.found = found
+
+        async def scalar(self, _s: Any) -> Any:
+            return self.found
+
+        async def execute(self, *_a: Any) -> None:
+            return None
+
+    async def admit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(briefs, "_admit", admit)
+    for found, expected_owner, expected_enabled in (
+        (row, "internal_brief", not disable_internal),
+        (other, "automation", True),  # not the holder: nothing changes
+    ):
+        await briefs.release_brief_slot(
+            Sess(found),  # type: ignore[arg-type]
+            automation_id,
+            scope=SCOPE,  # type: ignore[arg-type]
+            multi_workspace_enabled=False,
+            disable_internal=disable_internal,
+        )
+        assert found.schedule_owner == expected_owner and found.enabled is expected_enabled
+
+
+async def _post(
+    monkeypatch: pytest.MonkeyPatch, current: Any, *, fence_current: bool = True
+) -> tuple[str | None, list[str]]:
+    """Run ``_post_brief`` with a locked-run stub; return (skip code, chat calls)."""
+    from modules.automations._execution import actions
+
+    calls: list[str] = []
+
+    async def noop(*_a: Any, **_k: Any) -> Any:
+        return "fence"
+
+    async def locked(*_a: Any, **_k: Any) -> Any:
+        return current
+
+    async def fence(*_a: Any, **_k: Any) -> bool:
+        return fence_current
+
+    async def ensure(*_a: Any, **_k: Any) -> Any:
+        calls.append("ensure")
+        return uuid4()
+
+    async def append(*_a: Any, **_k: Any) -> Any:
+        calls.append("append")
+        return uuid4(), True
+
+    monkeypatch.setattr(actions, "_admit", noop)
+    monkeypatch.setattr(actions, "_locked_run", locked)
+    monkeypatch.setattr(actions, "_fence_current", fence)
+    monkeypatch.setattr(actions, "_commit", noop)
+    monkeypatch.setattr(actions.chat, "ensure_automation_conversation", ensure)
+    monkeypatch.setattr(actions.chat, "append_task_message", append)
+    brief = SimpleNamespace(id=uuid4(), revision=1, content="x", citations=[])
+    skipped = await actions._post_brief(
+        _BriefFactory(),  # type: ignore[arg-type]
+        SimpleNamespace(id=RUN_ID, automation_id=uuid4()),  # type: ignore[arg-type]
+        brief,
+        _brief_rev(),
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    return skipped, calls
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        None,
+        SimpleNamespace(document_evidence_revoked=True, status="running"),
+        SimpleNamespace(document_evidence_revoked=False, status="requires_review"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_brief_revoked_or_review_run_posts_nothing(
+    monkeypatch: pytest.MonkeyPatch, current: Any
+) -> None:
+    skipped, calls = await _post(monkeypatch, current)
+    assert skipped == "document_evidence_unavailable" and calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_brief_stale_revision_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = SimpleNamespace(document_evidence_revoked=False, status="running")
+    skipped, calls = await _post(monkeypatch, current, fence_current=False)
+    assert skipped == "stale_revision" and calls == []

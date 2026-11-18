@@ -176,3 +176,25 @@ async def test_delete_automation_conversation_includes_archived_and_scopes_works
     )
     assert count == 2 and deleted == [(ids[0], SCOPE), (ids[1], SCOPE)]
     assert "workspace_id" in statements[0] and "archived" not in statements[0]
+
+
+@pytest.mark.asyncio
+async def test_owner_rename_survives_later_posts_and_legacy_row_is_titled_once() -> None:
+    s = FakeSession()
+    aid = uuid4()
+
+    async def ensure(title: str, kind: Any) -> None:
+        await threads.ensure_automation_conversation(
+            s,
+            aid,
+            title,
+            task_kind=kind,
+            scope=SCOPE,  # type: ignore[arg-type]
+        )
+
+    await ensure("Rule", None)  # legacy row
+    await ensure("Brief", "daily_brief")  # first marked as a task: titled
+    assert s.conversations[0].title == "Brief"
+    s.conversations[0].title = "My renamed brief"
+    await ensure("Brief", "daily_brief")
+    assert s.conversations[0].title == "My renamed brief"

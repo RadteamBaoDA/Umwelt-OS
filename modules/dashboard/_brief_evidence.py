@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import AccessFence, Scope
+from modules.dashboard.daily_schemas import DailyWidget
 from modules.dashboard.models import DailyBrief, DailyBriefEvidence
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
@@ -109,6 +111,42 @@ def _validate_fact_group(
             raise RuntimeError("invariant violated: item.document_id must not be None")
         captured_documents.add(item.document_id)
     return not (exemplar.fact_kind == "stories" and not observed)
+
+
+def _fact_candidates(widgets: Sequence[DailyWidget]) -> tuple[list[dict[str, Any]], set[str]]:
+    """Flatten widget items into unvetted fact candidates and the source ids they reference.
+
+    News facts without any source id are skipped. ``_canonical_title`` keeps the untruncated title
+    so support lookups can compare against the stored value. Pure; privacy filtering happens later.
+    """
+    candidates: list[dict[str, Any]] = []
+    wanted: set[str] = set()
+    for widget in widgets:
+        for item in widget.items:
+            ids = [str(s) for s in item.get("source_ids", [])]
+            if widget.id not in ("stories", "events") and item.get("source_id"):
+                ids.append(str(item["source_id"]))
+            if widget.module == "news" and not ids:
+                continue
+            detail = (
+                item.get("detail")
+                or item.get("status")
+                or item.get("progress")
+                or item.get("type")
+                or ""
+            )
+            candidates.append(
+                {
+                    "kind": widget.id,
+                    "id": item["id"],
+                    "title": _prompt_title(item["title"]),
+                    "detail": str(detail),
+                    "source_ids": ids,
+                    "_canonical_title": str(item["title"]),
+                }
+            )
+            wanted.update(ids)
+    return candidates, wanted
 
 
 async def _load_evidence_groups(

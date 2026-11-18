@@ -62,7 +62,8 @@ async def ensure_automation_conversation(
 
     Scoped to ``scope.workspace_id``; archived conversations are ignored. With ``task_kind`` set the
     row is marked ``metadata["scheduled_task"] = {"kind": task_kind}`` and titled ``title[:255]``
-    (also applied to an existing row); with ``None`` it matches the legacy
+    only the first time it is marked (a legacy row converted to a task, or a new row), so a later
+    owner rename survives every subsequent post; with ``None`` it matches the legacy
     ``"Automation: <title>"`` shape and empty metadata. Flushes only.
     """
     conv = await session.scalar(
@@ -86,8 +87,11 @@ async def ensure_automation_conversation(
         )
         session.add(conv)
     if task_kind is not None:
-        conv.title = title[:255]
-        conv.metadata_json = {**(conv.metadata_json or {}), "scheduled_task": {"kind": task_kind}}
+        meta = conv.metadata_json or {}
+        if "scheduled_task" not in meta:
+            # Title only when the thread first becomes a task thread; later posts keep owner renames.
+            conv.title = title[:255]
+        conv.metadata_json = {**meta, "scheduled_task": {"kind": task_kind}}
     await session.flush()
     return conv.id
 

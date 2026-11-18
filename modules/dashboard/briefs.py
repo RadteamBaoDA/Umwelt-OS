@@ -48,6 +48,9 @@ from modules.dashboard._brief_evidence import (
     _captured_support_eligible as _captured_support_eligible,
 )
 from modules.dashboard._brief_evidence import (
+    _fact_candidates as _fact_candidates,
+)
+from modules.dashboard._brief_evidence import (
     _fact_support_current as _fact_support_current,
 )
 from modules.dashboard._brief_evidence import (
@@ -55,7 +58,6 @@ from modules.dashboard._brief_evidence import (
 )
 from modules.dashboard._brief_evidence import (
     _prompt_fact_digest,
-    _prompt_title,
 )
 from modules.dashboard._brief_evidence import (
     _validate_citations as _validate_citations,
@@ -246,42 +248,6 @@ async def list_briefs(
     return await _with_live_status(
         session, list(rows), scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-
-
-def _fact_candidates(widgets: Sequence[DailyWidget]) -> tuple[list[dict[str, Any]], set[str]]:
-    """Flatten widget items into unvetted fact candidates and the source ids they reference.
-
-    News facts without any source id are skipped. ``_canonical_title`` keeps the untruncated title
-    so support lookups can compare against the stored value. Pure; privacy filtering happens later.
-    """
-    candidates: list[dict[str, Any]] = []
-    wanted: set[str] = set()
-    for widget in widgets:
-        for item in widget.items:
-            ids = [str(s) for s in item.get("source_ids", [])]
-            if widget.id not in ("stories", "events") and item.get("source_id"):
-                ids.append(str(item["source_id"]))
-            if widget.module == "news" and not ids:
-                continue
-            detail = (
-                item.get("detail")
-                or item.get("status")
-                or item.get("progress")
-                or item.get("type")
-                or ""
-            )
-            candidates.append(
-                {
-                    "kind": widget.id,
-                    "id": item["id"],
-                    "title": _prompt_title(item["title"]),
-                    "detail": str(detail),
-                    "source_ids": ids,
-                    "_canonical_title": str(item["title"]),
-                }
-            )
-            wanted.update(ids)
-    return candidates, wanted
 
 
 async def _allowed_source_ids(
@@ -1431,9 +1397,18 @@ async def claim_brief_slot(
 
 
 async def release_brief_slot(
-    session: AsyncSession, automation_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    automation_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    disable_internal: bool = False,
 ) -> None:
-    """Return the slot to the internal cron if (and only if) ``automation_id`` holds it; no commit."""
+    """Return the slot to the internal cron if (and only if) ``automation_id`` holds it; no commit.
+
+    ``disable_internal=True`` (a paused or deleted scheduled task) also switches the internal brief
+    schedule off, so handing the slot back never restarts the cron the owner just stopped.
+    """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     await _lock_schedule_slot(session, scope.workspace_id)
     row = await session.scalar(
@@ -1446,6 +1421,8 @@ async def release_brief_slot(
     )
     if row is not None and row.automation_id == automation_id:
         row.schedule_owner, row.automation_id = "internal_brief", None
+        if disable_internal:
+            row.enabled = False
 
 
 async def run_due_brief(

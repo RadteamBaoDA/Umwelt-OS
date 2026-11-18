@@ -531,6 +531,43 @@ async def _transient(
         return "retry"
 
 
+def _make_evidence_guard(
+    run_id: UUID,
+    fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> Callable[[AsyncSession], Awaitable[bool]]:
+    """Build the brief ``publish_guard`` that re-checks the run's trigger evidence.
+
+    The returned coroutine takes the guarded session, re-reads the run (``populate_existing`` so a
+    purge committed mid-call is seen), and returns True only while ``_run_evidence_current`` still
+    holds under the original access ``fence``. Dashboard calls it before egress and before publish,
+    ahead of the brief's own locks.
+    """
+
+    async def evidence_guard(guarded: AsyncSession) -> bool:
+        """Re-take the trigger-evidence fence before the brief's own locks (egress and publish)."""
+        fresh = await guarded.scalar(
+            select(AutomationRun)
+            .where(
+                AutomationRun.workspace_id == scope.workspace_id,
+                AutomationRun.owner_id == _actor(scope),
+                AutomationRun.id == run_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        return fresh is not None and await _run_evidence_current(
+            guarded,
+            fresh,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
+
+    return evidence_guard
+
+
 async def _generate_brief(
     ctx: dict[str, Any],
     run: AutomationRun,
@@ -602,26 +639,9 @@ async def _generate_brief(
                 session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
             )
             day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
-            run_id = run.id
-
-            async def evidence_guard(guarded: AsyncSession) -> bool:
-                """Re-take the trigger-evidence fence before the brief's own locks (egress and publish)."""
-                fresh = await guarded.scalar(
-                    select(AutomationRun)
-                    .where(
-                        AutomationRun.workspace_id == scope.workspace_id,
-                        AutomationRun.owner_id == _actor(scope),
-                        AutomationRun.id == run_id,
-                    )
-                    .execution_options(populate_existing=True)
-                )
-                return fresh is not None and await _run_evidence_current(
-                    guarded,
-                    fresh,
-                    scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled,
-                    access_fence=fence,
-                )
+            evidence_guard = _make_evidence_guard(
+                run.id, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
 
             brief = await dashboard.generate_brief(
                 session,

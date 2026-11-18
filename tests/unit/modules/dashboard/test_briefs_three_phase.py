@@ -573,3 +573,46 @@ async def test_brief_cleanup_scrubs_chat_copies(monkeypatch: pytest.MonkeyPatch)
         multi_workspace_enabled=False,
     )
     assert calls == [([brief.id], SCOPE)] and progress.scrubbed_count == 1
+
+
+async def test_every_widget_read_uses_the_same_sections(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[Any] = []
+    base = context.build_daily_widgets
+
+    async def spy(session: Any, *args: object, **kwargs: Any) -> list[object]:
+        seen.append(kwargs.get("sections"))
+        return await base(session, *args, **kwargs)
+
+    monkeypatch.setattr(context, "build_daily_widgets", spy)
+    await briefs.generate_brief(
+        env.session,
+        DAY,
+        TZ,
+        scope=SCOPE,
+        multi_workspace_enabled=False,
+        settings=SimpleNamespace(),
+        redis=SimpleNamespace(),
+        force=False,
+        sections=["markets", "agenda"],
+    )
+    assert len(seen) == 4 and all(value == ["markets", "agenda"] for value in seen)
+
+
+async def test_generate_brief_rejects_long_extra_instruction_before_admission(env: _Env) -> None:
+    admitted: list[bool] = []
+    env.on_admit = lambda: admitted.append(True)
+    with pytest.raises(ValueError):
+        await briefs.generate_brief(
+            env.session,
+            DAY,
+            TZ,
+            scope=SCOPE,
+            multi_workspace_enabled=False,
+            settings=SimpleNamespace(),
+            redis=SimpleNamespace(),
+            force=False,
+            extra_instruction="x" * 501,
+        )
+    assert admitted == [] and env.log == []

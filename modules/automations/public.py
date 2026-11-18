@@ -195,7 +195,8 @@ async def _sync_brief_slot(
 
     Invariant: the slot belongs to the internal brief cron unless one enabled schedule+generate_brief
     automation has been explicitly enabled. Transfer happens only on an explicit enable (never as a
-    side effect of editing); disable, delete or no longer qualifying hands it back.
+    side effect of editing); disable, delete or no longer qualifying hands it back. Handing back a
+    Daily brief *task* also disables the internal cron; a legacy rule leaves it as the owner set it.
     """
     if _owns_brief_slot(head.enabled, parts[0], parts[2]):
         if explicit_enable:
@@ -213,7 +214,12 @@ async def _sync_brief_slot(
             )
     else:
         await dashboard.release_brief_slot(
-            session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            session,
+            head.id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            # A paused/disabled scheduled task must not revive the internal brief cron.
+            disable_internal=scheduled_task_kind(parts[0], parts[2]) is not None,
         )
 
 
@@ -495,10 +501,15 @@ async def delete_automation(
     head.enabled = False
     head.revision += 1
     _append_revision(session, head, current.trigger, current.conditions, current.actions)
+    is_task = scheduled_task_kind(current.trigger, current.actions) is not None
     await dashboard.release_brief_slot(
-        session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        session,
+        head.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        disable_internal=is_task,
     )
-    if scheduled_task_kind(current.trigger, current.actions) is not None:
+    if is_task:
         # The thread belongs to the task (an agent rule's thread is run history and stays).
         await chat.delete_automation_conversation(session, head.id, scope=scope)
     await commit_with_replay(
