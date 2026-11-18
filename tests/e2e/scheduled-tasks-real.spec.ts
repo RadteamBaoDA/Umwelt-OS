@@ -107,6 +107,8 @@ test('real sources collect data for the brief', async ({ page }) => {
   expect(NEWS.some(([id]) => /^[1-9]\d* records/.test(outcomes[id])), JSON.stringify(outcomes)).toBe(true);
   expect(OBSERVATIONS.some(([id]) => /^[1-9]\d* records/.test(outcomes[id])), JSON.stringify(outcomes)).toBe(true);
   await page.goto('/settings/sources');
+  await expect(page.getByRole('link', { name: 'Data sources', exact: true }).first()).toBeVisible({ timeout: 30_000 });
+  await page.waitForLoadState('networkidle').catch(() => undefined);
   await shot(page, '01-sources');
 });
 
@@ -115,6 +117,7 @@ test('owner sets up the Daily brief task from the template', async ({ page }) =>
   await configureRealModel(page);
   await page.goto('/settings/scheduled-tasks');
   await expect(page.getByRole('heading', { name: 'Scheduled tasks', exact: true })).toBeVisible();
+  await expect(page.getByText('No scheduled tasks yet')).toBeVisible({ timeout: 30_000 });
   await shot(page, '02-scheduled-tasks-empty');
   await page.getByRole('tab', { name: 'Templates' }).click();
   await page.getByRole('button', { name: 'Set up' }).first().click();
