@@ -114,7 +114,7 @@ test('owner sets up the Daily brief task from the template', async ({ page }) =>
   test.setTimeout(5 * 60_000);
   await configureRealModel(page);
   await page.goto('/settings/scheduled-tasks');
-  await expect(page.getByRole('heading', { name: 'Scheduled tasks' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Scheduled tasks', exact: true })).toBeVisible();
   await shot(page, '02-scheduled-tasks-empty');
   await page.getByRole('tab', { name: 'Templates' }).click();
   await page.getByRole('button', { name: 'Set up' }).first().click();
