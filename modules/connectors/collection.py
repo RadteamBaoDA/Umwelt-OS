@@ -16,6 +16,7 @@ Boundaries kept deliberately narrow:
 import asyncio
 import logging
 import time
+import traceback
 from contextlib import suppress
 from typing import Any
 
@@ -308,6 +309,16 @@ def _classify_failure(exc: BaseException, *, keyless: bool) -> dict[str, Any]:
             "retryable": error_status(exc) == 409,
         }
     if isinstance(exc, ValueError):
+        # Name the failing frame (module:function:line) and class only, never the message: provider payload
+        # text could reach the message, and operators still need to tell a parser bug from bad upstream data.
+        frame = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
+        logger.warning(
+            "collection rejected an invalid provider response: %s at %s",
+            type(exc).__name__,
+            f"{frame.filename.rsplit('/', 2)[-1]}:{frame.name}:{frame.lineno}"
+            if frame
+            else "unknown",
+        )
         return {"outcome": "failed", "error_code": "provider_response_invalid"}
     return {"outcome": "failed", "error_code": "executor_error", "retryable": True}
 
