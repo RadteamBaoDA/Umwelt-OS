@@ -206,8 +206,11 @@ test('dashboard day context serves the live brief; the owner adds the brief gadg
   }
   await page.goto('/dashboard');
   // A fresh install has no dashboard yet; the owner creates one before adding gadgets.
-  const create = page.getByRole('button', { name: 'Create a dashboard' });
-  if (await create.waitFor({ timeout: 15_000 }).then(() => true, () => false)) {
+  // Decide from the API, not a button that flashes while the dashboard list loads.
+  const dashboards = await (await page.request.get('/api/v1/dashboards')).json() as { items?: unknown[] } | unknown[];
+  const hasDashboard = (Array.isArray(dashboards) ? dashboards : dashboards.items ?? []).length > 0;
+  if (!hasDashboard) {
+    const create = page.getByRole('button', { name: 'Create a dashboard' });
     await create.click();
     await page.getByLabel('Dashboard name').fill('E2E home');
     await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
