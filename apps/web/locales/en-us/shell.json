@@ -96,5 +96,9 @@
   "sourcesNavigation": "Data sources sections",
   "statusline.label": "Status line",
   "statusline.modeNormal": "NORMAL",
-  "statusline.modeInsert": "INSERT"
+  "statusline.modeInsert": "INSERT",
+  "statusline.sourcesOk": "{count} sources ok",
+  "statusline.warn": "{count} warn",
+  "statusline.err": "{count} err",
+  "statusline.model": "model: {model}"
 }

@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+﻿import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: {
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 const request = vi.hoisted(() => vi.fn());
 vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, apiRequest: request, ApiError: class extends Error {} }));
-import { LiveMapGadget } from './live-map-gadget';
+import { LiveMapGadget, LiveMapOverview } from './live-map-gadget';
 import { LiveEventLegend } from './live-map-legend';
 import type { StoredEvent } from '../live-feed/store';
 
@@ -339,5 +339,45 @@ describe('live map overview legend', () => {
   it('renders nothing when there are no events', () => {
     renderLegend([]);
     expect(screen.queryByTestId('live-legend')).toBeNull();
+  });
+});
+
+describe('live map overview engine control', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    request.mockReset();
+  });
+  it('switches between globe and flat with a two-button segmented control', async () => {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    request.mockResolvedValue({ revision: 1, terms_catalog: [], fetched_at: '2026-11-04T00:00:00Z', truncated: false, items: [] });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+          <LiveMapOverview />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    const group = screen.getByRole('group', { name: 'Map engine' });
+    const globe = within(group).getByRole('button', { name: '3D globe' });
+    const flat = within(group).getByRole('button', { name: 'Flat map' });
+    expect(globe.getAttribute('aria-pressed')).toBe('true');
+    expect(flat.getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByRole('combobox', { name: 'Map engine' })).toBeNull();
+    fireEvent.click(flat);
+    expect(flat.getAttribute('aria-pressed')).toBe('true');
+    expect(globe.getAttribute('aria-pressed')).toBe('false');
   });
 });

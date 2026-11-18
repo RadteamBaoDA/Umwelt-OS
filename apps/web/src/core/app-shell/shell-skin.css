@@ -60,20 +60,36 @@
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
-  /* Mode chip and the topbar prompt are terminal ornaments. */
+  /* Mode chip, the topbar prompt and the source-health and model segments are terminal ornaments. */
   .statusline .statusline-mode,
+  .statusline .statusline-sources,
+  .statusline .statusline-model,
   .shell-crumb {
     display: none;
   }
   /* Narrow screens drop the route, locale and the top-bar prompt. The terminal shell-crumb rule below sets
-     display:block with higher specificity, so it is repeated here to win at this width. */
+     display:block with higher specificity, so it is repeated here to win at this width. The terminal model segment
+     (display:flex, specificity 0,2,1) is repeated for the same reason. */
   @media (max-width: 720px) {
     .statusline .hide-sm,
     .topbar .hide-sm,
     .shell-crumb.hide-sm,
-    html[data-skin='terminal'] .shell-crumb.hide-sm {
+    html[data-skin='terminal'] .shell-crumb.hide-sm,
+    .statusline .statusline-model.hide-sm,
+    html[data-skin='terminal'] .statusline .statusline-model.hide-sm {
       display: none;
     }
+  }
+}
+
+@layer components {
+  /* Source health dots: terminal skin only, next to the transport segment. */
+  html[data-skin='terminal'] .statusline .statusline-sources {
+    display: flex;
+  }
+  html[data-skin='terminal'] .statusline .statusline-model {
+    display: flex;
+    color: var(--muted);
   }
 }
 

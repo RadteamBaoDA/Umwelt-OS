@@ -10,7 +10,7 @@
  */
 
 import * as React from 'react';
-import { Loader2Icon } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { usePromptBridge } from '../bridge';
 import { genUiCopy } from '../copy';
 import type { SandboxTheme } from '../design-system';
@@ -329,7 +329,7 @@ function StreamingPlaceholder({ chip, message }: { chip: boolean; message: strin
       }
       data-testid="sandboxed-ui-placeholder"
     >
-      <Loader2Icon className="size-4 animate-spin text-primary" />
+      <Spinner className="size-4 text-primary" />
       <span>{message}</span>
     </div>
   );

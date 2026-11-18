@@ -5,6 +5,7 @@ import React from 'react';
 import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { BetterDirection } from './metric-direction';
+import { RollingNumber } from './rolling-number';
 import { Sparkline } from './sparkline';
 
 /** Props for DeltaPill. */
@@ -97,17 +98,17 @@ export function GadgetKpi({
   format,
 }: GadgetKpiProps) {
   const display = useDisplayPreferences();
+  const figure =
+    value === null
+      ? '—'
+      : format
+        ? format(value)
+        : formatChartValue(value, { currency, unit: currency ? unit : undefined, locale: display.locale });
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="truncate text-xs text-muted-foreground">{label}</div>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className={`${size === 'sm' ? 'text-figure-sm' : 'text-figure'} text-foreground`}>
-          {value === null
-            ? '—'
-            : format
-              ? format(value)
-              : formatChartValue(value, { currency, unit: currency ? unit : undefined, locale: display.locale })}
-        </span>
+        <RollingNumber className={`${size === 'sm' ? 'text-figure-sm' : 'text-figure'} text-foreground`} text={figure} value={value} />
         {!currency && unit && value !== null && <span className="text-xs text-muted-foreground">{unit}</span>}
         {deltaPercent !== undefined && <DeltaPill percent={deltaPercent} better={better} periodLabel={periodLabel} />}
       </div>

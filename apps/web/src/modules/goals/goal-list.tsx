@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { fetchGoals, fetchGoalsByIds } from './api';
 import type { Goal, GoalPage } from './types';
 import { BareButton } from '@/components/bare-button';
+import { asciiProgressBar } from './goal-progress-bar';
+import './goal-skin.css';
 
 /** One goal tile: title, localized status, summary line and a clamped 0-100 progress bar; clicking calls `onSelect`. */
 function GoalCard({ goal, onSelect }: { goal: Goal; onSelect?: (goal: Goal) => void }) {
@@ -31,8 +33,12 @@ function GoalCard({ goal, onSelect }: { goal: Goal; onSelect?: (goal: Goal) => v
         <span className="mt-1 block text-xs text-muted-foreground">
           {t('goal.summary', { progress: goal.progress, count: goal.milestones.length, deadline: goal.deadline ?? t('no.deadline') })}
         </span>
-        <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
+        <span className="goal-progress mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
           <span className="block h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }} />
+        </span>
+        {/* Terminal-skin text bar. Decorative: the summary line already states the progress. */}
+        <span className="goal-ascii-bar" aria-hidden="true">
+          {asciiProgressBar(goal.progress)}
         </span>
       </BareButton>
     </li>

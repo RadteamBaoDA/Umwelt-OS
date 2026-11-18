@@ -96,5 +96,9 @@
   "sourcesNavigation": "Các mục nguồn dữ liệu",
   "statusline.label": "Dòng trạng thái",
   "statusline.modeNormal": "NORMAL",
-  "statusline.modeInsert": "INSERT"
+  "statusline.modeInsert": "INSERT",
+  "statusline.sourcesOk": "{count} nguồn ok",
+  "statusline.warn": "{count} cảnh báo",
+  "statusline.err": "{count} lỗi",
+  "statusline.model": "mô hình: {model}"
 }

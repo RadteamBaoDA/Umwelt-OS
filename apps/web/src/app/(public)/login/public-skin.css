@@ -41,6 +41,23 @@ html[data-skin='terminal'] .auth-panel > :first-child {
   padding-top: 8px;
 }
 
+/* ASCII wordmark at the top of the card. Terminal only; the default skin has no box for it. Clipped, never wrapped,
+   so the 440px card cannot overflow on narrow screens. */
+.sp-banner {
+  display: none;
+}
+
+html[data-skin='terminal'] .sp-banner {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 12px;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+}
+
 html[data-skin='terminal'] .auth-panel h1::before {
   content: '> ' / '';
   color: var(--accent);

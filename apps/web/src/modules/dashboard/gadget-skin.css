@@ -129,3 +129,34 @@ html[data-skin='terminal'] .dashboard-gadget-body[data-reveal] > div:last-child 
     animation: none !important;
   }
 }
+
+/* Rolling figures (rolling-number.tsx): the terminal skin flashes the background green or red in the direction of
+   change while the digits settle (about 500 ms). The attribute is removed when the roll ends, and the default skin
+   never sets it. Reduced motion removes the flash. */
+html[data-skin='terminal'] [data-roll='up'] {
+  animation: roll-pulse-up 500ms ease-out;
+}
+html[data-skin='terminal'] [data-roll='down'] {
+  animation: roll-pulse-down 500ms ease-out;
+}
+@keyframes roll-pulse-up {
+  from {
+    background-color: color-mix(in srgb, var(--positive) 28%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@keyframes roll-pulse-down {
+  from {
+    background-color: color-mix(in srgb, var(--negative) 28%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-skin='terminal'] [data-roll] {
+    animation: none;
+  }
+}

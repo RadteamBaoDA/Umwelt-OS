@@ -21,6 +21,15 @@ import './public-skin.css';
 import { AppearanceControl } from '@/modules/account';
 import { useDisplayPreferences } from '@/core/query-provider';
 
+/**
+ * Terminal-skin ASCII wordmark for the login card, copied verbatim from the design demo (`sp-banner`). `String.raw`
+ * keeps the backslashes and the leading spaces that JSX text would collapse.
+ */
+const LOGIN_BANNER = String.raw`  _   _               _ _        ___  ___
+ | | | |_ __ ___ _ _ | | |_     / _ \/ __|
+ | |_| | '  \ V  V / -_) |  _|  | (_) \__ \
+  \___/|_|_|_\_/\_/\___|_|\__|   \___/|___/`;
+
 const loginSchema = z.object({ password: z.string().min(1).max(128), identifier: z.string().max(320).optional() });
 type LoginForm = z.infer<typeof loginSchema>;
 
@@ -58,6 +67,10 @@ export default function LoginPage() {
       </header>
       <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
         <section aria-labelledby="login-title" className="auth-panel flex flex-col gap-6">
+          {/* Terminal-only wordmark (hidden by CSS in the default skin); aria-hidden because it is decoration. */}
+          <pre className="sp-banner" aria-hidden="true">
+            {LOGIN_BANNER}
+          </pre>
           <div className="grid gap-1">
             <h1 id="login-title" className="m-0 text-2xl font-semibold leading-tight">
               {t('welcome')}

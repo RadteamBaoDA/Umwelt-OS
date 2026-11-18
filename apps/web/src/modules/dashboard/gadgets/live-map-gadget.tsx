@@ -65,16 +65,28 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
   const t = useTranslations('dashboard');
   // Overview defaults to the 3D globe; the choice is session-local and never written to the saved layout.
   const [engine, setEngine] = useState<'globe' | 'flat'>('globe');
-  const engineSelect = (
-    <Select value={engine} onValueChange={(next) => setEngine(next as 'globe' | 'flat')}>
-      <SelectTrigger aria-label={t('map.engineLabel')} className="h-8 w-36">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="globe">{t('map.globeEngine')}</SelectItem>
-        <SelectItem value="flat">{t('map.flatEngine')}</SelectItem>
-      </SelectContent>
-    </Select>
+  // Two-button segmented control (not a Select): the pressed segment is the active engine, as in the developer-theme demo.
+  const engineSegment = (
+    <div role="group" aria-label={t('map.engineLabel')} className="map-engine-seg inline-flex shrink-0 items-center gap-1">
+      <Button
+        type="button"
+        size="sm"
+        variant={engine === 'globe' ? 'default' : 'ghost'}
+        aria-pressed={engine === 'globe'}
+        onClick={() => setEngine('globe')}
+      >
+        {t('map.globeEngine')}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant={engine === 'flat' ? 'default' : 'ghost'}
+        aria-pressed={engine === 'flat'}
+        onClick={() => setEngine('flat')}
+      >
+        {t('map.flatEngine')}
+      </Button>
+    </div>
   );
   return (
     <LiveMapContent
@@ -86,7 +98,7 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
       toolbarStart={
         <>
           {toolbarStart}
-          {engineSelect}
+          {engineSegment}
         </>
       }
     />
