@@ -73,6 +73,8 @@ async def test_turn_inputs_pin_task_scope() -> None:
         patch(
             "modules.chat._worker.setup._history_cutoff", AsyncMock(return_value=datetime.now(UTC))
         ),
+        patch("modules.chat._worker.setup.latest_task_brief", AsyncMock(return_value=None)),
+        patch("modules.chat._worker.setup.multi_workspace_enabled", return_value=False),
     ):
         turn = await _load_turn_inputs(session, c, claimed)
     assert [str(x) for x in turn.answer_request.source_scope] == [B]
@@ -156,6 +158,8 @@ async def test_turn_inputs_task_thread_has_no_client_overrides() -> None:
         patch(
             "modules.chat._worker.setup._history_cutoff", AsyncMock(return_value=datetime.now(UTC))
         ),
+        patch("modules.chat._worker.setup.latest_task_brief", AsyncMock(return_value=None)),
+        patch("modules.chat._worker.setup.multi_workspace_enabled", return_value=False),
     ):
         turn = await _load_turn_inputs(session, c, claimed)
     req = turn.answer_request

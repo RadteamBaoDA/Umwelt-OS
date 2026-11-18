@@ -3,7 +3,9 @@
 All functions only flush; the caller owns the transaction and must not expect a commit here.
 """
 
+import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -16,13 +18,18 @@ from core.workspaces.admission import actor_id
 from core.workspaces.schemas import Scope
 from modules.chat._public.conversations import delete_conversation_in_scope
 from modules.chat.models import Conversation, Message
-from modules.chat.schemas import MAX_SOURCE_SCOPE
+from modules.chat.schemas import MAX_SELECTED_REFS, MAX_SOURCE_SCOPE, SelectedEvidenceRef
 
 # Conversation metadata keys only the scheduler may write; client create/patch payloads cannot set them.
 RESERVED_METADATA_KEYS = frozenset({"scheduled_task", "task_source_scope", "task_kind"})
 
 # Chat has no pre-existing erased-content constant; this is the single placeholder for scrubbed briefs.
 SCRUBBED_CONTENT = "[This message was removed because its sources are no longer available.]"
+
+# Prompt budget for the quoted brief, and the inline fact markers stripped so they cannot be
+# mistaken for evidence numbers.
+TASK_BRIEF_CONTEXT_CHARS = 4000
+_BRIEF_MARKER = re.compile(r"\[\d{1,2}\]")
 
 
 async def delete_automation_conversation(
@@ -240,3 +247,73 @@ async def withheld_brief_ids(
         else set()
     )
     return frozenset(key for key in wanted if key not in live)
+
+
+@dataclass(frozen=True)
+class TaskBriefContext:
+    """The latest live brief of a task thread as model context: marker-free text plus in-scope evidence refs."""
+
+    text: str
+    refs: list[SelectedEvidenceRef]
+
+
+async def latest_task_brief(
+    session: AsyncSession,
+    conversation_id: UUID,
+    cutoff: datetime,
+    pinned_scope: Sequence[str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> TaskBriefContext | None:
+    """Return the newest scheduled-task brief posted before ``cutoff`` in this workspace-scoped thread, or None.
+
+    None when there is no brief, when it is withheld (``withheld_brief_ids``: deleted, paused or
+    local-only source, stale support, malformed id) or when its text is the scrub placeholder. Refs
+    are the brief's document support restricted to ``pinned_scope`` and capped at
+    ``MAX_SELECTED_REFS``. Read-only and lock-free, so it is safe in the turn's short transaction.
+    """
+    from modules.dashboard import public as dashboard  # local import: dashboard imports chat
+
+    row = (
+        await session.execute(
+            select(Message.content, Message.metadata_json)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Conversation.workspace_id == scope.workspace_id,
+                Message.role == "assistant",
+                Message.metadata_json["origin"].as_string() == "scheduled_task",
+                Message.created_at < cutoff,
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None or row[0] == SCRUBBED_CONTENT:
+        return None
+    content, metadata = row[0], row[1]
+    key = task_brief_key(metadata) or ""
+    withheld = await withheld_brief_ids(
+        session, [metadata], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if key in withheld:
+        return None
+    allowed = set(pinned_scope)
+    refs: dict[tuple[UUID, UUID], SelectedEvidenceRef] = {}
+    for ref in await dashboard.brief_document_refs(
+        session, UUID(key), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    ):
+        if str(ref.source_id) not in allowed:  # defence in depth: never outside the pinned scope
+            continue
+        refs.setdefault(
+            (ref.document_version_id, ref.chunk_id),
+            SelectedEvidenceRef(
+                document_version_id=ref.document_version_id,
+                chunk_id=ref.chunk_id,
+                document_id=ref.document_id,
+                source_id=ref.source_id,
+            ),
+        )
+    text = _BRIEF_MARKER.sub("", content).strip()[:TASK_BRIEF_CONTEXT_CHARS]
+    return TaskBriefContext(text=text, refs=list(refs.values())[:MAX_SELECTED_REFS])
