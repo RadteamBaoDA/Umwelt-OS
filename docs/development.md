@@ -106,13 +106,13 @@ Ratchet procedure: when a change raises a measured value by 2 or more points, ra
 
 | Metric | Measured | Budget |
 | --- | --- | --- |
-| Largest route first-load JS (`/settings/global`) | 776.7 KB | 800 KB |
-| Chat (`/chat`) | 745.2 KB (was 797.2 before chat lazy-loading) | 785 KB |
+| Largest route first-load JS (`/settings/global`) | 806.6 KB | 825 KB |
+| Chat (`/chat`) | 801.6 KB (745.2 after chat lazy-loading; 793.4 after the data-source work) | 820 KB |
 | Landing page (`/`) | 230.4 KB | 245 KB |
 | Sign-in (`/login`) | 337.8 KB | 350 KB |
-| Total client JS | 2191.0 KB | 2313 KB |
+| Total client JS | 2024.2 KB | 2313 KB |
 
-Measured 2026-11-11. Public routes carry per-route budgets in `routes`; the workspace providers and full message catalog load only under `app/(workspace)`.
+Measured 2026-11-18. The 2026-11-18 raise covers the terminal ("Developer") skin: about 10 KB gzip of terminal-only gadget, statusline and chat presentation on every workspace route. Public routes carry per-route budgets in `routes`; the workspace providers and full message catalog load only under `app/(workspace)`.
 
 `--measure` prints the numbers without failing. To raise a budget, run a local build, measure, and edit `bundle-budget.json` to about measured + 10% in the same PR with the reason (a new dependency or feature); prefer lazy-loading (`next/dynamic`) over raising it. A per-route override can be added as `"routes": {"/(public)/login/page": 600}`.
 
