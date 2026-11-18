@@ -658,15 +658,19 @@ async def _resume_brief(
 
     Only a still-live brief (``status == "current"``) is resumed; a missing, foreign or stale one
     (its source became ineligible meanwhile) returns None so a fresh brief is generated rather than
-    posting withheld content.
+    posting withheld content. A reference whose id is not a UUID also returns None.
     """
     ref = row.result_reference or ""
     if not ref.startswith(PENDING_BRIEF_PREFIX):
         return None
+    try:
+        brief_id = UUID(ref.removeprefix(PENDING_BRIEF_PREFIX))
+    except ValueError:
+        return None  # a marker without a real id (``brief_pending:daily``) cannot be resumed
     async with factory() as session:
         brief = await dashboard.get_brief(
             session,
-            UUID(ref.removeprefix(PENDING_BRIEF_PREFIX)),
+            brief_id,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )

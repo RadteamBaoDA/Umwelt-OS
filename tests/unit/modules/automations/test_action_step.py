@@ -861,3 +861,28 @@ async def test_post_brief_stale_revision_posts_nothing(monkeypatch: pytest.Monke
     current = SimpleNamespace(document_evidence_revoked=False, status="running")
     skipped, calls = await _post(monkeypatch, current, fence_current=False)
     assert skipped == ("stale_revision", False) and calls == []
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_stale_brief_regenerates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pending brief that is no longer current is not posted; a fresh one is generated."""
+    bid = str(uuid4())
+    fresh = str(uuid4())
+    store, calls, marks = _brief_harness(monkeypatch, [fresh])
+    from modules.automations._execution import actions
+
+    async def stale(_s: Any, brief_id: Any, **_k: Any) -> Any:
+        calls.append(("get_brief", brief_id))
+        return SimpleNamespace(id=brief_id, status="stale", content="", citations=[])
+
+    monkeypatch.setattr(actions.dashboard, "get_brief", stale)
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert ("get_brief", UUID(bid)) in calls and sum(1 for c in calls if c[0] == "generate") == 1
+    assert list(store) == [f"brief:{fresh}"]
+
+
+@pytest.mark.asyncio
+async def test_non_uuid_pending_marker_generates(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, calls, _marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev(), reference="brief_pending:daily") == "succeeded"
+    assert not any(c[0] == "get_brief" for c in calls) and list(store) == ["brief:B"]
