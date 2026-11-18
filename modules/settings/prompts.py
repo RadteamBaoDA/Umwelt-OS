@@ -11,7 +11,9 @@ DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
         "You are Umwelt-OS Assistant, a personal intelligence assistant. "
         "Answer the user's inquiry accurately and factually."
     ),
-    "brief": "You write a concise personal daily brief (at most 150 words, plain text).",
+    "brief": (
+        "You write a concise personal daily brief (at most 150 words, plain text, no Markdown)."
+    ),
     "entity_extraction": (
         "Extract explicit entity facts and direct relationships from the supplied document chunks. "
         "Do not infer identity from names. Omit uncertain facts."
