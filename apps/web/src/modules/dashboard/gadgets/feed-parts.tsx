@@ -1,6 +1,6 @@
 'use client';
 
-import { Bookmark, ExternalLink, ListFilter, RotateCw } from 'lucide-react';
+import { Bookmark, ExternalLink, ListFilter, RotateCw, SquareCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import React from 'react';
@@ -387,9 +387,12 @@ export function FeedFilterPopover(props: FeedFilterProps) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs">
+        <Button type="button" variant="ghost" size="sm" className="feed-tool-opt h-8 gap-1 px-2 text-xs">
           <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />
-          {activeFilterCount > 0 ? t('feed.filterActive', { count: activeFilterCount }) : t('feed.filter')}
+          {/* Terminal skin keeps the label for assistive tech only; the icon alone shows in the title bar. */}
+          <span className="feed-tool-label">
+            {activeFilterCount > 0 ? t('feed.filterActive', { count: activeFilterCount }) : t('feed.filter')}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-72 space-y-2 p-3">
@@ -502,18 +505,19 @@ export function FeedToolbar(props: FeedToolbarProps) {
               type="button"
               variant={selectMode ? 'default' : 'ghost'}
               size="sm"
-              className="h-8 px-2 text-xs"
+              className="feed-tool-opt h-8 px-2 text-xs"
               aria-pressed={selectMode}
               onClick={props.toggleSelectMode}
             >
-              {selectMode ? t('feed.selectDone') : t('feed.selectMode')}
+              <SquareCheck className="feed-tool-icon h-3.5 w-3.5" aria-hidden="true" />
+              <span className="feed-tool-label">{selectMode ? t('feed.selectDone') : t('feed.selectMode')}</span>
             </Button>
           )}
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="size-8"
+            className="feed-tool-opt size-8"
             onClick={props.onRefresh}
             disabled={refreshing}
             aria-label={t('feed.refresh')}

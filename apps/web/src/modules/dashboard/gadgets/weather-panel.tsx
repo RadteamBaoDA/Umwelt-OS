@@ -6,6 +6,8 @@ import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveConta
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useSkin } from '@/core/use-skin';
+import { Button } from '@/components/ui/button';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -470,7 +472,18 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
 
   if (!sourceId) return <GadgetNotice kind="setup" message={t('weather.sourceRequired')} />;
   if (query.isPending) return <GadgetSkeleton variant="list" label={t('observation.loading')} />;
-  if (query.isError) return <GadgetNotice kind="error" message={t('observation.loadFailed')} />;
+  if (query.isError)
+    return (
+      <>
+        {/* Terminal skin: `[ retry ]` in the pane title bar (demo weather error pane); refetches the same query. */}
+        <TitleBarSlot>
+          <Button type="button" size="sm" onClick={() => void query.refetch()}>
+            {t('retry')}
+          </Button>
+        </TitleBarSlot>
+        <GadgetNotice kind="error" message={t('observation.loadFailed')} />
+      </>
+    );
   if (!items.length) return <GadgetNotice kind="empty" message={t('observation.empty')} />;
 
   // Fetch time of the data, not wall-clock in render: keeps render pure; falls back to the newest reading when unset.

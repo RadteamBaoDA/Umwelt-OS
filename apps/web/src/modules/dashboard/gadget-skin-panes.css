@@ -1,0 +1,318 @@
+/*
+ * Terminal pane details for the All gadget types board (developer-theme `#dashboard-gadgets`): tasks/goals title bars,
+ * related signals, daily brief, metric sparkline rows, video frame, activity log, empty/error notices and compact feed
+ * toolbars. Presentation only; the default skin keeps its markup and styling. Colours come from semantic tokens.
+ * Decorative twins of existing text (short codes, percent, regions) are hidden in the default skin below and revealed
+ * in the terminal skin; text the design drops is visually hidden (still in the accessibility tree), never removed.
+ */
+
+/* Terminal-only decorative spans: absent in the default skin. */
+.github-event-code,
+.github-event-ago,
+.goal-row-pct,
+.corr-regions,
+.feed-tool-icon {
+  display: none;
+}
+
+/* Visually hidden in the terminal skin only (kept for assistive tech and tests). */
+html[data-skin='terminal']
+  :is(
+    .corr-range,
+    .corr-note,
+    .corr-details,
+    .corr-evidence,
+    .map-range,
+    .github-counts,
+    .github-recent,
+    .github-event-type,
+    .github-event-head > time,
+    .goal-row-status,
+    .goal-row-summary,
+    .brief-saved-head,
+    .brief-records,
+    .brief-refs,
+    .video-rest,
+    .gadget-head-slot .feed-tool-label
+  ) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Title-bar buttons read as plain bracketed controls (demo `.btn.sm`), not filled accent boxes; a pressed toggle keeps its tint. */
+html[data-skin='terminal'] .gadget-head-slot [data-slot='button']:not([data-size='icon'], [aria-pressed='true']) {
+  color: var(--text);
+  background: transparent;
+}
+html[data-skin='terminal'] .gadget-head-slot .feed-tool-opt {
+  color: var(--muted);
+}
+html[data-skin='terminal'] .gadget-head-slot .feed-tool-icon {
+  display: inline-block;
+}
+html[data-skin='terminal'] .gadget-meta {
+  text-transform: lowercase;
+}
+
+/* Tasks title bar: summary text, compact view select and the create button. */
+html[data-skin='terminal'] .task-head {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+html[data-skin='terminal'] .task-summary {
+  font-size: 12px;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .task-view-select {
+  align-self: flex-end;
+  width: auto;
+  height: 24px;
+  min-height: 0;
+  padding-inline: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* Goals: title left, percent right, ASCII bar under (no status / milestone / deadline line). */
+html[data-skin='terminal'] .goal-row-pct {
+  display: inline;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Related signals (intelligence-panel.tsx): `region  date` over `↳ N signals · domains`. */
+html[data-skin='terminal'] .corr-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .corr-regions {
+  display: inline;
+}
+html[data-skin='terminal'] .corr-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  padding: 8px 0;
+}
+html[data-skin='terminal'] .corr-top {
+  display: contents;
+}
+html[data-skin='terminal'] .corr-region {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+html[data-skin='terminal'] .corr-top > time {
+  font-size: 11px;
+}
+html[data-skin='terminal'] .corr-signals {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+html[data-skin='terminal'] .corr-signals::before {
+  content: '↳ ' / '';
+}
+
+/* Daily brief: date controls and actions share one row; paragraphs with a bold lead and blue `[n]` cites. */
+html[data-skin='terminal'] .brief-root {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+}
+html[data-skin='terminal'] .brief-head {
+  flex: 0 1 auto;
+}
+html[data-skin='terminal'] .brief-saved {
+  display: contents;
+}
+html[data-skin='terminal'] .brief-root > :not(.brief-head, .brief-saved),
+html[data-skin='terminal'] .brief-saved > :not(.brief-actions) {
+  order: 2;
+  flex: 0 0 100%;
+}
+html[data-skin='terminal'] .brief-saved > .brief-actions {
+  order: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-end;
+}
+html[data-skin='terminal'] .brief-actions > [data-slot='button']:not([aria-pressed='true']) {
+  color: var(--text);
+  background: transparent;
+}
+html[data-skin='terminal'] .brief-term-p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+html[data-skin='terminal'] .brief-term-p > b {
+  font-weight: 700;
+  color: var(--strong, var(--text));
+}
+html[data-skin='terminal'] .brief-cite {
+  color: var(--info);
+  text-decoration: none;
+}
+html[data-skin='terminal'] .brief-cite:hover {
+  text-decoration: underline;
+}
+
+/* Metric: `name  ~line~  71.3K  +3.1%` rows (obs-term-* cells are shared with the watchlist table). */
+html[data-skin='terminal'] .obs-spark-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 60px 9ch 7ch;
+  column-gap: 12px;
+  align-items: center;
+  padding: 8px 4px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--rule);
+}
+html[data-skin='terminal'] .obs-spark-row .obs-term-name {
+  font-weight: 400;
+  color: var(--text);
+}
+html[data-skin='terminal'] .obs-spark-line {
+  display: block;
+  width: 60px;
+  height: 20px;
+}
+html[data-skin='terminal'] .obs-spark-row .obs-term-chg {
+  min-width: 0;
+  font-size: 12px;
+}
+
+/* Video: first record as a 16:9 frame with a play square and a caption (demo `.dash-video`). */
+html[data-skin='terminal'] .video-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+html[data-skin='terminal'] .video-frame-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+html[data-skin='terminal'] .video-frame-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 44px;
+  height: 36px;
+  place-items: center;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  transform: translate(-50%, -50%);
+}
+html[data-skin='terminal'] .video-frame-cap {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .video-frame:hover .video-frame-cap {
+  color: var(--accent);
+}
+html[data-skin='terminal'] .video-term-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Activity (github-project-gadget.tsx): coloured short code, title, relative time; the provider link shows on hover or focus. */
+html[data-skin='terminal'] .github-event-code {
+  display: inline;
+  order: 1;
+  color: var(--info);
+}
+html[data-skin='terminal'] .github-event-code[data-tone='ok'] {
+  color: var(--positive);
+}
+html[data-skin='terminal'] .github-event-code[data-tone='warn'] {
+  color: var(--danger);
+}
+html[data-skin='terminal'] .github-event-ago {
+  display: inline;
+  order: 3;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .github-event:is(:hover, :focus-within) .github-event-links {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+}
+
+/* Notices (gadget-notice.tsx): a failed load is an `ERR` alert block, empty and setup states read as quiet centred
+   hints whose action reads `run: ...` (demo `.alert.err` and `.empty`). */
+html[data-skin='terminal'] [data-gadget-notice='error'] {
+  margin: 8px 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--raised);
+  border-left: 3px solid var(--danger);
+}
+html[data-skin='terminal'] [data-gadget-notice='error'] > p::before {
+  content: 'ERR ' / '';
+  font-weight: 700;
+  margin-right: 6px;
+}
+html[data-skin='terminal'] :is([data-gadget-notice='empty'], [data-gadget-notice='setup']) {
+  align-items: center;
+  padding: 24px 12px;
+  text-align: center;
+}
+html[data-skin='terminal'] [data-gadget-notice] a::before,
+html[data-skin='terminal'] [data-gadget-notice] button::before {
+  content: 'run:' / '';
+  margin-right: 0.5ch;
+  color: var(--muted);
+}
+
+/* Tasks title bar: keep the pane title readable; the muted summary is the part that gives way. */
+html[data-skin='terminal'] .gadget-header:has(.task-head) .gadget-title {
+  overflow: visible;
+  text-overflow: clip;
+}
+html[data-skin='terminal'] .task-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

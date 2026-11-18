@@ -39,5 +39,6 @@
   "highlights.empty": "No highlights yet.",
   "watchlist.empty": "Watchlist empty",
   "watchlist.emptyDetail": "Add a rule to start watching for matches.",
-  "streamCount": "{count, plural, one {# record} other {# records}}"
+  "streamCount": "{count, plural, one {# record} other {# records}}",
+  "foot.summary": "Tasks due {tasks} · Active goals {goals}"
 }

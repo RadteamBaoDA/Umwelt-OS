@@ -593,5 +593,6 @@
   "staleSource.line": "{name}: lần thu thập gần nhất thất bại ({code}). Đang hiển thị dữ liệu thu thập thành công gần nhất.",
   "staleSource.times": "Thành công gần nhất {success} · lỗi gần nhất {error}",
   "staleSource.never": "chưa có",
-  "askWithUmwelt": "Hỏi AI"
+  "askWithUmwelt": "Hỏi AI",
+  "video.termNote": "{count, plural, other {# video mới}} · kênh: {channel}"
 }

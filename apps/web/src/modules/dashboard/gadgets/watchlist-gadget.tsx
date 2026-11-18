@@ -44,6 +44,8 @@ const SYMBOL_ALIASES: Record<string, string> = {
   DOGE: 'DOGECOIN',
   ADA: 'CARDANO',
 };
+/** Terminal skin: the rule filter only appears above this many rows (the demo shows none for two rows). */
+const TERMINAL_FILTER_MIN = 5;
 /** History window for watchlist sparklines. */
 const SPARK_LOOKBACK_DAYS = 30;
 
@@ -326,6 +328,8 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
   const filteredItems = filterWatchItems(items, filterQuery);
   const sortedItems = sortWatchItems(filteredItems);
   const alertingCount = items.filter((item) => item.status === 'alert').length;
+  // Terminal skin: every `HIT` row counts as alerting, and the tail counts the configured rules (demo `.metric`).
+  const hitCount = items.filter((item) => item.status !== 'monitoring').length;
   // The latest match time is the newest real data timestamp this gadget knows about.
   useReportGadgetFreshness(
     items.reduce<string | null>((max, i) => (i.lastMatchedAt && (!max || i.lastMatchedAt > max) ? i.lastMatchedAt : max), null),
@@ -342,8 +346,8 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
           {terminal ? (
             // Terminal skin: the alerting count is the big figure, the rest a muted tail (developer-theme `.metric`).
             <>
-              <span className="watch-figure">{alertingCount}</span>{' '}
-              <span className="watch-figure-tail">{t('watchlist.summaryTail', { total: items.length })}</span>
+              <span className="watch-figure">{hitCount}</span>{' '}
+              <span className="watch-figure-tail">{t('watchlist.summaryTail', { total: highlightRules.length || items.length })}</span>
             </>
           ) : (
             t('watchlist.summary', { alerting: alertingCount, total: items.length })
@@ -357,8 +361,8 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
         )}
       </div>
 
-      {/* Search Filter Input */}
-      {items.length > 0 && (
+      {/* Search filter: the terminal skin hides it for short lists (<= TERMINAL_FILTER_MIN rows), where it is not needed. */}
+      {items.length > (terminal ? TERMINAL_FILTER_MIN : 0) && (
         <div className={terminal ? 'watch-filter relative shrink-0' : 'relative shrink-0'}>
           <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-muted-foreground pointer-events-none" aria-hidden="true" />
           <Input

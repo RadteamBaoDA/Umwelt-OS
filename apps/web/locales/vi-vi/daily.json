@@ -39,5 +39,6 @@
   "highlights.empty": "Chưa có điểm nổi bật.",
   "watchlist.empty": "Danh sách theo dõi trống",
   "watchlist.emptyDetail": "Thêm một quy tắc để bắt đầu theo dõi.",
-  "streamCount": "{count, plural, other {# bản ghi}}"
+  "streamCount": "{count, plural, other {# bản ghi}}",
+  "foot.summary": "Việc đến hạn {tasks} · Mục tiêu đang chạy {goals}"
 }

@@ -418,7 +418,7 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
   return (
     <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
       {/* The gadget frame already shows the title; keep only the range line (the engine label is configuration noise). */}
-      <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('map.range', { days })}</p>
+      <p className="map-range m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('map.range', { days })}</p>
       <MapNotices
         showPlot={showPlot}
         mapEmpty={mapEmpty}

@@ -15,6 +15,7 @@ import { fetchTasks } from '@/modules/tasks';
 import type { Task } from '@/modules/tasks';
 import { getDateTimeFormat } from '@/modules/shared';
 import { useSession } from '@/core/session';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 
 /** Props required to render the persisted task gadget instance against owner task APIs. */
 export interface TasksGadgetProps {
@@ -70,16 +71,19 @@ export function TasksGadget({ instance }: TasksGadgetProps) {
       ) : (
         <>
           {/* The gadget frame already shows the title; only the create action remains. */}
-          <header className="flex items-center justify-between gap-2">
-            <p className="m-0 text-sm tabular-nums text-muted-foreground">
-              {summaryQuery.data ? tDash('tasksDueSummary', { due: dueToday, overdue }) : ''}
-            </p>
-            {!isAdminViewer && (
-              <Button type="button" size="sm" onClick={() => setCreating(true)}>
-                {t('new.task')}
-              </Button>
-            )}
-          </header>
+          {/* Terminal skin: the summary and create action sit in the pane title bar (demo `.pane-title .act`). */}
+          <TitleBarSlot>
+            <header className="task-head flex items-center justify-between gap-2">
+              <p className="task-summary m-0 text-sm tabular-nums text-muted-foreground">
+                {summaryQuery.data ? tDash('tasksDueSummary', { due: dueToday, overdue }) : ''}
+              </p>
+              {!isAdminViewer && (
+                <Button type="button" size="sm" onClick={() => setCreating(true)}>
+                  {t('new.task')}
+                </Button>
+              )}
+            </header>
+          </TitleBarSlot>
           <TaskList
             csrfToken={token}
             ids={ids.length ? ids : undefined}

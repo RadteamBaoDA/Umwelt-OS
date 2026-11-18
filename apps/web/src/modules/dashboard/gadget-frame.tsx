@@ -30,6 +30,7 @@ import type { GadgetInstance } from './api';
 import { getGadgetReadingBodyFloor } from './widget-registry';
 import { useGadgetReveal } from './use-gadget-reveal';
 import './gadget-skin.css';
+import './gadget-skin-panes.css';
 
 /** Rule match observation metadata displayed on gadget cards. */
 export interface GadgetRuleMatch {
@@ -217,9 +218,14 @@ function useGadgetFooter() {
  */
 function useTerminalMeta(instance: GadgetInstance, shortText: string): string {
   const t = useTranslations('dashboard');
-  const { renderer, source_ids: sourceIds } = instance.definition;
+  const { renderer, source_ids: sourceIds, scope } = instance.definition;
   if (renderer === 'news_feed') return t('gadget.metaFeed', { count: sourceIds?.length ?? 0 });
   if (renderer === 'highlights') return t('gadget.metaRules');
+  // The map and related-signals bodies drop their own "Last N days" line; the window reads in the title bar instead.
+  if (renderer === 'map') return t('map.range', { days: Math.max(1, Math.min(scope?.lookback_days ?? 30, 30)) });
+  if (renderer === 'intelligence_panel') return t('intelligence.range', { days: Math.max(1, Math.min(scope?.lookback_days ?? 30, 30)) });
+  // Tasks and goals carry their own title-bar content (summary, create action); no freshness meta.
+  if (renderer === 'tasks' || renderer === 'goals') return '';
   return shortText;
 }
 
@@ -594,6 +600,7 @@ const FOOT_RENDERERS: ReadonlySet<string> = new Set([
   'finance_chart',
   'metrics_chart',
   'provider_observation',
+  'daily_brief',
 ]);
 
 /**

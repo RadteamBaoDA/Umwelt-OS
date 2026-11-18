@@ -17,7 +17,17 @@ import { formatMetricLabel } from './metric-label';
 import { metricBetterDirection } from './metric-direction';
 import { SeriesRow } from './series-row';
 import { Sparkline } from './sparkline';
-import { formatTerminalChange, formatTerminalValue, TerminalObservationCells, TerminalObservationFigure } from './observation-terminal';
+import {
+  currencyPrefix,
+  formatTerminalChange,
+  formatTerminalCompact,
+  formatTerminalPercent,
+  formatTerminalValue,
+  TerminalObservationCells,
+  TerminalObservationFigure,
+  TerminalSparkRow,
+  terminalObservationLayout,
+} from './observation-terminal';
 import { useSkin } from '@/core/use-skin';
 import { getDateTimeFormat } from '@/modules/shared';
 
@@ -256,7 +266,9 @@ function useObservationFormatters(sources: ReturnType<typeof useEffectiveLookbac
 
 /**
  * Terminal skin of the observation gadget: one reading is the chart figure (`71,340 ▲ +3.12%` over the history line),
- * several are a `SYMBOL  LAST  CHG` table with full-precision values (never the KPI strip or sparkline column).
+
+ * two or three are sparkline rows (`name ~line~ 71.3K +3.1%`, small metric panes), more are a `SYMBOL  LAST  CHG` table
+ * with full-precision values (never the KPI strip or sparkline column).
  * Keeps the `observation-row` test ids and the observed/published/collected tooltips of the default layout.
  */
 function TerminalObservationRows({
@@ -284,11 +296,28 @@ function TerminalObservationRows({
       >
         <TerminalObservationFigure
           label={labelOf(single)}
-          figure={formatTerminalValue(single.value, display.locale, true)}
+          figure={currencyPrefix(single.currency, display.locale) + formatTerminalValue(single.value, display.locale, true)}
           change={changeOf(single)}
           spark={<Sparkline data={history.get(seriesKey(single)) ?? []} height={90} />}
         />
       </div>
+    );
+  }
+  if (terminalObservationLayout(items.length) === 'sparkrows') {
+    // Small multi-series pane: one sparkline row per series (demo `metric`); the watchlist table is for longer lists.
+    return (
+      <ul className="obs-term-list" aria-label={instance.title || t('providerObs.title')}>
+        {items.map((item) => (
+          <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
+            <TerminalSparkRow
+              label={labelOf(item).toLowerCase()}
+              spark={<Sparkline data={history.get(seriesKey(item)) ?? []} width={60} height={20} line />}
+              last={formatTerminalCompact(item.value, item.unit, display.locale)}
+              change={formatTerminalPercent(deltaVsPrevious(history.get(seriesKey(item))), metricBetterDirection(item.metric))}
+            />
+          </li>
+        ))}
+      </ul>
     );
   }
   return (

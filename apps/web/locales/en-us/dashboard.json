@@ -593,5 +593,6 @@
   "staleSource.line": "{name}: last collection failed ({code}). Showing the last successful collection.",
   "staleSource.times": "Last success {success} · last error {error}",
   "staleSource.never": "never",
-  "askWithUmwelt": "Ask AI"
+  "askWithUmwelt": "Ask AI",
+  "video.termNote": "{count, plural, one {# new video} other {# new videos}} · channel: {channel}"
 }

@@ -102,12 +102,12 @@ export function TaskList(props: TaskListProps) {
 
 type TaskListVm = ReturnType<typeof deriveTaskListView>;
 
-/** Task view selector. */
+/** Task view selector; the terminal skin shows it as a compact right-aligned control (`task-view-select`). */
 function TaskViewSelect({ vm }: { vm: TaskListVm }) {
   const { t, view, setView, viewLabels } = vm;
   return (
     <Select value={view} onValueChange={(next) => setView(next as TaskView)}>
-      <SelectTrigger aria-label={t('task.views')} className="w-full sm:w-48">
+      <SelectTrigger aria-label={t('task.views')} className="task-view-select w-full sm:w-48">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

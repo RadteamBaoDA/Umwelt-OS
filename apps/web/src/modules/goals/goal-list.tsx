@@ -28,7 +28,11 @@ function GoalCard({ goal, onSelect }: { goal: Goal; onSelect?: (goal: Goal) => v
       >
         <span className="goal-row-head flex justify-between gap-2">
           <strong className="truncate text-sm">{goal.title}</strong>
-          <span className="text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span>
+          <span className="goal-row-status text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span>
+          {/* Terminal skin: the right-hand figure of the demo `.dash-goal` row (percent; goals carry no target/current pair). */}
+          <span className="goal-row-pct" aria-hidden="true">
+            {Math.round(goal.progress)}%
+          </span>
         </span>
         <span className="goal-row-summary mt-1 block text-xs text-muted-foreground">
           {t('goal.summary', { progress: goal.progress, count: goal.milestones.length, deadline: goal.deadline ?? t('no.deadline') })}

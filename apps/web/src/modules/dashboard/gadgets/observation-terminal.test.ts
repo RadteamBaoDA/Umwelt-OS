@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { formatTerminalChange, formatTerminalValue } from './observation-terminal';
+import {
+  currencyPrefix,
+  formatTerminalChange,
+  formatTerminalCompact,
+  formatTerminalPercent,
+  formatTerminalValue,
+  terminalObservationLayout,
+} from './observation-terminal';
 
 describe('formatTerminalValue', () => {
   it('prints full precision with two fraction digits', () => {
@@ -36,5 +43,23 @@ describe('formatTerminalChange', () => {
   it('handles flat and unknown changes', () => {
     expect(formatTerminalChange(0, 'up')).toEqual({ text: '0.00%', tone: 'neutral' });
     expect(formatTerminalChange(null, 'up')).toEqual({ text: '—', tone: 'neutral' });
+  });
+});
+
+describe('terminal sparkline rows', () => {
+  it('picks the layout from the series count', () => {
+    expect(terminalObservationLayout(1)).toBe('figure');
+    expect(terminalObservationLayout(2)).toBe('sparkrows');
+    expect(terminalObservationLayout(3)).toBe('sparkrows');
+    expect(terminalObservationLayout(7)).toBe('table');
+  });
+
+  it('formats compact values, percent without arrow and currency prefix', () => {
+    expect(formatTerminalCompact(71340.2, 'USD', 'en-us')).toBe('71.3K');
+    expect(formatTerminalCompact(20.52, '°C', 'en-us')).toBe('20.5°');
+    expect(formatTerminalPercent(3.12, 'up')).toEqual({ text: '+3.1%', tone: 'positive' });
+    expect(formatTerminalPercent(-1.4, 'up').text).toBe('−1.4%');
+    expect(currencyPrefix('USD', 'en-us')).toBe('$');
+    expect(currencyPrefix(null, 'en-us')).toBe('');
   });
 });

@@ -8,6 +8,7 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
 import { useQuery } from '@tanstack/react-query';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
+import { useSkin } from '@/core/use-skin';
 
 /** Video media item representation. */
 /** Props for the VideoPanel gadget component. */
@@ -28,6 +29,64 @@ function VideoThumb({ src }: { src: string | null }) {
   );
 }
 
+/** Video item as the panel maps it from a YouTube document projection. */
+interface VideoItem {
+  id: string;
+  title: string;
+  channel: string;
+  videoUrl: string;
+  imageUrl: string | null;
+  durationSeconds: number | null;
+}
+
+/**
+ * `mm:ss` (or `h:mm:ss`) clock text of a duration.
+ *
+ * @param seconds Non-negative duration in seconds; null, negative or non-finite yields an empty string.
+ */
+export function formatVideoDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '';
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  // Minutes are two digits like the demo caption (`02:14`).
+  const s = String(total % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${String(m).padStart(2, '0')}:${s}`;
+}
+
+/**
+ * Terminal skin: the first video as a 16:9 frame with a play square and a `title  duration` caption (demo `.dash-video`).
+ * The frame is the same outbound link as the list rows (new tab, `noopener`); the thumbnail shows when the record has one.
+ *
+ * @param props.video First video of the list.
+ */
+function TerminalVideoFrame({ video }: { video: VideoItem }) {
+  const dashboard = useTranslations('dashboard');
+  const [failed, setFailed] = useState(false);
+  return (
+    <a
+      className="video-frame"
+      href={video.videoUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={dashboard('video.open')}
+      aria-label={`${dashboard('video.open')}: ${video.title}`}
+    >
+      {video.imageUrl && !failed && (
+        // eslint-disable-next-line @next/next/no-img-element -- same-origin signed proxy path
+        <img src={video.imageUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className="video-frame-img" />
+      )}
+      <span className="video-frame-play" aria-hidden="true">
+        ▶
+      </span>
+      <span className="video-frame-cap" aria-hidden="true">
+        <span>{video.title}</span>
+        <span>{formatVideoDuration(video.durationSeconds)}</span>
+      </span>
+    </a>
+  );
+}
+
 /**
  * Standard Video Panel gadget template.
  * Lists persisted YouTube records as outbound links; media playback is not provided here.
@@ -45,7 +104,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     enabled: sourceIds.length > 0,
     queryFn: async () => {
       const page = await listGadgetDocumentProjections(sourceIds);
-      return page.items.flatMap((item) => {
+      return page.items.flatMap((item): VideoItem[] => {
         const url = item.canonical_url;
         let safeUrl: string | undefined;
         try {
@@ -64,6 +123,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
             channel: typeof fields.author === 'string' ? fields.author : '',
             videoUrl: safeUrl,
             imageUrl: item.image_url ?? null,
+            durationSeconds: item.media?.duration_seconds ?? null,
           },
         ];
       });
@@ -71,6 +131,8 @@ export function VideoPanel({ instance }: VideoPanelProps) {
   });
   const items = query.data ?? [];
   const more = useShowMore(items, 5);
+  const terminal = useSkin() === 'terminal';
+  const first = terminal ? items[0] : undefined;
   // The record count belongs in the frame footer, not an inner header row.
   useReportGadgetFreshness(null, items.length > 0 ? daily('streamCount', { count: items.length }) : null);
 
@@ -87,8 +149,17 @@ export function VideoPanel({ instance }: VideoPanelProps) {
           action={{ href: '/settings/sources', label: dashboard('gadget.configureAction') }}
         />
       )}
-      <ul className="divide-y divide-border">
-        {more.visible.map((video) => (
+      {first && (
+        <>
+          <TerminalVideoFrame video={first} />
+          <p className="video-term-note m-0" aria-hidden="true">
+            {dashboard('video.termNote', { count: items.length, channel: first.channel })}
+          </p>
+        </>
+      )}
+      {/* Terminal skin: the first video is the frame above; the other rows stay available to assistive tech only. */}
+      <ul className={first ? 'video-rest divide-y divide-border' : 'divide-y divide-border'}>
+        {more.visible.slice(first ? 1 : 0).map((video) => (
           <li key={video.id} className="flex items-start gap-3 py-2">
             <VideoThumb src={video.imageUrl} />
             <div className="min-w-0 flex-1">
