@@ -151,6 +151,8 @@ interface HeaderProps extends SwitcherProps {
   isEditMode: boolean;
   canEditLayout: boolean;
   onToggleEdit: () => void;
+  /** Terminal-skin header shortcut: enters edit mode and opens the Add gadget dialog. */
+  onAddGadget: () => void;
   onOpenManagement: () => void;
 }
 
@@ -212,6 +214,13 @@ export function DashboardHeader(props: HeaderProps) {
       {isOwner && (
         <Button type="button" variant="outline" onClick={props.onOpenManagement}>
           {t('manage.topicsAndHighlights')}
+        </Button>
+      )}
+      {/* Terminal-only shortcut (hidden by CSS in the default skin); edit mode already has its own Add gadget button. */}
+      {!isAdminViewer && canEditLayout && !isEditMode && (
+        <Button type="button" variant="outline" className="dash-add-gadget" disabled={layoutOperationPending} onClick={props.onAddGadget}>
+          <Plus className="w-4 h-4" aria-hidden="true" />
+          <span>{t('addGadget.label')}</span>
         </Button>
       )}
     </div>

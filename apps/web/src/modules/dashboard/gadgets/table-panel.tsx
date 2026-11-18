@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { useSkin } from '@/core/use-skin';
 import { cleanExcerpt } from '@/modules/news';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -60,6 +61,50 @@ function distinctExcerpt(title: string, excerpt: string | null | undefined): str
   return !text || !folded || fold(title).includes(folded) ? null : text;
 }
 
+/**
+ * Compact terminal timestamp (`Nov 10 19:20`): short month, day and 24-hour clock in the owner's timezone, no year.
+ *
+ * @param value ISO instant; an unparsable value renders as an empty string.
+ * @param locale Display locale id.
+ * @param timeZone IANA timezone of the owner's display preference.
+ */
+function formatTerminalStamp(value: string | null | undefined, locale: string, timeZone: string): string {
+  const at = value ? new Date(value) : null;
+  if (!at || Number.isNaN(at.getTime())) return '';
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone })
+    .format(at)
+    .replace(',', '');
+}
+
+/** Select-mode toggle button; the caller owns the state and clears the selection in `onToggle`. */
+function SelectModeToggle({ selectMode, onToggle }: { selectMode: boolean; onToggle: () => void }) {
+  const t = useTranslations('dashboard');
+  return (
+    <Button type="button" size="sm" variant="ghost" className="h-6 px-1.5 text-xs" aria-pressed={selectMode} onClick={onToggle}>
+      {selectMode ? t('tableSelectDone') : t('tableSelectMode')}
+    </Button>
+  );
+}
+
+/** Terminal-only toolbar row that hosts the select toggle above the column header (it rides in the first row otherwise). */
+function TableToolbar({ visible, toggle }: { visible: boolean; toggle: React.ReactNode }) {
+  if (useSkin() !== 'terminal' || !visible) return null;
+  return <div className="tbl-toolbar">{toggle}</div>;
+}
+
+/** Terminal-only column header row (TITLE / SOURCE / PUBLISHED); decorative, so hidden from assistive technology. */
+function TableHead() {
+  const t = useTranslations('dashboard');
+  if (useSkin() !== 'terminal') return null;
+  return (
+    <li className="tbl-head" aria-hidden="true">
+      <span>{t('tableColTitle')}</span>
+      <span>{t('tableColSource')}</span>
+      <span>{t('tableColPublished')}</span>
+    </li>
+  );
+}
+
 /** One stacked record row: optional selection checkbox, title with severity badge, distinct excerpt and date. */
 function TableRecordRow({
   record,
@@ -77,10 +122,12 @@ function TableRecordRow({
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
+  const terminal = useSkin() === 'terminal';
   const shown = splitSeverity(record.title);
+  const sourceName = record.provider_metadata?.source_fields?.source;
   const excerpt = distinctExcerpt(record.title, record.excerpt);
   return (
-    <li className="flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
+    <li className="tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
       {selectMode && (
         <Checkbox
           aria-label={t('selectRecord', { title: record.title })}
@@ -115,15 +162,18 @@ function TableRecordRow({
             </Badge>
           )}
         </p>
-        {excerpt && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{excerpt}</p>}
+        {excerpt && <p className="tbl-excerpt mt-0.5 line-clamp-2 text-xs text-muted-foreground">{excerpt}</p>}
       </div>
-      <div className="flex shrink-0 flex-col items-end gap-0.5">
-        {toggle}
+      {terminal && <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>}
+      <div className="tbl-date flex shrink-0 flex-col items-end gap-0.5">
+        {terminal ? null : toggle}
         <time
           className="whitespace-nowrap text-xs tabular-nums text-muted-foreground"
           dateTime={record.published_at ?? record.observed_at ?? undefined}
         >
-          {formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}
+          {terminal
+            ? formatTerminalStamp(record.published_at ?? record.observed_at, display.locale, display.timezone)
+            : formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}
         </time>
       </div>
     </li>
@@ -151,33 +201,26 @@ export function TablePanel({ instance }: TablePanelProps) {
   const selectedIds = new Set(Object.keys(selectedRecords));
   const currentRecords = new Map(records.map((record) => [record.document_id, record]));
   const staleSelections = selected.filter((item) => currentRecords.get(item.documentId)?.document_version_id !== item.documentVersionId);
-
   // Count and newest collection time live in the frame footer instead of an inner header.
   useReportGadgetFreshness(
     records.reduce<string | null>((max, r) => (r.observed_at && (!max || r.observed_at > max) ? r.observed_at : max), null),
     records.length > 0 ? t('gadget.itemCount', { count: records.length }) : null,
   );
-
   /** Select-mode toggle; clears the selection on every flip. */
   const toggle = (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      className="h-6 px-1.5 text-xs"
-      aria-pressed={selectMode}
-      onClick={() => {
+    <SelectModeToggle
+      selectMode={selectMode}
+      onToggle={() => {
         setSelectMode((prev) => !prev);
         setSelectedRecords({});
       }}
-    >
-      {selectMode ? t('tableSelectDone') : t('tableSelectMode')}
-    </Button>
+    />
   );
 
   return (
     <section className="flex h-full flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
       {/* At rest the toggle rides in the first row (no row of its own); selection mode needs room for Ask AI + Done. */}
+      <TableToolbar visible={records.length > 0 && !selectMode} toggle={toggle} />
       {records.length > 0 && selectMode && (
         <div className="flex items-center justify-end gap-2">
           {selectMode && (
@@ -226,7 +269,8 @@ export function TablePanel({ instance }: TablePanelProps) {
         <GadgetNotice kind="empty" className="p-0" message={t('gadget.dataEmpty')} />
       ) : (
         // Stacked rows: title/excerpt on the left, date right on wide bodies and wrapped below on narrow ones.
-        <ul className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
+        <ul className="tbl-list min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
+          <TableHead />
           {records.map((record, index) => (
             <TableRecordRow
               key={record.document_id}

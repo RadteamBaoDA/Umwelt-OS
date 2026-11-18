@@ -15,6 +15,7 @@ import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-vie
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
+import { useSkin } from '@/core/use-skin';
 import { FEED_LANGUAGES, languageLabel, type FeedStreamItem, type SelectedTelegramIdentity } from './feed-model';
 import { formatRelativeTime } from './relative-time';
 
@@ -233,6 +234,41 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
   );
 }
 
+/**
+ * Terminal-skin Telegram message row (developer-theme `.dash-msg`): unread dot, channel name and clock on the first
+ * line, the message text on the second. Keeps the read/bookmark actions and selection checkbox of the standard row.
+ *
+ * @param props.item Message to show; `props.ctx` supplies selection and interaction handlers.
+ */
+function TerminalMessageRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const timeTitle = useTimeTitle(ctx.isTelegram);
+  const at = new Date(item.timestamp);
+  const clock = Number.isNaN(at.getTime())
+    ? ''
+    : new Intl.DateTimeFormat(display.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: display.timezone }).format(
+        at,
+      );
+  return (
+    <li className="msg-row group/item relative" data-read={item.read ? 'true' : 'false'}>
+      <FeedCheckbox item={item} ctx={ctx} />
+      <span className="msg-dot" aria-hidden="true">
+        {item.read ? '○' : '●'}
+      </span>
+      {item.read ? null : <span className="sr-only">{t('unread.badge', { count: 1 })}</span>}
+      <span className="msg-from">{item.channelLabel ?? item.author ?? ''}</span>
+      <time className="msg-time" dateTime={item.timestamp} title={timeTitle(item)}>
+        {clock}
+      </time>
+      <Link href={`/knowledge/documents/${item.id}`} className="msg-body">
+        {item.title}
+      </Link>
+      <FeedItemActions item={item} ctx={ctx} />
+    </li>
+  );
+}
+
 /** One non-lead list row. */
 function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const display = useDisplayPreferences();
@@ -292,8 +328,19 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
 
 /** Lead + list (or a responsive card grid): one DOM per item; the container query turns the first item into a lead on wide gadgets. */
 export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRowContext }) {
+  const terminal = useSkin() === 'terminal';
   const [lead, ...rest] = items;
   if (!lead) return null;
+  // Terminal Telegram feeds are plain two-line log rows: no wide-gadget lead headline.
+  if (terminal && ctx.isTelegram && ctx.view !== 'cards') {
+    return (
+      <ul className="msg-log min-w-0">
+        {items.map((item) => (
+          <TerminalMessageRow key={item.id} item={item} ctx={ctx} />
+        ))}
+      </ul>
+    );
+  }
   if (ctx.view === 'cards') {
     return (
       <ul data-testid="feed-cards" className="grid min-h-0 grid-cols-1 gap-3 @[28rem]/gadget:grid-cols-2 @[56rem]/gadget:grid-cols-3">

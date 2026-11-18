@@ -433,3 +433,285 @@ html[data-skin='terminal'] .weather-term-attr {
     transform: translateY(-50%);
   }
 }
+
+/* Source chips (feed-source-tabs.tsx): one `[x] name` / `[ ] name` chip per source instead of underlined tabs
+   (developer-theme `.chips`). The active chip is accent ink; the strip never draws the tab underline. */
+html[data-skin='terminal'] .feed-source-tabs {
+  gap: 14px;
+  padding: 2px 0 8px;
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'] {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  text-transform: lowercase;
+  border: 0;
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger']::before {
+  content: '[ ] ' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'][data-state='active'] {
+  font-weight: 400;
+  color: var(--accent);
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'][data-state='active']::before {
+  content: '[x] ' / '';
+  color: var(--accent);
+}
+
+/* Telegram message log (feed-parts.tsx TerminalMessageRow, demo `.dash-msg`): `● channel  clock` over the message. */
+html[data-skin='terminal'] .msg-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+html[data-skin='terminal'] .msg-row {
+  display: grid;
+  grid-template-columns: 1.5ch minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: baseline;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--rule);
+}
+html[data-skin='terminal'] .msg-row:last-child {
+  border-bottom: 0;
+}
+html[data-skin='terminal'] .msg-dot {
+  color: var(--positive);
+}
+html[data-skin='terminal'] .msg-row[data-read='true'] .msg-dot {
+  color: var(--muted);
+}
+html[data-skin='terminal'] .msg-from {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--strong, var(--text));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .msg-row[data-read='true'] .msg-from {
+  font-weight: 400;
+}
+html[data-skin='terminal'] .msg-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .msg-body {
+  grid-column: 2 / -1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .msg-body:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Record table (table-panel.tsx): TITLE / SOURCE / PUBLISHED columns with an uppercase muted header (demo `table.data`). */
+html[data-skin='terminal'] .tbl-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+html[data-skin='terminal'] .tbl-list {
+  --tbl-cols: minmax(0, 1fr) 12ch 14ch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+html[data-skin='terminal'] .tbl-head,
+html[data-skin='terminal'] .tbl-row {
+  display: grid;
+  grid-template-columns: var(--tbl-cols);
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+html[data-skin='terminal'] .tbl-head {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+html[data-skin='terminal'] .tbl-head > span:last-child,
+html[data-skin='terminal'] .tbl-date {
+  text-align: right;
+}
+html[data-skin='terminal'] .tbl-row {
+  border-color: var(--rule);
+}
+html[data-skin='terminal'] .tbl-row:hover {
+  background: var(--active);
+}
+html[data-skin='terminal'] .tbl-row > div:first-child {
+  min-width: 0;
+  flex-basis: auto;
+}
+html[data-skin='terminal'] .tbl-row > div:first-child p:first-child {
+  font-weight: 600;
+  color: var(--strong, var(--text));
+}
+html[data-skin='terminal'] .tbl-excerpt {
+  display: none;
+}
+html[data-skin='terminal'] .tbl-src {
+  color: var(--text);
+}
+html[data-skin='terminal'] .tbl-date {
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tasks (task-list.tsx): flat `[ ] title        due` rows (demo `.dash-task`), no card borders. */
+html[data-skin='terminal'] .task-list {
+  gap: 0;
+}
+html[data-skin='terminal'] .task-row {
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+html[data-skin='terminal'] .task-row > [data-slot='button'] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 0;
+}
+html[data-skin='terminal'] .task-row-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+html[data-skin='terminal'] .task-row-meta {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .task-row:has([data-state='checked']) .task-row-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Goals (goal-list.tsx): one flat row per goal, ASCII bar under the title (demo `.dash-goal`). */
+html[data-skin='terminal'] .goal-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+html[data-skin='terminal'] .goal-row {
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+html[data-skin='terminal'] .goal-row-head > strong {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+html[data-skin='terminal'] .goal-row-summary {
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Map evidence (map-gadget.tsx): `label · region / time` left, value right; the aria-pressed bracket prefix
+   the gadget buttons get is not a toggle here. */
+html[data-skin='terminal'] .map-evidence-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  height: auto;
+  min-height: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+html[data-skin='terminal'] .map-evidence-row::before {
+  content: none !important;
+}
+html[data-skin='terminal'] .map-evidence-list {
+  border-color: var(--rule);
+}
+
+/* GitHub activity (github-project-gadget.tsx): `TYPE  title  time` log rows (demo `.log li` with an 8ch level). */
+html[data-skin='terminal'] .github-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+html[data-skin='terminal'] .github-event {
+  display: grid;
+  grid-template-columns: 9ch minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 0;
+}
+html[data-skin='terminal'] .github-event-head {
+  display: contents;
+}
+html[data-skin='terminal'] .github-event-type {
+  order: 1;
+  padding: 0;
+  font-size: 13px;
+  color: var(--info);
+  background: none;
+}
+html[data-skin='terminal'] .github-event-title {
+  order: 2;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+}
+html[data-skin='terminal'] .github-event-head > time {
+  order: 3;
+  grid-column: 2 / -1;
+  font-size: 11px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .github-event-links {
+  order: 4;
+  grid-column: 2 / -1;
+  font-size: 11px;
+}
+html[data-skin='terminal'] .map-evidence-row time {
+  display: inline;
+  margin-left: 8px;
+}
+
+/* Collect now in the title bar (gadget-frame.tsx SourceHealthBadge): `[ collect now ]` like the demo's feed pane. */
+html[data-skin='terminal'] .gadget-collect {
+  text-transform: lowercase;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .gadget-collect::before {
+  content: '[ ' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .gadget-collect::after {
+  content: ' ]' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .gadget-collect:hover:not(:disabled) {
+  color: var(--accent);
+}

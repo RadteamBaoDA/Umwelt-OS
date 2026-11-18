@@ -13,6 +13,7 @@ import { collectAndWait, collectErrorKey, sourceKeys } from '@/modules/sources';
 import type { FreshnessTick } from './freshness-strip';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { useSkin } from '@/core/use-skin';
 import { templateName } from '@/core/renderer-labels';
 import { formatDateTime } from '@/core/i18n';
 import { GadgetFreshnessProvider } from './gadget-freshness';
@@ -235,58 +236,105 @@ function SeverityBadge({ severity }: { severity: 'info' | 'warning' | 'critical'
 }
 
 /**
- * Stale/failing badge for the gadget's bound sources plus a "Collect now" action for the worst one (failing first).
- * A failing source shows its plain-language reason (`collectErrorKey`, raw code as fallback) as the badge title.
- * Collect now triggers one collection with the owner CSRF token, waits for the terminal state and then refreshes
- * every source query; failures are announced, never thrown. Renders nothing while every source is fresh.
+ * Collection runner shared by the Collect now button: collects each source in order with the owner CSRF token, waits
+ * for the terminal state, then refreshes the source queries. Failures set `state` to `failed`; nothing is thrown.
  *
- * @param sourceHealth Freshness ticks of the bound sources.
+ * @param targets Sources to collect, in order.
+ * @returns The run state and the `collect` trigger.
  */
-function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessTick[] }) {
-  const t = useTranslations('dashboard');
-  const ts = useTranslations('sources');
+function useCollectSources(targets: readonly FreshnessTick[]) {
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
   const [state, setState] = useState<'idle' | 'running' | 'failed'>('idle');
+  /** Runs one collection per target source and refreshes the freshness data once they settle. */
+  const collect = async () => {
+    setState('running');
+    let next: 'idle' | 'failed' = 'idle';
+    try {
+      for (const target of targets) {
+        const result = await collectAndWait(target.id, csrfToken, { signal: new AbortController().signal });
+        if (result && result.status !== 'succeeded' && result.status !== 'no_changes') next = 'failed';
+      }
+    } catch {
+      next = 'failed';
+    }
+    setState(next);
+    await client.invalidateQueries({ queryKey: sourceKeys.list });
+  };
+  return { state, collect };
+}
+
+/**
+ * Stale/failing badge for the gadget's bound sources plus a "Collect now" action for the worst one (failing first).
+ * A failing source shows its plain-language reason (`collectErrorKey`, raw code as fallback) as the badge title.
+ * Collect now triggers one collection with the owner CSRF token, waits for the terminal state and then refreshes
+ * every source query; failures are announced, never thrown. Renders nothing while every source is fresh, except with
+ * `alwaysCollect` (terminal News feed title bar, demo `[ collect now ]`): then a fresh gadget shows only the same Collect
+ * now button, which collects each bound source in turn with the same handler and CSRF token.
+ *
+ * @param sourceHealth Freshness ticks of the bound sources.
+ * @param alwaysCollect Show the Collect now action even while every source is fresh.
+ */
+function SourceHealthBadge({ sourceHealth, alwaysCollect = false }: { sourceHealth: readonly FreshnessTick[]; alwaysCollect?: boolean }) {
+  const t = useTranslations('dashboard');
+  const ts = useTranslations('sources');
   const worst = sourceHealth.find((tick) => tick.status === 'failing') ?? sourceHealth.find((tick) => tick.status === 'stale');
-  if (!worst) return null;
+  // An unhealthy gadget collects its worst source; the always-visible fresh button collects every bound source in turn.
+  const run = useCollectSources(worst ? [worst] : sourceHealth);
+  if (!worst) return alwaysCollect ? <CollectNowButton run={run} /> : null;
   const failing = worst.status === 'failing';
   const key = failing ? collectErrorKey(worst.errorCode) : null;
   const reason = failing ? (key ? ts(key) : (worst.errorCode ?? '')) : t('source.staleTitle');
-  /** Runs one collection for the worst source and refreshes the freshness data once it settles. */
-  const collect = async () => {
-    setState('running');
-    try {
-      const result = await collectAndWait(worst.id, csrfToken, { signal: new AbortController().signal });
-      setState(result && result.status !== 'succeeded' && result.status !== 'no_changes' ? 'failed' : 'idle');
-    } catch {
-      setState('failed');
-    }
-    await client.invalidateQueries({ queryKey: sourceKeys.list });
-  };
   return (
     <>
       <Badge variant={failing ? 'destructive' : 'secondary'} className="shrink-0 gap-1 text-[11px]" title={reason}>
         <AlertTriangle className="w-3 h-3" aria-hidden />
         <span>{t(failing ? 'source.failingBadge' : 'source.staleBadge')}</span>
       </Badge>
+      <CollectNowButton run={run} />
+    </>
+  );
+}
+
+/**
+ * Collect now button with its failure announcement; disabled while a collection runs.
+ *
+ * @param props.run State and trigger from {@link useCollectSources}.
+ */
+function CollectNowButton({ run }: { run: ReturnType<typeof useCollectSources> }) {
+  const t = useTranslations('dashboard');
+  const ts = useTranslations('sources');
+  return (
+    <>
       <Button
         type="button"
         size="sm"
         variant="ghost"
-        className="h-6 shrink-0 px-1.5 text-[11px]"
-        disabled={state === 'running'}
-        onClick={() => void collect()}
+        className="gadget-collect h-6 shrink-0 px-1.5 text-[11px]"
+        disabled={run.state === 'running'}
+        onClick={() => void run.collect()}
       >
-        {state === 'running' ? ts('collecting') : ts('collect.now')}
+        {run.state === 'running' ? ts('collecting') : ts('collect.now')}
       </Button>
-      {state === 'failed' && (
+      {run.state === 'failed' && (
         <span role="alert" className="shrink-0 text-[11px] text-destructive">
           {t('source.collectFailed')}
         </span>
       )}
     </>
   );
+}
+
+/**
+ * Source-health badge slot of the status row: renders the badge for gadgets with bound sources; in the terminal skin a
+ * News feed also keeps the Collect now button while its sources are fresh (demo `[ collect now ]`).
+ *
+ * @param props.sourceHealth Freshness ticks of the bound sources; `props.renderer` the gadget's renderer id.
+ */
+function SourceHealthSlot({ sourceHealth, renderer }: { sourceHealth: GadgetFrameProps['sourceHealth']; renderer: string }) {
+  const terminal = useSkin() === 'terminal';
+  if (!sourceHealth || sourceHealth.length === 0) return null;
+  return <SourceHealthBadge sourceHealth={sourceHealth} alwaysCollect={terminal && renderer === 'news_feed'} />;
 }
 
 /** Status badges that share the header row; overflow is clipped so streaming counts never change grid height. */
@@ -319,7 +367,7 @@ function StatusBadges({
           <span>{t('ruleMatch.badge')}</span>
         </Badge>
       )}
-      {sourceHealth && sourceHealth.length > 0 && <SourceHealthBadge sourceHealth={sourceHealth} />}
+      <SourceHealthSlot sourceHealth={sourceHealth} renderer={definition.renderer} />
       {effectiveSeverity && <SeverityBadge severity={effectiveSeverity} />}
       {definition.warnings && definition.warnings.length > 0 && (
         <Badge variant="secondary" className="shrink-0 gap-0.5 text-xs" title={ts('frame.setupTitle')}>

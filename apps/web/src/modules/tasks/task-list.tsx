@@ -165,9 +165,9 @@ function TaskListNotices({ vm }: { vm: TaskListVm }) {
 function TaskRows({ vm }: { vm: TaskListVm }) {
   const { t, display, onSelectTask, isAdminViewer, toggleMutation, tasks, statusLabels } = vm;
   return (
-    <ul className="flex flex-col gap-2">
+    <ul className="task-list flex flex-col gap-2">
       {tasks.map((task) => (
-        <li key={task.id} className="flex items-start gap-3 rounded-lg border border-border p-3">
+        <li key={task.id} className="task-row flex items-start gap-3 rounded-lg border border-border p-3">
           <Checkbox
             checked={task.status === 'done'}
             disabled={isAdminViewer || toggleMutation.isPending}
@@ -175,8 +175,8 @@ function TaskRows({ vm }: { vm: TaskListVm }) {
             aria-label={t('toggleTask', { title: task.title, state: task.status === 'done' ? t('incomplete') : t('complete') })}
           />
           <BareButton type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}>
-            <span className="block truncate text-sm font-medium">{task.title}</span>
-            <span className="text-xs text-muted-foreground">
+            <span className="task-row-title block truncate text-sm font-medium">{task.title}</span>
+            <span className="task-row-meta text-xs text-muted-foreground">
               {statusLabels[task.status]} ·{' '}
               {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : (task.due_date ?? t('no.dueDate'))}
             </span>

@@ -309,6 +309,14 @@ html[data-skin='terminal'] .freshness-strip-root {
   border: 0;
 }
 
+/* Header `+ Add gadget` shortcut exists only in the terminal skin. */
+.dash-add-gadget {
+  display: none;
+}
+html[data-skin='terminal'] .dash-add-gadget {
+  display: inline-flex;
+}
+
 /* Page head (demo `.page-head`): actions sit on the title line, the greeting stays compact and the weather link is lowercase. */
 html[data-skin='terminal'] .dash-header {
   align-items: flex-start;

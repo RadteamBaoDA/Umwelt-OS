@@ -27,7 +27,7 @@ export function FeedSourceTabs({
     'min-h-8 pointer-coarse:min-h-11 max-w-40 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none';
   return (
     <Tabs value={value} onValueChange={onChange}>
-      <TabsList aria-label={t('feed.sourceTabs')} className="h-auto max-w-full flex-wrap gap-1 p-0">
+      <TabsList aria-label={t('feed.sourceTabs')} className="feed-source-tabs h-auto max-w-full flex-wrap gap-1 p-0">
         <TabsTrigger value="all" className={trigger}>
           {t('feed.sourceAll')}
         </TabsTrigger>

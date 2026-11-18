@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
@@ -9,8 +9,9 @@ import { formatDateWith } from '@/core/format';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRealtime } from '@/core/realtime-provider';
 import { useSkin } from '@/core/use-skin';
-import { useAiSettings } from '@/modules/chat';
-import { listAllSources, sourceKeys, type Source } from '@/modules/sources';
+import { useAiSettings } from '@/modules/chat/public-api';
+import { dashboardKeys } from '@/modules/dashboard/public-api';
+import { listAllSources, sourceKeys, type Source } from '@/modules/sources/public-api';
 import './shell-skin.css';
 
 /** Freshness window for a source with no expected cadence (`next_due_at` absent): mirrors dashboard freshness. */
@@ -203,14 +204,51 @@ function StatuslineClock({ locale, timezone }: { locale: AppLocaleId; timezone: 
 }
 
 /**
+ * ASCII path segment for a dashboard name: diacritics removed, lowercased, spaces to `-`, anything but `[a-z0-9-]` dropped.
+ *
+ * @param name - Dashboard display name.
+ * @returns The slug; may be empty when the name has no ASCII letters or digits.
+ */
+export function dashboardSlug(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd')
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+}
+
+/**
+ * Prompt path for the crumb: `/dashboard/<id>` shows `/dashboard/<slug of the dashboard name>` when that dashboard is in
+ * the react-query cache (list or detail entry; nothing is fetched). `/dashboard`, other routes, and unknown or
+ * unsluggable names fall back to the raw pathname.
+ *
+ * @param pathname - Current route path.
+ * @param nameOf - Reads a cached dashboard name by id, or undefined when not cached.
+ */
+function crumbPath(pathname: string, nameOf: (id: string) => string | undefined): string {
+  const match = /^\/dashboard\/([^/]+)\/?$/.exec(pathname);
+  if (!match) return pathname;
+  const slug = dashboardSlug(nameOf(decodeURIComponent(match[1])) ?? '');
+  return slug ? `/dashboard/${slug}` : pathname;
+}
+
+/**
  * Decorative terminal prompt `owner@umwelt:~<path> $` placed at the start of the top bar. Hidden from assistive technology
- * and visible only in the terminal skin (CSS); it duplicates the route and carries no information.
+ * and visible only in the terminal skin (CSS); it duplicates the route and carries no information. The dashboard id is
+ * replaced by the name slug using cached data only (no request).
  */
 export function ShellCrumb() {
   const pathname = usePathname();
+  const client = useQueryClient();
+  const path = crumbPath(pathname, (id) => {
+    const list = client.getQueryData<{ id: string; name: string }[]>(dashboardKeys.all);
+    return list?.find((d) => d.id === id)?.name ?? client.getQueryData<{ name: string }>(dashboardKeys.detail(id))?.name;
+  });
   return (
     <span className="shell-crumb hide-sm" aria-hidden="true">
-      <b>owner@umwelt</b>:<span className="shell-crumb-path">~{pathname}</span> $
+      <b>owner@umwelt</b>:<span className="shell-crumb-path">~{path}</span> $
     </span>
   );
 }

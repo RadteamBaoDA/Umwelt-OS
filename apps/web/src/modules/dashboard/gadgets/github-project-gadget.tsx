@@ -96,15 +96,15 @@ function GithubEventItem({ event }: { event: TimelineEvent }) {
   const url = safeGithubUrl(event.metadata?.canonical_url);
   const when = event.started_at || event.occurred_date || event.observed_at;
   return (
-    <li className="space-y-0.5 border-b border-border pb-2 last:border-b-0">
-      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded bg-muted px-1.5 py-0.5 text-foreground">
+    <li className="github-event space-y-0.5 border-b border-border pb-2 last:border-b-0">
+      <div className="github-event-head flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span className="github-event-type rounded bg-muted px-1.5 py-0.5 text-foreground">
           {event.type in EVENT_TYPE_KEY ? t(EVENT_TYPE_KEY[event.type as keyof typeof EVENT_TYPE_KEY]) : event.type}
         </span>
         <time dateTime={when}>{formatDateTime(when, display.locale, display.timezone)}</time>
       </div>
-      <p className="text-xs font-medium leading-snug">{event.title}</p>
-      <div className="flex flex-wrap gap-2 text-[11px]">
+      <p className="github-event-title text-xs font-medium leading-snug">{event.title}</p>
+      <div className="github-event-links flex flex-wrap gap-2 text-[11px]">
         {url && (
           <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">
             {t('openOnGithub')}
@@ -245,7 +245,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
         />
       )}
       {items.length > 0 && (
-        <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+        <ol className="github-events min-h-0 flex-1 space-y-2 overflow-y-auto">
           {items.map((event) => (
             <GithubEventItem key={event.id} event={event} />
           ))}

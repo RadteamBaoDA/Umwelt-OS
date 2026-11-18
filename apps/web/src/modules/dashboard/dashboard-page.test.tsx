@@ -263,6 +263,7 @@ describe('DashboardHeader summary placement', () => {
           onDelete={() => undefined}
           onOpenPresets={() => undefined}
           onToggleEdit={() => undefined}
+          onAddGadget={() => undefined}
           onOpenManagement={() => undefined}
         />
       </NextIntlClientProvider>,
@@ -270,6 +271,41 @@ describe('DashboardHeader summary placement', () => {
 
   afterEach(() => {
     document.getElementById('statusline-info')?.remove();
+  });
+
+  it('offers the header Add gadget shortcut only to editors outside edit mode and fires its handler', () => {
+    const onAddGadget = vi.fn();
+    const header = (over: Record<string, unknown>) => (
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+        <DashboardHeader
+          dashboards={[]}
+          activeDashboard={null}
+          selectedDashboardId={null}
+          layoutOperationPending={false}
+          isAdminViewer={false}
+          isOwner={false}
+          isEditMode={false}
+          canEditLayout
+          summary={null}
+          onSwitch={() => undefined}
+          onCreate={() => undefined}
+          onRename={() => undefined}
+          onDelete={() => undefined}
+          onOpenPresets={() => undefined}
+          onToggleEdit={() => undefined}
+          onAddGadget={onAddGadget}
+          onOpenManagement={() => undefined}
+          {...over}
+        />
+      </NextIntlClientProvider>
+    );
+    const { rerender } = render(header({}));
+    screen.getByRole('button', { name: 'Add gadget' }).click();
+    expect(onAddGadget).toHaveBeenCalledTimes(1);
+    rerender(header({ isEditMode: true }));
+    expect(screen.queryByRole('button', { name: 'Add gadget' })).toBeNull();
+    rerender(header({ canEditLayout: false }));
+    expect(screen.queryByRole('button', { name: 'Add gadget' })).toBeNull();
   });
 
   it('falls back to an inline paragraph when the statusline slot is missing', () => {

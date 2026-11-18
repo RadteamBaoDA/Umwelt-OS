@@ -11,12 +11,15 @@ let mockAiSettings: unknown = undefined;
 
 vi.mock('next/navigation', () => ({ usePathname: () => mockPath }));
 vi.mock('@/core/realtime-provider', () => ({ useRealtime: () => ({ status: 'connected' }) }));
-vi.mock('@/modules/sources', () => ({
+vi.mock('@/modules/dashboard/public-api', () => ({
+  dashboardKeys: { all: ['dashboards'], detail: (id: string) => ['dashboard', id] },
+}));
+vi.mock('@/modules/sources/public-api', () => ({
   listAllSources: () => mockListAll(),
   sourceKeys: { listAll: ['sources', 'list', 'all'] },
 }));
 // Mirrors react-query: a disabled read returns no data.
-vi.mock('@/modules/chat', () => ({
+vi.mock('@/modules/chat/public-api', () => ({
   useAiSettings: (options?: { enabled?: boolean }) => ({ data: options?.enabled === false ? undefined : mockAiSettings }),
 }));
 
@@ -209,10 +212,33 @@ describe('sourceHealth', () => {
   });
 });
 
+/** Renders the crumb under a query client optionally seeded with one cached dashboard list. */
+function renderCrumb(list?: { id: string; name: string }[]) {
+  const client = new QueryClient();
+  if (list) client.setQueryData(['dashboards'], list);
+  return render(
+    <QueryClientProvider client={client}>
+      <ShellCrumb />
+    </QueryClientProvider>,
+  );
+}
+
 describe('ShellCrumb', () => {
+  it('shows the slug of the cached dashboard name instead of the id', () => {
+    mockPath = '/dashboard/abc';
+    const { container } = renderCrumb([{ id: 'abc', name: 'Thế Giới  World!' }]);
+    expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/the-gioi-world $');
+  });
+
+  it('keeps the plain path for /dashboard', () => {
+    mockPath = '/dashboard';
+    const { container } = renderCrumb([{ id: 'abc', name: 'World' }]);
+    expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard $');
+  });
+
   it('renders the decorative prompt from the current path and is hidden from assistive technology', () => {
     mockPath = '/dashboard/abc';
-    const { container } = render(<ShellCrumb />);
+    const { container } = renderCrumb();
     const crumb = container.querySelector('.shell-crumb');
     expect(crumb?.getAttribute('aria-hidden')).toBe('true');
     expect(crumb?.textContent).toBe('owner@umwelt:~/dashboard/abc $');

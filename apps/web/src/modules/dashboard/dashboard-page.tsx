@@ -117,6 +117,7 @@ function ConnectedHeader({
   crud,
   overview,
   onOpenPresets,
+  onAddGadget,
   onOpenManagement,
 }: {
   data: PageData;
@@ -124,6 +125,7 @@ function ConnectedHeader({
   crud: ReturnType<typeof useDashboardCrud>;
   overview: boolean;
   onOpenPresets: () => void;
+  onAddGadget: () => void;
   onOpenManagement: () => void;
 }) {
   const t = useTranslations('dashboard');
@@ -163,6 +165,7 @@ function ConnectedHeader({
         if (session.isEditMode) save.requestExitEdit();
         else session.setIsEditMode(true);
       }}
+      onAddGadget={onAddGadget}
       onOpenManagement={onOpenManagement}
     />
   );
@@ -667,6 +670,11 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         crud={crud}
         overview={Boolean(activeDashboard?.groups.find((group) => group.id === session.activeGroupId)?.is_overview)}
         onOpenPresets={() => intents.setPresetPickerOpen(true)}
+        onAddGadget={() => {
+          // Same path as the `addTemplate` deep link: edit mode plus the editor's initial-open intent.
+          intents.setOpenAddInitially(true);
+          ops.session.setIsEditMode(true);
+        }}
         onOpenManagement={() => management.setOpen(true)}
       />
       <DashboardTabsArea data={data} ops={ops} crud={crud} intents={intents} ui={ui} isMobile={isMobile} isTablet={isTablet} />

@@ -135,7 +135,7 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
 const NEW_STORY_MINUTES = 15;
 
 /**
- * Terminal-skin log row of an embedded story: `HH:MM:SS  LEVEL  title  #publisher` (developer-theme `.log li`).
+ * Terminal-skin log row of an embedded story: `HH:MM  LEVEL  title  #publisher` (developer-theme `.log li`).
  * The title button opens the story detail exactly like the default row; the tag links to the publisher's article when
  * the evidence URL is a safe http(s) URL (licence text stays in the link title). LEVEL is NEW for stories observed in
  * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal.
@@ -150,7 +150,6 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
   const clock = new Intl.DateTimeFormat(normalizeFormattingLocale(display.locale), {
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
     hourCycle: 'h23',
     timeZone: display.timezone,
   });
