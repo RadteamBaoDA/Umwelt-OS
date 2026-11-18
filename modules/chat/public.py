@@ -214,6 +214,15 @@ from modules.chat._public.export import (
 from modules.chat._public.export import (
     validate_export_fences as validate_export_fences,
 )
+from modules.chat._public.scheduled_task_threads import (
+    append_task_message as append_task_message,
+)
+from modules.chat._public.scheduled_task_threads import (
+    ensure_automation_conversation as ensure_automation_conversation,
+)
+from modules.chat._public.scheduled_task_threads import (
+    scrub_task_messages as scrub_task_messages,
+)
 from modules.chat.citations import (
     validate_answer_citations,
     validate_citations,
@@ -277,6 +286,9 @@ from modules.chat.worker import (
 )
 
 __all__ = [
+    "append_task_message",
+    "ensure_automation_conversation",
+    "scrub_task_messages",
     "AgentActivityLink",
     "AgentActivityRead",
     "AnswerContext",
