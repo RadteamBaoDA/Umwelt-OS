@@ -1887,6 +1887,7 @@ export interface paths {
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
          *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     A Topic watch Source is refused (409 ``managed_by_scheduled_task``) before anything is paused.
          */
         post: operations["deactivate_source_api_v1_connectors__source_id__deactivate_post"];
         delete?: never;
@@ -16603,6 +16604,8 @@ export interface components {
          *     ``source_id`` is deliberately absent: it is stored for withholding only and never sent to clients.
          */
         TopicWatchMessageMeta: {
+            /** Automation Id */
+            automation_id?: string | null;
             /**
              * Coverage
              * @enum {string}
@@ -16687,6 +16690,11 @@ export interface components {
              * @default 0
              */
             results: number;
+            /**
+             * Seen
+             * @default 0
+             */
+            seen: number;
             /**
              * Timeout
              * @default 0

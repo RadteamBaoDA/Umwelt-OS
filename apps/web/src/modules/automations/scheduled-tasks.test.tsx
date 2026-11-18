@@ -11,6 +11,7 @@ import { ScheduledTasksWorkspace } from './scheduled-tasks';
 let locale: 'en-us' | 'vi-vi' = 'en-us';
 vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale, timezone: 'UTC' }) }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: vi.fn() }) }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(window.location.search),
@@ -40,6 +41,20 @@ const task = {
   conditions: [],
   actions: [{ type: 'generate_brief', scope: 'daily', sections: ['stories'], extra_instruction: null, deliver_chat: true }],
 } as api.Automation;
+const watchRule = {
+  ...task,
+  id: 'w1',
+  name: 'EV watch',
+  actions: [
+    {
+      type: 'collect_source',
+      watch: { topic: 'EV', keep_rule: null, languages: ['en'], include_sites: [], exclude_sites: [], max_items: 5 },
+      model_role: 'background',
+      source_id: 's1',
+      consent: { hash: 'h', granted_at: '', est_tokens: 15600 },
+    },
+  ],
+} as unknown as api.Automation;
 const legacy = { ...task, id: 'l1', actions: [{ type: 'generate_brief', scope: 'daily' }] } as api.Automation;
 
 /** Renders the node under the providers the module needs, in the current locale. */
@@ -56,6 +71,7 @@ function view(node: React.ReactNode) {
 beforeEach(() => {
   locale = 'en-us';
   vi.clearAllMocks();
+  vi.mocked(api.getLastRun).mockResolvedValue({ items: [] });
 });
 
 describe('scheduled tasks workspace', () => {
@@ -107,6 +123,31 @@ describe('scheduled tasks workspace', () => {
     render(view(<ScheduledTasksWorkspace />));
     await waitFor(() => expect(screen.queryByText('Every day at 07:00')).toBeNull());
     window.history.pushState({}, '', '/');
+  });
+
+  it('?run with ?task opens that task run history instead of the brief', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [task, watchRule] });
+    window.history.pushState({}, '', '/settings/scheduled-tasks?run=run-9&task=w1');
+    render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByText('Runs of EV watch')).toBeTruthy();
+    window.history.pushState({}, '', '/');
+  });
+
+  it('a stale-consent badge opens the editor with the consent checkbox', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [watchRule] });
+    vi.mocked(api.getLastRun).mockResolvedValue({
+      items: [
+        {
+          revision: 2,
+          status: 'skipped',
+          created_at: '2026-11-18T01:00:00Z',
+          actions: [{ error_code: 'consent_required', result_reference: null }],
+        },
+      ],
+    } as unknown as Awaited<ReturnType<typeof api.getLastRun>>);
+    render(view(<ScheduledTasksWorkspace />));
+    fireEvent.click(await screen.findByRole('button', { name: 'Needs consent' }));
+    expect(await screen.findByRole('checkbox', { name: 'I allow this task to run unattended' })).toBeTruthy();
   });
 
   it('disables the template and offers conversion when a legacy brief rule exists', async () => {

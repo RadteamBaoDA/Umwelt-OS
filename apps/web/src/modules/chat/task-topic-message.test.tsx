@@ -18,8 +18,9 @@ const msg = {
   task: {
     task_kind: 'topic_watch',
     run_id: 'run-9',
+    automation_id: 'auto-1',
     coverage: 'complete',
-    stats: { items: 2, queries: 3 },
+    stats: { items: 2, queries: 3, fetched: 4, tokens: 900 },
     items: [
       { title: 'First', url: 'https://example.com/a', site: 'example.com', summary: 'Summary one', document_id: 'd1' },
       { title: '<b>Bold</b> second', url: 'https://example.org/b', site: 'example.org', summary: '<img src=x onerror=alert(1)>' },
@@ -47,7 +48,7 @@ describe('TaskTopicMessage', () => {
     expect(screen.getByText('example.com')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: messages[locale].chat.taskThread.runLog })).toHaveAttribute(
       'href',
-      '/settings/scheduled-tasks?run=run-9',
+      '/settings/scheduled-tasks?run=run-9&task=auto-1',
     );
   });
 
@@ -63,6 +64,15 @@ describe('TaskTopicMessage', () => {
   it('shows a Partial badge only for partial coverage', () => {
     view({ ...msg, task: { ...msg.task, coverage: 'partial', stats: { reason: 'budget' } } } as unknown as ChatMessage);
     expect(screen.getByText(messages['en-us'].chat.taskThread.partial)).toBeInTheDocument();
+  });
+
+  it('shows the localized stats line and partial reason', () => {
+    view({
+      ...msg,
+      task: { ...msg.task, coverage: 'partial', stats: { ...(msg.task as object as { stats: object }).stats, reason: 'budget' } },
+    } as unknown as ChatMessage);
+    expect(screen.getByText('3 searches · 4 pages · 2 kept · 900 tokens')).toBeInTheDocument();
+    expect(screen.getByText('Token budget reached')).toBeInTheDocument();
   });
 
   it('does not render a complete post as partial', () => {

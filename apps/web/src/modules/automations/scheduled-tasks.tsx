@@ -58,7 +58,8 @@ const OUTCOME_KEYS = {
   failed: 'scheduledTasks.topic.outcome.failed',
 } as const;
 
-type Editor = { mode: 'new'; kind: 'daily_brief' | 'topic_watch' } | { mode: 'edit'; rule: Automation } | { mode: 'convert' };
+type Editor =
+  { mode: 'new'; kind: 'daily_brief' | 'topic_watch' } | { mode: 'edit'; rule: Automation; consentStale?: boolean } | { mode: 'convert' };
 type View = { kind: 'list' } | { kind: 'blank' } | { kind: 'runs'; ruleId: string };
 
 /**
@@ -134,17 +135,29 @@ export function ScheduleText({ cron }: { cron: string }) {
 }
 
 /**
- * Last-run outcome of a Topic watch under its summary: collected, collecting, no new items, failed, or a "Needs
- * consent" badge (the Edit action re-grants it). `consent_required` counts only for the rule's current revision, so
- * re-consenting (which bumps the revision) clears it at once. Renders nothing when the run has no known outcome.
+ * True when the newest run of a Topic watch was skipped for `consent_required` at the rule's current revision, i.e. the
+ * stored consent no longer matches the definition. Re-consenting bumps the revision, which clears it at once.
  */
-function TopicRunLine({ rule, run, action }: { rule: Automation; run: Run; action: Action | undefined }) {
+function isConsentStale(rule: Automation, run: Run | undefined): boolean {
+  const outcome = run?.actions[0] ? topicOutcome(run.actions[0]) : null;
+  return outcome === 'consent_required' && run?.revision === rule.revision;
+}
+
+/**
+ * Last-run outcome of a Topic watch under its summary: collected, collecting, no new items, failed, or a "Needs
+ * consent" badge button that opens the editor to re-grant consent. Renders nothing when the run has no known outcome.
+ */
+function TopicRunLine({ run, action, stale, onEdit }: { run: Run; action: Action | undefined; stale: boolean; onEdit: () => void }) {
   const t = useTranslations('automations');
   const outcome = run.actions[0] ? topicOutcome(run.actions[0]) : null;
-  const needsConsent = !action?.consent || (outcome === 'consent_required' && run.revision === rule.revision);
+  const needsConsent = !action?.consent || stale;
   return (
     <div className="text-xs">
-      {needsConsent && <span className="rounded border border-border px-1.5 py-0.5">{t('scheduledTasks.topic.needsConsent')}</span>}
+      {needsConsent && (
+        <button type="button" className="rounded border border-border px-1.5 py-0.5" onClick={onEdit}>
+          {t('scheduledTasks.topic.needsConsent')}
+        </button>
+      )}
       {!needsConsent && outcome && outcome !== 'consent_required' && (
         <span className="text-muted-foreground">{t(OUTCOME_KEYS[outcome])}</span>
       )}
@@ -156,7 +169,7 @@ function TopicRunLine({ rule, run, action }: { rule: Automation; run: Run; actio
  * Task cell under the name: the first line of the topic (Topic watch) or the extra instruction / section count
  * (Daily brief); for a Topic watch also its kind and last-run outcome.
  */
-function TaskSummary({ rule, run }: { rule: Automation; run: Run | undefined }) {
+function TaskSummary({ rule, run, stale, onEdit }: { rule: Automation; run: Run | undefined; stale: boolean; onEdit: () => void }) {
   const t = useTranslations('automations');
   const action = rule.actions[0];
   const topic = scheduledTaskKind(rule) === 'topic_watch';
@@ -167,7 +180,7 @@ function TaskSummary({ rule, run }: { rule: Automation; run: Run | undefined }) 
         {firstLine || t('scheduledTasks.briefSummary', { count: action?.sections?.length ?? 0 })}
       </div>
       {topic && <div className="text-xs text-muted-foreground">{t('scheduledTasks.topic.kind')}</div>}
-      {topic && run && <TopicRunLine rule={rule} run={run} action={action} />}
+      {topic && run && <TopicRunLine run={run} action={action} stale={stale} onEdit={onEdit} />}
     </>
   );
 }
@@ -220,7 +233,7 @@ function TaskRow({
   busy: boolean;
   onRun: () => void;
   onToggle: () => void;
-  onEdit: () => void;
+  onEdit: (consentStale: boolean) => void;
   onHistory: () => void;
   onThread: () => void;
   onDelete: () => void;
@@ -230,6 +243,7 @@ function TaskRow({
   const last = useQuery({ queryKey: ['automation-last-run', rule.id, rule.revision], queryFn: () => getLastRun(rule.id) });
   const conversation = useQuery({ queryKey: ['automation-conversation', rule.id], queryFn: () => getRuleConversationId(rule.id) });
   const run = last.data?.items[0];
+  const stale = isConsentStale(rule, run);
   const cron = rule.trigger.cron ?? '';
   const label = (key: string, text: string, handler: () => void, icon: React.ReactNode, disabled = false) => (
     <Button key={key} type="button" variant="ghost" size="icon" aria-label={text} title={text} disabled={disabled} onClick={handler}>
@@ -240,7 +254,7 @@ function TaskRow({
     <TableRow>
       <TableCell>
         <div className="font-medium">{rule.name}</div>
-        <TaskSummary rule={rule} run={run} />
+        <TaskSummary rule={rule} run={run} stale={stale} onEdit={() => onEdit(true)} />
       </TableCell>
       <TableCell>{rule.enabled ? t('scheduledTasks.state.active') : t('scheduledTasks.state.paused')}</TableCell>
       <TableCell>
@@ -267,7 +281,7 @@ function TaskRow({
             rule.enabled ? <PauseIcon size={16} aria-hidden /> : <PlayIcon size={16} aria-hidden />,
             busy,
           )}
-          {label('edit', t('scheduledTasks.edit'), onEdit, <PencilIcon size={16} aria-hidden />)}
+          {label('edit', t('scheduledTasks.edit'), () => onEdit(stale), <PencilIcon size={16} aria-hidden />)}
           {label('history', t('scheduledTasks.history'), onHistory, <HistoryIcon size={16} aria-hidden />)}
           {label('thread', t('scheduledTasks.openThread'), onThread, <MessageSquareIcon size={16} aria-hidden />, !conversation.data)}
           <TopicActions rule={rule} label={label} onDelete={onDelete} />
@@ -388,7 +402,8 @@ function NewTaskMenu({ onTemplates, onBlank }: { onTemplates: () => void; onBlan
 
 /**
  * Applies the chat deep links once the rules load: `?edit={automation id}` opens that task's editor and `?run={run id}`
- * opens the run history of the daily brief task (one per workspace; the run id only marks the intent). Each link is
+ * opens the run history of the task named by `?task={automation id}` (the run id only marks the intent), falling back
+ * to the daily brief task (one per workspace) when `task` is absent or unknown. Each link is
  * applied once per page load so closing the editor does not reopen it.
  */
 function useDeepLink(
@@ -403,7 +418,11 @@ function useDeepLink(
   // Adjusting state during render (not in an effect) once the rules first arrive, so the list never flashes first.
   if (applied || items.length === 0) return;
   const edited = editId ? items.find((rule) => rule.id === editId && scheduledTaskKind(rule)) : undefined;
-  const brief = hasRun ? items.find((rule) => scheduledTaskKind(rule) === 'daily_brief') : undefined;
+  const taskId = params?.get('task');
+  const brief = hasRun
+    ? ((taskId ? items.find((rule) => rule.id === taskId && scheduledTaskKind(rule)) : undefined) ??
+      items.find((rule) => scheduledTaskKind(rule) === 'daily_brief'))
+    : undefined;
   setApplied(true);
   if (edited) setEditor({ mode: 'edit', rule: edited });
   else if (brief) setView({ kind: 'runs', ruleId: brief.id });
@@ -431,9 +450,12 @@ function TaskDialogs({
   onCloseDelete: () => void;
 }) {
   const rule = editor?.mode === 'edit' ? editor.rule : undefined;
+  const consentStale = editor?.mode === 'edit' && editor.consentStale === true;
   return (
     <>
-      {editor && isTopicEditor(editor) && <TopicWatchEditor rule={rule} csrfToken={csrfToken} onSaved={onSaved} onClose={onCloseEditor} />}
+      {editor && isTopicEditor(editor) && (
+        <TopicWatchEditor rule={rule} consentStale={consentStale} csrfToken={csrfToken} onSaved={onSaved} onClose={onCloseEditor} />
+      )}
       {editor && !isTopicEditor(editor) && (
         <BriefTaskEditor
           rule={rule}
@@ -526,7 +548,7 @@ export function ScheduledTasksWorkspace() {
                       busy={run.isPending || toggle.isPending}
                       onRun={() => run.mutate(rule)}
                       onToggle={() => toggle.mutate(rule)}
-                      onEdit={() => setEditor({ mode: 'edit', rule })}
+                      onEdit={(consentStale) => setEditor({ mode: 'edit', rule, consentStale })}
                       onHistory={() => setView({ kind: 'runs', ruleId: rule.id })}
                       onThread={() => void openThread(rule)}
                       onDelete={() => setDeleting(rule)}

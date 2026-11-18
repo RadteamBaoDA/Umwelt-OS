@@ -35,6 +35,8 @@ const LANGUAGE_KEYS = { en: 'scheduledTasks.topic.langEn', vi: 'scheduledTasks.t
 export interface TopicWatchEditorProps {
   rule?: Automation;
   csrfToken: string;
+  /** True when the newest run was skipped for `consent_required` at the rule's current revision: stored consent is stale. */
+  consentStale?: boolean;
   /** Called after a successful save, just before `onClose`. */
   onSaved?: () => void;
   onClose: () => void;
@@ -254,10 +256,13 @@ function formInvalid(form: TopicForm): boolean {
   return !form.topic.trim() || form.languages.length === 0 || tooManySites || badItems || !/^\d{2}:\d{2}$/.test(form.time);
 }
 
-/** True when saving must carry a fresh consent: a new watch, a stored watch without consent, or a changed consent key. */
-function needsConsent(rule: Automation | undefined, form: TopicForm, initialKey: string): boolean {
+/**
+ * True when saving must carry a fresh consent: a new watch, a stored watch without consent, a stale consent (the server
+ * skips runs whose stored hash no longer matches, for example after the model role was re-pointed), or a changed key.
+ */
+function needsConsent(rule: Automation | undefined, form: TopicForm, initialKey: string, stale: boolean): boolean {
   const hadConsent = Boolean(rule?.actions.find((item) => item.type === 'collect_source')?.consent);
-  return !rule || !hadConsent || consentKey(form) !== initialKey;
+  return !rule || !hadConsent || stale || consentKey(form) !== initialKey;
 }
 
 /** Cancel and Save buttons; Save shows the saving label while the request is in flight. */
@@ -335,13 +340,13 @@ function useTopicSave({
 /**
  * Topic watch editor dialog. Creates an enabled schedule rule with one `collect_source` action (POST), or edits an
  * existing watch (revision-fenced PATCH). Consent is explicit and one-time: it is required on create, whenever the
- * stored watch has no consent, and whenever a field the consent hash covers (topic, keep rule, languages, sites,
+ * stored watch has no consent or the consent is stale (`consentStale`), and whenever a field the consent hash covers (topic, keep rule, languages, sites,
  * max items, schedule, model role) changed; only then is `grant_consent_est_tokens` sent. Saving is disabled until the
  * topic is non-empty, a language is chosen, site lists fit their bound, max items is 1-10 and, when required, consent
  * is ticked. Side effects: one request, list invalidation, then `onSaved` and `onClose`. A rejected estimate shows a
  * localized error (server text is never rendered).
  */
-export function TopicWatchEditor({ rule, csrfToken, onSaved, onClose }: TopicWatchEditorProps) {
+export function TopicWatchEditor({ rule, csrfToken, consentStale = false, onSaved, onClose }: TopicWatchEditorProps) {
   const t = useTranslations('automations');
   const [form, setForm] = useState(() => initialForm(rule));
   const [initialKey] = useState(() => consentKey(initialForm(rule)));
@@ -350,7 +355,7 @@ export function TopicWatchEditor({ rule, csrfToken, onSaved, onClose }: TopicWat
   const zone = useQuery({ queryKey: ['brief-timezone'], queryFn: getBriefTimezone, retry: false });
   const models = useQuery({ queryKey: ['brief-models'], queryFn: getBriefRoleModels, retry: false });
   const timezone = rule?.trigger.timezone ?? zone.data ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const consentRequired = needsConsent(rule, form, initialKey);
+  const consentRequired = needsConsent(rule, form, initialKey, consentStale);
 
   const save = useTopicSave({
     rule,

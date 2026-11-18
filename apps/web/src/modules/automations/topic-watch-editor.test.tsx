@@ -87,6 +87,20 @@ describe('topic watch editor', () => {
     expect(vi.mocked(api.patchAutomation).mock.calls[0][2].actions?.[0]).not.toHaveProperty('grant_consent_est_tokens');
   });
 
+  it('re-grants stale consent: the checkbox shows and Save sends the grant', async () => {
+    vi.mocked(api.patchAutomation).mockResolvedValue(existing);
+    render(view(<TopicWatchEditor rule={existing} consentStale csrfToken="csrf" onClose={vi.fn()} />));
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I allow this task to run unattended' }));
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+    await waitFor(() => expect(api.patchAutomation).toHaveBeenCalled());
+    expect(vi.mocked(api.patchAutomation).mock.calls[0][2].actions?.[0]).toMatchObject({
+      grant_consent_est_tokens: 15600,
+    });
+  });
+
   it('renders Vietnamese copy', async () => {
     render(view(<TopicWatchEditor csrfToken="csrf" onClose={vi.fn()} />, 'vi-vi'));
     expect(await screen.findByText('Tôi cho phép tác vụ này chạy không giám sát')).toBeTruthy();

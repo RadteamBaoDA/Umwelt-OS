@@ -16,6 +16,19 @@ interface TopicItem {
   documentId: string | null;
 }
 
+/** Literal catalog keys of the partial-run reasons the collector can report; any other reason shows no text. */
+const REASON_KEYS = {
+  budget: 'taskThread.reason.budget',
+  search_quota: 'taskThread.reason.search_quota',
+  deadline: 'taskThread.reason.deadline',
+} as const;
+
+/** Read a non-negative integer counter from the untrusted stats object (0 when absent or malformed). */
+function count(stats: Record<string, unknown> | undefined, key: string): number {
+  const value = stats?.[key];
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
 /**
  * True for an assistant message posted by a Topic watch scheduled task (`task.task_kind === 'topic_watch'`).
  *
@@ -57,8 +70,30 @@ function parseItems(raw: unknown): TopicItem[] {
 }
 
 /**
- * Posted Topic watch message: a run line (time and a link to the run log in Settings), a "Partial" badge when the run
- * stopped early, then one row per collected item with its title linked to the stored document
+ * Deep link to the run log of a post: the run id plus, when known, the owning task id so Settings opens that task and
+ * not the daily brief. Returns null without a run id. Both ids are URL-encoded.
+ *
+ * @param meta - The message's `task` metadata (untrusted).
+ */
+function runLogHref(meta: Record<string, unknown> | null | undefined): string | null {
+  if (typeof meta?.run_id !== 'string') return null;
+  const task = typeof meta.automation_id === 'string' ? `&task=${encodeURIComponent(meta.automation_id)}` : '';
+  return `/settings/scheduled-tasks?run=${encodeURIComponent(meta.run_id)}${task}`;
+}
+
+/**
+ * Catalog key of the localized partial-run reason in the stats, or null for an absent or unknown reason.
+ *
+ * @param stats - The message's `task.stats` (untrusted).
+ */
+function reasonKeyOf(stats: Record<string, unknown> | undefined): (typeof REASON_KEYS)[keyof typeof REASON_KEYS] | null {
+  const reason = text(stats?.reason);
+  return reason && Object.hasOwn(REASON_KEYS, reason) ? REASON_KEYS[reason as keyof typeof REASON_KEYS] : null;
+}
+
+/**
+ * Posted Topic watch message: a run line (time and a link to the run log of this task in Settings), a "Partial" badge
+ * with its localized reason when the run stopped early, one muted stats line (searches, pages, kept, tokens), then one row per collected item with its title linked to the stored document
  * (`/knowledge/documents/{id}`) or, without a document id, to the original page, plus the site and the summary.
  * Titles and summaries are plain text nodes (never markup). External links open in a new tab with
  * `rel="noopener noreferrer"`. Read-only; tolerates a malformed payload by showing fewer or no items.
@@ -69,41 +104,55 @@ export function TaskTopicMessage({ msg }: { msg: ChatMessage }) {
   const t = useTranslations('chat');
   const display = useDisplayPreferences();
   const meta = msg.task as Record<string, unknown> | null | undefined;
-  const runId = typeof meta?.run_id === 'string' ? meta.run_id : null;
-  const items = parseItems(meta?.items);
-  const reason = text((meta?.stats as Record<string, unknown> | undefined)?.reason);
+  const stats = meta?.stats as Record<string, unknown> | undefined;
+  const reasonKey = reasonKeyOf(stats);
+  const href = runLogHref(meta);
   const partial = meta?.coverage === 'partial';
   return (
     <div className="space-y-2" data-testid="task-topic-message">
       <p className="text-xs text-muted-foreground">
         {t('taskThread.topicRunLine', { time: formatDateTime(msg.created_at, display.locale, display.timezone) })}
-        {runId && (
+        {href && (
           <>
             {' · '}
-            <Link href={`/settings/scheduled-tasks?run=${encodeURIComponent(runId)}`} className="underline">
+            <Link href={href} className="underline">
               {t('taskThread.runLog')}
             </Link>
           </>
         )}
-        {partial && (
-          <span
-            className="ml-2 rounded border border-line px-1.5 py-0.5"
-            title={reason ? t('taskThread.partialReason', { reason }) : undefined}
-          >
-            {t('taskThread.partial')}
-          </span>
-        )}
+        {partial && <span className="ml-2 rounded border border-border px-1.5 py-0.5">{t('taskThread.partial')}</span>}
+        {partial && reasonKey && <span className="ml-1">{t(reasonKey)}</span>}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        {t('taskThread.topicStats', {
+          queries: count(stats, 'queries'),
+          fetched: count(stats, 'fetched'),
+          items: count(stats, 'items'),
+          tokens: count(stats, 'tokens'),
+        })}
       </p>
       <ul className="space-y-2">
-        {items.map((item, index) => (
-          <li key={`${item.documentId ?? item.url ?? item.title}-${index}`} className="text-sm">
-            <TopicItemTitle item={item} openLabel={t('taskThread.openOriginal')} />
-            {item.site && <span className="ml-2 text-xs text-muted-foreground">{item.site}</span>}
-            {item.summary && <p className="text-xs text-muted-foreground">{item.summary}</p>}
-          </li>
+        {parseItems(meta?.items).map((item, index) => (
+          <TopicItemRow key={`${item.documentId ?? item.url ?? item.title}-${index}`} item={item} />
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * One collected item: its title link, the site and the summary, all as plain text.
+ *
+ * @param props - The parsed item.
+ */
+function TopicItemRow({ item }: { item: TopicItem }) {
+  const t = useTranslations('chat');
+  return (
+    <li className="text-sm">
+      <TopicItemTitle item={item} openLabel={t('taskThread.openOriginal')} />
+      {item.site && <span className="ml-2 text-xs text-muted-foreground">{item.site}</span>}
+      {item.summary && <p className="text-xs text-muted-foreground">{item.summary}</p>}
+    </li>
   );
 }
 
