@@ -45,6 +45,7 @@ FIFTEEN_MINUTE_PROVIDERS = frozenset(
         "health",
         "mastodon",
         "x",
+        "topic_watch",  # cadence and spend are bounded by its automation rule (5-minute floor, token cap)
     }
 )
 # Floors pre-registered for a provider with no adapter yet (none: ITviec shipped on the owner's 2026-11-04 decision).

@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     HttpUrl,
@@ -201,10 +202,14 @@ class CoinGeckoAsset(BaseModel):
         return self
 
 
-# Lowercased hostname for Topic watch site filters; the pattern runs after ``to_lower`` so "EXAMPLE.com" is accepted.
+def _lower_host(value: object) -> object:
+    """Strip and lowercase a hostname before the pattern check so "EXAMPLE.com" is accepted."""
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+# Lowercased hostname for Topic watch site filters (dot-boundary suffix match happens in the collector).
 SiteHost = Annotated[
-    str,
-    StringConstraints(to_lower=True, strip_whitespace=True, pattern=r"^(?=.{1,253}$)[a-z0-9.-]+$"),
+    str, BeforeValidator(_lower_host), StringConstraints(max_length=253, pattern=r"^[a-z0-9.-]+$")
 ]
 
 

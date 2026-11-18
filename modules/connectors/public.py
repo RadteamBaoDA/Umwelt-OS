@@ -534,6 +534,10 @@ _LAZY_DTO_MODULES = {
     "ManagedNoChanges": "modules.connectors.collection_schemas",
     "GitHubBindingFence": "modules.connectors.github.schemas",
     "GitHubSegmentProof": "modules.connectors.github.schemas",
+    "TopicWatchConfig": "modules.connectors.topic_watch",
+    "provision_topic_watch_source": "modules.connectors.topic_watch",
+    "update_topic_watch_source": "modules.connectors.topic_watch",
+    "retire_topic_watch_source": "modules.connectors.topic_watch",
 }
 
 
@@ -573,6 +577,18 @@ if TYPE_CHECKING:
     )
     from modules.connectors.providers.manual_finance import (
         render_finance_markdown as render_finance_markdown,
+    )
+    from modules.connectors.topic_watch import (
+        TopicWatchConfig as TopicWatchConfig,
+    )
+    from modules.connectors.topic_watch import (
+        provision_topic_watch_source as provision_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        retire_topic_watch_source as retire_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        update_topic_watch_source as update_topic_watch_source,
     )
 
 if TYPE_CHECKING:
