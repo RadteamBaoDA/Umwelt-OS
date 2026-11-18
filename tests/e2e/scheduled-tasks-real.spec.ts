@@ -15,7 +15,7 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 const KEY = process.env.E2E_REAL_API_KEY ?? '';
 const BASE_URL = (process.env.E2E_REAL_BASE_URL ?? '').replace(/\/+$/, '');
 const MODEL = process.env.E2E_REAL_MODEL ?? '';
-const SHOTS = process.env.E2E_SHOTS_DIR ?? path.resolve(__dirname, '../../.e2e-shots/scheduled-tasks');
+const SHOTS = process.env.E2E_SHOTS_DIR ?? path.resolve(__dirname, '../../test-results/scheduled-tasks-shots');
 const REAL_TIMEOUT = 180_000;
 
 // Real sources the brief can draw on: stories (news), markets, hazards. Weather is connected through the wizard.
