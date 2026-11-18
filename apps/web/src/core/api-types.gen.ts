@@ -7342,6 +7342,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Next Run At */
+            next_run_at?: string | null;
             /** Revision */
             revision: number;
             /** Trigger */
@@ -11154,11 +11156,20 @@ export interface components {
          */
         GenerateBriefAction: {
             /**
+             * Deliver Chat
+             * @default false
+             */
+            deliver_chat: boolean;
+            /** Extra Instruction */
+            extra_instruction?: string | null;
+            /**
              * Scope
              * @default daily
              * @constant
              */
             scope: "daily";
+            /** Sections */
+            sections?: ("stories" | "markets" | "weather" | "hazards" | "agenda" | "source_health")[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}

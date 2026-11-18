@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from modules.automations.conditions import Operator, check_condition, validate_sample
 from modules.automations.scheduler import validate_schedule
+from modules.dashboard.public import ALL_BRIEF_SECTIONS, BriefSection
 from modules.notifications.public import NotificationEmit
 
 MAX_CONDITIONS = 20
@@ -173,6 +174,20 @@ class GenerateBriefAction(_Action):
 
     type: Literal["generate_brief"]
     scope: Literal["daily"] = "daily"
+    sections: list[BriefSection] = Field(
+        default_factory=lambda: list(ALL_BRIEF_SECTIONS), min_length=1, max_length=6
+    )
+    extra_instruction: str | None = Field(default=None, max_length=500)
+    # Default False so rules saved before scheduled tasks existed keep their behaviour.
+    deliver_chat: bool = False
+
+    @field_validator("sections")
+    @classmethod
+    def unique_sections(cls, value: list[BriefSection]) -> list[BriefSection]:
+        """Reject a section listed twice so the stored spec is canonical."""
+        if len(set(value)) != len(value):
+            raise ValueError("sections must not repeat")
+        return value
 
 
 class CallWebhookAction(_Action):
@@ -240,6 +255,23 @@ class AutomationUpdate(BaseModel):
     actions: list[Action] | None = Field(default=None, min_length=1, max_length=MAX_ACTIONS)
 
 
+def scheduled_task_kind(
+    trigger: dict[str, Any], actions: list[dict[str, Any]]
+) -> Literal["daily_brief"] | None:
+    """Classify a stored rule: ``"daily_brief"`` iff a schedule trigger has exactly one
+    ``generate_brief`` action with ``deliver_chat`` true, else ``None``. The single classifier;
+    the web editor mirrors it.
+    """
+    if (
+        trigger.get("type") == "schedule"
+        and len(actions) == 1
+        and actions[0].get("type") == "generate_brief"
+        and actions[0].get("deliver_chat") is True
+    ):
+        return "daily_brief"
+    return None
+
+
 class AutomationRead(BaseModel):
     """Public projection of a rule at its current revision."""
 
@@ -252,6 +284,8 @@ class AutomationRead(BaseModel):
     actions: list[dict[str, Any]]
     created_at: datetime
     updated_at: datetime
+    # Next scheduled firing for an enabled schedule rule; None otherwise.
+    next_run_at: datetime | None = None
 
 
 class AutomationPage(BaseModel):

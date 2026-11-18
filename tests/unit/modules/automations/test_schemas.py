@@ -200,3 +200,32 @@ class TestAutomationDefinitionSchemas:
         assert update.expected_revision == 1
         assert update.name == "Updated Automation Name"
         assert update.enabled is False
+
+
+class TestGenerateBriefScheduledTask:
+    """GenerateBriefAction additions and the single scheduled-task classifier."""
+
+    def test_defaults_keep_old_behaviour(self) -> None:
+        """A stored pre-task spec parses to no chat delivery and every section."""
+        from modules.dashboard.public import ALL_BRIEF_SECTIONS
+
+        action = GenerateBriefAction(type="generate_brief")
+        assert action.deliver_chat is False
+        assert action.sections == list(ALL_BRIEF_SECTIONS)
+        assert action.extra_instruction is None
+
+    def test_rejects_duplicate_sections(self) -> None:
+        """A repeated section is invalid."""
+        with pytest.raises(ValidationError):
+            GenerateBriefAction(type="generate_brief", sections=["stories", "stories"])
+
+    def test_scheduled_task_kind(self) -> None:
+        """Only schedule + exactly one delivering brief action is a daily brief task."""
+        from modules.automations.schemas import scheduled_task_kind
+
+        sched = {"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"}
+        brief = {"type": "generate_brief", "deliver_chat": True}
+        assert scheduled_task_kind(sched, [brief]) == "daily_brief"
+        assert scheduled_task_kind({"type": "webhook"}, [brief]) is None
+        assert scheduled_task_kind(sched, [brief, brief]) is None
+        assert scheduled_task_kind(sched, [{**brief, "deliver_chat": False}]) is None

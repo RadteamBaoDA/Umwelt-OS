@@ -49,8 +49,9 @@ from modules.automations.models import (
     AutomationRun,
     AutomationRunAction,
 )
+from modules.automations.schemas import scheduled_task_kind
 from modules.automations.scope import _actor, _admit
-from modules.chat.public import Conversation
+from modules.chat import public as chat
 from modules.dashboard import public as dashboard
 from modules.notifications.public import NotificationEmit, emit
 from modules.settings import public as settings_public
@@ -318,7 +319,7 @@ async def _prepare_action(  # noqa: C901, PLR0912
             session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )  # release locks; brief generation commits internally
         return await _generate_brief(
-            ctx, run, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            ctx, run, row, rev, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )
     session_hash, destination = row.approved_session_hash, row.destination_revision
     if kind == "call_webhook":
@@ -534,11 +535,20 @@ async def _generate_brief(
     ctx: dict[str, Any],
     run: AutomationRun,
     row: AutomationRunAction,
+    rev: Any,
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> str:
-    """Generate through Dashboard only while the persisted trigger evidence remains eligible."""
+    """Generate through Dashboard only while the persisted trigger evidence remains eligible.
+
+    ``rev`` is the run's pinned revision: its action spec supplies ``sections`` and
+    ``extra_instruction`` (absent on rules saved before they existed, meaning all sections), and
+    ``deliver_chat`` makes a successful brief also post into the rule's chat thread. The post runs
+    in its own short transaction after generation and is keyed on the brief id, so a retry after
+    any failure (including a crash after the commit) never posts twice. ``BriefEmpty`` posts nothing.
+    """
+    spec = rev.actions[row.ordinal - 1]
     factory = worker_session_factory(ctx)
     try:
         async with factory() as session:
@@ -623,6 +633,17 @@ async def _generate_brief(
                 redis=cast(Redis, ctx["redis"]),
                 force=False,
                 publish_guard=evidence_guard,
+                sections=spec.get("sections"),
+                extra_instruction=spec.get("extra_instruction"),
+            )
+        if spec.get("deliver_chat"):
+            await _post_brief(
+                factory,
+                run,
+                brief,
+                rev,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         await _mark(
             factory,
@@ -635,7 +656,28 @@ async def _generate_brief(
             multi_workspace_enabled=multi_workspace_enabled,
         )
         return "succeeded"
-    except dashboard.BriefEmpty:
+    except Exception as exc:  # noqa: BLE001  # deliberate boundary: every failure is mapped to an outcome so the loop continues
+        return await _brief_failure(
+            exc, factory, run, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+
+
+async def _brief_failure(
+    exc: Exception,
+    factory: async_sessionmaker[AsyncSession],
+    run: AutomationRun,
+    row: AutomationRunAction,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> str:
+    """Map a failure of brief generation or posting to the action outcome and persist it.
+
+    ``BriefEmpty`` succeeds with ``brief:empty``; ``BriefEvidenceRevoked`` (purge landed mid-call)
+    is dropped like the step-start check; everything else, including ``BriefUnavailable`` and chat
+    posting errors, goes through the bounded ``_transient`` retry.
+    """
+    if isinstance(exc, dashboard.BriefEmpty):
         await _mark(
             factory,
             run.id,
@@ -647,9 +689,7 @@ async def _generate_brief(
             multi_workspace_enabled=multi_workspace_enabled,
         )
         return "succeeded"
-    except (
-        dashboard.BriefEvidenceRevoked
-    ):  # purge landed mid-call: drop like the step-start check, any attempt
+    if isinstance(exc, dashboard.BriefEvidenceRevoked):
         await _mark(
             factory,
             run.id,
@@ -660,55 +700,75 @@ async def _generate_brief(
             multi_workspace_enabled=multi_workspace_enabled,
         )
         return "dropped"
-    except dashboard.BriefUnavailable:
-        return await _transient(
-            factory,
-            run.id,
-            row.ordinal,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
+    return await _transient(
+        factory,
+        run.id,
+        row.ordinal,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+
+async def _post_brief(
+    factory: async_sessionmaker[AsyncSession],
+    run: AutomationRun,
+    brief: Any,
+    rev: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Post a generated brief into the rule's chat thread in one short transaction.
+
+    Idempotent on ``brief:<brief.id>``: a reused or retried brief appends nothing the second time.
+    Brief citations are fact refs, not document chunks, so the message's document ``citations`` stay
+    empty and the refs travel in ``metadata["brief_citations"]``. Raises whatever the chat commands
+    raise; the caller's transient-retry path handles it.
+    """
+    async with factory() as session:
+        fence = await _admit(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
         )
-    except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-        return await _transient(
-            factory,
-            run.id,
-            row.ordinal,
+        conversation_id = await chat.ensure_automation_conversation(
+            session,
+            run.automation_id,
+            rev.name,
+            task_kind=scheduled_task_kind(rev.trigger, rev.actions),
             scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
         )
+        source_ids = list(
+            dict.fromkeys(sid for c in brief.citations for sid in c.get("source_ids", []))
+        )
+        await chat.append_task_message(
+            session,
+            conversation_id,
+            content=brief.content,
+            citations=[],
+            metadata={
+                "task_kind": "daily_brief",
+                "run_id": str(run.id),
+                "brief_id": str(brief.id),
+                "brief_revision": brief.revision,
+                "brief_citations": brief.citations,
+            },
+            source_ids=[UUID(str(i)) for i in source_ids],
+            dedupe_key=f"brief:{brief.id}",
+            scope=scope,
+        )
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
 async def _automation_conversation(
     session: AsyncSession, automation_id: UUID, name: str, *, scope: Scope
 ) -> UUID:
-    """Return the rule's dedicated Chat conversation, creating it once (same model the Chat route creates).
+    """Return the rule's dedicated Chat conversation, creating it once (delegates to Chat).
 
     P07 profile runs require a live Chat link; this per-rule thread is where the owner opens the
     run, its activity and any approval the agent itself raises.
     """
-    existing = await session.scalar(
-        select(Conversation.id)
-        .where(
-            Conversation.workspace_id == scope.workspace_id,
-            Conversation.context_kind == "automation",
-            Conversation.context_resource_id == automation_id,
-            Conversation.archived.is_(False),
-        )
-        .limit(1)
+    return await chat.ensure_automation_conversation(
+        session, automation_id, name, task_kind=None, scope=scope
     )
-    if existing is not None:
-        return existing
-    conversation = Conversation(
-        workspace_id=scope.workspace_id,
-        actor_user_id=_actor(scope),
-        title=f"Automation: {name}"[:255],
-        context_kind="automation",
-        context_resource_id=automation_id,
-        metadata_json={},
-    )
-    session.add(conversation)
-    await session.flush()
-    return conversation.id
 
 
 async def _start_agent(

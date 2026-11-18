@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
 from typing import Any as _Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy import delete, select
@@ -42,8 +43,9 @@ from modules.automations.execution import (
     scrub_document_triggers,
     start_manual,
 )
-from modules.automations.models import Automation, AutomationRevision
+from modules.automations.models import Automation, AutomationRevision, AutomationSchedule
 from modules.automations.models import AutomationRun as _AutomationRun
+from modules.automations.scheduler import next_slot, parse_cron
 from modules.automations.schemas import (
     MAX_REVISION,
     AutomationCreate,
@@ -61,9 +63,10 @@ from modules.automations.schemas import (
     RunActionRead,
     RunPage,
     RunRead,
+    scheduled_task_kind,
 )
 from modules.automations.scope import _actor, _admit
-from modules.chat.public import Conversation
+from modules.chat.public import Conversation, delete_conversation
 from modules.dashboard import public as dashboard
 from modules.tools.public import webhook_aliases
 
@@ -232,8 +235,31 @@ def _hash(trigger: dict[str, Any], conditions: list[Any], actions: list[Any], en
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-def _read(head: Automation, rev: AutomationRevision) -> AutomationRead:
-    """Join a rule head with its current revision snapshot."""
+async def _next_run_at(
+    session: AsyncSession, head: Automation, rev: AutomationRevision
+) -> datetime | None:
+    """Next firing of an enabled schedule rule, else None.
+
+    Prefers the scheduler's persisted slot when it is for the current revision; the scheduler creates
+    that row lazily, so a fresh or just-edited rule falls back to computing the first slot from its cron.
+    """
+    if not head.enabled or rev.trigger.get("type") != "schedule":
+        return None
+    slot = await session.scalar(
+        select(AutomationSchedule.next_slot).where(
+            AutomationSchedule.automation_id == head.id,
+            AutomationSchedule.revision == head.revision,
+        )
+    )
+    if slot is not None:
+        return slot
+    return next_slot(
+        parse_cron(rev.trigger["cron"]), ZoneInfo(rev.trigger["timezone"]), datetime.now(UTC)
+    )
+
+
+async def _read(session: AsyncSession, head: Automation, rev: AutomationRevision) -> AutomationRead:
+    """Join a rule head with its current revision snapshot and its next scheduled run."""
     return AutomationRead(
         id=head.id,
         name=head.name,
@@ -244,6 +270,7 @@ def _read(head: Automation, rev: AutomationRevision) -> AutomationRead:
         actions=rev.actions,
         created_at=head.created_at,
         updated_at=head.updated_at,
+        next_run_at=await _next_run_at(session, head, rev),
     )
 
 
@@ -364,7 +391,7 @@ async def create_automation(
         )
     else:
         await session.flush()
-    return _read(head, rev)
+    return await _read(session, head, rev)
 
 
 async def update_automation(
@@ -434,7 +461,7 @@ async def update_automation(
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=fence,
     )
-    return _read(head, rev)
+    return await _read(session, head, rev)
 
 
 async def delete_automation(
@@ -468,6 +495,11 @@ async def delete_automation(
     await dashboard.release_brief_slot(
         session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
+    if scheduled_task_kind(current.trigger, current.actions) is not None:
+        # The thread belongs to the task (an agent rule's thread is run history and stays).
+        thread_id = await _conversation_id(session, head.id, scope)
+        if thread_id is not None:
+            await delete_conversation(session, thread_id, _actor(scope))
     await commit_with_replay(
         session,
         [],
@@ -487,7 +519,7 @@ async def get_automation(
     """Return one live owned rule at its current revision."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     head = await _owned_head(session, automation_id, scope=scope)
-    return _read(head, await _current_revision(session, head))
+    return await _read(session, head, await _current_revision(session, head))
 
 
 def capabilities(registry: Mapping[str, Any], settings: Settings) -> CapabilitiesRead:
@@ -534,6 +566,11 @@ async def get_automation_conversation_id(
     """Return the rule's Chat conversation id (hidden from the default Chat list) or None before any agent run."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await _owned_head(session, automation_id, scope=scope)
+    return await _conversation_id(session, automation_id, scope)
+
+
+async def _conversation_id(session: AsyncSession, automation_id: UUID, scope: Scope) -> UUID | None:
+    """Return the id of the rule's live (non-archived) Chat conversation in the workspace, or None."""
     return await session.scalar(
         select(Conversation.id)
         .where(
@@ -573,7 +610,7 @@ async def list_automations(
     for head in heads:
         rev = await _current_revision(session, head)
         if trigger_type is None or rev.trigger["type"] == trigger_type:
-            items.append(_read(head, rev))
+            items.append(await _read(session, head, rev))
     return AutomationPage(items=items)
 
 
