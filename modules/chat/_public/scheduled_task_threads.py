@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.errors import NotFoundError
 from core.workspaces.admission import actor_id
 from core.workspaces.schemas import Scope
+from modules.chat._public.conversations import delete_conversation_in_scope
 from modules.chat.models import Conversation, Message
 from modules.chat.schemas import MAX_SOURCE_SCOPE
 
@@ -22,6 +23,31 @@ RESERVED_METADATA_KEYS = frozenset({"scheduled_task", "task_source_scope", "task
 
 # Chat has no pre-existing erased-content constant; this is the single placeholder for scrubbed briefs.
 SCRUBBED_CONTENT = "[This message was removed because its sources are no longer available.]"
+
+
+async def delete_automation_conversation(
+    session: AsyncSession, automation_id: UUID, *, scope: Scope
+) -> int:
+    """Delete every Chat conversation of one automation in ``scope.workspace_id``; return the count.
+
+    Includes archived conversations. Reuses the normal conversation deletion (agent actions, saved
+    templates, cascading messages and runs) so nothing is orphaned. Flushes only; the caller owns
+    the transaction. Conversations of other workspaces are never touched.
+    """
+    ids = (
+        await session.scalars(
+            select(Conversation.id).where(
+                Conversation.workspace_id == scope.workspace_id,
+                Conversation.context_kind == "automation",
+                Conversation.context_resource_id == automation_id,
+            )
+        )
+    ).all()
+    deleted = 0
+    for conversation_id in ids:
+        if await delete_conversation_in_scope(session, conversation_id, scope):
+            deleted += 1
+    return deleted
 
 
 async def ensure_automation_conversation(

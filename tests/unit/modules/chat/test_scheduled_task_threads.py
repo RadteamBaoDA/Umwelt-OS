@@ -144,3 +144,35 @@ async def test_scrub_task_messages_clears_content_and_citations() -> None:
     m = s.messages[0]
     assert m.content == threads.SCRUBBED_CONTENT
     assert m.citations == [] and "brief_citations" not in m.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_delete_automation_conversation_includes_archived_and_scopes_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every thread id the query returns (archived included) is deleted in the caller's scope."""
+    ids = [uuid4(), uuid4()]
+    statements: list[str] = []
+    deleted: list[tuple[Any, Any]] = []
+
+    class _Rows:
+        def all(self) -> list[Any]:
+            return ids
+
+    class _Session:
+        async def scalars(self, statement: Any) -> _Rows:
+            statements.append(str(statement.compile(compile_kwargs={"literal_binds": False})))
+            return _Rows()
+
+    async def fake_delete(_s: Any, cid: Any, scope: Any, **_k: Any) -> bool:
+        deleted.append((cid, scope))
+        return True
+
+    monkeypatch.setattr(threads, "delete_conversation_in_scope", fake_delete)
+    count = await threads.delete_automation_conversation(
+        _Session(),  # type: ignore[arg-type]
+        uuid4(),
+        scope=SCOPE,  # type: ignore[arg-type]
+    )
+    assert count == 2 and deleted == [(ids[0], SCOPE), (ids[1], SCOPE)]
+    assert "workspace_id" in statements[0] and "archived" not in statements[0]

@@ -218,6 +218,9 @@ from modules.chat._public.scheduled_task_threads import (
     append_task_message as append_task_message,
 )
 from modules.chat._public.scheduled_task_threads import (
+    delete_automation_conversation as delete_automation_conversation,
+)
+from modules.chat._public.scheduled_task_threads import (
     ensure_automation_conversation as ensure_automation_conversation,
 )
 from modules.chat._public.scheduled_task_threads import (
@@ -287,6 +290,7 @@ from modules.chat.worker import (
 
 __all__ = [
     "append_task_message",
+    "delete_automation_conversation",
     "ensure_automation_conversation",
     "scrub_task_messages",
     "AgentActivityLink",

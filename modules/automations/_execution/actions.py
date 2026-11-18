@@ -636,15 +636,10 @@ async def _generate_brief(
                 sections=spec.get("sections"),
                 extra_instruction=spec.get("extra_instruction"),
             )
-        if spec.get("deliver_chat"):
-            await _post_brief(
-                factory,
-                run,
-                brief,
-                rev,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
+        if await _deliver_brief(
+            factory, run, row, brief, rev, spec, scope, multi_workspace_enabled
+        ):
+            return "dropped"
         await _mark(
             factory,
             run.id,
@@ -709,6 +704,41 @@ async def _brief_failure(
     )
 
 
+async def _deliver_brief(
+    factory: async_sessionmaker[AsyncSession],
+    run: AutomationRun,
+    row: AutomationRunAction,
+    brief: Any,
+    rev: Any,
+    spec: Mapping[str, Any],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Post the brief when the action asks for it; return True when the action was skipped instead.
+
+    Only a real schedule task (``scheduled_task_kind``) owns a thread, so any other rule never
+    posts even with ``deliver_chat`` set. A failed re-check in ``_post_brief`` marks the action
+    ``skipped`` with that error code and nothing is posted.
+    """
+    if not spec.get("deliver_chat") or scheduled_task_kind(rev.trigger, rev.actions) is None:
+        return False
+    skipped = await _post_brief(
+        factory, run, brief, rev, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if skipped is None:
+        return False
+    await _mark(
+        factory,
+        run.id,
+        row.ordinal,
+        "skipped",
+        skipped,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return True
+
+
 async def _post_brief(
     factory: async_sessionmaker[AsyncSession],
     run: AutomationRun,
@@ -717,8 +747,13 @@ async def _post_brief(
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> None:
+) -> str | None:
     """Post a generated brief into the rule's chat thread in one short transaction.
+
+    Takes the access fence, then re-locks the run and re-checks it (the model I/O released every
+    lock): a missing run, revoked document evidence, a ``requires_review`` run or a stale revision
+    (rule edited, disabled or deleted) rolls back without creating or touching the thread and
+    returns the skip error code for the caller to record. Otherwise returns None after commit.
 
     Idempotent on ``brief:<brief.id>``: a reused or retried brief appends nothing the second time.
     Brief citations are fact refs, not document chunks, so the message's document ``citations`` stay
@@ -729,6 +764,17 @@ async def _post_brief(
         fence = await _admit(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
         )
+        current = await _locked_run(session, run.id, scope)
+        if (
+            current is None
+            or current.document_evidence_revoked
+            or current.status == "requires_review"
+        ):
+            await session.rollback()
+            return "document_evidence_unavailable"
+        if not await _fence_current(session, current, scope=scope, share=True):
+            await session.rollback()
+            return "stale_revision"
         conversation_id = await chat.ensure_automation_conversation(
             session,
             run.automation_id,
@@ -756,6 +802,7 @@ async def _post_brief(
             scope=scope,
         )
         await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return None
 
 
 async def _automation_conversation(

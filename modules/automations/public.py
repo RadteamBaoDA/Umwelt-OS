@@ -66,7 +66,8 @@ from modules.automations.schemas import (
     scheduled_task_kind,
 )
 from modules.automations.scope import _actor, _admit
-from modules.chat.public import Conversation, delete_conversation
+from modules.chat import public as chat
+from modules.chat.public import Conversation
 from modules.dashboard import public as dashboard
 from modules.tools.public import webhook_aliases
 
@@ -254,7 +255,9 @@ async def _next_run_at(
     if slot is not None:
         return slot
     return next_slot(
-        parse_cron(rev.trigger["cron"]), ZoneInfo(rev.trigger["timezone"]), datetime.now(UTC)
+        parse_cron(rev.trigger["cron"]),
+        ZoneInfo(rev.trigger.get("timezone", "UTC")),
+        datetime.now(UTC),
     )
 
 
@@ -497,9 +500,7 @@ async def delete_automation(
     )
     if scheduled_task_kind(current.trigger, current.actions) is not None:
         # The thread belongs to the task (an agent rule's thread is run history and stays).
-        thread_id = await _conversation_id(session, head.id, scope)
-        if thread_id is not None:
-            await delete_conversation(session, thread_id, _actor(scope))
+        await chat.delete_automation_conversation(session, head.id, scope=scope)
     await commit_with_replay(
         session,
         [],

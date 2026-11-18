@@ -346,7 +346,11 @@ class _BriefFactory:
 
 
 def _brief_harness(
-    monkeypatch: pytest.MonkeyPatch, briefs: list[str], *, fail_first_commit: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    briefs: list[str],
+    *,
+    fail_first_mark: bool = False,
+    fence_current: bool = True,
 ) -> tuple[dict[str, Any], list[Any], list[tuple[Any, ...]]]:
     """Patch ``_generate_brief`` collaborators; return (message store, calls, marks)."""
     from modules.automations._execution import actions
@@ -363,14 +367,22 @@ def _brief_harness(
         return True
 
     async def commit(*_a: Any, **_k: Any) -> None:
-        if fail_first_commit and not state["failed"]:
-            state["failed"] = True
-            raise RuntimeError("boom after append")
+        return None
 
     async def mark(
-        _f: Any, _run: Any, _ord: Any, status: str, _c: Any, ref: Any, **_k: Any
+        _f: Any, _run: Any, _ord: Any, status: str, code: Any, ref: Any = None, **_k: Any
     ) -> None:
-        marks.append((status, ref))
+        if fail_first_mark and not state["failed"]:
+            # The post already committed; recording the outcome is what crashes.
+            state["failed"] = True
+            raise RuntimeError("boom after post commit")
+        marks.append((status, code if status == "skipped" else ref))
+
+    async def locked_run(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(id=RUN_ID, document_evidence_revoked=False, status="running")
+
+    async def fence(*_a: Any, **_k: Any) -> bool:
+        return fence_current
 
     async def transient(*_a: Any, **_k: Any) -> str:
         return "retry"
@@ -402,6 +414,8 @@ def _brief_harness(
         ("_commit", commit),
         ("_mark", mark),
         ("_transient", transient),
+        ("_locked_run", locked_run),
+        ("_fence_current", fence),
     ]:
         monkeypatch.setattr(actions, name, fn)
     monkeypatch.setattr(actions.dashboard, "read_schedule", read_schedule)
@@ -455,10 +469,31 @@ async def test_old_spec_without_deliver_chat_posts_nothing(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_retry_posts_brief_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    store, _calls, _marks = _brief_harness(monkeypatch, ["B"], fail_first_commit=True)
+    store, calls, marks = _brief_harness(monkeypatch, ["B"], fail_first_mark=True)
+    # Attempt 1 posts and commits, then recording the outcome crashes (-> transient retry).
     assert await _run_brief(_brief_rev()) == "retry"
-    assert await _run_brief(_brief_rev()) == "succeeded"
     assert list(store) == ["brief:B"]
+    # The retry re-appends under the same dedupe key: nothing new is stored, outcome recorded.
+    assert await _run_brief(_brief_rev()) == "succeeded"
+    assert list(store) == ["brief:B"] and marks == [("succeeded", "brief:B")]
+    assert sum(1 for c in calls if c[0] == "append") == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_fence_posts_nothing_and_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, calls, marks = _brief_harness(monkeypatch, ["B"], fence_current=False)
+    assert await _run_brief(_brief_rev()) == "dropped"
+    assert store == {} and not any(c[0] == "append" for c in calls)
+    assert marks == [("skipped", "stale_revision")]
+
+
+@pytest.mark.asyncio
+async def test_non_schedule_rule_never_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, ["B"])
+    rev = _brief_rev()
+    rev.trigger = {"type": "manual"}
+    assert await _run_brief(rev) == "succeeded"
+    assert store == {} and marks == [("succeeded", "brief:B")]
 
 
 @pytest.mark.asyncio
@@ -545,7 +580,6 @@ async def test_delete_brief_task_deletes_thread_releases_slot(
     from modules.automations import public
 
     events: list[str] = []
-    thread = uuid4()
     head = SimpleNamespace(id=uuid4(), revision=1, enabled=True, deleted_at=None)
     cur = SimpleNamespace(
         trigger={"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
@@ -565,12 +599,9 @@ async def test_delete_brief_task_deletes_thread_releases_slot(
     async def release(*_a: Any, **_k: Any) -> None:
         events.append("release")
 
-    async def conv(*_a: Any, **_k: Any) -> Any:
-        return thread
-
-    async def delete(_s: Any, cid: Any, owner: Any) -> bool:
-        events.append(f"delete:{cid == thread}:{owner}")
-        return True
+    async def delete(_s: Any, automation_id: Any, *, scope: Any) -> int:
+        events.append(f"delete:{automation_id == head.id}:{scope is SCOPE}")
+        return 1
 
     async def commit(*_a: Any, **_k: Any) -> None:
         events.append("commit")
@@ -580,8 +611,7 @@ async def test_delete_brief_task_deletes_thread_releases_slot(
     monkeypatch.setattr(public, "_current_revision", current)
     monkeypatch.setattr(public, "_append_revision", lambda *_a: None)
     monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
-    monkeypatch.setattr(public, "_conversation_id", conv)
-    monkeypatch.setattr(public, "delete_conversation", delete)
+    monkeypatch.setattr(public.chat, "delete_automation_conversation", delete)
     monkeypatch.setattr(public, "commit_with_replay", commit)
     await public.delete_automation(
         None,  # type: ignore[arg-type]
@@ -590,4 +620,4 @@ async def test_delete_brief_task_deletes_thread_releases_slot(
         scope=SCOPE,  # type: ignore[arg-type]
         multi_workspace_enabled=False,
     )
-    assert events == ["release", "delete:True:1", "commit"]
+    assert events == ["release", "delete:True:True", "commit"]
