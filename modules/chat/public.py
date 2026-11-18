@@ -248,6 +248,9 @@ from modules.chat.models import (
     StreamEvent,
 )
 from modules.chat.retrieval import (
+    _neutralize_angles as neutralize_angles,
+)
+from modules.chat.retrieval import (
     build_context,
     format_grounded_context,
     revalidate_context_fence,
@@ -371,6 +374,7 @@ __all__ = [
     "read_memory_export_origin",
     "revalidate_context_fence",
     "run_response_generation",
+    "neutralize_angles",
     "run_web_search",
     "search_conversations",
     "validate_answer_citations",

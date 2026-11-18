@@ -55,6 +55,7 @@ NEWS_PROVIDER_IDS = (
     "google_news",
     "openalex",
     "sec_edgar",
+    "topic_watch",
 )
 MEASUREMENT_PROVIDER_IDS = (
     "alpha_vantage",
@@ -392,6 +393,7 @@ _PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
     },
     "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
     "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
+    "topic_watch": set(),  # first-party search-and-summarise watch: envelope carries no source fields
 }
 
 # Maximum length of each string-typed source field (shared across providers).

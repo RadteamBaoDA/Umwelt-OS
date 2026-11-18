@@ -125,6 +125,10 @@ from modules.connectors._collection.providers import (
     _run_vietnamworks,
     _run_vn_stock,
 )
+from modules.connectors._collection.topic_watch import (
+    TopicWatchFailure,
+    _run_topic_watch,  # noqa: F401  # registers the adapter
+)
 from modules.connectors._collection.web import (
     _NotModified,
     _PageText,
@@ -257,6 +261,8 @@ def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
     if isinstance(exc, McpCollectionError):
         # Stable secret-free MCP code; all-calls-failed or stale config will not heal by retrying.
         return {"outcome": "failed", "error_code": exc.code}
+    if isinstance(exc, TopicWatchFailure):
+        return {"outcome": "failed", "error_code": exc.code}  # owner action needed; not retryable
     if isinstance(exc, rest.CollectionIncomplete):
         return {"outcome": "failed", "error_code": "collection_incomplete"}
     if isinstance(exc, rest.RestSchemaChanged):
