@@ -13,7 +13,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ConflictError, NotFoundError
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.schemas import Scope, WorkspaceContext
 from modules.connectors import provisioning, registry, scheduler
 from modules.connectors.activation import activate_native_in_uow
 from modules.connectors.public import ConnectorConfig, serialize_source_configuration
@@ -200,3 +200,34 @@ async def retire_topic_watch_source(
         await sources.archive_source(
             session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )
+
+
+async def request_topic_watch_collection(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> UUID:
+    """Queue one collection of a watch Source for its automation rule and return the request id.
+
+    The request is created with the ``manual`` trigger: the watch's own connector schedule is
+    deliberately disabled, so a ``scheduled`` request would be refused as not due. The rule's cron is
+    the only cadence. Fenced on the Source's current desired connector revision. Commits (the
+    connector scheduler owns that commit). Raises ``NotFoundError`` for a missing or foreign Source and
+    ``ConflictError`` while the Source is not active at its desired revision.
+    """
+    row = await provisioning.activation_status(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if row is None:
+        raise NotFoundError("Source not found")
+    request = await scheduler.request_collection(
+        session,
+        scope,
+        source_id,
+        "manual",
+        row.desired_revision,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    return request.request_id

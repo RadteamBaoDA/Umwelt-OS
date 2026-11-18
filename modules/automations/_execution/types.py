@@ -32,6 +32,7 @@ ACTION_MODULE = {
     "create_task": "tasks",
     "create_notification": "notifications",
     "generate_brief": "dashboard",
+    "collect_source": "sources",
     "call_webhook": "tools",
 }
 _modules_cache: dict[str, Any] = {}

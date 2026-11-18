@@ -538,6 +538,7 @@ _LAZY_DTO_MODULES = {
     "provision_topic_watch_source": "modules.connectors.topic_watch",
     "update_topic_watch_source": "modules.connectors.topic_watch",
     "retire_topic_watch_source": "modules.connectors.topic_watch",
+    "request_topic_watch_collection": "modules.connectors.topic_watch",
     "estimate_tokens": "modules.connectors.topic_watch_rules",
     "token_cap": "modules.connectors.topic_watch_rules",
 }
@@ -585,6 +586,9 @@ if TYPE_CHECKING:
     )
     from modules.connectors.topic_watch import (
         provision_topic_watch_source as provision_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        request_topic_watch_collection as request_topic_watch_collection,
     )
     from modules.connectors.topic_watch import (
         retire_topic_watch_source as retire_topic_watch_source,

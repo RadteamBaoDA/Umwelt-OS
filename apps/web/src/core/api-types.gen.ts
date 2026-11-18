@@ -760,6 +760,9 @@ export interface paths {
         /**
          * Delete Automation
          * @description Soft-delete a rule (history retained) when the expected revision matches.
+         *
+         *     For a Topic watch, ``purge_items=true`` also deletes the items it collected; by default its
+         *     Source is archived and the items stay searchable.
          */
         delete: operations["delete_automation_api_v1_automations__automation_id__delete"];
         options?: never;
@@ -7283,7 +7286,7 @@ export interface components {
          */
         AutomationCreate: {
             /** Actions */
-            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"])[];
+            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"] | components["schemas"]["CollectSourceAction"])[];
             /** Conditions */
             conditions?: components["schemas"]["Condition"][];
             /**
@@ -7302,7 +7305,7 @@ export interface components {
          */
         AutomationDefinition: {
             /** Actions */
-            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"])[];
+            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"] | components["schemas"]["CollectSourceAction"])[];
             /** Conditions */
             conditions?: components["schemas"]["Condition"][];
             /** Trigger */
@@ -7363,7 +7366,7 @@ export interface components {
          */
         AutomationUpdate: {
             /** Actions */
-            actions?: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"])[] | null;
+            actions?: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"] | components["schemas"]["CollectSourceAction"])[] | null;
             /** Conditions */
             conditions?: components["schemas"]["Condition"][] | null;
             /** Enabled */
@@ -8234,6 +8237,33 @@ export interface components {
         CoinSearchRead: {
             /** Items */
             items: components["schemas"]["Coin"][];
+        };
+        /**
+         * CollectSourceAction
+         * @description Run the rule's Topic watch collection (web search, bounded fetch, summary) into its own Source.
+         *
+         *     ``source_id`` and ``consent`` are server-assigned on save (client values are discarded);
+         *     ``grant_consent_est_tokens`` is request-only: the owner accepts that per-run token estimate and it
+         *     is never stored.
+         */
+        CollectSourceAction: {
+            consent?: components["schemas"]["TopicConsent"] | null;
+            /** Grant Consent Est Tokens */
+            grant_consent_est_tokens?: number | null;
+            /**
+             * Model Role
+             * @default background
+             * @enum {string}
+             */
+            model_role: "background" | "chat" | "brief";
+            /** Source Id */
+            source_id?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "collect_source";
+            watch: components["schemas"]["TopicWatchSpec"];
         };
         /**
          * CollectionAdmissionRead
@@ -16440,6 +16470,21 @@ export interface components {
             todos: components["schemas"]["TodoItem"][];
         };
         /**
+         * TopicConsent
+         * @description One-time owner consent bound to a definition hash; written only by the server.
+         */
+        TopicConsent: {
+            /** Est Tokens */
+            est_tokens: number;
+            /**
+             * Granted At
+             * Format: date-time
+             */
+            granted_at: string;
+            /** Hash */
+            hash: string;
+        };
+        /**
          * TopicCreate
          * @description Validate topic creation fields and document profile input bounds.
          */
@@ -16531,6 +16576,27 @@ export interface components {
             name?: string | null;
             /** Weight */
             weight?: number | null;
+        };
+        /**
+         * TopicWatchSpec
+         * @description What a Topic watch looks for: the topic, an optional keep rule, languages, sites and item cap.
+         */
+        TopicWatchSpec: {
+            /** Exclude Sites */
+            exclude_sites?: string[];
+            /** Include Sites */
+            include_sites?: string[];
+            /** Keep Rule */
+            keep_rule?: string | null;
+            /** Languages */
+            languages?: string[];
+            /**
+             * Max Items
+             * @default 5
+             */
+            max_items: number;
+            /** Topic */
+            topic: string;
         };
         /**
          * TraceContext
@@ -18674,6 +18740,7 @@ export interface operations {
         parameters: {
             query: {
                 expected_revision: number;
+                purge_items?: boolean;
             };
             header?: {
                 origin?: string | null;

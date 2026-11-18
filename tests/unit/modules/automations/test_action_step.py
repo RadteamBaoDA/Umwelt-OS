@@ -916,3 +916,134 @@ async def test_read_refreshes_expired_head_before_sync_access(
     read = await public._read(Sess(), head, rev)  # type: ignore[arg-type]
     assert refreshed == [head]
     assert read.updated_at == now
+
+
+# ---------------------------------------------------------------- topic watch (collect_source)
+def _watch_rev(*, consent_for: dict[str, Any] | None = None, **over: Any) -> Any:
+    """Build a revision whose single ``collect_source`` action carries consent for ``consent_for``."""
+    from modules.automations.schemas import topic_consent_hash
+
+    trigger = {"type": "schedule", "cron": "0 8 * * *", "timezone": "UTC"}
+    watch = {"topic": "ai chips", "max_items": 5}
+    spec: dict[str, Any] = {
+        "type": "collect_source",
+        "watch": watch,
+        "model_role": "background",
+        "source_id": str(SOURCE_ID),
+        **over,
+    }
+    basis = consent_for or {"watch": watch, "trigger": trigger}
+    spec["consent"] = {
+        "hash": topic_consent_hash(basis["watch"], basis["trigger"], "background"),
+        "granted_at": "2026-11-18T00:00:00+00:00",
+        "est_tokens": 15600,
+    }
+    return SimpleNamespace(actions=[spec], trigger=trigger, name="Watch")
+
+
+SOURCE_ID = uuid4()
+
+
+async def _run_collect(
+    monkeypatch: pytest.MonkeyPatch, rev: Any, *, error: Exception | None = None
+) -> tuple[str, list[Any]]:
+    """Run ``_collect_source`` with a spy factory, ``_mark`` and the connectors request command."""
+    from modules.automations._execution import collect_source as module
+
+    calls: list[Any] = []
+    request_id = uuid4()
+
+    async def mark(
+        _f: Any, run_id: Any, ordinal: int, status: str, code: Any, ref: Any, **_k: Any
+    ) -> None:
+        calls.append(("mark", ordinal, status, code, ref))
+
+    async def request(_session: Any, source_id: Any, **kwargs: Any) -> Any:
+        calls.append(("request", source_id, kwargs["scope"] is SCOPE))
+        if error is not None:
+            raise error
+        return request_id
+
+    monkeypatch.setattr(module, "_mark", mark)
+    monkeypatch.setattr(module.connectors, "request_topic_watch_collection", request)
+    monkeypatch.setattr(
+        module, "worker_session_factory", lambda _ctx: lambda: FakeSession(None, None)
+    )
+    run = SimpleNamespace(id=RUN_ID)
+    row = SimpleNamespace(ordinal=1)
+    outcome = await module._collect_source(
+        {},
+        run,
+        row,
+        rev,
+        scope=SCOPE,
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
+    )
+    calls.append(("request_id", request_id))
+    return outcome, calls
+
+
+@pytest.mark.asyncio
+async def test_collect_source_without_consent_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No stored consent: the unattended run is skipped and nothing is requested."""
+    rev = _watch_rev()
+    del rev.actions[0]["consent"]
+    outcome, calls = await _run_collect(monkeypatch, rev)
+    assert outcome == "dropped"
+    assert calls[0] == ("mark", 1, "skipped", "consent_required", None)
+    assert not any(c[0] == "request" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_requests_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valid consent: one collection request for the stored Source, referenced on the action row."""
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev())
+    request_id = calls[-1][1]
+    assert outcome == "succeeded"
+    assert calls[0] == ("request", SOURCE_ID, True)
+    assert calls[1] == ("mark", 1, "succeeded", None, f"collection:{request_id}")
+
+
+@pytest.mark.asyncio
+async def test_collect_source_after_edit_requires_consent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Consent granted for another topic or schedule no longer matches: skipped, nothing requested."""
+    trigger = {"type": "schedule", "cron": "0 8 * * *", "timezone": "UTC"}
+    stale = {"watch": {"topic": "old topic", "max_items": 5}, "trigger": trigger}
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(consent_for=stale))
+    assert outcome == "dropped" and calls[0][2:4] == ("skipped", "consent_required")
+    moved = {
+        "watch": {"topic": "ai chips", "max_items": 5},
+        "trigger": {**trigger, "cron": "0 9 * * *"},
+    }
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(consent_for=moved))
+    assert outcome == "dropped" and not any(c[0] == "request" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_conflict_fails_the_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A source that is not collectable is a permanent action failure, not a retry loop."""
+    from core.errors import ConflictError
+
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(), error=ConflictError("inactive"))
+    assert outcome == "failed" and calls[1] == ("mark", 1, "failed", "collection_rejected", None)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_commits_before_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dispatch releases the locks first (the request command commits) and counts an attempt."""
+    row, events, _f, ctx = _setup(monkeypatch, kind="collect_source")
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_collect_source",
+        lambda *_a, **_k: _spy_event(events, "collect", "collected"),
+        facade="execution",
+    )
+    assert await _step(ctx) == "collected"
+    assert row.attempts == 1 and events == ["admit", "commit", "collect"]
+
+
+async def _spy_event(events: list[str], name: str, result: Any) -> Any:
+    """Record an awaited collaborator and return its canned result."""
+    events.append(name)
+    return result

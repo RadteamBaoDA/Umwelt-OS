@@ -166,6 +166,7 @@ async def create_automation(
             payload,
             request.app.state.modules,
             request.app.state.settings,
+            allow_consent=True,  # only the owner's HTTP session may grant Topic watch consent
             scope=scope,
             multi_workspace_enabled=_flag(request),
         )
@@ -513,6 +514,7 @@ async def update_automation(
             payload,
             request.app.state.modules,
             request.app.state.settings,
+            allow_consent=True,  # only the owner's HTTP session may grant Topic watch consent
             scope=scope,
             multi_workspace_enabled=_flag(request),
         )
@@ -527,13 +529,19 @@ async def delete_automation(
     owner: OwnerWrite,
     scope: WorkspaceWrite,
     expected_revision: Annotated[int, Query(ge=1)],
+    purge_items: bool = False,
 ) -> Response:
-    """Soft-delete a rule (history retained) when the expected revision matches."""
+    """Soft-delete a rule (history retained) when the expected revision matches.
+
+    For a Topic watch, ``purge_items=true`` also deletes the items it collected; by default its
+    Source is archived and the items stay searchable.
+    """
     await _call(
         public.delete_automation(
             session,
             automation_id,
             expected_revision,
+            purge_items=purge_items,
             scope=scope,
             multi_workspace_enabled=_flag(request),
         )

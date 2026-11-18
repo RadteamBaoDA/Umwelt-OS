@@ -66,7 +66,7 @@ async def ensure_automation_conversation(
     automation_id: UUID,
     title: str,
     *,
-    task_kind: Literal["daily_brief"] | None,
+    task_kind: Literal["daily_brief", "topic_watch"] | None,
     scope: Scope,
 ) -> UUID:
     """Return the automation's live Chat conversation id, creating it on first use.

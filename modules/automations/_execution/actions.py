@@ -24,6 +24,7 @@ from core.worker_context import worker_session_factory
 from core.workspaces.schemas import AccessFence, Scope
 from modules.agents import public as agents
 from modules.agents.public import ProfileRunStart
+from modules.automations._execution.collect_source import _collect_source
 from modules.automations._execution.core import (
     _action_modules_enabled,
 )
@@ -314,11 +315,11 @@ async def _prepare_action(  # noqa: C901, PLR0912
             multi_workspace_enabled=multi_workspace_enabled,
             access_fence=fence,
         )
-    if kind == "generate_brief":
-        await _commit(
-            session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-        )  # release locks; brief generation commits internally
-        return await _generate_brief(
+    if kind in ("generate_brief", "collect_source"):
+        # Release the locks first: both owners commit internally.
+        await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        runner = _generate_brief if kind == "generate_brief" else _collect_source
+        return await runner(
             ctx, run, row, rev, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )
     session_hash, destination = row.approved_session_hash, row.destination_revision
