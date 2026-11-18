@@ -446,6 +446,8 @@ function YoutubePopularScope(props: ScopeSectionProps) {
         pattern="[0-9]{1,4}"
         required={false}
       />
+      {/* The server still applies these post-fetch filters to the chart, so keep them visible and clearable. */}
+      <MediaFilterFields {...props} fields={MEDIA_PROVIDER_FIELDS.youtube_api.filter((field) => field !== 'media_countries')} />
     </>
   );
 }
