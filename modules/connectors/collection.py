@@ -309,15 +309,32 @@ def _classify_failure(exc: BaseException, *, keyless: bool) -> dict[str, Any]:
             "retryable": error_status(exc) == 409,
         }
     if isinstance(exc, ValueError):
-        # Name the failing frame (module:function:line) and class only, never the message: provider payload
-        # text could reach the message, and operators still need to tell a parser bug from bad upstream data.
-        frame = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
-        logger.warning(
-            "collection rejected an invalid provider response: %s at %s",
-            type(exc).__name__,
+        # Name the innermost app frame and, for validation errors, the field locations and error types, never
+        # input values or messages: provider payload text could reach them, yet operators must tell a parser bug
+        # from bad upstream data.
+        frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ else []
+        app = [f for f in frames if "/modules/" in f.filename.replace("\\", "/")]
+        chosen = app or frames
+        frame = chosen[-1] if chosen else None
+        where = (
             f"{frame.filename.rsplit('/', 2)[-1]}:{frame.name}:{frame.lineno}"
             if frame
-            else "unknown",
+            else "unknown"
+        )
+        errors = getattr(exc, "errors", None)
+        fields = (
+            [
+                (".".join(map(str, e.get("loc", ()))), e.get("type"))
+                for e in errors(include_input=False)
+            ][:5]
+            if callable(errors)
+            else []
+        )
+        logger.warning(
+            "collection rejected an invalid provider response: %s at %s %s",
+            type(exc).__name__,
+            where,
+            fields,
         )
         return {"outcome": "failed", "error_code": "provider_response_invalid"}
     return {"outcome": "failed", "error_code": "executor_error", "retryable": True}
