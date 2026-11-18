@@ -5,6 +5,18 @@ from typing import Any, Literal, TypeGuard
 
 CollectionBackend = Literal["native", "n8n"]
 
+# Owner-supplied scope of the first-party Topic watch provider (validated by ``ConnectorConfig``).
+TOPIC_WATCH_FIELDS = (
+    "topic_watch_topic",
+    "topic_watch_keep_rule",
+    "topic_watch_languages",
+    "topic_watch_include_sites",
+    "topic_watch_exclude_sites",
+    "topic_watch_max_items",
+    "topic_watch_token_budget",
+    "topic_watch_model_role",
+)
+
 PROVIDER_SOURCE_TYPES = MappingProxyType(
     {
         "youtube": "rss",
@@ -19,6 +31,7 @@ PROVIDER_SOURCE_TYPES = MappingProxyType(
         "telegram": "api",
         "alpha_vantage": "api",
         "open_meteo": "api",
+        "topic_watch": "web",  # first-party: web search plus bounded page fetches (Topic watch task)
         # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
         "bbc_world": "rss",
         "vnexpress_business": "rss",
@@ -117,6 +130,7 @@ FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset(
         "telegram",
         "alpha_vantage",
         "open_meteo",
+        "topic_watch",
         "google_news",
         "sec_edgar",
         "google_mail",
@@ -155,9 +169,11 @@ GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {
     "openaq",
     "nasa_firms",
     "coingecko",
+    "topic_watch",
 }
 PROVIDER_SCOPE_FIELDS = MappingProxyType(
     {
+        "topic_watch": frozenset(TOPIC_WATCH_FIELDS),
         "youtube": frozenset({"youtube_channel_id"}),
         "arxiv": frozenset({"arxiv_category"}),
         "huggingface": frozenset({"huggingface_author"}),

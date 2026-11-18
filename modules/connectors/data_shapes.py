@@ -31,6 +31,7 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         "telegram": frozenset({"messages"}),
         "youtube": frozenset({"video"}),
         "github": frozenset({"project_activity"}),
+        "topic_watch": frozenset({"news"}),  # kept pages are feed-style summaries
         "open_meteo": frozenset(
             {"measurement", "weather", "located"}
         ),  # writes the configured latitude/longitude

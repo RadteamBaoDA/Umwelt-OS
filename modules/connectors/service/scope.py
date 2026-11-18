@@ -61,6 +61,15 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
+    "topic_watch": frozenset(
+        {
+            "topic_watch_keep_rule",
+            "topic_watch_languages",
+            "topic_watch_include_sites",
+            "topic_watch_exclude_sites",
+            "topic_watch_model_role",
+        }
+    ),
     "coingecko": frozenset(
         {"coingecko_assets"}
     ),  # absent on legacy BTC/USD sources (collection falls back to BTC)

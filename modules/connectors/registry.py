@@ -105,6 +105,14 @@ _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] 
         lambda c: not c.ha_base_url or not c.ha_entity_ids,
         "Home Assistant endpoint and selected entities are required",
     ),
+    "topic_watch": (
+        lambda c: (
+            not c.topic_watch_topic
+            or c.topic_watch_max_items is None
+            or c.topic_watch_token_budget is None
+        ),
+        "Topic, max items and token budget are required",
+    ),
 }
 
 

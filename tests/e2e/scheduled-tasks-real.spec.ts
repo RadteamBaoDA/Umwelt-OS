@@ -195,6 +195,7 @@ test('dashboard day context serves the live brief; the owner adds the brief gadg
   const task = await briefTask(page);
   const { conversation_id: conversationId } = await (await page.request.get(`/api/v1/automations/${task.id}/conversation`)).json() as { conversation_id: string };
   // The gadget shows the selected day in the owner's DISPLAY timezone; align it with the brief's timezone.
+  await page.goto('/dashboard'); // writeHeaders derives Origin from the current page URL
   const headers = await writeHeaders(page);
   const prefs = await (await page.request.get('/api/v1/settings/preferences')).json();
   if (prefs.timezone !== timezone) {
@@ -220,7 +221,7 @@ test('dashboard day context serves the live brief; the owner adds the brief gadg
     await page.getByRole('button', { name: 'Done editing' }).click();
   }
   await expect(gadget).toBeVisible({ timeout: 30_000 });
-  await expect(gadget.getByText(/\[[\dd+\]]/).first()).toBeVisible({ timeout: 30_000 });
+  await expect(gadget.getByText(/\[\d+\]/).first()).toBeVisible({ timeout: 30_000 });
   await expect(gadget.getByRole('list', { name: 'Citations' })).toBeVisible();
   const link = gadget.getByRole('link', { name: 'Open full brief' });
   await expect(link).toHaveAttribute('href', `/chat/${conversationId}`);
