@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
-vi.mock('@/modules/dashboard/public-api', () => ({
+vi.mock('@/modules/dashboard/public-api', async () => ({
+  briefCitationHref: (await import('@/modules/dashboard/brief-citation-href')).briefCitationHref,
   BriefText: ({ brief }: { brief: { content: string } }) => <p>{brief.content}</p>,
 }));
 
@@ -82,8 +83,21 @@ describe('TaskBriefMessage', () => {
         <TaskBriefMessage msg={m} />
       </NextIntlClientProvider>,
     );
-    expect(screen.getByRole('link', { name: 'Story one' })).toHaveAttribute('href', '/news');
+    expect(screen.getByRole('link', { name: 'Story one' })).toHaveAttribute('href', '/news?story=s1');
     expect(screen.queryByRole('link', { name: 'Rain' })).toBeNull();
     expect(screen.getByText(/Rain/)).toBeInTheDocument();
+  });
+
+  it('links an event citation to the pinned timeline event', () => {
+    const m = {
+      ...msg,
+      task: { ...msg.task, brief_citations: [{ ref: 1, kind: 'events', id: 'e1', title: 'Meeting', source_ids: [] }] },
+    } as unknown as ChatMessage;
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <TaskBriefMessage msg={m} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByRole('link', { name: 'Meeting' })).toHaveAttribute('href', '/timeline?event_id=e1');
   });
 });

@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -12,12 +13,16 @@ import { StoryList } from './story-list';
 /**
  * Full News page. Owners scope stories to their active sources; members get the backend's shared
  * projection (source ids are ignored server side) with no trends and no topic or entity filters.
+ * `?story=<id>` opens that story on load (brief citations link here); closing it drops the param so a reload does not
+ * reopen it.
  */
 export function NewsPage() {
   const t = useTranslations('shell');
   const d = useTranslations('detail');
   const { isOwner } = useWorkspace();
-  const [storyId, setStoryId] = useState<string | null>(null);
+  const params = useSearchParams();
+  const router = useRouter();
+  const [storyId, setStoryId] = useState<string | null>(() => params.get('story')?.trim().slice(0, 64) || null);
   // Title-row slot that StoryList portals its refresh/translated controls into.
   const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
@@ -50,7 +55,9 @@ export function NewsPage() {
       <Dialog
         open={storyId !== null}
         onOpenChange={(open) => {
-          if (!open) setStoryId(null);
+          if (open) return;
+          setStoryId(null);
+          if (params.has('story')) router.replace('/news', { scroll: false });
         }}
       >
         <DialogContent

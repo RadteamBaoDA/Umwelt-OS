@@ -23,6 +23,7 @@ import { useSelectedDay } from './selected-day';
 import { useWorkspace } from '@/core/workspace-context';
 import { BriefShareButton, SharedBriefs } from './brief-sharing';
 import { BriefText } from './brief-text';
+import { briefCitationHref } from './brief-citation-href';
 import { useSession } from '@/core/session';
 import { getRuleConversationId } from '@/modules/automations';
 
@@ -153,7 +154,7 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
 }
 
 /**
- * Saved brief body: stale notice, text, citations and an "open full brief" link, or the empty message. The link is
+ * Saved brief body: stale notice, text, citations (linked via `briefCitationHref` when a page exists) and an "open full brief" link, or the empty message. The link is
  * shown only while an automation owns the brief slot (a Daily brief task is enabled) and goes to
  * the task's chat thread (`/chat/{conversation_id}`), or to Settings > Scheduled tasks while the task has no thread yet.
  * The ownership and conversation reads are best-effort: while the ownership read loads or fails the link stays hidden,
@@ -179,11 +180,21 @@ export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) 
       <BriefText key={`${brief.id}:${brief.revision}`} brief={brief} />
       {brief.citations.length > 0 && (
         <ol className="space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
-          {brief.citations.map((citation) => (
-            <li key={citation.ref}>
-              [{citation.ref}] {citation.title}
-            </li>
-          ))}
+          {brief.citations.map((citation) => {
+            const href = briefCitationHref(citation.kind, citation.id);
+            return (
+              <li key={citation.ref}>
+                [{citation.ref}]{' '}
+                {href ? (
+                  <Link href={href} className="underline">
+                    {citation.title}
+                  </Link>
+                ) : (
+                  citation.title
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
       {owner.data?.schedule_owner === 'automation' && (

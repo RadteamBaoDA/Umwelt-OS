@@ -42,6 +42,26 @@ const view = () => (
 describe('SavedBriefBody full-brief link', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('links a story citation to the News story and leaves other kinds as text', async () => {
+    api.getBriefSlotOwner.mockResolvedValue({ logical_job: 'daily_brief', schedule_owner: 'internal_brief', automation_id: null });
+    const cited = {
+      ...brief,
+      citations: [
+        { ref: 1, kind: 'stories', id: 's1', title: 'Story one', source_ids: [] },
+        { ref: 2, kind: 'weather', id: 'w1', title: 'Rain', source_ids: [] },
+      ],
+    };
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <NextIntlClientProvider locale="en-US" messages={{ daily: getCatalog('en-us', 'daily') }}>
+          <SavedBriefBody brief={cited} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('link', { name: 'Story one' })).toHaveAttribute('href', '/news?story=s1');
+    expect(screen.queryByRole('link', { name: 'Rain' })).toBeNull();
+  });
+
   it('is shown while an automation owns the brief slot', async () => {
     api.getBriefSlotOwner.mockResolvedValue({ logical_job: 'daily_brief', schedule_owner: 'automation', automation_id: 'a1' });
     automations.getRuleConversationId.mockResolvedValue('c1');

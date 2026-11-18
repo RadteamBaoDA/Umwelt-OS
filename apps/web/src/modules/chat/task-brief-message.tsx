@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { BriefText } from '@/modules/dashboard/public-api';
+import { BriefText, briefCitationHref } from '@/modules/dashboard/public-api';
 import type { ChatMessage } from './api';
 
 /**
@@ -26,19 +26,9 @@ export function isTaskBriefMessage(msg: ChatMessage): boolean {
 }
 
 /**
- * Page a brief citation opens, or null when none exists. Only stories have a page (the News list); no route can open a
- * single story or filter Settings > Sources to one source, so every other kind stays plain text.
- *
- * @param kind - Citation fact kind from `task.brief_citations`.
- */
-function citationHref(kind: string): string | null {
-  return kind === 'stories' || kind === 'story' ? '/news' : null;
-}
-
-/**
  * Posted daily-brief message: a run line (generated time and a link to the run log in Settings), the brief text rendered
  * by the dashboard's `BriefText` (so translation of the saved revision works as on the gadget) and the brief's own
- * citations from `task.brief_citations`. Read-only; no side effects beyond the translation lookup in BriefText.
+ * citations from `task.brief_citations`, each linked by `briefCitationHref` (story, event or Sources page) or plain text. Read-only; no side effects beyond the translation lookup in BriefText.
  *
  * @param props - The assistant message carrying the brief metadata (`task.run_id`, `brief_id`, `brief_revision`, `brief_citations`).
  */
@@ -87,7 +77,7 @@ export function TaskBriefMessage({ msg }: { msg: ChatMessage }) {
       {citations.length > 0 && (
         <ol className="space-y-0.5 text-xs text-muted-foreground" aria-label={t('taskThread.citations')}>
           {citations.map((citation) => {
-            const href = citationHref(citation.kind);
+            const href = briefCitationHref(citation.kind, citation.id);
             return (
               <li key={citation.ref}>
                 [{citation.ref}]{' '}
