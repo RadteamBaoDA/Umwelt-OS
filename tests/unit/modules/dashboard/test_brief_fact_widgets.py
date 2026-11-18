@@ -118,6 +118,51 @@ async def test_default_sections_include_agenda_widgets(world: SimpleNamespace) -
     }
 
 
+async def test_day_context_returns_only_legacy_widgets(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def latest(*_a: Any, **_k: Any) -> None:
+        return None
+
+    async def count(*_a: Any, **_k: Any) -> int:
+        return 0
+
+    world.sources = [_source("econ")]
+    monkeypatch.setattr(briefs, "latest_brief", latest)
+    monkeypatch.setattr(briefs, "revision_count", count)
+
+    async def unread(*_a: Any, **_k: Any) -> SimpleNamespace:
+        return SimpleNamespace(unread_count=0)
+
+    monkeypatch.setattr(context.notifications, "list_notifications", unread)
+    ctx = await context.build_daily_context(
+        None,  # type: ignore[arg-type]
+        date(2026, 11, 18),
+        "UTC",
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert {w.id for w in ctx.widgets} == {"tasks", "goals", "events", "stories"}
+
+
+async def test_fact_widget_title_keys_are_camel_case(world: SimpleNamespace) -> None:
+    widgets = await _build(["markets", "weather", "hazards", "source_health"])
+    assert [w.title_key for w in widgets] == [
+        "dayMarkets",
+        "dayWeather",
+        "dayHazards",
+        "daySourceHealth",
+    ]
+
+
+async def test_local_only_source_excluded(world: SimpleNamespace) -> None:
+    src = _source("econ", local_only=True)
+    world.sources = [src]
+    world.obs = [_obs(src, "close", 103, AS_OF - timedelta(hours=1), symbol="AAA")]
+    (widget,) = await _build(["markets"])
+    assert widget.status == "empty"
+
+
 async def test_markets_latest_and_change(world: SimpleNamespace) -> None:
     src = _source("econ")
     world.sources = [src]

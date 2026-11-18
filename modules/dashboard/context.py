@@ -196,6 +196,14 @@ async def _events_widget(
     )
 
 
+_FACT_TITLE_KEYS = {
+    "markets": "dayMarkets",
+    "weather": "dayWeather",
+    "hazards": "dayHazards",
+    "source_health": "daySourceHealth",
+}
+
+
 def _fact_widget(widget_id: str, items: list[dict[str, str]], as_of: datetime) -> DailyWidget:
     """Wrap fact items (``id``/``title``/``detail``/``source_id``) into a widget.
 
@@ -205,7 +213,7 @@ def _fact_widget(widget_id: str, items: list[dict[str, str]], as_of: datetime) -
     return DailyWidget(
         id=widget_id,
         module="dashboard",
-        title_key=f"day_{widget_id}",
+        title_key=_FACT_TITLE_KEYS[widget_id],
         status="ok" if items else "empty",
         updated_at=as_of if items else None,
         items=items[:MAX_ITEMS],
@@ -444,6 +452,7 @@ async def build_daily_context(
 
     Retained brief history is presentation data; callers needing only fact support should use
     ``build_daily_widgets`` so malformed saved citations cannot prevent independent current reads.
+    Only the legacy ``agenda`` and ``stories`` widgets are returned (tasks, goals, events, stories).
     """
     await briefs._admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     relation = relation_to_today(day, timezone)
@@ -454,6 +463,8 @@ async def build_daily_context(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
         relation=relation,
+        # Brief-only fact widgets (markets, weather, hazards, source health) stay off the day view.
+        sections=("agenda", "stories"),
     )
     now = datetime.now(UTC)
     return DailyContext(
