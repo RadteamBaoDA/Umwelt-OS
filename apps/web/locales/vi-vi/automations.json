@@ -258,5 +258,13 @@
   "scheduledTasks.topic.outcome.collecting": "Đang thu thập…",
   "scheduledTasks.topic.outcome.settled": "Đã đăng mục mới",
   "scheduledTasks.topic.outcome.noNew": "Không có mục mới",
-  "scheduledTasks.topic.outcome.failed": "Thu thập thất bại"
+  "scheduledTasks.topic.outcome.failed": "Thu thập thất bại",
+  "run.error.web_search_not_configured": "Chưa thiết lập tìm kiếm web. Cấu hình nhà cung cấp trong Cài đặt › Tìm kiếm web.",
+  "run.error.search_unavailable": "Tìm kiếm web hiện không khả dụng. Lần chạy sau sẽ thử lại.",
+  "run.error.model_unavailable": "Mô hình không phản hồi. Lần chạy sau sẽ thử lại.",
+  "run.error.model_not_permitted": "Cài đặt quyền riêng tư không cho phép mô hình này cho tác vụ. Chọn mô hình khác hoặc cập nhật Cài đặt › Quyền riêng tư.",
+  "run.error.ai_settings_changed": "Cài đặt AI đã thay đổi trong lúc chạy. Hãy chạy lại.",
+  "run.error.topic_watch_configuration_invalid": "Cài đặt tác vụ không còn hợp lệ. Mở tác vụ và lưu lại.",
+  "run.error.provider_timeout": "Lần chạy quá lâu nên đã dừng. Lần chạy sau sẽ thử lại.",
+  "run.error.collection_failed": "Thu thập thất bại. Lần chạy sau sẽ thử lại."
 }

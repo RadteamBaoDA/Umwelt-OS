@@ -12,6 +12,18 @@ import { decideAction, getRuleConversationId, listRuns, type Automation, type Ru
 import { actionLabel, actionStatusLabel, runStatusLabel, triggerLabel } from './message-keys';
 import { topicOutcome } from './scheduled-task-model';
 
+/** Literal catalog keys for collector error codes the owner can act on (Topic watch runs). */
+const RUN_ERROR_KEYS = {
+  web_search_not_configured: 'run.error.web_search_not_configured',
+  search_unavailable: 'run.error.search_unavailable',
+  model_unavailable: 'run.error.model_unavailable',
+  model_not_permitted: 'run.error.model_not_permitted',
+  ai_settings_changed: 'run.error.ai_settings_changed',
+  topic_watch_configuration_invalid: 'run.error.topic_watch_configuration_invalid',
+  provider_timeout: 'run.error.provider_timeout',
+  collection_failed: 'run.error.collection_failed',
+} as const;
+
 /** Literal catalog keys of the Topic watch run outcomes. */
 const TOPIC_OUTCOME_KEYS = {
   collecting: 'scheduledTasks.topic.outcome.collecting',
@@ -87,7 +99,12 @@ function ActionRow({
         </p>
       )}
       {action.error_code && action.error_code !== 'no_new_data' && (
-        <p className="text-xs text-muted-foreground">{t('errorCode', { code: action.error_code })}</p>
+        <p className="text-xs text-muted-foreground">
+          {/* Known collector codes get an owner-facing explanation of what to fix; anything else shows the raw code. */}
+          {action.error_code in RUN_ERROR_KEYS
+            ? t(RUN_ERROR_KEYS[action.error_code as keyof typeof RUN_ERROR_KEYS])
+            : t('errorCode', { code: action.error_code })}
+        </p>
       )}
       {action.result_reference && (
         <p className="break-all text-xs text-muted-foreground">{t('resultReference', { reference: action.result_reference })}</p>

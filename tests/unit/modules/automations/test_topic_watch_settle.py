@@ -55,6 +55,7 @@ class World:
         self.raise_missing = False
         self.until: datetime | None = None
         self.in_flight = False
+        self.request_error: str | None = None
         self.read_until: Any = "unset"
 
         async def get_request(
@@ -62,7 +63,9 @@ class World:
         ) -> Any:
             if self.raise_missing:
                 raise NotFoundError("gone")
-            return SimpleNamespace(status=self.status, ingestion_run_id=uuid4())
+            return SimpleNamespace(
+                status=self.status, ingestion_run_id=uuid4(), error_code=self.request_error
+            )
 
         async def recent(
             _s: Any, source_id: Any, since: Any, limit: int, *, until: Any = None, **_k: Any
@@ -218,3 +221,14 @@ async def test_accepted_request_waits_for_its_ingestion_run(
     assert w.closed == [] and w.published == []
     w.in_flight, w.docs = False, [_doc(1)]
     assert await _run(_cand()) == "posted"
+
+
+@pytest.mark.asyncio
+async def test_failed_request_keeps_the_collectors_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner sees what to fix (e.g. web search not configured), not a generic collection_failed."""
+    w = World(monkeypatch)
+    w.status, w.request_error = "failed", "web_search_not_configured"
+    assert await _run(_cand()) == "closed"
+    assert [c for _cand_, c in w.closed] == ["web_search_not_configured"]

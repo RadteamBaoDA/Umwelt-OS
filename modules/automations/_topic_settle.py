@@ -362,7 +362,10 @@ async def settle_candidate(
     if request.status in ("queued", "running") or in_flight:
         return "pending"
     if request.status in ("failed", "cancelled"):
-        await _close(factory, cand, f"collection_{request.status}", **kw)
+        # The collector's own code (e.g. web_search_not_configured) tells the owner what to fix; the generic
+        # status code is only the fallback. Bounded to the action's 48-character error_code column.
+        code = (request.error_code or f"collection_{request.status}")[:48]
+        await _close(factory, cand, code, **kw)
         return "closed"
     if not docs:
         await _close(factory, cand, "no_new_data", **kw)

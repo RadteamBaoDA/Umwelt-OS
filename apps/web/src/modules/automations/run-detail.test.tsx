@@ -42,3 +42,41 @@ describe('RunDetail no_new_data', () => {
     expect(screen.queryByText(/Code: no_new_data/)).toBeNull();
   });
 });
+
+describe('RunDetail collector error codes', () => {
+  it('explains a known Topic watch failure and keeps the raw code for unknown ones', async () => {
+    const run = {
+      id: 'r2',
+      automation_id: 'a1',
+      revision: 1,
+      trigger_type: 'manual',
+      depth: 0,
+      status: 'succeeded',
+      attempts: 1,
+      created_at: '2026-11-18T07:00:00Z',
+      finished_at: '2026-11-18T07:05:00Z',
+      actions: [
+        {
+          ordinal: 1,
+          type: 'collect_source',
+          status: 'succeeded',
+          attempts: 1,
+          error_code: 'web_search_not_configured',
+          result_reference: 'settled:q1',
+        },
+        { ordinal: 2, type: 'collect_source', status: 'failed', attempts: 1, error_code: 'something_new', result_reference: null },
+      ],
+    } as unknown as Run;
+    api.listRuns.mockResolvedValue({ items: [run] });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <RunDetail rule={rule} csrfToken="c" onBack={vi.fn()} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText(/Web search is not set up/)).toBeInTheDocument();
+    expect(screen.queryByText(/Code: web_search_not_configured/)).toBeNull();
+    expect(screen.getByText(/Code: something_new/)).toBeInTheDocument();
+  });
+});

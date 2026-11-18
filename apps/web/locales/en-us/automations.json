@@ -258,5 +258,13 @@
   "scheduledTasks.topic.outcome.collecting": "Collecting…",
   "scheduledTasks.topic.outcome.settled": "New items posted",
   "scheduledTasks.topic.outcome.noNew": "No new items",
-  "scheduledTasks.topic.outcome.failed": "Collection failed"
+  "scheduledTasks.topic.outcome.failed": "Collection failed",
+  "run.error.web_search_not_configured": "Web search is not set up. Configure a provider in Settings › Web search.",
+  "run.error.search_unavailable": "Web search is unavailable right now. The next run will try again.",
+  "run.error.model_unavailable": "The model did not respond. The next run will try again.",
+  "run.error.model_not_permitted": "Your privacy settings do not allow this model for the task. Pick another model or update Settings › Privacy.",
+  "run.error.ai_settings_changed": "AI settings changed during the run. Run it again.",
+  "run.error.topic_watch_configuration_invalid": "The task settings are no longer valid. Open the task and save it again.",
+  "run.error.provider_timeout": "The run took too long and stopped. The next run will try again.",
+  "run.error.collection_failed": "Collection failed. The next run will try again."
 }
