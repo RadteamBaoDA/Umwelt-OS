@@ -2403,6 +2403,7 @@ export interface paths {
          *         session: Active asynchronous database session.
          *         _owner: Authenticated owner session dependency.
          *         response: HTTP response object for no-store header attachment.
+         *         request: Incoming request; supplies the app session factory for the withheld-brief lookup.
          *
          *     Returns:
          *         ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task

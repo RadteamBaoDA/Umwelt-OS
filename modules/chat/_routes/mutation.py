@@ -10,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.chat import conversation_service
-from modules.chat._public.scheduled_task_threads import SCRUBBED_CONTENT
+from modules.chat._public.scheduled_task_threads import SCRUBBED_CONTENT, task_brief_key
 from modules.chat._routes.guards import (
     _message_mutation_digest,
     _message_reasoning,
@@ -45,11 +45,17 @@ def _message_reads(
 
     Pure mapping: ``current_citations`` aligns one-to-one with ``messages_rows`` (strict zip).
     The first generative-UI part is mirrored into ``generative_ui`` for older clients. A scheduled-task
-    brief message whose ``brief_id`` is in ``withheld_brief_ids`` (its sources are no longer eligible)
-    is returned with the scrub placeholder, no citations and ``task=None``, so the copy fails closed.
+    brief message whose :func:`task_brief_key` is in ``withheld_brief_ids`` (its sources are no longer
+    eligible, or its brief id is malformed) is returned with the scrub placeholder, no citations and
+    ``task=None``, so the copy fails closed. The ``task`` DTO alone uses the lenient
+    ``parse_task_message_meta``; the withhold decision never depends on it.
     """
     task_metas = [parse_task_message_meta(getattr(m, "metadata_json", None)) for m in messages_rows]
-    withheld = [t is not None and t.brief_id in withheld_brief_ids for t in task_metas]
+    withheld = [
+        (key := task_brief_key(getattr(m, "metadata_json", None))) is not None
+        and key in withheld_brief_ids
+        for m in messages_rows
+    ]
     return [
         MessageRead(
             id=m.id,

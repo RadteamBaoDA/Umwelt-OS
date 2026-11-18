@@ -76,7 +76,7 @@ async def test_get_conversation_run_lookup_filters_by_conversation(monkeypatch) 
     monkeypatch.setattr(chat_routes, "_reject_expired_conversation", lambda c: None)
     try:
         await chat_routes.get_conversation(
-            cid, session, SimpleNamespace(owner_id=1), MagicMock(headers={})
+            cid, session, SimpleNamespace(owner_id=1), MagicMock(headers={}), MagicMock()
         )
     except _Stop:
         pass

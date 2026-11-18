@@ -185,7 +185,11 @@ async def test_get_conversation_reads_outcome_for_assistant_messages(
 
     patch_routes(monkeypatch, "owner_default_scope", default_scope)
     detail = await routes.get_conversation(
-        cid, session, SimpleNamespace(owner_id=1), SimpleNamespace(headers={})
+        cid,
+        session,
+        SimpleNamespace(owner_id=1),
+        SimpleNamespace(headers={}),
+        SimpleNamespace(),  # no task messages: the withheld lookup opens no session
     )  # type: ignore[arg-type]
     by_id = {m.id: m.web_search for m in detail.messages}
     assert by_id[assistant_id] is not None and by_id[assistant_id].reason == "daily_limit"

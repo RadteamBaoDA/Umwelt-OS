@@ -16,8 +16,7 @@ from core.workspaces.admission import actor_id
 from core.workspaces.schemas import Scope
 from modules.chat._public.conversations import delete_conversation_in_scope
 from modules.chat.models import Conversation, Message
-from modules.chat.schemas import MAX_SOURCE_SCOPE, parse_task_message_meta
-from modules.chat.scope import multi_workspace_enabled
+from modules.chat.schemas import MAX_SOURCE_SCOPE
 
 # Conversation metadata keys only the scheduler may write; client create/patch payloads cannot set them.
 RESERVED_METADATA_KEYS = frozenset({"scheduled_task", "task_source_scope", "task_kind"})
@@ -180,35 +179,57 @@ async def scrub_task_messages(
     return count
 
 
-async def withheld_brief_ids(
-    session: AsyncSession, metadatas: Sequence[Any], *, scope: Scope
-) -> frozenset[str]:
-    """Return the ``brief_id`` of every scheduled-task brief among ``metadatas`` that must not be shown.
+def task_brief_key(metadata: Any) -> str | None:
+    """Return the brief key a stored message's metadata is withheld by, or ``None`` for a non-task message.
 
-    ``metadatas`` are the messages' stored ``metadata_json`` values (``None`` or non-task ones are ignored).
+    ``None`` when ``metadata`` is not a mapping or its ``origin`` is not ``"scheduled_task"``.
+    Otherwise ``str(metadata.get("brief_id") or "")``: a missing, malformed or extra-key-laden
+    task message still yields a key (possibly ``""``) that never matches a live brief, so it is
+    withheld instead of shown in full (fail closed). Pure; unlike ``parse_task_message_meta`` it
+    never validates the rest of the payload.
+    """
+    if not isinstance(metadata, dict) or metadata.get("origin") != "scheduled_task":
+        return None
+    return str(metadata.get("brief_id") or "")
+
+
+async def withheld_brief_ids(
+    session: AsyncSession,
+    metadatas: Sequence[Any],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> frozenset[str]:
+    """Return the brief key of every scheduled-task message among ``metadatas`` that must not be shown.
+
+    ``metadatas`` are the messages' stored ``metadata_json`` values (``None`` or non-task ones are
+    ignored; see :func:`task_brief_key`).
 
     A brief is withheld when Dashboard no longer reports it live (a captured source was deleted,
-    paused or made local-only, or its support changed) or when its stored id is unreadable, so the
-    check fails closed. Messages that are not task briefs are ignored. Read-only; one batched
-    Dashboard lookup for the whole transcript, scoped to ``scope``.
+    paused or made local-only, or its support changed) or when its stored id is missing or
+    unreadable, so the check fails closed. Writes nothing, but the Dashboard lookup takes share
+    locks on the briefs' captured Sources and Documents in canonical order on ``session``, so a
+    caller that already holds other Source or Document locks must call this on a fresh session
+    first. One batched lookup for the whole transcript, scoped to ``scope`` and the caller's
+    ``multi_workspace_enabled`` flag.
     """
     from modules.dashboard import public as dashboard  # local import: dashboard imports chat
 
     wanted: dict[str, UUID | None] = {}
     for raw in metadatas:
-        meta = parse_task_message_meta(raw)
-        if meta is None:
+        key = task_brief_key(raw)
+        if key is None:
             continue
         try:
-            wanted[meta.brief_id] = UUID(meta.brief_id)
+            wanted[key] = UUID(key)
         except ValueError:
-            wanted[meta.brief_id] = None
+            wanted[key] = None
     ids = [u for u in wanted.values() if u is not None]
     live = (
         {
             str(i)
             for i in await dashboard.live_brief_ids(
-                session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+                session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled
             )
         }
         if ids

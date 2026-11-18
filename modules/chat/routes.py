@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -24,7 +24,11 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
-from modules.chat._public.scheduled_task_threads import RESERVED_METADATA_KEYS, withheld_brief_ids
+from modules.chat._public.scheduled_task_threads import (
+    RESERVED_METADATA_KEYS,
+    task_brief_key,
+    withheld_brief_ids,
+)
 from modules.chat._routes.guards import (
     _TOKEN_RE as _TOKEN_RE,
 )
@@ -400,12 +404,34 @@ async def create_conversation(
     )
 
 
+async def _withheld_task_briefs(
+    request: Request, messages_rows: list[Any], scope: WorkspaceContext
+) -> frozenset[str]:
+    """Return the withheld brief keys of a transcript, read on a short session of its own.
+
+    The lookup takes Source share locks (Dashboard liveness), while the citation filter that runs on
+    the request session takes Source then Document locks. Running both on one transaction would
+    interleave those orders, so this uses a fresh session from the app factory that commits and
+    releases its locks before the request session reads. Liveness is a read-time judgment anyway, so
+    the separate snapshot loses nothing. Opens no session when no message is a task brief.
+    """
+    metadatas = [getattr(m, "metadata_json", None) for m in messages_rows]
+    if all(task_brief_key(meta) is None for meta in metadatas):
+        return frozenset()
+    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with factory() as own:
+        return await withheld_brief_ids(
+            own, metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+        )
+
+
 @router.get("/api/v1/conversations/{conversation_id}", response_model=ConversationDetailRead)
 async def get_conversation(
     conversation_id: UUID,
     session: Session,
     _owner: OwnerRead,
     response: Response,
+    request: Request,
 ) -> ConversationDetailRead:
     """Retrieve ordered messages with current citations and the durable response handle.
 
@@ -417,6 +443,7 @@ async def get_conversation(
         session: Active asynchronous database session.
         _owner: Authenticated owner session dependency.
         response: HTTP response object for no-store header attachment.
+        request: Incoming request; supplies the app session factory for the withheld-brief lookup.
 
     Returns:
         ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task
@@ -449,6 +476,8 @@ async def get_conversation(
         messages_rows,
     )
 
+    # Before the citation filter: its Source/Document locks must not precede the lookup's (I4).
+    withheld = await _withheld_task_briefs(request, messages_rows, scope)
     # One batched evidence lookup for the whole transcript instead of one per message (P2-6).
     current_citations = await _filter_citation_lists(
         session, [m.citations or [] for m in messages_rows], scope
@@ -458,9 +487,7 @@ async def get_conversation(
         current_citations,
         response_ids_by_user_message,
         web_search_by_assistant,
-        await withheld_brief_ids(
-            session, [getattr(m, "metadata_json", None) for m in messages_rows], scope=scope
-        ),
+        withheld,
     )
     return ConversationDetailRead(
         id=conv.id,

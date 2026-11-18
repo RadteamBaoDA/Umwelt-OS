@@ -580,6 +580,9 @@ class ChatExportFence(BaseModel):
     message_created_at: datetime | None = None
     message_updated_at: datetime | None = None
     citations: list[ChatExportCitationFence] = Field(default_factory=list, max_length=100)
+    # None for non-task messages; False/True when a scheduled-task brief was published live/withheld,
+    # so the final fence check can reject a brief that became withheld after the page was built.
+    brief_withheld: bool | None = None
 
 
 class ChatExportPage(BaseModel):

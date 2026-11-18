@@ -69,13 +69,17 @@ async def test_ineligible_brief_is_withheld(monkeypatch: pytest.MonkeyPatch) -> 
         _brief_message("not-a-uuid").metadata_json,
         plain.metadata_json,
     ]
-    out = await withheld_brief_ids(object(), msgs, scope=object())  # type: ignore[arg-type]
+    out = await withheld_brief_ids(  # type: ignore[arg-type]
+        object(), msgs, scope=object(), multi_workspace_enabled=False
+    )
     assert out == {BRIEF, "not-a-uuid"} and len(seen) == 1
 
 
 @pytest.mark.asyncio
 async def test_no_brief_messages_skip_the_lookup() -> None:
-    out = await withheld_brief_ids(object(), [{}], scope=object())  # type: ignore[arg-type]
+    out = await withheld_brief_ids(  # type: ignore[arg-type]
+        object(), [{}], scope=object(), multi_workspace_enabled=False
+    )
     assert out == frozenset()
 
 
@@ -84,3 +88,89 @@ def test_brief_messages_never_enter_model_history() -> None:
     brief = _brief_message()
     turns = select_turns([brief], [])
     assert turns == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_task_metadata_is_withheld_not_shown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """origin=scheduled_task with an unknown key and a bad brief_id fails closed end to end."""
+    from modules.dashboard import public as dashboard
+
+    async def live(_s: Any, ids: list[UUID], **_k: Any) -> set[UUID]:
+        return set(ids)
+
+    monkeypatch.setattr(dashboard, "live_brief_ids", live)
+    bad = {"origin": "scheduled_task", "surprise": 1, "brief_id": "zzz"}
+    missing = {"origin": "scheduled_task"}
+    withheld = await withheld_brief_ids(  # type: ignore[arg-type]
+        object(), [bad, missing], scope=object(), multi_workspace_enabled=False
+    )
+    assert withheld == {"zzz", ""}
+    m = _brief_message("zzz")
+    m.metadata_json = bad
+    read = _message_reads([m], [[{"x": 1}]], {}, {}, withheld)[0]
+    assert read.content == SCRUBBED_CONTENT and read.task is None and read.citations == []
+
+
+def test_task_brief_key() -> None:
+    from modules.chat._public.scheduled_task_threads import task_brief_key
+
+    assert task_brief_key(None) is None and task_brief_key({"origin": "x"}) is None
+    assert task_brief_key({"origin": "scheduled_task"}) == ""
+    assert task_brief_key({"origin": "scheduled_task", "brief_id": 5}) == "5"
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_withholds_on_its_own_session_before_the_citation_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Route wiring: the lookup uses a fresh factory session and runs before citation locks."""
+    from modules.chat import routes
+    from tests.unit.modules.chat._routes_patch import patch_routes
+    from tests.unit.modules.chat.test_p15_w3_api import _ConversationSession
+
+    msg = _brief_message()
+    main = _ConversationSession([msg], [])
+    own = object()
+    order: list[str] = []
+
+    class _Factory:
+        def __call__(self) -> "_Factory":
+            return self
+
+        async def __aenter__(self) -> object:
+            return own
+
+        async def __aexit__(self, *_a: Any) -> None:
+            order.append("released")
+
+    async def lookup(session: Any, metas: Any, **kwargs: Any) -> frozenset[str]:
+        order.append("lookup")
+        assert session is own and kwargs["multi_workspace_enabled"] is False
+        assert metas == [msg.metadata_json]
+        return frozenset({BRIEF})
+
+    async def keep(_s: Any, lists: Any, _scope: Any = None) -> list[list[Any]]:
+        order.append("citations")
+        return [list(x) for x in lists]
+
+    async def default_scope(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(workspace_id=uuid4(), user_id=1)
+
+    monkeypatch.setattr(routes, "withheld_brief_ids", lookup)
+    monkeypatch.setattr(routes, "multi_workspace_enabled", lambda: False)
+    patch_routes(monkeypatch, "_filter_citation_lists", keep)
+    patch_routes(monkeypatch, "owner_default_scope", default_scope)
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(session_factory=_Factory()))
+    )
+    detail = await routes.get_conversation(
+        msg.conversation_id,
+        main,  # type: ignore[arg-type]
+        SimpleNamespace(owner_id=1),  # type: ignore[arg-type]
+        SimpleNamespace(headers={}),  # type: ignore[arg-type]
+        request,  # type: ignore[arg-type]
+    )
+    assert order == ["lookup", "released", "citations"]
+    assert detail.messages[0].content == SCRUBBED_CONTENT and detail.messages[0].task is None
