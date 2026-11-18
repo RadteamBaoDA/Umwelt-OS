@@ -9,11 +9,13 @@ import { useSkin } from '@/core/use-skin';
 import { Button } from '@/components/ui/button';
 import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
+import { listAllSources, sourceKeys } from '@/modules/sources';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
 import { formatMetricLabel } from './metric-label';
+import { staleInfo } from './chart-range';
 import { useSourceInfo } from './use-effective-lookback';
 import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
@@ -454,12 +456,74 @@ function WeatherTerminal({
 }
 
 /**
+ * Muted "last good data 2h ago · next retry 13:20:00" line for a failing weather read. Facts come from the bound source
+ * row in the shared `sourceKeys.listAll` cache (the one the dashboard already loads; no extra request when it is warm).
+ *
+ * @param props Bound source id; `failingOnly` hides the line unless the source's latest error is newer than its latest
+ *   success (used on the empty branch, where a read succeeded but the collector is failing).
+ * @returns The line, or null when the source row carries neither a last success nor a next due time.
+ */
+function WeatherStaleLine({ sourceId, failingOnly = false }: { sourceId: string; failingOnly?: boolean }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const sources = useQuery({ queryKey: sourceKeys.listAll, queryFn: listAllSources, enabled: Boolean(sourceId) });
+  // Wall-clock facts are judged as of the source list fetch so render stays pure.
+  const source = sources.data?.items.find((item) => item.id === sourceId);
+  const info = staleInfo(source, sources.dataUpdatedAt);
+  if (!info) return null;
+  // Same "failing" rule as the frame badge and statusline: an error newer than the last success.
+  if (
+    failingOnly &&
+    !(source?.last_error_at && (!source.last_success_at || Date.parse(source.last_error_at) > Date.parse(source.last_success_at)))
+  )
+    return null;
+  const next =
+    info.nextDueMs === null
+      ? null
+      : getDateTimeFormat(normalizeFormattingLocale(display.locale), {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+          timeZone: display.timezone,
+        }).format(new Date(info.nextDueMs));
+  const text = [info.ago && t('weather.lastGood', { ago: info.ago }), next && t('weather.nextRetry', { next })].filter(Boolean).join(' · ');
+  return (
+    <p className="m-0 text-xs text-muted-foreground" data-testid="weather-stale-line">
+      {text}
+    </p>
+  );
+}
+
+/**
+ * Last successful temperature, kept by react-query across a failed refetch, as `16.2°C · stale`.
+ *
+ * @param props Cached readings and the epoch ms they were fetched (the "now" for picking the nearest reading).
+ * @returns The muted reading, or null when there is no temperature reading.
+ */
+function WeatherStaleReading({ items, now }: { items: WorldObservation[]; now: number }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const { heroTemp } = buildWeatherModel(items, now, display.timezone);
+  if (!heroTemp) return null;
+  const value = getNumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(heroTemp.value);
+  return (
+    <p className="weather-stale-reading m-0 px-3 text-2xl text-muted-foreground tabular-nums" data-testid="weather-stale-reading">
+      {t('weather.staleReading', { value, unit: heroTemp.unit })}
+    </p>
+  );
+}
+
+/**
  * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
  * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
  * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
  * medium = + timeline, large = + day rows. Open-Meteo attribution is the body link only.
  *
  * @param props Gadget instance whose first source and metric scope select the Open-Meteo readings.
+ * On a failed read the error notice also lists the bound source's last good data age and next retry, and the last
+ * cached temperature as `16.2°C · stale` when react-query still holds it.
+ *
  * @returns Weather panel, or a setup/loading/error/empty notice.
  */
 function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
@@ -484,10 +548,13 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
             {t('retry')}
           </Button>
         </TitleBarSlot>
-        <GadgetNotice kind="error" message={t('observation.loadFailed')} />
+        <GadgetNotice kind="error" message={t('observation.loadFailed')} detail={<WeatherStaleLine sourceId={sourceId} />} />
+        {/* react-query keeps the last good data on a failed refetch: show that reading, muted, instead of nothing. */}
+        {items.length > 0 && <WeatherStaleReading items={items} now={query.dataUpdatedAt} />}
       </>
     );
-  if (!items.length) return <GadgetNotice kind="empty" message={t('observation.empty')} />;
+  if (!items.length)
+    return <GadgetNotice kind="empty" message={t('observation.empty')} detail={<WeatherStaleLine sourceId={sourceId} failingOnly />} />;
 
   // Fetch time of the data, not wall-clock in render: keeps render pure; falls back to the newest reading when unset.
   const now = query.dataUpdatedAt || Math.max(...items.map((item) => Date.parse(item.observed_at)).filter(Number.isFinite), 0);

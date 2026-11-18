@@ -478,55 +478,67 @@ export interface FeedToolbarProps {
   setView: (view: FeedView) => void;
 }
 
-/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. In the terminal skin it renders in the gadget title bar (`TitleBarSlot`). */
+/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. In the terminal skin it renders in the gadget title bar (`TitleBarSlot`); in narrow panes the List | Cards toggle moves from the title bar to a body row (CSS decides which copy shows), so no control is lost. */
 export function FeedToolbar(props: FeedToolbarProps) {
   const t = useTranslations('dashboard');
+  const terminal = useSkin() === 'terminal';
   const { onlyUnread, selectMode, refreshing } = props;
   return (
-    <TitleBarSlot>
-      <div className="gadget-toolbar flex items-center justify-between gap-2 text-xs">
-        <Button
-          type="button"
-          variant={onlyUnread ? 'default' : 'ghost'}
-          size="sm"
-          className="h-8 px-2 text-xs"
-          aria-pressed={onlyUnread}
-          onClick={props.toggleUnread}
-        >
-          {t('unread.only')} ({props.unreadCount})
-        </Button>
-
-        <div className="flex min-w-0 items-center gap-1">
-          {props.volume}
-          {props.filters}
+    <>
+      {/* Narrow terminal panes: the title-bar copy of the view toggle is hidden by CSS (`.feed-view-slot`) so the meta and
+        `[ collect now ]` keep their room; this body-row copy (shown only when narrow) keeps list/cards reachable. */}
+      {terminal && (
+        <div className="feed-view-narrow">
           <FeedViewToggle view={props.view} setView={props.setView} />
-          {props.canSelect && (
-            <Button
-              type="button"
-              variant={selectMode ? 'default' : 'ghost'}
-              size="sm"
-              className="feed-tool-opt h-8 px-2 text-xs"
-              aria-pressed={selectMode}
-              onClick={props.toggleSelectMode}
-            >
-              <SquareCheck className="feed-tool-icon h-3.5 w-3.5" aria-hidden="true" />
-              <span className="feed-tool-label">{selectMode ? t('feed.selectDone') : t('feed.selectMode')}</span>
-            </Button>
-          )}
+        </div>
+      )}
+      <TitleBarSlot>
+        <div className="gadget-toolbar flex items-center justify-between gap-2 text-xs">
           <Button
             type="button"
-            variant="ghost"
-            size="icon"
-            className="feed-tool-opt size-8"
-            onClick={props.onRefresh}
-            disabled={refreshing}
-            aria-label={t('feed.refresh')}
+            variant={onlyUnread ? 'default' : 'ghost'}
+            size="sm"
+            className="h-8 px-2 text-xs"
+            aria-pressed={onlyUnread}
+            onClick={props.toggleUnread}
           >
-            <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {t('unread.only')} ({props.unreadCount})
           </Button>
+
+          <div className="flex min-w-0 items-center gap-1">
+            {props.volume}
+            {props.filters}
+            <div className="feed-view-slot">
+              <FeedViewToggle view={props.view} setView={props.setView} />
+            </div>
+            {props.canSelect && (
+              <Button
+                type="button"
+                variant={selectMode ? 'default' : 'ghost'}
+                size="sm"
+                className="feed-tool-opt h-8 px-2 text-xs"
+                aria-pressed={selectMode}
+                onClick={props.toggleSelectMode}
+              >
+                <SquareCheck className="feed-tool-icon h-3.5 w-3.5" aria-hidden="true" />
+                <span className="feed-tool-label">{selectMode ? t('feed.selectDone') : t('feed.selectMode')}</span>
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="feed-tool-opt size-8"
+              onClick={props.onRefresh}
+              disabled={refreshing}
+              aria-label={t('feed.refresh')}
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            </Button>
+          </div>
         </div>
-      </div>
-    </TitleBarSlot>
+      </TitleBarSlot>
+    </>
   );
 }
 

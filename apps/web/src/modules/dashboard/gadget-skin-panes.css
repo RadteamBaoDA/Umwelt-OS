@@ -316,10 +316,14 @@ html[data-skin='terminal'] [data-gadget-notice='error'] {
   background: var(--raised);
   border-left: 3px solid var(--danger);
 }
-html[data-skin='terminal'] [data-gadget-notice='error'] > p::before {
+html[data-skin='terminal'] [data-gadget-notice='error'] > p:first-of-type::before {
   content: 'ERR ' / '';
   font-weight: 700;
   margin-right: 6px;
+}
+/* Detail lines under the ERR message (e.g. last good data / next retry) align with the message text. */
+html[data-skin='terminal'] [data-gadget-notice='error'] > p:not(:first-of-type) {
+  padding-left: calc(4ch + 6px);
 }
 html[data-skin='terminal'] :is([data-gadget-notice='empty'], [data-gadget-notice='setup']) {
   align-items: center;

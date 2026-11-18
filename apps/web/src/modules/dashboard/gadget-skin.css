@@ -471,7 +471,7 @@ html[data-skin='terminal'] .gadget-head-slot [data-slot='button']:not([data-size
 html[data-skin='terminal'] .story-meta-row {
   display: none;
 }
-html[data-skin='terminal'] .story-meta-row:has(> :not(:empty)) {
+html[data-skin='terminal'] .story-meta-row:has(> :not(:empty, .feed-view-narrow)) {
   display: flex;
 }
 
@@ -524,6 +524,37 @@ html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'][data-sta
 html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'][data-state='active']::before {
   content: '[x] ' / '';
   color: var(--accent);
+}
+
+/* Chart range chips (range-chips.tsx): `[x] 7D` chips like the source chips (developer-theme `.chips`). */
+html[data-skin='terminal'] .range-chips {
+  gap: 14px;
+  margin: 6px 0;
+}
+html[data-skin='terminal'] .range-chip {
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+html[data-skin='terminal'] .range-chip::before {
+  content: '[ ] ' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .range-chip[aria-pressed='true'] {
+  color: var(--accent);
+}
+html[data-skin='terminal'] .range-chip[aria-pressed='true']::before {
+  content: '[x] ' / '';
+  color: var(--accent);
+}
+html[data-skin='terminal'] .range-chip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Telegram message log (feed-parts.tsx TerminalMessageRow, demo `.dash-msg`): `● channel  clock` over the message. */
@@ -775,4 +806,41 @@ html[data-skin='terminal'] .gadget-collect::after {
 }
 html[data-skin='terminal'] .gadget-collect:hover:not(:disabled) {
   color: var(--accent);
+}
+
+/* Narrow terminal feed panes: the List | Cards toggle leaves the title bar (so the muted meta and `[ collect now ]`
+   fit) and shows as a right-aligned row at the top of the body instead (feed-parts.tsx FeedToolbar). */
+html[data-skin='terminal'] .feed-view-narrow {
+  display: none;
+}
+@container (max-width: 40rem) {
+  html[data-skin='terminal'] .gadget-head-slot .feed-view-slot {
+    display: none;
+  }
+  /* With the toolbar copy gone from the title bar, the hover actions (Ask, Expand) overlay the right edge again (as in
+     panes without a toolbar) so the meta and `[ collect now ]` keep the width; they still appear on hover and focus. */
+  /* The emptied toolbar slot, its flex gap and the roomy header gap/button padding would cost the meta ~16px. */
+  html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) {
+    gap: 4px;
+  }
+  html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) .gadget-head-slot {
+    display: none;
+  }
+  html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) .gadget-collect {
+    padding-inline: 4px;
+  }
+  @media (pointer: fine) {
+    html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) .gadget-head-actions:not([data-edit]) {
+      position: absolute;
+      transform: translateY(-50%);
+    }
+  }
+  html[data-skin='terminal'] .story-meta-row:has(> .feed-view-narrow) {
+    display: flex;
+  }
+  html[data-skin='terminal'] .feed-view-narrow {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 8px 0;
+  }
 }

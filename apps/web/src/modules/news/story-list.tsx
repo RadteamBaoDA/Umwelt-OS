@@ -247,8 +247,9 @@ function Attribution({ story }: { story: Story }) {
 
 type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 
-/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. */
+/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow terminal panes the embedded List | Cards toggle and refresh move from the title bar into this row (CSS picks the copy), so no control is lost. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
+  const terminal = useSkin() === 'terminal';
   const { embedded, actionsHost, translation, incompleteNotice, showOriginal, setShowOriginal, refreshButton, pageActions } = vm;
   return embedded ? (
     // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
@@ -259,10 +260,20 @@ function StoryListChrome({ vm }: { vm: StoryListVm }) {
       <TitleBarSlot>
         <div className="flex items-center gap-1">
           {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+          <div className="feed-view-slot flex items-center gap-1">
+            <FeedViewToggle view={vm.view} setView={vm.setView} />
+            {refreshButton}
+          </div>
+        </div>
+      </TitleBarSlot>
+      {/* Narrow terminal panes: the title-bar toggle and refresh are hidden by CSS (so the meta and `[ collect now ]` fit) and this body-row
+          copy, shown only when narrow, keeps both reachable. */}
+      {terminal && (
+        <div className="feed-view-narrow ml-auto gap-1">
           <FeedViewToggle view={vm.view} setView={vm.setView} />
           {refreshButton}
         </div>
-      </TitleBarSlot>
+      )}
     </div>
   ) : actionsHost ? (
     createPortal(pageActions, actionsHost)

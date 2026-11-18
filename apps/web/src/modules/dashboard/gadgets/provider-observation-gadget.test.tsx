@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -85,6 +85,22 @@ describe('ProviderObservationGadget', () => {
     await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalled());
     const { from, to } = api.listWorldObservationWindow.mock.calls[0][0];
     expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(31);
+  });
+
+  it('range chips default to the nearest chip and re-query the same window with the chosen lookback', async () => {
+    api.listWorldObservationWindow.mockResolvedValue({
+      truncated: false,
+      items: [{ ...base, id: 'o9', provider: 'alternative_me', metric: 'm', value: 5, observed_at: '2026-10-09T00:00:00Z' }],
+    });
+    view({ id: 'g7', title: '', definition: { source_ids: ['s1'], scope: { metrics: [], lookback_days: 30 } } } as never);
+    const group = await screen.findByRole('group', { name: 'Chart range' });
+    expect(screen.getByRole('button', { name: '30D' }).getAttribute('aria-pressed')).toBe('true');
+    expect(group).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '1Y' }));
+    await waitFor(() => expect(api.listWorldObservationWindow).toHaveBeenCalledTimes(2));
+    const { from, to } = api.listWorldObservationWindow.mock.calls[1][0];
+    expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(365 + 1);
+    expect(screen.getByRole('button', { name: '1Y' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('reads revision history over at most two pages so each series has points for delta and sparkline', async () => {

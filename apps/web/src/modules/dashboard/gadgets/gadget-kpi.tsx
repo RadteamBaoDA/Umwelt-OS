@@ -1,12 +1,12 @@
 'use client';
 
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { BetterDirection } from './metric-direction';
 import { RollingNumber } from './rolling-number';
-import { Sparkline } from './sparkline';
+import { Sparkline, type SparklineProps } from './sparkline';
 
 /** Props for DeltaPill. */
 export interface DeltaPillProps {
@@ -75,13 +75,17 @@ export interface GadgetKpiProps {
   sparkHeight?: number;
   /** Custom figure formatter; defaults to `formatChartValue` with the display locale. */
   format?: (value: number) => string;
+  /** Optional control row (e.g. range chips) shown between the figure and the sparkline. */
+  chips?: ReactNode;
+  /** Optional decorative axes for the sparkline (see `SparklineProps.axes`). */
+  axes?: SparklineProps['axes'];
 }
 
 /**
  * KPI block: label, figure, delta pill and optional sparkline. Figure formatting reuses `formatChartValue`
  * with the user's display locale.
  *
- * @param props Label, value, formatting, delta and optional series.
+ * @param props Label, value, formatting, delta, optional series, and optional `chips` / `axes` extras.
  * @returns Stacked KPI element.
  */
 export function GadgetKpi({
@@ -96,6 +100,8 @@ export function GadgetKpi({
   series,
   sparkHeight = 40,
   format,
+  chips,
+  axes,
 }: GadgetKpiProps) {
   const display = useDisplayPreferences();
   const figure =
@@ -112,7 +118,8 @@ export function GadgetKpi({
         {!currency && unit && value !== null && <span className="text-xs text-muted-foreground">{unit}</span>}
         {deltaPercent !== undefined && <DeltaPill percent={deltaPercent} better={better} periodLabel={periodLabel} />}
       </div>
-      {series && series.length >= 2 && <Sparkline data={series} height={sparkHeight} />}
+      {chips}
+      {series && series.length >= 2 && <Sparkline data={series} height={sparkHeight} axes={axes} />}
     </div>
   );
 }

@@ -595,5 +595,9 @@
   "staleSource.times": "Last success {success} · last error {error}",
   "staleSource.never": "never",
   "askWithUmwelt": "Ask AI",
-  "video.termNote": "{count, plural, one {# new video} other {# new videos}} · channel: {channel}"
+  "video.termNote": "{count, plural, one {# new video} other {# new videos}} · channel: {channel}",
+  "providerObs.rangeLabel": "Chart range",
+  "weather.lastGood": "last good data {ago} ago",
+  "weather.nextRetry": "next retry {next}",
+  "weather.staleReading": "{value}{unit} · stale"
 }

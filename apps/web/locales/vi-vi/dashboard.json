@@ -595,5 +595,9 @@
   "staleSource.times": "Thành công gần nhất {success} · lỗi gần nhất {error}",
   "staleSource.never": "chưa có",
   "askWithUmwelt": "Hỏi AI",
-  "video.termNote": "{count, plural, other {# video mới}} · kênh: {channel}"
+  "video.termNote": "{count, plural, other {# video mới}} · kênh: {channel}",
+  "providerObs.rangeLabel": "Khoảng thời gian biểu đồ",
+  "weather.lastGood": "dữ liệu tốt gần nhất {ago} trước",
+  "weather.nextRetry": "thử lại lúc {next}",
+  "weather.staleReading": "{value}{unit} · cũ"
 }

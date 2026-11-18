@@ -73,18 +73,20 @@ export function TerminalObservationCells({
  * label stays as screen-reader text because the gadget title already names the series visually.
  *
  * @param props.label Series label; `props.figure` the formatted value; `props.change` the formatted change;
- * `props.spark` the history chart element (or null with fewer than two points).
+ * `props.spark` the history chart element (or null with fewer than two points); optional `props.chips` a control row between figure and chart.
  */
 export function TerminalObservationFigure({
   label,
   figure,
   change,
   spark,
+  chips,
 }: {
   label: string;
   figure: string;
   change: ReturnType<typeof formatTerminalChange>;
   spark: ReactNode;
+  chips?: ReactNode;
 }) {
   return (
     <div className="obs-term-figure-box">
@@ -93,6 +95,7 @@ export function TerminalObservationFigure({
         {figure}
         <small data-tone={change.tone}>{change.text}</small>
       </p>
+      {chips}
       {spark}
     </div>
   );
