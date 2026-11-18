@@ -499,6 +499,7 @@ class _ModelSetup:
     prior_messages: list[dict[str, str]]
     # Image-search hits listed to the model as img1..imgN (empty unless remote media is permitted this turn).
     web_images: tuple[web.WebImage, ...] = ()
+    task_draft_on: bool = False  # offer draft_scheduled_task (plain chat only)
 
     def base_messages(self, with_ui_prompt: bool) -> list[dict[str, Any]]:
         """Initial chat messages; the Generative UI prompt is included only while tools are offered."""
@@ -816,6 +817,15 @@ async def _db_query_providers(
         return []
 
 
+def _task_draft_offered(turn: _TurnInputs) -> bool:
+    """Whether ``draft_scheduled_task`` is offered: plain chat only, not task threads, selections or gadget turns."""
+    return not (
+        turn.answer_request.source_scope_enforced
+        or turn.answer_request.selected_only
+        or is_gadget_turn(turn.req_params)
+    )
+
+
 async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs) -> _ModelSetup:
     """Resolve the model, gateway, prompts and offered tools for this turn (phase 3).
 
@@ -851,6 +861,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
             else []
         )
         db_sql_on = sql_mode_available()
+        task_draft_on = _task_draft_offered(turn)
         ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
             include_read_skill=bool(skill_names),
             include_trip_images=trip_images_on,
@@ -861,6 +872,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
             include_db_query=db_query_on,
             include_db_sql=db_sql_on,
             include_answer=has_web_results,
+            include_task_draft=task_draft_on,
         )
     ui_system_text = (
         system_text
@@ -894,6 +906,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         user_prompt=turn.user_prompt,
         prior_messages=turn.prior_messages,
         web_images=web_images,
+        task_draft_on=task_draft_on,
     )
 
 

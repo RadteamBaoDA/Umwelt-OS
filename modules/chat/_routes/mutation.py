@@ -32,6 +32,7 @@ from modules.chat.schemas import (
     parse_generative_ui_parts,
     parse_task_message_meta,
 )
+from modules.chat.task_drafts import parse_task_draft
 
 
 def _message_reads(
@@ -75,6 +76,7 @@ def _message_reads(
             suggestions=_message_suggestions(getattr(m, "metadata_json", None)),
             uncited=_message_uncited(getattr(m, "metadata_json", None)),
             task=None if gone else task,
+            task_draft=None if gone else parse_task_draft(getattr(m, "metadata_json", None)),
         )
         for m, citations, parts, task, gone in zip(
             messages_rows,

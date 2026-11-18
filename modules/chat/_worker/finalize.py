@@ -359,8 +359,11 @@ def _assistant_metadata(
     generative_uis: list[dict[str, Any]],
     route_decision: dict[str, Any] | None,
     uncited: bool = False,
+    task_draft: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Message ``metadata_json`` kwargs: reasoning, UI parts, the ``uncited`` flag and the router audit trail (pure).
+    """Message ``metadata_json`` kwargs: reasoning, UI parts, ``uncited``, the router audit trail and the task draft (pure).
+
+    ``task_draft`` is the validated ``draft_scheduled_task`` card; it is display-only and saves nothing.
 
     Returns ``{}`` when there is nothing to store so the column keeps its default.
     """
@@ -372,6 +375,7 @@ def _assistant_metadata(
         and route_decision is None
         and not st.accumulated_reasoning
         and not uncited
+        and not task_draft
     ):
         return {}
     return {
@@ -390,6 +394,7 @@ def _assistant_metadata(
                 else {}
             ),
             **({"uncited": True} if uncited else {}),
+            **({"task_draft": task_draft} if task_draft else {}),
             # Audit trail of the external router's choice (category + renderer only, no content).
             **(
                 {
@@ -441,7 +446,9 @@ async def _persist_final(
             citations=valid_citations,
             response_id=c.response_id,
             revision_of_message_id=turn.revision_of_message_id,
-            **_assistant_metadata(st, generative_uis, env.ts.route_decision, uncited),
+            **_assistant_metadata(
+                st, generative_uis, env.ts.route_decision, uncited, task_draft=env.ts.task_draft
+            ),
         )
         session.add(assistant_msg)
         await session.flush()

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from modules.chat.generative_ui.prompt import SandboxedUiArgs
 from modules.chat.generative_ui.tools.form import FormPayload, TimeSlot
 from modules.chat.generative_ui.tools.query import ChartSeriesConfig, TableColumn
+from modules.chat.task_drafts import TOOL_DRAFT_SCHEDULED_TASK, ScheduledTaskDraft
 from modules.chat.templates import (
     ApplyTemplateArgs,
     run_template_tool,
@@ -420,6 +421,31 @@ def _template_tool_specs() -> list[dict[str, Any]]:
     ]
 
 
+def _task_draft_tool_spec() -> dict[str, Any]:
+    """Function spec of the non-terminal ``draft_scheduled_task`` tool (shows a card; saves nothing)."""
+    return _function_spec(
+        TOOL_DRAFT_SCHEDULED_TASK,
+        (
+            "Propose a recurring Daily brief scheduled task when the user asks for one. Shows a card; "
+            "NOTHING is saved - the owner reviews and confirms it. Never say the task was created. "
+            "Not terminal."
+        ),
+        ScheduledTaskDraft.model_json_schema(),
+    )
+
+
+def _theme_tool_spec() -> dict[str, Any]:
+    """Function spec of the non-terminal ``set_theme`` tool."""
+    return _function_spec(
+        TOOL_SET_THEME,
+        (
+            "Switch the app theme (light, dark or system) for the user's current browser session; they can keep "
+            "or revert it. Use only when the user asks. Not terminal."
+        ),
+        SetThemeArgs.model_json_schema(),
+    )
+
+
 def build_chat_tool_specs(
     *,
     include_read_skill: bool,
@@ -431,6 +457,7 @@ def build_chat_tool_specs(
     include_db_query: bool = False,
     include_answer: bool = False,
     include_db_sql: bool = True,
+    include_task_draft: bool = False,
 ) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
@@ -444,6 +471,7 @@ def build_chat_tool_specs(
         include_db_query: Whether to expose the non-terminal `query_collected_data` database query tool.
         include_answer: Whether to expose the terminal `render_answer` tool (only when web search returned results).
         include_db_sql: Whether the db query tool advertises `mode='sql'` (False when no reader DSN is configured).
+        include_task_draft: Whether to expose the non-terminal `draft_scheduled_task` tool (card only; saves nothing).
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -505,20 +533,13 @@ def build_chat_tool_specs(
     if include_templates:
         specs.extend(_template_tool_specs())
     if include_theme:
-        specs.append(
-            _function_spec(
-                TOOL_SET_THEME,
-                (
-                    "Switch the app theme (light, dark or system) for the user's current browser session; they can keep "
-                    "or revert it. Use only when the user asks. Not terminal."
-                ),
-                SetThemeArgs.model_json_schema(),
-            )
-        )
+        specs.append(_theme_tool_spec())
     if include_db_query:
         from modules.chat.db_query import build_db_query_tool_spec
 
         specs.append(build_db_query_tool_spec(sql_enabled=include_db_sql))
+    if include_task_draft:
+        specs.append(_task_draft_tool_spec())
     return copy.deepcopy(specs)
 
 

@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from modules.chat.task_drafts import ScheduledTaskDraft
 from modules.chat.web_search import sanitize_url
 from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
@@ -477,6 +478,8 @@ class MessageRead(BaseModel):
     uncited: bool = False
     # Scheduled-task posts only (allowlisted keys of metadata_json); None for ordinary messages.
     task: TaskMessageMeta | None = None
+    # Model-proposed scheduled task awaiting the owner's confirmation in the editor; never saved server-side.
+    task_draft: ScheduledTaskDraft | None = None
 
 
 class ChatExportCitation(BaseModel):

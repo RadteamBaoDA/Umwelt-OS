@@ -2403,7 +2403,6 @@ export interface paths {
          *         session: Active asynchronous database session.
          *         _owner: Authenticated owner session dependency.
          *         response: HTTP response object for no-store header attachment.
-         *         request: Incoming request; supplies the app session factory for the withheld-brief lookup.
          *
          *     Returns:
          *         ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task
@@ -8595,6 +8594,22 @@ export interface components {
             timezone: string;
             /** Title Field */
             title_field?: string | null;
+            /** Topic Watch Exclude Sites */
+            topic_watch_exclude_sites?: string[] | null;
+            /** Topic Watch Include Sites */
+            topic_watch_include_sites?: string[] | null;
+            /** Topic Watch Keep Rule */
+            topic_watch_keep_rule?: string | null;
+            /** Topic Watch Languages */
+            topic_watch_languages?: string[] | null;
+            /** Topic Watch Max Items */
+            topic_watch_max_items?: number | null;
+            /** Topic Watch Model Role */
+            topic_watch_model_role?: ("background" | "chat" | "brief") | null;
+            /** Topic Watch Token Budget */
+            topic_watch_token_budget?: number | null;
+            /** Topic Watch Topic */
+            topic_watch_topic?: string | null;
             /** Updated Field */
             updated_field?: string | null;
             /** Url */
@@ -12961,6 +12976,7 @@ export interface components {
             /** Suggestions */
             suggestions?: string[];
             task?: components["schemas"]["TaskMessageMeta"] | null;
+            task_draft?: components["schemas"]["ScheduledTaskDraft"] | null;
             /**
              * Uncited
              * @default false
@@ -15224,6 +15240,40 @@ export interface components {
              * @enum {string}
              */
             type: "schedule";
+        };
+        /**
+         * ScheduledTaskDraft
+         * @description Model-proposed Daily brief task shown to the owner as a card; never persisted as an automation by the server.
+         */
+        ScheduledTaskDraft: {
+            /**
+             * Days
+             * @default daily
+             * @enum {string}
+             */
+            days: "daily" | "weekdays";
+            /** Extra Instruction */
+            extra_instruction?: string | null;
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "daily_brief";
+            /**
+             * Model Role
+             * @default brief
+             * @enum {string}
+             */
+            model_role: "brief" | "chat" | "background";
+            /** Name */
+            name: string;
+            /** Sections */
+            sections?: ("stories" | "markets" | "weather" | "hazards" | "agenda" | "source_health")[];
+            /**
+             * Time
+             * @description Local HH:MM
+             */
+            time: string;
         };
         /**
          * SearchFilters
