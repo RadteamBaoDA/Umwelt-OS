@@ -31,6 +31,7 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.chat import db_query
 from modules.chat._db_scope import resolve_source_scopes
 from modules.chat.db_query import execute_db_query_tool
+from modules.knowledge.documents.schemas import ProviderRecordMetadata
 
 pytestmark = [
     pytest.mark.integration,
@@ -48,6 +49,41 @@ CEILING_SECONDS = 2.0
 SYMBOLS_PER_SOURCE = 5
 # 20 observation sources; consecutive pairs (k, k+1) of one provider share their series keys.
 OBS_PROVIDERS = ["binance"] * 8 + ["frankfurter"] * 6 + ["usgs"] * 3 + ["cisa_kev"] * 3
+
+# One declared measurement field per provider, so the attributes view has something to read.
+_VOLUME_FIELDS: dict[str, dict[str, str]] = {
+    "binance": {"symbol": "VOL"},
+    "frankfurter": {"base": "USD"},
+    "usgs": {"place": "vol"},
+    "cisa_kev": {"product": "vol"},
+}
+
+
+def _provider_record(provider: str) -> dict[str, Any]:
+    """A contract-valid ``provider_record`` (validated by the real model), as normalization would persist it.
+
+    The rows are inserted with raw SQL, so an invalid record would only fail later in workers that read it
+    (the news ready consumer dead-lettered every such version and starved the other queues).
+    """
+    return ProviderRecordMetadata.model_validate(
+        {
+            "provider": provider,
+            "identity": f"{provider}:volume",
+            "timestamp_basis": "collection",
+            "coverage": "returned_snapshot",
+            "content_truncated": False,
+            "world_data": {
+                "provider": provider,
+                "metric": "volume_fixture",
+                "value": 1.0,
+                "unit": "count",
+                "quality": "provider_reported",
+                "provider_fields": _VOLUME_FIELDS[provider],
+            },
+        }
+    ).model_dump(mode="json", exclude_none=True)
+
+
 DOC_PROVIDER = "vnexpress_business"
 PHRASES = [
     "Giá vàng tăng mạnh",
@@ -152,7 +188,7 @@ async def _seed_observations(
         prov = json.dumps(
             {
                 "provider_scope_discriminator": disc,
-                "provider_record": {"world_data": {"provider_fields": {"venue": "vol"}}},
+                "provider_record": _provider_record(provider),
             }
         )
         async with engine.begin() as conn:
@@ -440,71 +476,83 @@ async def test_collected_data_tool_at_volume(
 ) -> None:
     """Four representative calls stay under the ceiling at volume and the text search uses the 0025 GIN index."""
     seeded = await _create_sources(ready_owner_client, committed_engine)
-    scopes = await _discriminators(committed_engine, seeded)
-    t0 = time.perf_counter()
-    observations = await _seed_observations(committed_engine, seeded, scopes)
-    await _seed_documents(committed_engine, seeded, scopes)
-    await _analyze(committed_engine)
-    seed_seconds = time.perf_counter() - t0
+    try:
+        scopes = await _discriminators(committed_engine, seeded)
+        t0 = time.perf_counter()
+        observations = await _seed_observations(committed_engine, seeded, scopes)
+        await _seed_documents(committed_engine, seeded, scopes)
+        await _analyze(committed_engine)
+        seed_seconds = time.perf_counter() - t0
 
-    since = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
-    sql_text = (
-        "SELECT date_trunc('day', observed_at) AS day, avg(value) AS avg_value "
-        "FROM scoped_observations WHERE provider = 'binance' AND symbol = 'S00' "
-        "AND observed_at >= now() - interval '90 days' GROUP BY 1 ORDER BY 1"
-    )
-    queries: dict[str, dict[str, Any]] = {
-        "latest_one_symbol": {
-            "providers": ["binance"],
-            "symbols": ["S00"],
-            "target": "observations",
-        },
-        "aggregate_avg_90d": {
-            "target": "observations",
-            "aggregation": "avg",
-            "date_from": since,
-        },
-        "sql_daily_avg": {"mode": "sql", "sql_query": sql_text},
-        "text_gia_vang": {
-            "providers": [DOC_PROVIDER],
-            "target": "documents",
-            "text_query": "gia vang",
-        },
-    }
-    timings: dict[str, Any] = {
-        "observations_seeded": observations,
-        "documents_seeded": DOC_ROWS,
-        "seed_seconds": round(seed_seconds, 1),
-        "runs_per_query": RUNS,
-    }
-    plans: dict[str, str] = {}
-    results: dict[str, dict[str, Any]] = {}
-    for name, args in queries.items():
-        await _timed_call(committed_engine, seeded, args, captured=None)  # warm-up, not measured
-        samples = []
-        for _ in range(RUNS):
-            elapsed, results[name] = await _timed_call(
-                committed_engine, seeded, args, captured=None
-            )
-            samples.append(elapsed)
-        timings[name] = {
-            "p50_s": round(statistics.median(samples), 4),
-            "p95_s": round(_percentile(samples, 0.95), 4),
-            "samples_s": [round(s, 4) for s in samples],
-            "error": results[name].get("error"),
-            "result_head": json.dumps(results[name], ensure_ascii=False, default=str)[:300],
+        since = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
+        sql_text = (
+            "SELECT date_trunc('day', observed_at) AS day, avg(value) AS avg_value "
+            "FROM scoped_observations WHERE provider = 'binance' AND symbol = 'S00' "
+            "AND observed_at >= now() - interval '90 days' GROUP BY 1 ORDER BY 1"
+        )
+        queries: dict[str, dict[str, Any]] = {
+            "latest_one_symbol": {
+                "providers": ["binance"],
+                "symbols": ["S00"],
+                "target": "observations",
+            },
+            "aggregate_avg_90d": {
+                "target": "observations",
+                "aggregation": "avg",
+                "date_from": since,
+            },
+            "sql_daily_avg": {"mode": "sql", "sql_query": sql_text},
+            "text_gia_vang": {
+                "providers": [DOC_PROVIDER],
+                "target": "documents",
+                "text_query": "gia vang",
+            },
         }
-        if args.get("mode") == "sql":
-            plans[name] = await _explain_sql_mode(committed_engine, seeded, scopes, sql_text)
-        else:
-            captured: list[Any] = []
-            await _timed_call(committed_engine, seeded, args, captured=captured)
-            plans[name] = "\n\n".join(await _explain_captured(committed_engine, captured))
-    _write_report(seeded["tag"], timings, plans)
+        timings: dict[str, Any] = {
+            "observations_seeded": observations,
+            "documents_seeded": DOC_ROWS,
+            "seed_seconds": round(seed_seconds, 1),
+            "runs_per_query": RUNS,
+        }
+        plans: dict[str, str] = {}
+        results: dict[str, dict[str, Any]] = {}
+        for name, args in queries.items():
+            await _timed_call(
+                committed_engine, seeded, args, captured=None
+            )  # warm-up, not measured
+            samples = []
+            for _ in range(RUNS):
+                elapsed, results[name] = await _timed_call(
+                    committed_engine, seeded, args, captured=None
+                )
+                samples.append(elapsed)
+            timings[name] = {
+                "p50_s": round(statistics.median(samples), 4),
+                "p95_s": round(_percentile(samples, 0.95), 4),
+                "samples_s": [round(s, 4) for s in samples],
+                "error": results[name].get("error"),
+                "result_head": json.dumps(results[name], ensure_ascii=False, default=str)[:300],
+            }
+            if args.get("mode") == "sql":
+                plans[name] = await _explain_sql_mode(committed_engine, seeded, scopes, sql_text)
+            else:
+                captured: list[Any] = []
+                await _timed_call(committed_engine, seeded, args, captured=captured)
+                plans[name] = "\n\n".join(await _explain_captured(committed_engine, captured))
+        _write_report(seeded["tag"], timings, plans)
 
-    for name in queries:
-        assert not timings[name]["error"], f"{name}: {timings[name]['error']}"
-        assert timings[name]["p95_s"] < CEILING_SECONDS, f"{name}: {timings[name]}"
-    assert results["latest_one_symbol"]["observations"]
-    assert results["text_gia_vang"]["documents"]
-    assert f"Bitmap Index Scan on {GIN_INDEX}" in plans["text_gia_vang"], plans["text_gia_vang"]
+        for name in queries:
+            assert not timings[name]["error"], f"{name}: {timings[name]['error']}"
+            assert timings[name]["p95_s"] < CEILING_SECONDS, f"{name}: {timings[name]}"
+        assert results["latest_one_symbol"]["observations"]
+        assert results["text_gia_vang"]["documents"]
+        assert f"Bitmap Index Scan on {GIN_INDEX}" in plans["text_gia_vang"], plans["text_gia_vang"]
+    finally:
+        # Archive the synthetic sources: their ~50k documents would otherwise keep the shared workers busy
+        # (news/graph recovery) and starve later integration tests. A status flip avoids a multi-million-row
+        # delete; workers skip inactive sources.
+        async with committed_engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE sources SET status = 'archived' WHERE id = ANY(:ids)"),
+                {"ids": list(seeded["ids"].values())},
+            )
