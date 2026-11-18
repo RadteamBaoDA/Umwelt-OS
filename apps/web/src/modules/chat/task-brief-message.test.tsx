@@ -65,4 +65,25 @@ describe('TaskBriefMessage', () => {
       unmount();
     }
   });
+
+  it('links a story citation and leaves other kinds as text', () => {
+    const m = {
+      ...msg,
+      task: {
+        ...msg.task,
+        brief_citations: [
+          { ref: 1, kind: 'stories', id: 's1', title: 'Story one', source_ids: [] },
+          { ref: 2, kind: 'weather', id: 'w1', title: 'Rain', source_ids: [] },
+        ],
+      },
+    } as unknown as ChatMessage;
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <TaskBriefMessage msg={m} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByRole('link', { name: 'Story one' })).toHaveAttribute('href', '/news');
+    expect(screen.queryByRole('link', { name: 'Rain' })).toBeNull();
+    expect(screen.getByText(/Rain/)).toBeInTheDocument();
+  });
 });

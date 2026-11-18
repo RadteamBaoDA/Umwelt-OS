@@ -26,6 +26,16 @@ export function isTaskBriefMessage(msg: ChatMessage): boolean {
 }
 
 /**
+ * Page a brief citation opens, or null when none exists. Only stories have a page (the News list); no route can open a
+ * single story or filter Settings > Sources to one source, so every other kind stays plain text.
+ *
+ * @param kind - Citation fact kind from `task.brief_citations`.
+ */
+function citationHref(kind: string): string | null {
+  return kind === 'stories' || kind === 'story' ? '/news' : null;
+}
+
+/**
  * Posted daily-brief message: a run line (generated time and a link to the run log in Settings), the brief text rendered
  * by the dashboard's `BriefText` (so translation of the saved revision works as on the gadget) and the brief's own
  * citations from `task.brief_citations`. Read-only; no side effects beyond the translation lookup in BriefText.
@@ -76,11 +86,21 @@ export function TaskBriefMessage({ msg }: { msg: ChatMessage }) {
       <BriefText brief={brief} />
       {citations.length > 0 && (
         <ol className="space-y-0.5 text-xs text-muted-foreground" aria-label={t('taskThread.citations')}>
-          {citations.map((citation) => (
-            <li key={citation.ref}>
-              [{citation.ref}] {citation.title}
-            </li>
-          ))}
+          {citations.map((citation) => {
+            const href = citationHref(citation.kind);
+            return (
+              <li key={citation.ref}>
+                [{citation.ref}]{' '}
+                {href ? (
+                  <Link href={href} className="underline">
+                    {citation.title}
+                  </Link>
+                ) : (
+                  citation.title
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>
