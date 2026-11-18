@@ -31,6 +31,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     border-left: 1px solid var(--line);
+    text-transform: lowercase;
   }
   .statusline-info:empty {
     display: none;

@@ -29,6 +29,7 @@ import { safeLiveLink } from '../live-map-data';
 import { LiveMapConfig } from '../live-map-config';
 import { LIVE_TAG_KEY, LIVE_TAGS, providerMeta } from '../live-feed/sources';
 import type { StoredEvent } from '../live-feed/store';
+import { publishLiveEventCount } from '../live-event-count';
 import { termsAccepted, useLiveFeed, type ProviderStatus } from '../live-feed/use-live-feed';
 
 const WorldMap = lazy(() => import('./world-map').then((module) => ({ default: module.WorldMap })));
@@ -77,6 +78,8 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
   const t = useTranslations('dashboard');
   // Overview defaults to the 3D globe; the choice is session-local and never written to the saved layout.
   const [engine, setEngine] = useState<'globe' | 'flat'>('globe');
+  // Terminal shows the demo's short "globe | flat" labels; the full names stay as accessible names.
+  const terminal = useSkin() === 'terminal';
   // Two-button segmented control (not a Select): the pressed segment is the active engine, as in the developer-theme demo.
   const engineSegment = (
     <div role="group" aria-label={t('map.engineLabel')} className="map-engine-seg inline-flex shrink-0 items-center gap-1">
@@ -85,18 +88,20 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
         size="sm"
         variant={engine === 'globe' ? 'default' : 'ghost'}
         aria-pressed={engine === 'globe'}
+        aria-label={terminal ? t('map.globeEngine') : undefined}
         onClick={() => setEngine('globe')}
       >
-        {t('map.globeEngine')}
+        {terminal ? t('map.globeShort') : t('map.globeEngine')}
       </Button>
       <Button
         type="button"
         size="sm"
         variant={engine === 'flat' ? 'default' : 'ghost'}
         aria-pressed={engine === 'flat'}
+        aria-label={terminal ? t('map.flatEngine') : undefined}
         onClick={() => setEngine('flat')}
       >
-        {t('map.flatEngine')}
+        {terminal ? t('map.flatShort') : t('map.flatEngine')}
       </Button>
     </div>
   );
@@ -783,6 +788,12 @@ function LiveMapContent({
   const feed = useLiveFeed(scope, { tags, days, query, now }, visible);
   const { workspaceId, isOwner, providers, accepted, config, results, events: filtered, points, statuses } = feed;
   const selectedEvent = filtered.find((event) => event.key === selected);
+  // The overview map reports its event count to the page header (terminal statusline); cleared on unmount.
+  useEffect(() => {
+    if (!overview) return undefined;
+    publishLiveEventCount(filtered.length);
+    return () => publishLiveEventCount(null);
+  }, [overview, filtered.length]);
   // A selection whose event left the filtered list (filters, expiry) reads as cleared everywhere.
   const activeSelection = selectedEvent ? selected : null;
   const listResetKey = `${tags.join(',')}|${days}|${query}`;

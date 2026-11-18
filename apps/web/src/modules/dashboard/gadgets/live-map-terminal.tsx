@@ -12,16 +12,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { LIVE_TAG_KEY, LIVE_TAGS } from '../live-feed/sources';
 import type { StoredEvent } from '../live-feed/store';
 import { safeLiveLink } from '../live-map-data';
-import { legendTone } from './live-map-legend';
-
-/**
- * Event kind shown in the terminal event rows: the first known category tag of the event (upper-cased by CSS),
- * else its provider id, so every row carries a short coloured label.
- */
-export function eventKind(event: Pick<StoredEvent, 'tags' | 'provider'>): { label: string; tone: string } {
-  const tag = LIVE_TAGS.find((candidate) => event.tags.includes(candidate));
-  return { label: tag ?? event.provider, tone: tag ? legendTone(tag) : 'var(--muted)' };
-}
+import { eventKind } from './event-kind';
 
 /**
  * Terminal title bar of the overview map pane: status dot, "── live map ──" title, muted meta (event count and

@@ -15,6 +15,9 @@ import { DashboardOverview } from './dashboard-overview';
 import { DashboardPanel } from './dashboard-panel';
 import { DashboardCrudDialogs, ManagementDialog, useDashboardCrud } from './dashboard-dialogs';
 import { DashboardHeader, formatRelativeAge } from './dashboard-header';
+import { buildHeaderSummary } from './header-summary';
+import { useLiveEventCount } from './live-event-count';
+import { useSkin } from '@/core/use-skin';
 import './dashboard-skin.css';
 import { GroupTabs, LayoutNotices, StaleSourcesPanel, TimezoneFooter, TodayHeaderGate } from './dashboard-panels';
 import { FreshnessStrip } from './freshness-strip';
@@ -94,20 +97,6 @@ function useMobileNoticeDismissal(): [boolean, () => void] {
   return [dismissed, dismiss];
 }
 
-/** Joins the "updated" and "stale sources" fragments of the header summary; null when both are absent. */
-function buildHeaderSummary(
-  t: ReturnType<typeof useTranslations<'dashboard'>>,
-  lastUpdatedAt: number | null,
-  staleCount: number,
-  locale: string,
-): string | null {
-  const parts = [
-    lastUpdatedAt !== null ? t('summaryUpdated', { time: formatRelativeAge(lastUpdatedAt, locale) }) : null,
-    staleCount > 0 ? t('staleSources.summary', { count: staleCount }) : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(' · ') : null;
-}
-
 type PageData = ReturnType<typeof useDashboardData>;
 type PageOps = {
   session: ReturnType<typeof useLayoutSession>;
@@ -142,6 +131,9 @@ function ConnectedHeader({
   const display = useDisplayPreferences();
   const { session, save } = ops;
   const { activeDashboard, sources, showFirstRun } = data;
+  const terminal = useSkin() === 'terminal';
+  // Only the overview group mounts the live map; elsewhere the count is null and its fragment is omitted.
+  const liveEvents = useLiveEventCount();
   return (
     <DashboardHeader
       dashboards={data.dashboards}
@@ -152,7 +144,12 @@ function ConnectedHeader({
       isOwner={isOwner}
       isEditMode={session.isEditMode}
       canEditLayout={session.canEditLayout}
-      summary={buildHeaderSummary(t, sources.lastUpdatedAt, sources.staleSources.length, display.locale)}
+      summary={buildHeaderSummary(
+        t,
+        sources.lastUpdatedAt !== null ? formatRelativeAge(sources.lastUpdatedAt, display.locale) : null,
+        sources.staleSources.length,
+        terminal ? { sources: sources.dashboardSources.length, liveEvents: liveEvents } : undefined,
+      )}
       greeting={overview ? <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} /> : undefined}
       onSwitch={save.requestSwitchDashboard}
       onCreate={() => crud.setCreateOpen(true)}

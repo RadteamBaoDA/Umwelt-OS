@@ -16,6 +16,9 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatMetricLabel } from './metric-label';
 import { metricBetterDirection } from './metric-direction';
 import { SeriesRow } from './series-row';
+import { Sparkline } from './sparkline';
+import { formatTerminalChange, formatTerminalValue, TerminalObservationCells, TerminalObservationFigure } from './observation-terminal';
+import { useSkin } from '@/core/use-skin';
 import { getDateTimeFormat } from '@/modules/shared';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
@@ -251,6 +254,66 @@ function useObservationFormatters(sources: ReturnType<typeof useEffectiveLookbac
   return { t, display, timesTitle, labelOf, unitOf };
 }
 
+/**
+ * Terminal skin of the observation gadget: one reading is the chart figure (`71,340 ▲ +3.12%` over the history line),
+ * several are a `SYMBOL  LAST  CHG` table with full-precision values (never the KPI strip or sparkline column).
+ * Keeps the `observation-row` test ids and the observed/published/collected tooltips of the default layout.
+ */
+function TerminalObservationRows({
+  instance,
+  items,
+  history,
+  fmt,
+}: {
+  instance: GadgetInstance;
+  items: WorldObservation[];
+  history: ReturnType<typeof historyPerSeries>;
+  fmt: Pick<ReturnType<typeof useObservationFormatters>, 't' | 'display' | 'timesTitle' | 'labelOf'>;
+}) {
+  const { t, display, timesTitle, labelOf } = fmt;
+  const changeOf = (item: WorldObservation) =>
+    formatTerminalChange(deltaVsPrevious(history.get(seriesKey(item))), metricBetterDirection(item.metric));
+  if (items.length === 1) {
+    const single = items[0];
+    return (
+      <div
+        title={timesTitle(single)}
+        data-testid="observation-row"
+        role="group"
+        aria-label={single.value === null ? t('weather.missingValue') : `${single.value} ${single.currency ?? single.unit}`}
+      >
+        <TerminalObservationFigure
+          label={labelOf(single)}
+          figure={formatTerminalValue(single.value, display.locale, true)}
+          change={changeOf(single)}
+          spark={<Sparkline data={history.get(seriesKey(single)) ?? []} height={90} />}
+        />
+      </div>
+    );
+  }
+  return (
+    <>
+      {/* Decorative column header; every row's text already reads label, value, change. */}
+      <div className="obs-term-row obs-term-head" aria-hidden="true">
+        <span>{t('providerObs.colSymbol')}</span>
+        <span className="obs-term-last">{t('providerObs.colLast')}</span>
+        <span className="obs-term-chg">{t('providerObs.colChange')}</span>
+      </div>
+      <ul className="obs-term-list divide-y divide-border" aria-label={instance.title || t('providerObs.title')}>
+        {items.map((item) => (
+          <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
+            <TerminalObservationCells
+              label={labelOf(item)}
+              last={formatTerminalValue(item.value, display.locale)}
+              change={changeOf(item)}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 /** One reading as a KPI (single series), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
 function ObservationRows({
   instance,
@@ -267,6 +330,9 @@ function ObservationRows({
 }) {
   const { t, display, timesTitle, labelOf, unitOf } = useObservationFormatters(sources, sourceIds);
   const single = items.length === 1 ? items[0] : null;
+  const terminal = useSkin() === 'terminal';
+  if (terminal)
+    return <TerminalObservationRows instance={instance} items={items} history={history} fmt={{ t, display, timesTitle, labelOf }} />;
   const kpiStrip = items.length >= 2 && items.length <= 8; // wide gadgets show these as one KPI row
   if (single) {
     return (

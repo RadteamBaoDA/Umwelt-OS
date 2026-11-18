@@ -112,6 +112,7 @@ export function DashboardOverview({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {collapsed && !editMode && <div className="mb-2 flex justify-end">{toggle}</div>}
       <div
+        data-overview-split=""
         className={`flex min-h-0 min-w-0 flex-1 gap-4 ${collapsed ? '' : 'min-[1100px]:grid min-[1100px]:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]'}`}
       >
         {!editMode && !collapsed && map}

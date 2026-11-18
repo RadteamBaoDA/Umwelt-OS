@@ -271,3 +271,53 @@ html[data-skin='terminal'] .live-event-kind {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Terminal Overview split: map column one third, gadget panel two thirds (demo `.s4` + `.s8`), instead of 45/55. */
+@media (min-width: 1100px) {
+  html[data-skin='terminal'] [data-overview-split] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+}
+
+/* Map title-bar actions read `[globe|flat] refresh sources collapse` as in the demo: the collapse toggle goes last. */
+html[data-skin='terminal'] .live-map-titlebar-actions > [aria-expanded] {
+  order: 9;
+}
+
+/* The freshness tick strip is replaced by the statusline summary and source health in the terminal skin; it stays
+   in the accessibility tree (visually hidden) rather than being removed. */
+html[data-skin='terminal'] .freshness-strip-root {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Page head (demo `.page-head`): actions sit on the title line, the greeting stays compact and the weather link is lowercase. */
+html[data-skin='terminal'] .dash-header {
+  align-items: flex-start;
+}
+html[data-skin='terminal'] .dash-greeting p {
+  font-size: 14px;
+}
+html[data-skin='terminal'] .dash-greeting :is(a, button) {
+  text-transform: lowercase;
+}
+
+/* Map title-bar icon buttons are tighter on fine pointers so the "N events · 7d" meta keeps its full width. */
+@media (pointer: fine) {
+  html[data-skin='terminal'] .live-map-titlebar-actions [data-slot='button'][data-size='icon'] {
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    min-height: 22px;
+  }
+  html[data-skin='terminal'] .live-map-titlebar-actions {
+    gap: 0;
+  }
+}

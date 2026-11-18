@@ -188,7 +188,7 @@ export function DashboardHeader(props: HeaderProps) {
   const t = useTranslations('dashboard');
   const { summary, greeting, isOwner, isAdminViewer, isEditMode, canEditLayout, layoutOperationPending } = props;
   return (
-    <div className="flex flex-wrap items-end gap-3">
+    <div className="dash-header flex flex-wrap items-end gap-3">
       <div className="mr-auto flex min-w-0 basis-full flex-col gap-0.5 sm:basis-auto">
         <h1 className="m-0 min-w-0 text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground">
           <DashboardSwitcher {...props} />

@@ -219,7 +219,11 @@ function severityEdge(severity: WatchlistItem['severity']): string {
   return severity === 'critical' ? 'border-destructive' : severity === 'warning' ? 'border-foreground/50' : 'border-transparent';
 }
 
-/** One rule row: a symbol row with sparkline when live observations exist, otherwise the target/condition/time row. */
+/**
+ * One rule row: a symbol row with sparkline when live observations exist, otherwise the target/condition/time row.
+ * In the terminal skin a rule match is a plain `HIT  text` log row (alerting = danger, matched = warning,
+ * monitoring = muted `idle`); symbol rows keep their value layout.
+ */
 function WatchlistRow({
   item,
   obs,
@@ -231,6 +235,7 @@ function WatchlistRow({
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
+  const terminal = useSkin() === 'terminal';
   const edge = severityEdge(item.severity);
   const srSeverity = (
     <span className="sr-only">
@@ -251,6 +256,20 @@ function WatchlistRow({
           deltaPercent={deltaVsPrevious(points)}
           better={metricBetterDirection(obs.metric)}
         />
+        {srSeverity}
+      </li>
+    );
+  }
+  if (terminal) {
+    const hit = item.status !== 'monitoring';
+    return (
+      <li
+        className="watch-hit-row"
+        data-status={item.status}
+        title={[item.condition, item.matchReason].filter(Boolean).join(' · ') || undefined}
+      >
+        <span className="watch-hit-level">{hit ? t('watchlist.levelHit') : t('watchlist.levelIdle')}</span>
+        <span className="watch-hit-text">{item.target}</span>
         {srSeverity}
       </li>
     );
@@ -340,7 +359,7 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
 
       {/* Search Filter Input */}
       {items.length > 0 && (
-        <div className="relative shrink-0">
+        <div className={terminal ? 'watch-filter relative shrink-0' : 'relative shrink-0'}>
           <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-muted-foreground pointer-events-none" aria-hidden="true" />
           <Input
             type="search"
