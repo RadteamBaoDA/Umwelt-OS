@@ -81,7 +81,11 @@ def test_registered_presets_are_the_dispatchable_set() -> None:
     registered = {pid for pid, group in rows.items() if group[0][7].startswith("registered")}
     assert registered == set(DISPATCHABLE)
     assert rows["coingecko"][0][7] == "registered (requires API key)"
-    keyed = {pid for pid, group in rows.items() if group[0][7] == "registered (requires API key)"}
+    keyed = {
+        pid
+        for pid, group in rows.items()
+        if group[0][7].startswith(("registered (requires API key", "registered (requires bearer token"))
+    }
     assert keyed == {
         spec.id for spec in FREE_PROVIDER_SPECS if spec.key_required and spec.id in DISPATCHABLE
     }

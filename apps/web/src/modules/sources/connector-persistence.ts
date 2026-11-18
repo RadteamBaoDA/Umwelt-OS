@@ -328,7 +328,7 @@ async function publishSaved(
   draft.setProviderCredentialConfigured(acknowledged.provider_credential_configured);
   if (draft.draftVersion.current === submittedVersion) {
     draft.setDirty(false);
-    draft.dirtyRef.current = Boolean(draft.secret);
+    draft.dirtyRef.current = Boolean(draft.secret || draft.apiSecret);
   }
   draft.setValidation(null);
   queryClient.setQueryData(connectorKeys.configuration(id), acknowledged);
@@ -378,7 +378,7 @@ export async function saveConfiguration(
 /** Removes a stored provider credential only when there is no unsaved draft or secret input. */
 export async function removeCredential(ctx: EditorContext) {
   const { draft, requests } = ctx;
-  if (draft.dirtyRef.current || draft.secret) return;
+  if (draft.dirtyRef.current || draft.secret || draft.apiSecret) return;
   const token = requests.beginRequest('remove');
   const id = draft.sourceId;
   if (!token || !id) return;

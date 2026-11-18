@@ -59,7 +59,7 @@ export function useConnectorActivation(source: Source | null | undefined, source
 export type ConnectorActivationState = ReturnType<typeof useConnectorActivation>;
 
 /** Secret the owner typed plus the auth choice at the moment activation started; replacement bytes travel only with the activation request. */
-type ActivationDraft = { authMethod: string; secret: string; telegramSecretAction: 'keep' | 'replace' };
+type ActivationDraft = { authMethod: string; secret: string; apiSecret: string; telegramSecretAction: 'keep' | 'replace' };
 
 /** Mirrors an accepted activation result into the draft: state, error, credential flag, and clears a replaced secret. */
 function applyActivationResult(
@@ -116,9 +116,13 @@ async function storeReplacementKeys(
   nextRevision: number,
   keys: { native: boolean; world: boolean },
   secret: string,
+  apiSecret: string,
 ) {
   const signal = token.controller.signal;
-  if (keys.native) await saveNativeRestCredential(id, nextRevision, secret, ctx.csrfToken, signal);
+  if (keys.native) {
+    const credential = ['podcast_index', 'igdb_games'].includes(ctx.draft.provider) ? { apiKey: secret, apiSecret } : secret;
+    await saveNativeRestCredential(id, nextRevision, credential, ctx.csrfToken, signal);
+  }
   if (keys.world) await saveWorldProviderCredential(id, ctx.draft.sourceGenerationRef.current, nextRevision, secret, ctx.csrfToken, signal);
 }
 
@@ -217,6 +221,10 @@ async function runSaveAndEnable(
   progress: { actionSourceId: string | null; nextRevision: number },
 ): Promise<EnableOutcome | null> {
   const { draft, requests } = ctx;
+  if (['podcast_index', 'igdb_games'].includes(draft.provider) && Boolean(activationDraft.secret) !== Boolean(activationDraft.apiSecret)) {
+    draft.setError(draft.provider === 'igdb_games' ? 'igdb.pairRequired' : 'podcastIndex.pairRequired');
+    return null;
+  }
   if (!(await saveBeforeEnable(ctx, token, progress))) return null;
   const id = progress.actionSourceId;
   if (!id || !requests.requestIsCurrent(token)) return null;
@@ -228,7 +236,7 @@ async function runSaveAndEnable(
     draft.setError('provider.secretRequired');
     return null;
   }
-  await storeReplacementKeys(ctx, token, id, progress.nextRevision, keys, activationDraft.secret);
+  await storeReplacementKeys(ctx, token, id, progress.nextRevision, keys, activationDraft.secret, activationDraft.apiSecret);
   return activateAndPublish(ctx, token, id, progress.nextRevision, activationDraft, keys);
 }
 
@@ -241,7 +249,12 @@ export async function saveAndEnable(ctx: EditorContext): Promise<EnableOutcome |
   const token = requests.beginRequest('save_enable');
   if (!token) return null;
   // Save persists scope first; only the following activation request may carry replacement secret bytes.
-  const activationDraft = { authMethod: draft.authMethod, secret: draft.secret, telegramSecretAction: draft.telegramSecretAction };
+  const activationDraft = {
+    authMethod: draft.authMethod,
+    secret: draft.secret,
+    apiSecret: draft.apiSecret,
+    telegramSecretAction: draft.telegramSecretAction,
+  };
   const progress = { actionSourceId: draft.sourceId || null, nextRevision: draft.revision };
   draft.setError('');
   draft.setNotice('');
@@ -293,7 +306,19 @@ async function runRetryActivation(ctx: EditorContext, token: RequestToken, id: s
   const { draft } = ctx;
   const requestedSecret = draft.secret;
   const replacingNativeKey = usesProviderCredential(ctx.currentEntry) && Boolean(requestedSecret);
-  if (replacingNativeKey) await saveNativeRestCredential(id, draft.revision, requestedSecret, ctx.csrfToken, token.controller.signal);
+  if (['podcast_index', 'igdb_games'].includes(draft.provider) && Boolean(requestedSecret) !== Boolean(draft.apiSecret)) {
+    draft.setError(draft.provider === 'igdb_games' ? 'igdb.pairRequired' : 'podcastIndex.pairRequired');
+    return;
+  }
+  await storeReplacementKeys(
+    ctx,
+    token,
+    id,
+    draft.revision,
+    { native: replacingNativeKey, world: false },
+    requestedSecret,
+    draft.apiSecret,
+  );
   if (providerCredentialRequired(ctx.currentEntry) && !replacingNativeKey && !draft.providerCredentialConfigured) {
     draft.setError('provider.secretRequired');
     return;

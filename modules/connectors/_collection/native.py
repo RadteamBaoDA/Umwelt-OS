@@ -3,12 +3,14 @@
 Private part of :mod:`modules.connectors.collection` (a pure move; that module re-exports every name).
 """
 
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from modules.connectors import public as connectors
+from modules.connectors import quota
 from modules.connectors._collection.base import (
     HEADER_AUTH_PROVIDERS,
     PAYLOAD_RATE_LIMIT_BACKOFF,
@@ -27,6 +29,7 @@ from modules.connectors._collection.oauth import (
     _google_access_token,
     _reddit_access_token,
 )
+from modules.connectors.backends import NATIVE_SIGNED_MEDIA_PROVIDERS
 from modules.connectors.providers import rest
 
 
@@ -423,6 +426,115 @@ async def _native_world_data(call: NativeCall) -> Any:
     )
 
 
+async def _native_keyed_media(call: NativeCall) -> None:
+    """Load the current encrypted credential, gate each send, then accept records and cursor together."""
+    from modules.connectors.providers.media_native import collect_podcast_index, collect_youtube_api
+
+    run = call.run
+    placement, stored = await _rest_secret(run)
+    if placement != "Authorization":
+        raise CredentialMissing
+    config = connectors.ConnectorConfig.model_validate(run.attempt.source.configuration)
+    is_podcast = run.attempt.source.provider == "podcast_index"
+    api_key, api_secret = stored, ""
+    if is_podcast:
+        try:
+            pair = json.loads(stored)
+            api_key, api_secret = pair["apiKey"], pair["apiSecret"]
+        except (KeyError, TypeError, ValueError):
+            raise CredentialMissing from None
+        if not isinstance(api_key, str) or not isinstance(api_secret, str) or not api_key or not api_secret:
+            raise CredentialMissing
+    run.gate.bind_credential(
+        quota.credential_fingerprint(
+            api_key,
+            deployment_key=run.settings.connector_credential_encryption_key.get_secret_value(),
+        )
+    )
+    fetch, cursor = run.gate.fetch_bytes, call.lease.cursor_before
+    if is_podcast:
+        page = await collect_podcast_index(config, api_key, api_secret, call.collected_at, fetch, cursor)
+    else:
+        page = await collect_youtube_api(config, api_key, call.collected_at, fetch, cursor)
+    # Ingestion verifies the captured credential revision under lock before committing cursor and data.
+    await _accept_native(
+        run, call.lease, page.records, page.coverage, call.collected_at,
+        cursor_after=page.cursor_after, provider_credential_revision=run.attempt.credential_revision,
+    )
+
+
+async def _native_listenbrainz(call: NativeCall) -> None:
+    """Collect the public ListenBrainz snapshot through SendGate and atomically accept its cursor and query fence."""
+    from modules.connectors.provider_options import native_fingerprint
+    from modules.connectors.providers.media_music import collect_listenbrainz_releases
+
+    run = call.run
+    config = connectors.ConnectorConfig.model_validate(run.attempt.source.configuration)
+    options = config.model_dump(exclude_none=True)
+    fingerprint = native_fingerprint("listenbrainz_releases", options)
+    if fingerprint is None:
+        raise CollectionFenceLost("configuration_invalid", "query_fingerprint_missing")
+    run.extras["native_fp"] = fingerprint
+    page = await collect_listenbrainz_releases(
+        options,
+        cursor=call.lease.cursor_before,
+        collected_at=call.collected_at,
+        fetch_bytes=run.gate.fetch_bytes,
+    )
+    await _accept_native(
+        run, call.lease, page.records, page.coverage, call.collected_at,
+        cursor_after=page.cursor_after,
+    )
+
+
+async def _native_steam_igdb(call: NativeCall) -> None:
+    """Collect Steam or IGDB through SendGate and accept data with its scope and credential revision fence."""
+    from modules.connectors.provider_options import native_fingerprint
+    from modules.connectors.providers.media_games import collect_igdb, collect_steam
+
+    run, attempt = call.run, call.run.attempt
+    provider = attempt.source.provider
+    if provider is None:
+        raise CollectionFenceLost("configuration_invalid", "provider_missing")
+    config = connectors.ConnectorConfig.model_validate(attempt.source.configuration)
+    options = config.model_dump(exclude_none=True)
+    fingerprint = native_fingerprint(provider, options)
+    if fingerprint is None:
+        raise CollectionFenceLost("configuration_invalid", "query_fingerprint_missing")
+    run.extras["native_fp"] = fingerprint
+    credential_revision = None
+    if provider == "steam_releases":
+        page = await collect_steam(config, call.collected_at, run.gate.fetch_bytes)
+    else:
+        placement, stored = await _rest_secret(run)
+        if placement != "Authorization":
+            raise CredentialMissing
+        try:
+            pair = json.loads(stored)
+            client_id, client_secret = pair["apiKey"], pair["apiSecret"]
+        except (KeyError, TypeError, ValueError):
+            raise CredentialMissing from None
+        if not all(isinstance(value, str) and value for value in (client_id, client_secret)):
+            raise CredentialMissing
+        run.gate.bind_credential(
+            quota.credential_fingerprint(
+                f"{client_id}:{client_secret}",
+                deployment_key=run.settings.connector_credential_encryption_key.get_secret_value(),
+            )
+        )
+        credential_revision = attempt.credential_revision
+        page = await collect_igdb(config, client_id, client_secret, call.collected_at, run.gate.fetch_bytes)
+        if page.token_expires_at is None or datetime.now(UTC) >= page.token_expires_at:
+            raise rest.CollectionIncomplete
+    await _accept_native(
+        run, call.lease, page.records, page.coverage, call.collected_at,
+        cursor_after=page.cursor_after, provider_credential_revision=credential_revision,
+    )
+
+
+register_native_provider(tuple(NATIVE_SIGNED_MEDIA_PROVIDERS), _native_keyed_media)
+register_native_provider(("listenbrainz_releases",), _native_listenbrainz)
+register_native_provider(("steam_releases", "igdb_games"), _native_steam_igdb)
 register_native_provider(("youtube", "arxiv"), _native_feed)
 register_native_provider(("huggingface",), _native_huggingface)
 register_native_provider(("bluesky",), _native_bluesky)

@@ -192,7 +192,7 @@ _MEDIA_FIELDS = _FEED_FIELDS | {
     "media_type", "artwork_aspect", "country", "language", "genres", "format", "content_rating",
     "release_status", "release_date", "release_year", "release_season", "rating", "creator", "tags",
     "season", "episode", "chapter", "volume", "duration_seconds", "page_count", "external_ids",
-    "trailer_url", "attribution",
+    "trailer_url", "attribution", "final_price", "price_currency", "release_date_text",
 }
 
 
@@ -480,18 +480,19 @@ _SOURCE_FIELD_STRING_LIMITS: dict[str, int] = {
     "format": 32, "content_rating": 32, "release_status": 32, "release_date": 64,
     "release_season": 32, "creator": 240, "season": 32, "episode": 32, "chapter": 32,
     "volume": 32, "attribution": 160,
+    "price_currency": 3, "release_date_text": 64,
 }
 
 _MEDIA_TYPES = frozenset({
     "movie", "anime", "manga", "manhwa", "manhua", "light_novel", "book", "audiobook",
     "youtube", "tv", "podcast", "music", "game",
 })
-_ARTWORK_ASPECTS = frozenset({"poster", "square", "video"})
+_ARTWORK_ASPECTS = frozenset({"poster", "square", "video", "landscape"})
 _RELEASE_STATUSES = frozenset({"upcoming", "airing", "released", "completed", "hiatus"})
 _MEDIA_EXTERNAL_ID_KEYS = frozenset({
-    "tmdb", "imdb", "anilist", "mal", "kitsu", "mangadex", "mangaupdates", "isbn13",
+    "tmdb", "imdb", "anilist", "mal", "kitsu", "mangadex", "mangaupdates", "isbn13", "isbn10", "google_books",
     "openlibrary", "mbid", "tvmaze", "youtube", "steam", "igdb", "wikidata", "itunes",
-    "trakt", "podcastindex",
+    "trakt", "podcastindex", "hardcover",
 })
 _MEDIA_INT_BOUNDS = {"release_year": (1800, 2100), "duration_seconds": (0, 604800), "page_count": (0, 50000)}
 
@@ -661,6 +662,13 @@ def _validate_source_field(key: str, value: Any) -> None:
     """
     if key in {"tags", "categories", "authors", "recurrence"}:
         _validate_string_list(key, value)
+    elif key == "final_price":
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError("Provider final_price must be a nonnegative integer or null")
+    elif key == "price_currency":
+        _validate_bounded_string(key, value)
+        if re.fullmatch(r"[A-Z]{3}", value) is None:
+            raise ValueError("Provider price currency must be an uppercase ISO code")
     elif key == "genres":
         _validate_media_genres(value)
     elif key in {"draft", "prerelease", "deleted", "dead"}:
@@ -1074,7 +1082,7 @@ class MediaProjectionRead(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     media_type: str
-    artwork_aspect: Literal["poster", "square", "video"] = "poster"
+    artwork_aspect: Literal["poster", "square", "video", "landscape"] = "poster"
     country: str | None = None
     language: str | None = None
     genres: list[str] = Field(default_factory=list)

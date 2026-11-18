@@ -207,13 +207,31 @@ export function TelegramCredential({ m }: { m: ConnectorEditorModel }) {
   );
 }
 
-/** Write-only API key field with status and removal for keyed providers. */
+const API_KEY_LABEL = {
+  coingecko: 'coingecko.key',
+  alpha_vantage: 'alphaVantageKey',
+  tmdb_movies: 'tmdb.key',
+  tmdb_tv: 'tmdb.key',
+  trakt_media: 'trakt.key',
+  omdb_lookup: 'omdb.key',
+  mal_anime: 'mal.key',
+  mal_manga: 'mal.key',
+  google_books: 'googleBooks.key',
+  hardcover_books: 'hardcover.key',
+  youtube_api: 'youtubeApi.key',
+  podcast_index: 'podcastIndex.key',
+  igdb_games: 'igdb.clientId',
+} as const;
+
+/** Renders provider write-only API credentials and keeps paired provider inputs revision-fenced. */
 export function ApiKeyField({ m }: { m: ConnectorEditorModel }) {
   const t = useTranslations('sources');
   const {
     provider,
     secret,
     setSecret,
+    apiSecret,
+    setApiSecret,
     backendChoice,
     providerCredentialConfigured,
     setDirty,
@@ -224,28 +242,50 @@ export function ApiKeyField({ m }: { m: ConnectorEditorModel }) {
     setDirtyRef,
     bumpDraftVersion,
   } = m;
+  /** Invalidates pending wizard validation when either write-only credential value changes. */
+  function markCredentialChanged() {
+    setDirtyRef(true);
+    setDirty(true);
+    bumpDraftVersion();
+    setValidation(null);
+    setNotice('');
+  }
   return (
     <>
       {(provider === 'alpha_vantage' || (usesApiKey(currentEntry) && (backendChoice ?? 'native') === 'native')) && (
         <div className="field">
           <Label htmlFor="source-provider-key">
-            {t(provider === 'coingecko' ? 'coingecko.key' : provider === 'alpha_vantage' ? 'alphaVantageKey' : 'provider.key')}
+            {t(Object.hasOwn(API_KEY_LABEL, provider) ? API_KEY_LABEL[provider as keyof typeof API_KEY_LABEL] : 'provider.key')}
           </Label>
           <PasswordInput
             id="source-provider-key"
             autoComplete="new-password"
-            maxLength={256}
+            maxLength={provider === 'hardcover_books' ? 512 : 256}
             required={!providerCredentialConfigured}
             value={secret}
             onChange={(event) => {
               setSecret(event.target.value);
-              setDirtyRef(true);
-              setDirty(true);
-              bumpDraftVersion();
-              setValidation(null);
-              setNotice('');
+              markCredentialChanged();
             }}
           />
+          {(provider === 'podcast_index' || provider === 'igdb_games') && (
+            <div className="field">
+              <Label htmlFor="source-paired-provider-secret">
+                {t(provider === 'podcast_index' ? 'podcastIndex.secret' : 'igdb.clientSecret')}
+              </Label>
+              <PasswordInput
+                id="source-paired-provider-secret"
+                autoComplete="new-password"
+                maxLength={256}
+                required={!providerCredentialConfigured || Boolean(secret)}
+                value={apiSecret}
+                onChange={(event) => {
+                  setApiSecret(event.target.value);
+                  markCredentialChanged();
+                }}
+              />
+            </div>
+          )}
           <small className="text-muted-foreground">{providerCredentialConfigured ? t('credential.savedWriteOnly') : t('secretHelp')}</small>
           {usesApiKey(currentEntry) && keyNeeded(visibleActivationError) && (
             <small className="error" role="alert">

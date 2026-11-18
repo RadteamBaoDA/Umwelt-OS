@@ -25,6 +25,14 @@ from core.errors import (
     NotFoundError,
 )
 from core.workspaces.schemas import Scope
+from modules.connectors.backends import (
+    IGDB_SCOPE_FIELDS,
+    LISTENBRAINZ_SCOPE_FIELDS,
+    PODCAST_INDEX_SCOPE_FIELDS,
+    STEAM_SCOPE_FIELDS,
+    YOUTUBE_SCOPE_FIELDS,
+    YOUTUBE_TARGET_FIELDS,
+)
 from modules.connectors.models import (
     AgentBrowserGrant,
 )
@@ -51,34 +59,33 @@ def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
     return unavailable_v8_projection(requested_countries)
 
 
-# Providers whose scope is exactly one of several alternative fields (enforced by registry.validate).
+# Providers whose scope needs at least one target field. Provider validation enforces any mutual exclusion.
 _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
-    "youtube": frozenset(
-        {"youtube_channel_id", "youtube_channels", "youtube_handles", "youtube_playlist_ids"}
-    ),
+    **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_TARGET_FIELDS),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
+    "google_books": frozenset({"google_books_query", "google_books_subject"}),
 }
 
 
 # Single source of truth for catalog scope fields that may be absent from a stored configuration. Lives here (not in
 # registry.py, which imports this module) to avoid an import cycle; registry.validate imports it too.
 OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
-    "youtube": frozenset(
-        {
-            "youtube_channel_id",
-            "youtube_channels",
-            "youtube_handles",
-            "youtube_playlist_ids",
-            "youtube_filter",
-        }
-    ),
+    "podcast_index": PODCAST_INDEX_SCOPE_FIELDS,
+    "listenbrainz_releases": LISTENBRAINZ_SCOPE_FIELDS,
+    "steam_releases": STEAM_SCOPE_FIELDS,
+    "igdb_games": IGDB_SCOPE_FIELDS,
+    **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_SCOPE_FIELDS),
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
     "coingecko": frozenset(
         {"coingecko_assets"}
     ),  # absent on legacy BTC/USD sources (collection falls back to BTC)
+    "mal_anime": frozenset({"mal_mode", "mal_ranking_type", "mal_season_year", "mal_season"}),
+    "mal_manga": frozenset({"mal_ranking_type"}),
+    "google_books": frozenset({"google_books_query", "google_books_subject"}),
+    "omdb_lookup": frozenset({"omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search"}),
     "anilist_anime": frozenset({"media_ids"}),
     "openlibrary_books": frozenset({"openlibrary_mode", "openlibrary_subject", "openlibrary_query", "ebooks_only", "media_languages"}),
     "gutendex_books": frozenset({"media_languages", "gutendex_topic", "gutendex_search", "gutendex_copyright", "gutendex_mime_type", "gutendex_author_year_start", "gutendex_author_year_end", "media_genres"}),

@@ -18,6 +18,13 @@ from tests.unit.modules.connectors._collection_patch import patch_collection
 KEY = "SECRET-key-0123456789abcdef"
 NOW = datetime(2026, 10, 22, 0, 0, tzinfo=UTC)
 CFG = {
+    "tmdb_movies": {"tmdb_mode": "upcoming"},
+    "tmdb_tv": {"tmdb_mode": "airing_today"},
+    "trakt_media": {},
+    "omdb_lookup": {"omdb_mode": "title", "omdb_title": "Example movie"},
+    "mal_anime": {},
+    "mal_manga": {},
+    "google_books": {"google_books_subject": "History"},
     "fred": {"fred_series_id": "DFF"},
     "finnhub_news": {},
     "newsapi": {},
@@ -29,6 +36,13 @@ CFG = {
 # OpenWeather 2.5 current weather, OpenAQ v3 locations/{id}/sensors, FIRMS country CSV), trimmed but with the full
 # envelope and the extra fields real responses carry, so a mapper that only works on a minimal body is caught.
 BODIES = {
+    "tmdb_movies": {"results": [{"id": 42, "title": "Example movie", "release_date": "2026-12-01"}]},
+    "tmdb_tv": {"results": [{"id": 43, "name": "Example series", "first_air_date": "2026-12-01"}]},
+    "trakt_media": [{"movie": {"title": "Example movie", "year": 2026, "ids": {"trakt": 44}}}],
+    "omdb_lookup": {"Response": "True", "Title": "Example movie", "Year": "2026", "imdbID": "tt1234567", "Type": "movie"},
+    "mal_anime": {"data": [{"node": {"id": 41, "title": "Example anime", "media_type": "tv"}}]},
+    "mal_manga": {"data": [{"node": {"id": 42, "title": "Example manga", "media_type": "manga"}}]},
+    "google_books": {"items": [{"id": "example", "volumeInfo": {"title": "Example book"}}]},
     "fred": {
         "realtime_start": "2026-10-22",
         "realtime_end": "2026-10-22",
@@ -334,10 +348,13 @@ def make_run(monkeypatch, provider, secret, body=b"{}"):
 
     async def lease(_run):
         leased.append(1)
-        return object()
+        return SimpleNamespace(cursor_before=None)
 
-    async def accept(_run, _lease, records, coverage, _at, update=None):
+    async def accept(_run, _lease, records, coverage, _at, cursor_after=None, update=None):
         accepted.append(records)
+
+    async def select(_run, _lease, records, _at):
+        return list(records), None
 
     async def stored(_run):
         if isinstance(secret, Exception):
@@ -346,6 +363,7 @@ def make_run(monkeypatch, provider, secret, body=b"{}"):
 
     patch_collection(monkeypatch, "_lease", lease)
     patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_select", select)
     patch_collection(monkeypatch, "_rest_secret", stored)
     settings = SimpleNamespace(
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "x" * 44)

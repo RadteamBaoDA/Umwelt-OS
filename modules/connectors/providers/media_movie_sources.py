@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 
 from modules.connectors.provider_options import filter_media_records
 from modules.connectors.providers._media_common import (
+    MEDIA_ATTRIBUTIONS,
     media_user_agent,
     normalize_country,
     normalize_cover_url,
@@ -107,11 +108,7 @@ def _movie_record(
     fields.setdefault("title", title[:500])
     fields.setdefault("media_type", "movie")
     fields.setdefault("artwork_aspect", "poster")
-    fields.setdefault("attribution", {
-        "wikidata_movies": "Data via Wikidata (CC0 1.0)",
-        "itunes_movies": "Data via Apple iTunes Search API",
-        "letterboxd_rss": "Data via Letterboxd RSS",
-    }[provider])
+    fields.setdefault("attribution", MEDIA_ATTRIBUTIONS[provider])
     if canonical_url:
         fields["canonical_url"] = canonical_url
     envelope = ProviderRecordMetadata(

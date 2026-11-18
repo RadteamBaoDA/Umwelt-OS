@@ -11,6 +11,7 @@ import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -88,7 +89,11 @@ def _split_for(provider_id: str, limit: int | None) -> tuple[int | None, int | N
 
 
 def window_bounds(window: str, now: datetime) -> tuple[datetime, datetime]:
-    """UTC-floored ``[start, end)`` for a policy window."""
+    """Return UTC ``[start, end)`` for a policy window, including daylight saving on Pacific days."""
+    if window == "day_pacific":
+        local = now.astimezone(ZoneInfo("America/Los_Angeles"))
+        start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+        return start.astimezone(UTC), (start + timedelta(days=1)).astimezone(UTC)
     now = now.astimezone(UTC)
     if window == "second":
         start = now.replace(microsecond=0)
@@ -261,14 +266,16 @@ async def debit_send(
     credential: str | None = None,
     egress: str | None = None,
     now: datetime | None = None,
+    apply_quota: bool = True,
 ) -> UUID:
-    """Record one physical send and debit all its windows atomically; flush only, the caller commits.
+    """Record a logical send and its applicable quota debits atomically; the caller commits.
 
-    ``request_target`` must already be redacted; only its digest is stored. Raises
-    ``QuotaDeferred`` (no counters changed) or ``SendPermitConsumed`` (permit never replayable).
+    ``apply_quota=False`` still inserts the unique admission/attempt sequence but omits quota
+    windows for a host outside the adapter's budget. ``request_target`` must be redacted and
+    is stored as a digest. Raises ``QuotaDeferred`` or ``SendPermitConsumed`` before any send.
     """
     now = now or datetime.now(UTC)
-    plan = _plan(provider_id, now, credential, egress)
+    plan = _plan(provider_id, now, credential, egress) if apply_quota else []
     send_id = uuid7()
     async with session.begin_nested():
         inserted = (

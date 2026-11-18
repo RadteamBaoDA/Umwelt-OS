@@ -37,6 +37,7 @@ export const REQUIRED_SCOPE: Partial<Record<string, readonly (keyof ConnectorCon
   openaq: ['openaq_location_id'],
   nasa_firms: ['firms_country'],
   apple_books_rss: ['country', 'kind', 'chart'],
+  hardcover_books: ['hardcover_mode'],
   itunes_movies: ['search_terms', 'country'],
   letterboxd_rss: ['letterboxd_username'],
   arxiv: ['arxiv_category'],
@@ -222,13 +223,19 @@ export const NATIVE_SCOPE_DEFAULTS: Partial<Record<string, Partial<ConnectorConf
   },
 };
 
-/** Builds the editable default configuration for the selected provider. */
+const PRESET_DRAFT_OVERRIDES: Readonly<Record<string, Partial<ConnectorConfig>>> = {
+  // SEC fair-access rules require the owner's real contact address.
+  sec_edgar: { sec_contact_email: '' },
+  // The owner chooses a collection target instead of inheriting the documentation example.
+  google_books: { google_books_subject: undefined },
+  hardcover_books: { hardcover_mode: undefined },
+};
+
+/** Builds the editable default configuration while clearing values that the owner must supply. */
 export function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry): ConnectorConfig {
-  // Preset providers use catalog configuration (including the example scope) so every required field starts filled
-  // and newly registered adapters need no parallel frontend list.
-  // SEC fair-access rules require the owner's real contact address, so the placeholder email is never preselected.
-  if (provider === 'sec_edgar' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), sec_contact_email: '' };
-  if (isPreset(entry) && entry?.example_config) return entry.example_config as ConnectorConfig;
+  if (entry?.example_config && (isPreset(entry) || provider === 'sec_edgar')) {
+    return { ...(entry.example_config as ConnectorConfig), ...PRESET_DRAFT_OVERRIDES[provider] };
+  }
   if (isNativeEntry(entry))
     return {
       timeout_seconds: 30,

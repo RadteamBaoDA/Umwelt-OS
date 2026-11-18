@@ -35,7 +35,7 @@ class QuotaWindowPolicy:
 
     policy_key: str
     budget_kind: Literal["provider", "credential", "ip"]
-    window: Literal["second", "minute", "day", "month"]
+    window: Literal["second", "minute", "day", "day_pacific", "month"]
     unit: Literal["http_calls", "request_weight", "call_credits"]
     limit_units: int | None
     cost_per_send: int = 1
@@ -124,6 +124,19 @@ class FreeProviderSpec:
 # Code presence only; runtime_verified stays False.
 DISPATCHABLE = frozenset(
     {
+        "tmdb_movies",
+        "tmdb_tv",
+        "trakt_media",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "google_books",
+        "hardcover_books",
+        "youtube_api",
+        "podcast_index",
+        "listenbrainz_releases",
+          "steam_releases",
+          "igdb_games",
         "bbc_world",
         "vnexpress_business",
         "dantri_news",
@@ -205,6 +218,18 @@ DISPATCHABLE = frozenset(
 # data published once a day 24 h; small community sites and strict free tiers 1 h; publisher feeds 30 min;
 # real-time prices/hazards and owner-credential sources keep the 15-minute default (absent from the table).
 PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
+    "tmdb_movies": 360,
+    "tmdb_tv": 360,
+    "trakt_media": 360,
+    "omdb_lookup": 1440,
+    "mal_anime": 360,
+    "mal_manga": 360,
+    "google_books": 1440,
+    "hardcover_books": 360,
+    "youtube_api": 30,
+    "podcast_index": 60,
+    "steam_releases": 360,
+    "igdb_games": 360,
     **dict.fromkeys(
         (
             "world_bank",
@@ -348,6 +373,7 @@ def _spec(
     key: bool = False,
     secret: str | None = None,
     implemented: bool = False,
+    checked_on: str = CHECKED_ON,
 ) -> FreeProviderSpec:
     """Build one free-provider spec; ``code_implemented`` is true when flagged or the id is dispatchable."""
     return FreeProviderSpec(
@@ -366,6 +392,7 @@ def _spec(
         quota=quota,
         secret_location=secret,  # type: ignore[arg-type]
         code_implemented=implemented or id_ in DISPATCHABLE,
+        checked_on=checked_on,
     )
 
 
@@ -1419,6 +1446,93 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         key=True,
         secret="path",  # noqa: S106  # label/URL/enum value, not a credential
     ),
+    _spec(
+        "tmdb_movies", "TMDB movies", "media", ("api.themoviedb.org",), "event", 360,
+        "https://www.themoviedb.org/terms-of-use", "personal", "Metadata by TMDB; visible attribution is required.",
+        ("/3/movie/now_playing", "/3/movie/upcoming", "/3/movie/changes"), (_unknown("credential"),), key=True, secret="query", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "tmdb_tv", "TMDB television", "media", ("api.themoviedb.org",), "event", 360,
+        "https://www.themoviedb.org/terms-of-use", "personal", "Metadata by TMDB; visible attribution is required.",
+        ("/3/tv/airing_today", "/3/tv/on_the_air"), (_unknown("credential"),), key=True, secret="query", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "trakt_media", "Trakt movies and television", "media", ("api.trakt.tv",), "event", 360,
+        "https://trakt.tv/terms", "personal", "Data via Trakt.",
+        ("/movies/trending", "/movies/anticipated", "/shows/trending", "/shows/anticipated", "/calendars/all", "/search"),
+        (_unknown("credential"),), key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "omdb_lookup", "OMDb ratings lookup", "media", ("www.omdbapi.com",), "event", 1440,
+        "https://www.omdbapi.com/legal.htm", "personal", "Data via OMDb API.", ("/",),
+        (QuotaWindowPolicy("official_calls_per_day", "credential", "day", "http_calls", 1000, 1, "official_documented"),),
+        key=True, secret="query", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "mal_anime", "MyAnimeList anime", "media", ("api.myanimelist.net",), "event", 360,
+        "https://myanimelist.net/static/apiagreement.html", "personal", "Data via MyAnimeList.",
+        ("/v2/anime/ranking", "/v2/anime/season/{year}/{season}"), (QuotaWindowPolicy("pilot_calls_utc_second", "provider", "second", "http_calls", 1), _unknown("credential")),
+        key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "mal_manga", "MyAnimeList manga", "media", ("api.myanimelist.net",), "event", 360,
+        "https://myanimelist.net/static/apiagreement.html", "personal", "Data via MyAnimeList.",
+        ("/v2/manga/ranking",), (QuotaWindowPolicy("pilot_calls_utc_second", "provider", "second", "http_calls", 1), _unknown("credential")),
+        key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "google_books", "Google Books", "media", ("www.googleapis.com",), "event", 1440,
+        "https://developers.google.com/books/terms", "personal", "Data via Google Books.",
+        ("/books/v1/volumes",),
+        (QuotaWindowPolicy("pilot_calls_utc_day", "credential", "day", "http_calls", 1000), _unknown("credential")),
+        key=True, secret="query", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "hardcover_books", "Hardcover books", "media", ("api.hardcover.app",), "event", 360,
+        "https://hardcover.app/terms", "personal", "Data via Hardcover.", ("/v1/graphql",),
+        (
+            QuotaWindowPolicy("pilot_calls_utc_second", "credential", "second", "http_calls", 10),
+            QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 60, 1, "official_documented"),
+            QuotaWindowPolicy("official_calls_per_day", "credential", "day", "http_calls", 5000, 1, "official_documented"),
+        ),
+        key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "youtube_api", "YouTube Data API", "media", ("www.googleapis.com",), "event", 30,
+        "https://developers.google.com/youtube/terms/api-services-terms-of-service", "review",
+        "Data via YouTube Data API.", ("/youtube/v3/channels", "/youtube/v3/playlistItems", "/youtube/v3/videos"),
+        (QuotaWindowPolicy("official_units_pacific_day", "credential", "day_pacific", "call_credits", 10000, 1, "official_documented"),),
+        key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "podcast_index", "Podcast Index", "media", ("api.podcastindex.org",), "event", 60,
+        "https://podcastindex.org/terms", "review", "Data via Podcast Index.",
+        ("/api/1.0/recent/feeds", "/api/1.0/search/byterm"),
+        (QuotaWindowPolicy("pilot_calls_utc_minute", "credential", "minute", "http_calls", 2), _unknown("credential")),
+        key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
+    _spec(
+        "listenbrainz_releases", "ListenBrainz releases", "media",
+        ("api.listenbrainz.org", "musicbrainz.org", "coverartarchive.org", "archive.org"), "event", 360,
+        "https://listenbrainz.org/terms/", "review", "Data via ListenBrainz / MusicBrainz (CC0 1.0).",
+        ("/1/explore/fresh-releases/", "/ws/2/release-group", "/release-group/"),
+        (QuotaWindowPolicy("musicbrainz_one_request_per_second", "provider", "second", "http_calls", 1),),
+        checked_on="2026-11-18",
+    ),
+    _spec(
+        "steam_releases", "Steam releases and news", "media", ("store.steampowered.com",), "event", 360,
+        "https://store.steampowered.com/subscriber_agreement/", "review", "Data via Steam.",
+        ("/api/featuredcategories", "/api/appdetails", "/feeds/news/app/{appid}/"),
+          (QuotaWindowPolicy("pilot_game_api_utc_minute", "provider", "minute", "http_calls", 16), _unknown("provider")),
+        checked_on="2026-11-18",
+    ),
+    _spec(
+        "igdb_games", "IGDB games", "media", ("id.twitch.tv", "api.igdb.com"), "event", 360,
+        "https://www.igdb.com/api", "noncommercial", "Data via IGDB.",
+        ("/oauth2/token", "/v4/games"),
+        (QuotaWindowPolicy("official_four_requests_per_second", "credential", "second", "http_calls", 4, 1, "official_documented"), _unknown("credential")),
+        key=True, secret="header", checked_on="2026-11-18",  # noqa: S106  # placement, not a key
+    ),
 )
 
 # The built-in expansion (RSS, JSON, bespoke and keyed presets) was checked later than the original 21 presets;
@@ -1505,7 +1619,7 @@ def _finalize_spec(spec: FreeProviderSpec) -> FreeProviderSpec:
         Frozen FreeProviderSpec with tier and retention defaults populated.
     """
     is_realtime = spec.id in _REALTIME_TIER_IDS
-    retention_days = 14 if is_realtime else (365 if spec.id in _LONG_RETENTION_IDS else 60)
+    retention_days = 30 if spec.id == "youtube_api" else 14 if is_realtime else (365 if spec.id in _LONG_RETENTION_IDS else 60)
     return replace(
         spec,
         checked_on=EXPANSION_CHECKED_ON if spec.id in _EXPANSION_IDS else spec.checked_on,
@@ -1683,7 +1797,7 @@ INCREMENTAL_PROVIDERS: frozenset[str] = frozenset(
     if spec.id in BUILTIN_PROVIDERS
     and spec.data_kind in ("news", "event")
     and spec.id not in MEASUREMENT_PROVIDER_IDS
-) | {"google_news"}
+) | {"google_news", "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga", "google_books"}
 
 # Optional per-sync selection options accepted only by INCREMENTAL_PROVIDERS (see modules.connectors.selection).
 COLLECTION_FILTER_FIELDS = frozenset(

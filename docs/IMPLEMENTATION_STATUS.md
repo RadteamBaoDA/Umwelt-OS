@@ -1,3 +1,8 @@
+## 2026-11-18 - Media datasource Phase 4 complete
+
+- All Phase 4 tasks have implementation, focused validation and independent review evidence in `docs/superpowers/plans/EXECUTION.md` and the Phase 4 handoffs.
+- The independent whole-phase review is complete. It found and re-reviewed a Podcast Index cursor fix: effective filter changes now reset continuation state while provider source identity remains query-only. The updated backend regression plus scope identity tests passed (21); attribution UI test, TypeScript, ESLint, Prettier, Ruff and whitespace checks passed. Final pre-commit GitNexus analysis reported 72 changed files, 42 changed symbols, 926 affected processes and CRITICAL aggregate risk, with no partial/truncated result. Phase 4 was committed locally on `codex/media-datasource-phase3`. The local TMDB SVG's official provenance has not been independently verified. Live providers, authenticated browser, PostgreSQL runtime, Docker/E2E and production acceptance remain unverified; the production build is also unverified after an earlier `next/package.json` resolution failure in the junction-based worktree.
+
 ## 2026-11-17 - Chat collected-data correctness
 
 Chat answers from collected data through `query_collected_data` (`modules/chat/db_query.py`). Correctness fixes are committed on `feature/more-datasource`; the scope fence is migration `0024_chat_sql_scope_fence`.

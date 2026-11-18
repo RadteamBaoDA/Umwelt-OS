@@ -58,6 +58,8 @@ from modules.connectors.provider_options import (
     JobCity,
     JobKeyword,
     JobLevel,
+    MalAnimeRanking,
+    MalMangaRanking,
     MediaFormat,
     MediaGenre,
     MediaLanguage,
@@ -405,6 +407,28 @@ class ConnectorConfig(BaseModel):
     )
     min_rating: float | None = Field(default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True)
     exclude_adult: StrictBool | None = None
+    tmdb_mode: Literal["now_playing", "upcoming", "changes", "airing_today", "on_the_air"] | None = None
+    tmdb_language: str | None = Field(default=None, min_length=2, max_length=16, pattern=r"^[a-z]{2}(?:-[a-z0-9]{2,8})?$", strict=True)
+    tmdb_certification_country: IsoCountry | None = None
+    tmdb_certification: str | None = Field(default=None, min_length=1, max_length=12, pattern=r"^[A-Za-z0-9+-]+$", strict=True)
+    trakt_mode: Literal["movies_trending", "movies_anticipated", "shows_trending", "shows_anticipated", "movies_calendar", "shows_calendar", "movies_search", "shows_search"] | None = None
+    trakt_query: str | None = Field(default=None, min_length=1, max_length=100, strict=True)
+    trakt_calendar_days: StrictInt | None = Field(default=None, ge=1, le=31)
+    trakt_certifications: tuple[Literal["G", "PG", "PG-13", "R", "NC-17"], ...] | None = Field(default=None, min_length=1, max_length=5)
+    omdb_mode: Literal["imdb_id", "title", "search"] | None = None
+    omdb_imdb_id: str | None = Field(default=None, min_length=9, max_length=14, pattern=r"^tt\d{7,12}$", strict=True)
+    omdb_title: str | None = Field(default=None, min_length=1, max_length=120, strict=True)
+    omdb_search: str | None = Field(default=None, min_length=1, max_length=120, strict=True)
+    omdb_type: Literal["movie", "series", "episode"] | None = None
+    mal_mode: Literal["ranking", "season"] | None = None
+    mal_ranking_type: MalAnimeRanking | MalMangaRanking | None = None
+    mal_season_year: StrictInt | None = Field(default=None, ge=1917, le=2100)
+    mal_season: AnimeSeason | None = None
+    google_books_query: str | None = Field(default=None, min_length=1, max_length=160, strict=True)
+    google_books_subject: str | None = Field(default=None, min_length=1, max_length=100, strict=True)
+    google_books_print_type: Literal["all", "books", "magazines"] | None = None
+    google_books_filter: Literal["ebooks", "free-ebooks", "paid-ebooks"] | None = None
+    hardcover_mode: Literal["catalog", "upcoming"] | None = None
     tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
     tvmaze_global: StrictBool | None = None
     ann_mode: Literal["news", "encyclopedia"] | None = None
@@ -426,6 +450,24 @@ class ConnectorConfig(BaseModel):
     country: IsoCountry | None = None
     kind: Literal["books", "audio-books"] | None = None
     chart: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$")
+    podcast_index_query: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_languages: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=12)
+    podcast_index_categories: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_excluded_categories: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_since: StrictInt | None = Field(default=None, ge=1, le=4_102_444_800)
+    podcast_index_value: Literal["any", "lightning", "hive", "webmonetization"] | None = None
+    listenbrainz_username: str | None = Field(default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    listenbrainz_days: StrictInt | None = Field(default=None, ge=1, le=90)
+    listenbrainz_sort: Literal["release_date", "release_group_date"] | None = None
+    listenbrainz_tags: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    listenbrainz_status: Literal["official", "promotion", "bootleg"] | None = None
+    steam_mode: Literal["featured", "news"] | None = None
+    steam_country: IsoCountry | None = None
+    steam_language: Literal["english", "vietnamese", "japanese", "schinese", "koreana", "french", "german", "spanish"] | None = None
+    steam_appids: tuple[Annotated[StrictInt, Field(gt=0)], ...] | None = Field(default=None, min_length=1, max_length=8)
+    igdb_game_types: tuple[Literal["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"], ...] | None = Field(default=None, min_length=1, max_length=8)
+    igdb_region: Literal["europe", "north_america", "australia", "new_zealand", "japan", "china", "asia", "world"] | None = None
+    igdb_platforms: tuple[Annotated[StrictInt, Field(gt=0)], ...] | None = Field(default=None, min_length=1, max_length=16)
     itunes_podcast_id: StrictInt | None = Field(default=None, ge=1, le=9_999_999_999_999_999)
     lookback_days: StrictInt | None = Field(default=None, ge=1, le=3650)
     genre_qids: tuple[WikidataQid, ...] | None = Field(default=None, min_length=1, max_length=12)

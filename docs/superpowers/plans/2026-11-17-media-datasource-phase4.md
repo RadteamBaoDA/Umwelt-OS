@@ -39,11 +39,11 @@
 
 **Interfaces:** Consume Phase 1 media options/record schemas and Phase 2 provider registration/receipt patterns. Produce four active provider IDs with scoped credentials, catalog rows, filter validation, normalization, cursor/fingerprint behavior and localized source fields.
 
-- [ ] Add failing provider-option/build/normalization/credential tests for exact IDs and provider-specific field maps.
-- [ ] Implement keyed single-GET providers through existing keyed registration; keep options optional with `None` defaults.
-- [ ] Add Source UI credential/scope fields and localized labels while keeping display filters optional.
-- [ ] Run focused movie/TV connector, catalog, wizard, source-scope, provider-document inventory tests; Ruff, mypy and focused frontend checks.
-- [ ] Run GitNexus change detection, update Task 1 report, commit only Task 1-owned files.
+- [x] Add provider-option/build/normalization/credential tests for exact IDs and provider-specific field maps.
+- [x] Implement keyed single-GET providers through existing keyed registration; keep options optional with `None` defaults.
+- [x] Add Source UI credential/scope fields and localized labels while keeping display filters optional.
+- [x] Run focused movie/TV connector, catalog, wizard, source-scope, provider-document inventory tests; Ruff, mypy and focused frontend checks.
+- [x] Run GitNexus change detection, update Task 1 report, and complete independent review. Per-task commit is deferred to the Phase 4 local commit per owner instruction.
 
 ### Task 2: MAL anime/manga and Google Books
 
@@ -53,11 +53,11 @@
 
 **Interfaces:** Reuse Task 1 keyed credential/UI pattern and Phase 1 media normalization. Produce these three providers with per-provider query fields, bounded source targets, filter fingerprints, docs and localized UI.
 
-- [ ] Add failing tests for MAL `nsfw` defaults, manga country/media-type mapping, `mean * 10`, Google `subject:` inside `q`, `langRestrict`, ISBNs and HTTPS cover URLs.
-- [ ] Implement the three keyed adapters with one bounded send each and no undeclared secondary calls.
-- [ ] Add required scopes, credential request labels, provider catalog inventory and source wizard coverage.
-- [ ] Run focused connector, provider specs, catalog, source UI and locale tests; Ruff/mypy/TypeScript/ESLint as applicable.
-- [ ] Run GitNexus change detection and commit only Task 2 files.
+- [x] Add failing tests for MAL `nsfw` defaults, manga country/media-type mapping, `mean * 10`, Google `subject:` inside `q`, `langRestrict`, ISBNs and HTTPS cover URLs.
+- [x] Implement the three keyed adapters with one bounded send each and no undeclared secondary calls.
+- [x] Add required scopes, credential request labels, provider catalog inventory and source wizard coverage.
+- [x] Run focused connector, provider specs, catalog, source UI and locale tests; Ruff/mypy/TypeScript/ESLint as applicable.
+- [x] Run GitNexus change detection and complete independent review. Per-task commit is deferred to the Phase 4 local commit per owner instruction.
 
 ### Task 3: Hardcover GraphQL books
 
@@ -67,11 +67,11 @@
 
 **Interfaces:** Reuse native credential isolation, send fences and atomic receipt; reuse Phase 1 book/media projection contract. Produce provider/catalog/scope registration and stable cursor behavior. Live GraphQL schema introspection is an acceptance gate explicitly separate from mocked unit tests and requires owner approval for live calls.
 
-- [ ] Add failing tests for GraphQL request body, headers/secret redaction, cursor/page limits, metadata normalization, filter pushdown and no cursor advance on partial failure.
-- [ ] Implement bounded native collection using `SendGate` for every call and accepted receipt for records/cursor.
-- [ ] Add credential/scope UI and localized labels with optional filters outside required-scope gate.
-- [ ] Run focused backend tests, Ruff/mypy, source wizard/frontend and catalog parity checks.
-- [ ] Run GitNexus change detection and commit only Task 3 files.
+- [x] Add failing tests for GraphQL request body, headers/secret redaction, cursor/page limits, metadata normalization, filter pushdown and no cursor advance on partial failure.
+- [x] Implement bounded native collection using `SendGate` for every call and accepted receipt for records/cursor.
+- [x] Add credential/scope UI and localized labels with optional filters outside required-scope gate.
+- [x] Run focused backend tests, Ruff/mypy, source wizard/frontend and catalog parity checks.
+- [x] Run GitNexus change detection and complete independent review. Live schema/provider validation remains an explicit acceptance limit; per-task commit is deferred to the Phase 4 local commit per owner instruction.
 
 ### Task 4: YouTube Data API and Podcast Index native collectors
 
@@ -81,11 +81,11 @@
 
 **Interfaces:** Reuse YouTube Atom source targets and media filters from Phase 2/3; do not fork IDs/provenance. Produce API-key upgrades with stable receipts, source-scope UI and provider inventory.
 
-- [ ] Add failing tests for handle resolution call order, quota/bounds, ETag `304`, video metadata, HMAC headers/clock-skew failure, secret redaction and cursor atomicity.
-- [ ] Implement bounded SendGate native handlers and exact credential requests.
-- [ ] Register optional API-key upgrades and UI scopes without changing keyless YouTube behavior.
-- [ ] Run focused connector/auth/receipt/provider catalog/source UI tests, Ruff/mypy/TS/ESLint.
-- [ ] Run GitNexus change detection and commit only Task 4 files.
+- [x] Add failing tests for handle resolution call order, quota/bounds, ETag `304`, video metadata, HMAC headers/clock-skew failure, secret redaction and cursor atomicity.
+- [x] Implement bounded SendGate native handlers and exact credential requests.
+- [x] Register optional API-key upgrades and UI scopes without changing keyless YouTube behavior.
+- [x] Run focused connector/auth/receipt/provider catalog/source UI tests, Ruff/mypy/TS/ESLint.
+- [x] Run GitNexus change detection and complete independent review. Per-task commit is deferred to the Phase 4 local commit per owner instruction.
 
 ### Task 5: Wave 2 music releases
 
@@ -95,11 +95,11 @@
 
 **Interfaces:** Reuse `_media_common`, SendGate and Phase 1 canonical genre/country/language options. Produce a source with a bounded cursor, exact query fingerprint, canonical metadata and CAA-safe image URL handling.
 
-- [ ] Add failing tests for 1 req/sec pacing, MB 3-letter language normalization, CAA redirects, query filters and no cursor advance on failed enrichment.
-- [ ] Implement bounded collector and deterministic dedup/cursor behavior.
-- [ ] Add source scope/options/catalog and localized UI with optional filters.
-- [ ] Run focused provider, quota, source/UI and locale tests; Ruff/mypy/TS/ESLint.
-- [ ] Run GitNexus change detection and commit only Task 5 files.
+- [x] Add failing tests for 1 req/sec pacing, MB 3-letter language normalization, CAA redirects, query filters and no cursor advance on failed enrichment.
+- [x] Implement bounded collector and deterministic dedup/cursor behavior.
+- [x] Add source scope/options/catalog and localized UI with optional filters.
+- [x] Run focused provider, quota, source/UI and locale tests; Ruff/mypy/TS/ESLint.
+- [x] Run final Phase 4 GitNexus change detection; batch the Task 5 checkpoint into the owner-requested single Phase 4 commit.
 
 ### Task 6: Wave 3 Steam and IGDB games
 
@@ -109,19 +109,20 @@
 
 **Interfaces:** Native adapter for both because Steam detail fanout and IGDB OAuth/POST exceed `keyed.py`'s single-request static-secret contract. Reuse canonical `MediaGenre`, `MediaFormat`, countries/ratings and atomic receipt. Do not batch Steam appdetails multi-appid calls.
 
-- [ ] Add failing tests for Steam bounded appdetails, fuzzy dates/null price, region/language normalization; IGDB OAuth, token fencing/expiry, Apicalypse request, genre/theme and age-rating normalization.
-- [ ] Implement quota-bounded native collection and credentials without logging secrets/tokens.
-- [ ] Add catalog/UI source scopes, provider inventory and optional filters.
-- [ ] Run focused provider/auth/quota/wizard/catalog tests; Ruff/mypy/TS/ESLint.
-- [ ] Run GitNexus change detection and commit only Task 6 files.
+- [x] Add failing tests for Steam bounded appdetails, fuzzy dates/null price, region/language normalization; IGDB OAuth, token fencing/expiry, Apicalypse request, genre/theme and age-rating normalization.
+- [x] Implement quota-bounded native collection and credentials without logging secrets/tokens.
+- [x] Add catalog/UI source scopes, provider inventory and optional filters.
+- [x] Run focused provider/auth/quota/wizard/catalog tests; Ruff/mypy/TS/ESLint.
+- [x] Run final Phase 4 GitNexus change detection; batch the Task 6 checkpoint into the owner-requested single Phase 4 commit.
 
 ### Task 7: Whole Phase 4 parity and acceptance
 
-- [ ] Verify all 13 IDs (`tmdb_movies`, `tmdb_tv`, `trakt_media`, `omdb_lookup`, `mal_anime`, `mal_manga`, `hardcover_books`, `google_books`, `youtube_api`, `podcast_index`, `listenbrainz_releases`, `steam_releases`, `igdb_games`) appear consistently in provider registry, catalog inventory, docs, option registry, credential schema/UI, dashboard media compatibility and source wizard contract.\n- [ ] Compare each provider against its Part 3 pushdown/post-fetch matrix; verify every supported canonical genre, country, language, format, year, rating and content-rating filter is mapped, and unsupported dimensions are omitted rather than falsely advertised.
-- [ ] Run all focused connector/provider/filter/cursor/receipt/catalog tests from Tasks 1–6, plus media source/UI locale tests and renderer/snapshot parity.
-- [ ] Run full relevant Ruff/mypy, TypeScript/ESLint, and repository prescribed build if resource allows; report unavailable/environment-specific gates accurately.
-- [ ] Independently review the pinned Phase 4 range for spec coverage, auth/data safety, cursor semantics, quotas, docs/JSDoc and regression gaps.
-- [ ] Update `docs/IMPLEMENTATION_STATUS.md` and `docs/superpowers/plans/EXECUTION.md`; run final GitNexus `detect_changes` and commit the completed Phase 4 checkpoint locally on the current branch.
+- [x] Verify all 13 IDs (`tmdb_movies`, `tmdb_tv`, `trakt_media`, `omdb_lookup`, `mal_anime`, `mal_manga`, `hardcover_books`, `google_books`, `youtube_api`, `podcast_index`, `listenbrainz_releases`, `steam_releases`, `igdb_games`) appear consistently in provider registry, catalog inventory, docs, option registry, credential schema/UI, dashboard media compatibility and source wizard contract.
+- [x] Compare each provider against its Part 3 pushdown/post-fetch matrix; verify every supported canonical genre, country, language, format, year, rating and content-rating filter is mapped, and unsupported dimensions are omitted rather than falsely advertised.
+- [x] Run all focused connector/provider/filter/cursor/receipt/catalog tests from Tasks 1–6, plus media source/UI locale tests and renderer/snapshot parity.
+- [x] Run full relevant Ruff/mypy, TypeScript/ESLint, and repository prescribed build if resource allows; report unavailable/environment-specific gates accurately. Production build remains unverified; an earlier attempt failed resolving `next/package.json` in the junction-based worktree. Live/runtime gates remain explicit.
+- [x] Independently review the pinned Phase 4 range for spec coverage, auth/data safety, cursor semantics, quotas, docs/JSDoc and regression gaps; the Podcast Index cursor finding was addressed and re-reviewed.
+- [x] Update `docs/IMPLEMENTATION_STATUS.md` and `docs/superpowers/plans/EXECUTION.md`; run final GitNexus `detect_changes` and commit the completed Phase 4 checkpoint locally on the current branch.
 
 ## Delivery limits
 

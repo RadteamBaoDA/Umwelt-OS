@@ -11,6 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.documents import public
+from modules.knowledge.documents._news import _extract_media_projection
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=3)
@@ -57,6 +58,12 @@ async def test_no_filters_leaves_language_unconstrained_so_unknown_matches_any()
     sql = _sql(session)
     assert "documents.language" not in sql.split("WHERE")[1]
     assert "normalized_version_provenance" not in sql
+
+
+def test_media_projection_preserves_landscape_artwork_aspect() -> None:
+    media = _extract_media_projection(SimpleNamespace(source_fields={"media_type": "game", "artwork_aspect": "landscape"}))
+    assert media is not None
+    assert media.artwork_aspect == "landscape"
 
 
 @pytest.mark.asyncio

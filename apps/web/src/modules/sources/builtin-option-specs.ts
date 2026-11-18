@@ -1,6 +1,23 @@
 import { MEDIAGENRE, MEDIALANGUAGE, MEDIAFORMAT, CONTENTRATING, ANIMESEASON } from '@/core/media-options';
 import type { BuiltinTypeOptions } from './api';
 
+const OMDB_DETAIL_FILTERS = ['media_country', 'media_countries', 'media_genres', 'media_languages', 'min_rating'] as const;
+const TMDB_CHANGES_FILTERS = [
+  ...OMDB_DETAIL_FILTERS,
+  'release_year',
+  'exclude_adult',
+  'tmdb_language',
+  'tmdb_certification',
+  'tmdb_certification_country',
+] as const;
+
+/** Lists media filters unavailable in the selected endpoint response, for rendering and request cleanup. */
+export function inactiveMediaModeFilters(modeKey: string, selected: unknown): readonly (keyof BuiltinTypeOptions)[] {
+  if (modeKey === 'omdb_mode' && selected === 'search') return OMDB_DETAIL_FILTERS;
+  if (modeKey === 'tmdb_mode' && selected === 'changes') return TMDB_CHANGES_FILTERS;
+  return [];
+}
+
 /** One per-type built-in option: how it renders and the bounds the server enforces. */
 export type OptionSpec = {
   key: keyof BuiltinTypeOptions;
@@ -184,8 +201,91 @@ export const MEDIA_FILTER_SPECS: readonly OptionSpec[] = [
   { key: 'exclude_adult', kind: 'bool', nullable: true, native: true },
 ];
 
-/** Phase 2 provider options shown only for the selected provider or server-advertised built-in. */
+/** MAL API ranking choices by catalog. */
+export const MAL_ANIME_RANKINGS = ['all', 'airing', 'upcoming', 'tv', 'ova', 'movie', 'special', 'bypopularity', 'favorite'] as const;
+export const MAL_MANGA_RANKINGS = ['manga', 'novels', 'oneshots', 'doujin', 'manhwa', 'manhua', 'bypopularity', 'favorite'] as const;
+
+/** Media provider options shown only for the selected provider or server-advertised built-in. */
 const MEDIA_PROVIDER_SPECS: readonly OptionSpec[] = [
+  {
+    key: 'tmdb_mode',
+    kind: 'enum',
+    values: ['now_playing', 'upcoming', 'changes', 'airing_today', 'on_the_air'],
+    labelled: true,
+    native: true,
+  },
+  { key: 'tmdb_language', kind: 'enum', values: MEDIALANGUAGE, labelled: true, native: true },
+  { key: 'tmdb_certification_country', kind: 'enum', values: ISO_COUNTRY, native: true },
+  { key: 'tmdb_certification', kind: 'text', maxLen: 12, pattern: '[A-Za-z0-9+-]+', native: true },
+  {
+    key: 'trakt_mode',
+    kind: 'enum',
+    values: [
+      'movies_trending',
+      'movies_anticipated',
+      'shows_trending',
+      'shows_anticipated',
+      'movies_calendar',
+      'shows_calendar',
+      'movies_search',
+      'shows_search',
+    ],
+    labelled: true,
+    native: true,
+  },
+  { key: 'trakt_query', kind: 'text', maxLen: 100, native: true },
+  { key: 'trakt_calendar_days', kind: 'int', min: 1, hi: 31, native: true },
+  { key: 'trakt_certifications', kind: 'multi', max: 5, values: ['G', 'PG', 'PG-13', 'R', 'NC-17'], native: true },
+  { key: 'omdb_mode', kind: 'enum', values: ['imdb_id', 'title', 'search'], labelled: true, native: true },
+  { key: 'omdb_imdb_id', kind: 'text', maxLen: 14, pattern: 'tt[0-9]{7,12}', native: true },
+  { key: 'omdb_title', kind: 'text', maxLen: 120, native: true },
+  { key: 'omdb_search', kind: 'text', maxLen: 120, native: true },
+  { key: 'omdb_type', kind: 'enum', values: ['movie', 'series', 'episode'], labelled: true, native: true },
+  { key: 'mal_mode', kind: 'enum', values: ['ranking', 'season'], labelled: true, native: true },
+  { key: 'mal_ranking_type', kind: 'enum', values: MAL_ANIME_RANKINGS, labelled: true, native: true },
+  { key: 'mal_season_year', kind: 'int', min: 1917, hi: 2100, native: true },
+  { key: 'mal_season', kind: 'enum', values: ANIMESEASON, labelled: true, native: true },
+  { key: 'podcast_index_query', kind: 'text', maxLen: 160, native: true },
+  { key: 'podcast_index_languages', kind: 'tags', max: 12, maxLen: 80, native: true },
+  { key: 'podcast_index_categories', kind: 'text', maxLen: 160, native: true },
+  { key: 'podcast_index_excluded_categories', kind: 'text', maxLen: 160, native: true },
+  { key: 'podcast_index_since', kind: 'int', min: 1, hi: 4102444800, native: true },
+  { key: 'podcast_index_value', kind: 'enum', values: ['any', 'lightning', 'hive', 'webmonetization'], native: true },
+  { key: 'listenbrainz_username', kind: 'text', maxLen: 30, pattern: '[A-Za-z0-9_-]+', native: true },
+  { key: 'listenbrainz_days', kind: 'int', min: 1, hi: 90, native: true },
+  { key: 'listenbrainz_sort', kind: 'enum', values: ['release_date', 'release_group_date'], labelled: true, native: true },
+  { key: 'listenbrainz_tags', kind: 'tags', max: 8, maxLen: 64, native: true },
+  { key: 'listenbrainz_status', kind: 'enum', values: ['official', 'promotion', 'bootleg'], native: true },
+  { key: 'steam_mode', kind: 'enum', values: ['featured', 'news'], labelled: true, native: true },
+  { key: 'steam_country', kind: 'enum', values: ISO_COUNTRY, native: true },
+  {
+    key: 'steam_language',
+    kind: 'enum',
+    values: ['english', 'vietnamese', 'japanese', 'schinese', 'koreana', 'french', 'german', 'spanish'],
+    labelled: true,
+    native: true,
+  },
+  { key: 'steam_appids', kind: 'tags', max: 8, maxLen: 10, numeric: true, pattern: '[0-9]*', native: true },
+  {
+    key: 'igdb_game_types',
+    kind: 'multi',
+    max: 8,
+    values: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'],
+    native: true,
+  },
+  {
+    key: 'igdb_region',
+    kind: 'enum',
+    values: ['europe', 'north_america', 'australia', 'new_zealand', 'japan', 'china', 'asia', 'world'],
+    labelled: true,
+    native: true,
+  },
+  { key: 'igdb_platforms', kind: 'tags', max: 16, maxLen: 6, numeric: true, pattern: '[0-9]*', native: true },
+  { key: 'google_books_query', kind: 'text', maxLen: 160, native: true },
+  { key: 'google_books_subject', kind: 'text', maxLen: 100, native: true },
+  { key: 'google_books_print_type', kind: 'enum', values: ['all', 'books', 'magazines'], labelled: true, native: true },
+  { key: 'google_books_filter', kind: 'enum', values: ['ebooks', 'free-ebooks', 'paid-ebooks'], labelled: true, native: true },
+  { key: 'hardcover_mode', kind: 'enum', values: ['catalog', 'upcoming'], labelled: true, native: true },
   { key: 'media_ids', kind: 'tags', max: 50, maxLen: 16, numeric: true, pattern: '[0-9, ]*' },
   { key: 'anilist_mode', kind: 'enum', values: ['airing', 'trending', 'updated'], labelled: true, native: true },
   { key: 'country_of_origin', kind: 'enum', values: ['JP', 'KR', 'CN', 'TW', 'ALL'], native: true },
@@ -278,8 +378,116 @@ const MEDIA_PROVIDER_SPECS: readonly OptionSpec[] = [
   { key: 'letterboxd_username', kind: 'text', maxLen: 30, pattern: '[A-Za-z0-9][A-Za-z0-9._-]{0,29}', native: true },
 ];
 
-/** Provider-specific accepted keys from Phase 2 OPTION_FIELDS; identifier fields stay in their established scopes. */
+const MAL_FILTER_FIELDS = ['media_genres', 'media_formats', 'release_year', 'content_ratings', 'min_rating', 'exclude_adult'] as const;
+
+/** Mirrors the server's accepted media options and identifying target fields per provider. */
 export const MEDIA_PROVIDER_FIELDS = {
+  mal_anime: ['mal_mode', 'mal_ranking_type', 'mal_season_year', 'mal_season', 'anime_season', ...MAL_FILTER_FIELDS],
+  mal_manga: ['mal_ranking_type', 'media_countries', ...MAL_FILTER_FIELDS],
+  hardcover_books: ['hardcover_mode', 'media_genres', 'release_year', 'min_rating'],
+  youtube_api: ['media_countries', 'media_languages', 'release_year', 'content_ratings'],
+  podcast_index: [
+    'podcast_index_query',
+    'podcast_index_languages',
+    'podcast_index_categories',
+    'podcast_index_excluded_categories',
+    'podcast_index_since',
+    'podcast_index_value',
+    'media_genres',
+    'content_ratings',
+  ],
+  listenbrainz_releases: [
+    'listenbrainz_username',
+    'listenbrainz_days',
+    'listenbrainz_sort',
+    'listenbrainz_tags',
+    'listenbrainz_status',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'media_formats',
+    'release_year',
+  ],
+  steam_releases: [
+    'steam_mode',
+    'steam_country',
+    'steam_language',
+    'steam_appids',
+    'media_genres',
+    'release_year',
+    'min_rating',
+    'content_ratings',
+  ],
+  igdb_games: [
+    'igdb_game_types',
+    'igdb_region',
+    'igdb_platforms',
+    'media_genres',
+    'media_formats',
+    'release_year',
+    'min_rating',
+    'content_ratings',
+  ],
+  google_books: [
+    'google_books_query',
+    'google_books_subject',
+    'google_books_print_type',
+    'google_books_filter',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'media_formats',
+    'release_year',
+    'min_rating',
+  ],
+  tmdb_movies: [
+    'tmdb_mode',
+    'tmdb_language',
+    'tmdb_certification_country',
+    'tmdb_certification',
+    'media_country',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'release_year',
+    'min_rating',
+    'exclude_adult',
+  ],
+  tmdb_tv: [
+    'tmdb_mode',
+    'tmdb_language',
+    'media_country',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'release_year',
+    'min_rating',
+    'exclude_adult',
+  ],
+  trakt_media: [
+    'trakt_mode',
+    'trakt_query',
+    'trakt_calendar_days',
+    'trakt_certifications',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'release_year',
+    'min_rating',
+  ],
+  omdb_lookup: [
+    'omdb_mode',
+    'omdb_imdb_id',
+    'omdb_title',
+    'omdb_search',
+    'omdb_type',
+    'release_year',
+    'media_country',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'min_rating',
+  ],
   anilist_anime: [
     'media_ids',
     'anilist_mode',

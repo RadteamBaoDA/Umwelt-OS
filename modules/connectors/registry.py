@@ -125,6 +125,10 @@ _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] 
 }
 
 
+# The keyed upgrade accepts the same mutually exclusive target choices as Atom.
+_PROVIDER_SCOPE_RULES["youtube_api"] = _PROVIDER_SCOPE_RULES["youtube"]
+
+
 def _check_provider_keys(source: ConnectorSource, provider: str) -> None:
     """Reject unsupported configuration keys and name every missing required scope key.
 

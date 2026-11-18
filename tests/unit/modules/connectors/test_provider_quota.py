@@ -156,3 +156,54 @@ async def test_retry_after_only_extends_deadlines() -> None:
     statement = session.sql[0]
     assert "greatest(coalesce(connector_quota_windows.blocked_until" in statement.lower()
     assert "window_end >" in statement
+
+
+async def test_music_send_gate_records_every_sequence_but_only_debits_musicbrainz(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from modules.connectors._collection.base import SendGate
+    from modules.connectors.providers import media_music, rest
+
+    # Script the durable insert result, then attempt the same logical sequence via a new gate.
+    session = FakeSession([("discovery",), ("enrichment",), (1,), ("artwork",), None])
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    attempt = SimpleNamespace(
+        scope=SimpleNamespace(workspace_id=uuid4()),
+        ref=SimpleNamespace(request_id=uuid4(), admission_token=uuid4()),
+        attempt=1,
+    )
+    authorize = AsyncMock()
+    recheck = AsyncMock()
+    monkeypatch.setattr(SendGate, "_authorize", authorize)
+    monkeypatch.setattr(SendGate, "recheck", recheck)
+    wire = []
+
+    async def fetch_bounded(url, *, before_send, **kwargs):
+        await before_send()
+        if "coverartarchive.org" in url:
+            await before_send.recheck()
+        wire.append(url)
+        return rest.Fetched(b"")
+
+    monkeypatch.setattr(rest, "fetch_bounded", fetch_bounded)
+    gate = SendGate(lambda: session, attempt, settings=None, deadline=1000, quota_provider="listenbrainz_releases")
+    urls = [media_music.LISTENBRAINZ_BASE, media_music.MUSICBRAINZ_BASE, media_music.CAA_BASE]
+    for url in urls:
+        await gate.fetch_bytes(url)
+    assert gate.sends == 3
+    assert wire == urls
+    assert authorize.await_count == 3
+    recheck.assert_awaited_once()
+    assert session.commit.await_count == 3
+    assert sum("INSERT INTO connector_provider_sends" in sql for sql in session.sql) == 3
+    assert len(session.added) == 1 and isinstance(session.added[0], ConnectorQuotaDebit)
+
+    retry = SendGate(lambda: session, attempt, settings=None, deadline=1000, quota_provider="listenbrainz_releases")
+    with pytest.raises(quota.SendPermitConsumed):
+        await retry.fetch_bytes(urls[0])
+    assert retry.sends == 1
+    assert wire == urls
+    assert "ON CONFLICT ON CONSTRAINT uq_connector_provider_sends_sequence" in session.sql[-1]
+    assert session.commit.await_count == 3
+    session.rollback.assert_awaited_once()

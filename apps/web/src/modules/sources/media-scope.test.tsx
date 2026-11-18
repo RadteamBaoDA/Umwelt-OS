@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
-import type { ConnectorConfig } from './api';
+import type { ConnectorCatalogEntry, ConnectorConfig } from './api';
+import { ApiKeyField } from './connector-connect-sections';
+import { defaultConfiguration } from './connector-editor-model';
 import { ScheduleStep } from './connector-editor/schedule-step';
 import type { ConnectorEditorModel } from './connector-editor-types';
 import type { BuiltinSource } from './api';
@@ -30,7 +32,11 @@ function view(provider: NativeProvider, configuration: Partial<ConnectorConfig> 
     </NextIntlClientProvider>
   );
   const result = render(tree(configuration));
-  return { onChange, rerender: (next: Partial<ConnectorConfig>, epoch = 0) => result.rerender(tree(next, epoch)) };
+  return {
+    onChange,
+    rerender: (next: Partial<ConnectorConfig>, epoch = 0) => result.rerender(tree(next, epoch)),
+    unmount: result.unmount,
+  };
 }
 
 afterEach(cleanup);
@@ -50,7 +56,9 @@ describe('media source scope', () => {
           />
         </NextIntlClientProvider>,
       );
-      expect(container.querySelectorAll('[required]')).toHaveLength(0);
+      const required = [...container.querySelectorAll('[required]')].map((node) => node.id);
+      expect(required).toEqual(provider === 'youtube_api' ? ['source-scope-youtube_channel_id'] : []);
+      expect(screen.queryByLabelText('Telegram channel IDs')).not.toBeInTheDocument();
       unmount();
     },
   );
@@ -70,10 +78,195 @@ describe('media source scope', () => {
     }
   });
 
+  it.each([
+    ['tmdb_movies', ['Now playing', 'Upcoming', 'Changed movies'], ['Airing today', 'On the air']],
+    ['tmdb_tv', ['Airing today', 'On the air'], ['Now playing', 'Upcoming', 'Changed movies']],
+  ] as const)('limits %s TMDB modes to the provider modes accepted by validate_options', async (provider, allowed, rejected) => {
+    const user = userEvent.setup();
+    const { unmount } = view(provider);
+
+    await user.click(screen.getByLabelText('TMDB list'));
+    for (const label of allowed) expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
+    for (const label of rejected) expect(screen.queryByRole('option', { name: label })).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it('clears and hides TMDB metadata filters for the ID-only changes mode', async () => {
+    const user = userEvent.setup();
+    const { onChange, rerender } = view('tmdb_movies', {
+      tmdb_mode: 'upcoming',
+      tmdb_certification: 'PG-13',
+      tmdb_certification_country: 'US',
+      min_rating: 80,
+    });
+    expect(screen.getByLabelText('Maximum certification')).toBeInTheDocument();
+    expect(screen.getByLabelText('Certification country')).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('TMDB list'));
+    await user.click(screen.getByRole('option', { name: 'Changed movies' }));
+    expect(onChange).toHaveBeenCalledWith('tmdb_certification', null);
+    expect(onChange).toHaveBeenCalledWith('tmdb_certification_country', null);
+    expect(onChange).toHaveBeenCalledWith('min_rating', null);
+
+    rerender({ tmdb_mode: 'changes' });
+    expect(screen.queryByLabelText('Maximum certification')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Certification country')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Minimum rating (0–100)')).not.toBeInTheDocument();
+  });
+
+  it('clears OMDb detail-only filters when switching to search while keeping the year filter', async () => {
+    const user = userEvent.setup();
+    const { onChange, rerender } = view('omdb_lookup', {
+      omdb_mode: 'title',
+      omdb_title: 'Dune',
+      min_rating: 80,
+      media_genres: ['sci_fi'],
+    });
+    expect(screen.getByLabelText('Minimum rating (0–100)')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Lookup by'));
+    await user.click(screen.getByRole('option', { name: 'Search' }));
+    for (const field of ['media_country', 'media_countries', 'media_genres', 'media_languages', 'min_rating']) {
+      expect(onChange).toHaveBeenCalledWith(field, null);
+    }
+
+    rerender({ omdb_mode: 'search' });
+    expect(screen.getByLabelText('Search title')).toBeInTheDocument();
+    expect(screen.getByLabelText('Release year')).toBeInTheDocument();
+    expect(screen.queryByText('Genres')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Minimum rating (0–100)')).not.toBeInTheDocument();
+  });
+
+  it('changes MAL anime from ranking to the seasonal endpoint and requires both season fields', async () => {
+    const user = userEvent.setup();
+    const { onChange, rerender } = view('mal_anime', { mal_ranking_type: 'airing' });
+    expect(screen.getByLabelText('Ranking type')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Season year')).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('MyAnimeList list'));
+    await user.click(screen.getByRole('option', { name: 'Seasonal anime' }));
+    expect(onChange).toHaveBeenCalledWith('mal_mode', 'season');
+    expect(onChange).toHaveBeenCalledWith('mal_ranking_type', null);
+
+    rerender({ mal_mode: 'season' });
+    expect(screen.queryByLabelText('Ranking type')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Season year')).toBeInTheDocument();
+    expect(scopeGate('mal_anime', { mal_mode: 'season', mal_season: 'fall' })).toBe(false);
+    expect(scopeGate('mal_anime', { mal_mode: 'season', mal_season: 'fall', mal_season_year: 2026 })).toBe(true);
+  });
+
+  it('offers only manga rankings in MyAnimeList manga', async () => {
+    const user = userEvent.setup();
+    view('mal_manga');
+    await user.click(screen.getByLabelText('Ranking type'));
+    expect(screen.getByRole('option', { name: 'Manhwa' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^All$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Airing' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('MyAnimeList list')).not.toBeInTheDocument();
+  });
+
+  it('localizes Google Books targets and accepts a query or subject before optional filters', () => {
+    view('google_books', {}, 'vi-vi');
+    expect(screen.getByLabelText('Truy vấn sách')).toBeInTheDocument();
+    expect(screen.getByLabelText('Chủ đề sách')).toBeInTheDocument();
+    expect(scopeGate('google_books', { min_rating: 80 })).toBe(false);
+    expect(scopeGate('google_books', { google_books_query: 'intitle:Dune' })).toBe(true);
+    expect(scopeGate('google_books', { google_books_subject: 'Lịch sử' })).toBe(true);
+  });
+
+  it('requires the owner to choose the Google Books target even with a catalog example', () => {
+    const entry = {
+      kind: 'preset',
+      example_config: config({ google_books_subject: 'History', schedule_interval_minutes: 1440 }),
+    } as unknown as ConnectorCatalogEntry;
+    const draft = defaultConfiguration('google_books', entry);
+    expect(draft.schedule_interval_minutes).toBe(1440);
+    expect(productionScopeGate('google_books', draft)).toBe(false);
+  });
+
+  it.each([
+    ['mal_anime', 'MyAnimeList client ID'],
+    ['mal_manga', 'MyAnimeList client ID'],
+    ['google_books', 'Google Books API key'],
+    ['hardcover_books', 'Hardcover API token'],
+    ['youtube_api', 'YouTube Data API key'],
+    ['podcast_index', 'Podcast Index API key'],
+  ])('labels the write-only credential for %s', (provider, label) => {
+    const model = {
+      provider,
+      currentEntry: { key_fields: ['api_key'] },
+      secret: '',
+      providerCredentialConfigured: false,
+    } as unknown as ConnectorEditorModel;
+    render(
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <ApiKeyField m={model} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByLabelText(label)).toBeRequired();
+    expect(screen.getByLabelText(label)).toHaveAttribute('type', 'password');
+    if (provider === 'hardcover_books') expect(screen.getByLabelText(label)).toHaveAttribute('maxlength', '512');
+    if (provider === 'podcast_index') {
+      expect(screen.getByLabelText('Podcast Index API secret')).toBeRequired();
+      expect(screen.getByLabelText('Podcast Index API secret')).toHaveAttribute('type', 'password');
+    }
+  });
+
+  it('localizes the Hardcover scope and keeps collection filters optional', () => {
+    view('hardcover_books', { hardcover_mode: 'catalog' }, 'vi-vi');
+    expect(screen.getByLabelText('Phạm vi thu thập Hardcover')).toHaveTextContent('Danh mục sách');
+    expect(scopeGate('hardcover_books', { min_rating: 80 })).toBe(false);
+    expect(scopeGate('hardcover_books', { hardcover_mode: 'upcoming' })).toBe(true);
+  });
+
+  it('uses the YouTube target families and only allows All videos for playlist targets', () => {
+    view('youtube_api', { youtube_playlist_ids: ['PL0123456789'] });
+    expect(screen.getByLabelText('Video format')).toBeDisabled();
+    expect(screen.queryByText('Countries')).not.toBeInTheDocument();
+    expect(scopeGate('youtube_api', { youtube_handles: ['@example'] })).toBe(true);
+    expect(scopeGate('youtube_api', { youtube_playlist_ids: ['PL0123456789'], youtube_filter: 'shorts' })).toBe(false);
+  });
+
+  it('clears YouTube channel country and format when switching to a direct playlist', async () => {
+    const user = userEvent.setup();
+    const { onChange } = view('youtube_api', { youtube_handles: ['@example'], youtube_filter: 'shorts', media_countries: ['VN'] });
+    await user.click(screen.getByLabelText('YouTube targets'));
+    await user.click(screen.getByRole('option', { name: 'Playlist IDs' }));
+    expect(onChange).toHaveBeenCalledWith('youtube_filter', 'all');
+    expect(onChange).toHaveBeenCalledWith('media_countries', null);
+  });
+
+  it('shows Podcast Index scope fields for the selected endpoint', () => {
+    const { rerender, onChange } = view('podcast_index');
+    expect(screen.getByLabelText('Recent feeds since (Unix seconds)')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Value block type')).not.toBeInTheDocument();
+    expect(screen.queryByText('Content ratings')).not.toBeInTheDocument();
+    rerender({ podcast_index_query: 'History', content_ratings: ['explicit'], podcast_index_value: 'any' });
+    expect(screen.getByLabelText('Value block type')).toBeInTheDocument();
+    expect(screen.getByText('Content ratings')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Recent feeds since (Unix seconds)')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Podcast search term'), { target: { value: '' } });
+    expect(onChange).toHaveBeenCalledWith('podcast_index_value', null);
+    expect(onChange).toHaveBeenCalledWith('content_ratings', null);
+  });
+
+  it('requires Steam news app IDs and a bounded IGDB game scope', () => {
+    view('steam_releases');
+    expect(screen.getByLabelText('Steam collection mode')).toBeInTheDocument();
+    expect(scopeGate('steam_releases', { steam_mode: 'news' })).toBe(false);
+    expect(scopeGate('steam_releases', { steam_mode: 'news', steam_appids: [570] })).toBe(true);
+    expect(scopeGate('igdb_games', {})).toBe(false);
+    expect(scopeGate('igdb_games', { igdb_region: 'world' })).toBe(true);
+  });
+
   it('allows empty optional filters but requires identifying source targets', () => {
     for (const provider of [
       'anilist_anime',
       'anilist_manga',
+      'tmdb_movies',
+      'tmdb_tv',
+      'trakt_media',
+      'mal_anime',
+      'mal_manga',
       'gutendex_books',
       'mangadex_releases',
       'mangaupdates_releases',
@@ -94,6 +287,10 @@ describe('media source scope', () => {
     expect(scopeGate('podcast_rss', { itunes_podcast_id: 123 })).toBe(true);
     expect(scopeGate('podcast_rss', {})).toBe(false);
     expect(scopeGate('podcast_rss', { itunes_podcast_id: 123, feed_url: 'https://example.org/rss' })).toBe(false);
+    expect(scopeGate('omdb_lookup', {})).toBe(false);
+    expect(scopeGate('omdb_lookup', { omdb_mode: 'title', omdb_title: 'Dune' })).toBe(true);
+    expect(scopeGate('omdb_lookup', { omdb_mode: 'search', omdb_search: 'Dune' })).toBe(true);
+    expect(scopeGate('omdb_lookup', { omdb_mode: 'imdb_id', omdb_imdb_id: 'tt1234567' })).toBe(true);
     expect(scopeGate('openlibrary_books', {})).toBe(false);
     expect(scopeGate('openlibrary_books', { openlibrary_subject: 'science_fiction' })).toBe(true);
     expect(scopeGate('openlibrary_books', { openlibrary_mode: 'search', openlibrary_query: 'Dune' })).toBe(true);

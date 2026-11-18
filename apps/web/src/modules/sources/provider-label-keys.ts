@@ -4,6 +4,19 @@
  * is added to `locales/<locale>/sources.json` under `provider.*`.
  */
 export const PROVIDER_LABEL_KEY = {
+  tmdb_movies: 'provider.tmdbMovies',
+  tmdb_tv: 'provider.tmdbTv',
+  trakt_media: 'provider.traktMedia',
+  omdb_lookup: 'provider.omdbLookup',
+  mal_anime: 'provider.malAnime',
+  mal_manga: 'provider.malManga',
+  google_books: 'provider.googleBooks',
+  hardcover_books: 'provider.hardcoverBooks',
+  youtube_api: 'provider.youtubeApi',
+  podcast_index: 'provider.podcastIndex',
+  listenbrainz_releases: 'provider.listenbrainzReleases',
+  steam_releases: 'provider.steamReleases',
+  igdb_games: 'provider.igdbGames',
   anilist_anime: 'provider.anilistAnime',
   anilist_manga: 'provider.anilistManga',
   livechart_episodes: 'provider.livechartEpisodes',

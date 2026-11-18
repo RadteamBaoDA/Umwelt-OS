@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -24,6 +25,7 @@ from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provider_options, provider_terms, provisioning, quota, scheduler
 from modules.connectors import public as connectors
+from modules.connectors.backends import NATIVE_SIGNED_MEDIA_PROVIDERS
 from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionRequestRef
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProvisioning
 from modules.connectors.provider_specs import (
@@ -85,6 +87,9 @@ KEYED_PROVIDERS = {
 SIMPLE_NATIVE = frozenset(
     {
         "youtube",
+        *NATIVE_SIGNED_MEDIA_PROVIDERS,
+        "listenbrainz_releases",
+        "steam_releases",
         "arxiv",
         "huggingface",
         "bluesky",
@@ -106,7 +111,13 @@ SIMPLE_NATIVE = frozenset(
 # Both HTTP-shaped error families a collaborator (Sources, terms, access admission) may raise.
 _HTTP_ERRORS = (HTTPException, DomainError)
 HEADER_AUTH_PROVIDERS = LOCAL_SERVICE_PROVIDERS
-REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x"})
+NATIVE_REST_PLACEMENTS = {
+    "hardcover_books": "Authorization",
+    "youtube_api": "Authorization",
+    "podcast_index": "Authorization",
+    "igdb_games": "Authorization",
+}
+REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x", "youtube_api", "podcast_index", "igdb_games"})
 REFUSED_HERE: frozenset[str] = (
     frozenset()
 )  # providers that must never run here (GitHub/Telegram are native now)
@@ -209,9 +220,15 @@ class SendGate:
         self._last_authorized: float | None = None
 
     async def __call__(
-        self, credential_operation_id: UUID | None = None, *, header_recheck: bool = False
+        self,
+        credential_operation_id: UUID | None = None,
+        *,
+        header_recheck: bool = False,
+        apply_quota: bool = True,
     ) -> None:
-        """Authorize and debit one physical send; ``header_recheck=True`` only revalidates, never debits.
+        """Authorize and record one logical send, optionally omitting its quota windows.
+
+        ``header_recheck=True`` revalidates without creating a second ledger entry.
 
         Raises ``CollectionFenceLost`` when the credential operation changed; authorization and quota
         errors propagate and abort the send. A header-time recheck is skipped when the same send passed
@@ -227,7 +244,7 @@ class SendGate:
                 await self._authorize()
             return
         await self._authorize()
-        await self._debit()
+        await self._debit(apply_quota=apply_quota)
 
     async def recheck(self) -> None:
         """Header-time fence for ``send_fence_trace``: revalidate only, no quota debit."""
@@ -243,13 +260,25 @@ class SendGate:
         self._fingerprint = bound
 
     async def fetch_bytes(self, url: str, **kwargs: Any) -> rest.Fetched:
-        """Gated, pinned GET for generic adapters (one debited/fenced send per call)."""
+        """Fetch through the pinned transport and source fence, debiting only the applicable quota.
+
+        The ListenBrainz quota belongs to MusicBrainz. Discovery and artwork requests
+        still consume a durable logical sequence and recheck authority on redirect hops.
+        """
+        if self._quota_provider == "listenbrainz_releases" and urlsplit(url).hostname != "musicbrainz.org":
+            async def record_without_quota() -> None:
+                """Authorize and commit the logical send without spending a MusicBrainz unit."""
+                await self(apply_quota=False)
+
+            # The pinned transport looks for this optional callback before redirect hops.
+            setattr(record_without_quota, "recheck", self.recheck)  # noqa: B010
+            return await rest.fetch_bounded(url, before_send=record_without_quota, **kwargs)
         return await rest.fetch_bounded(url, before_send=self, **kwargs)
 
     async def _authorize(self) -> None:
         """Revalidate the current request, terms and any captured credential revision before a send.
 
-        Keyed presets, local-service tokens, and Notion/Slack bearer credentials must still match
+        Keyed presets, local-service tokens, and native bearer credentials must still match
         the admission revision; expired source, permission, terms or credential authority fails closed.
         """
         a = self._a
@@ -282,6 +311,7 @@ class SendGate:
                 source.provider in KEYED_PROVIDERS
                 or source.provider in HEADER_AUTH_PROVIDERS
                 or source.provider in REVISIONED_REST_PROVIDERS
+                or source.provider in NATIVE_REST_PLACEMENTS
             ):
                 await self._check_credential_revision(session, source)
         # Stamped only after every check passed; a failed check raises before reaching here.
@@ -340,8 +370,11 @@ class SendGate:
         finally:
             await session.rollback()
 
-    async def _debit(self) -> None:
-        """Debit one physical send from the provider quota (no-op without a quota provider) and count it."""
+    async def _debit(self, *, apply_quota: bool) -> None:
+        """Commit the next sequence and applicable quota windows before bytes leave the process.
+
+        Providers without a quota/ledger registration keep their existing no-op behavior.
+        """
         if self._quota_provider is None:
             return
         a = self._a
@@ -359,8 +392,9 @@ class SendGate:
                     send_sequence=self.sends,
                     request_target=self._quota_provider,
                     credential=fingerprint,
+                    apply_quota=apply_quota,
                 )
-                await session.commit()  # the debit is durable BEFORE bytes leave the process
+                await session.commit()  # The sequence is durable even when this host spends no quota.
             except BaseException:
                 await session.rollback()
                 raise
@@ -1051,8 +1085,8 @@ SOCIAL_WALK_PROVIDERS = frozenset(
     {"bluesky", "reddit", "mastodon", "x"}
 )  # catch-up walk (providers/social_walk.py)
 DEDUP_ONLY_PROVIDERS = frozenset(
-    {"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs", "tvmaze_schedule", "livechart_episodes", "anilist_anime", "anilist_manga"}
-)  # late-surfacing feeds: a cursor floor would drop items
+    {"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs", "tvmaze_schedule", "livechart_episodes", "anilist_anime", "anilist_manga", "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga", "google_books"}
+)  # late-surfacing feeds and media snapshots: a cursor floor would drop or strand valid items
 
 
 def _run_stats(run: Run, taken: Sequence[IngestionRecord]) -> dict[str, Any] | None:
@@ -1121,10 +1155,10 @@ async def _select(
     cursor, the source's selection options and a read-only ``seen_record_keys`` lookup (done BEFORE the cap,
     so a run of already-seen items cannot stall the cap) feed ``select_incremental``. Backlog, gap and
     duplicate counts go to ``run.extras["selection"]`` only - never into record metadata, which is hashed.
-    ``hn_top`` and ``google_news`` are ranking/aggregator feeds that surface late items, so they are
-    dedup-only: no cursor floor and the stored cursor is left unchanged (``None``). The full mapped list is
-    kept in ``run.extras["preview"]`` so the realtime preview shows the newest items, not the capped batch.
-    The lookup session is rolled back; it writes nothing.
+    Ranking/aggregator feeds and snapshot providers (including TMDB movies/TV, Trakt, and OMDb) surface late
+    or reordered items, so they are dedup-only: no cursor floor is applied and the stored cursor is left
+    unchanged (``None``). The full mapped list is kept in ``run.extras["preview"]`` so the realtime preview
+    shows the newest items, not the capped batch. The lookup session is rolled back; it writes nothing.
     """
     source = run.attempt.source
     if source.provider not in INCREMENTAL_PROVIDERS:

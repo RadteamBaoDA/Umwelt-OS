@@ -3,6 +3,19 @@
  * fallbacks). Tables instead of runtime key building keep every key type-checked; add a row with each new guide.
  */
 export const GUIDE_STEP_KEYS = {
+  tmdb_movies: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  tmdb_tv: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  trakt_media: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  omdb_lookup: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  mal_anime: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  mal_manga: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  google_books: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  hardcover_books: ['guideSteps.hardcover.s1', 'guideSteps.hardcover.s2', 'guideSteps.media.s3'],
+  youtube_api: ['guideSteps.youtubeApi.s1', 'guideSteps.youtubeApi.s2', 'guideSteps.media.s3'],
+  podcast_index: ['guideSteps.podcastIndex.s1', 'guideSteps.podcastIndex.s2', 'guideSteps.media.s3'],
+  listenbrainz_releases: ['guideSteps.listenbrainz.s1', 'guideSteps.listenbrainz.s2', 'guideSteps.media.s3'],
+  steam_releases: ['guideSteps.steam.s1', 'guideSteps.steam.s2', 'guideSteps.media.s3'],
+  igdb_games: ['guideSteps.igdb.s1', 'guideSteps.igdb.s2', 'guideSteps.media.s3'],
   anilist_anime: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
   anilist_manga: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
   livechart_episodes: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],

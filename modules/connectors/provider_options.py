@@ -244,6 +244,9 @@ MediaFormat = Literal[
     "remaster",
 ]
 AnimeSeason = Literal["winter", "spring", "summer", "fall"]
+MalAnimeRanking = Literal["all", "airing", "upcoming", "tv", "ova", "movie", "special", "bypopularity", "favorite"]
+MalMangaRanking = Literal["manga", "novels", "oneshots", "doujin", "manhwa", "manhua", "bypopularity", "favorite"]
+MAL_RANKING_DEFAULTS = {"mal_anime": "all", "mal_manga": "manga"}
 OpenLibraryMode = Literal["subject", "search", "recent"]
 MediaStatus = Literal["finished", "releasing", "not_yet_released", "cancelled", "hiatus"]
 AniListMode = Literal["airing", "trending", "updated"]
@@ -459,7 +462,16 @@ MAX_COINS = 5
 ISO_COUNTRY_PATTERN = r"^[A-Z]{2}$"
 
 # Provider-specific option names (the common selection filters are allowed separately by INCREMENTAL_PROVIDERS).
+_MAL_FILTER_FIELDS = ("media_genres", "media_formats", "release_year", "content_ratings", "min_rating", "exclude_adult")
 OPTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "mal_anime": ("mal_mode", "mal_ranking_type", "mal_season_year", "mal_season", "anime_season", *_MAL_FILTER_FIELDS),
+    "mal_manga": ("mal_ranking_type", "media_countries", *_MAL_FILTER_FIELDS),
+    "google_books": ("google_books_query", "google_books_subject", "google_books_print_type", "google_books_filter", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
+    "hardcover_books": ("media_genres", "release_year", "min_rating"),
+    "tmdb_movies": ("tmdb_mode", "tmdb_language", "tmdb_certification_country", "tmdb_certification", "media_country", "media_countries", "media_genres", "media_languages", "release_year", "min_rating", "exclude_adult"),
+    "tmdb_tv": ("tmdb_mode", "tmdb_language", "media_country", "media_countries", "media_genres", "media_languages", "release_year", "min_rating", "exclude_adult"),
+    "trakt_media": ("trakt_mode", "trakt_query", "trakt_calendar_days", "trakt_certifications", "media_countries", "media_genres", "media_languages", "release_year", "min_rating"),
+    "omdb_lookup": ("omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search", "omdb_type", "release_year", "media_country", "media_countries", "media_genres", "media_languages", "min_rating"),
     "tvmaze_schedule": ("tvmaze_mode", "tvmaze_global", "media_country", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
     "livechart_episodes": ("media_genres", "release_year"),
     "openlibrary_books": ("openlibrary_mode", "openlibrary_subject", "openlibrary_query", "ebooks_only", "media_languages"),
@@ -470,6 +482,19 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
     "mangaupdates_releases": ("mangaupdates_types", "licensed_only", "release_year", "media_genres", "exclude_genre", "series_ids"),
     "mangadex_releases": ("manga_ids", "original_languages", "available_translated_languages", "mangadex_content_ratings", "mangadex_statuses", "publication_demographic", "release_year", "updated_at_since", "media_genres", "excluded_tags"),
     "apple_books_rss": ("country", "kind", "chart", "media_country", "media_genres", "media_languages"),
+    "youtube_api": ("media_countries", "media_languages", "release_year", "content_ratings"),
+    "podcast_index": (
+        "podcast_index_query", "podcast_index_languages", "podcast_index_categories",
+        "podcast_index_excluded_categories", "podcast_index_since", "podcast_index_value",
+        "media_genres", "content_ratings",
+    ),
+    "listenbrainz_releases": (
+        "listenbrainz_username", "listenbrainz_days", "listenbrainz_sort", "listenbrainz_tags",
+        "listenbrainz_status", "media_countries", "media_country", "media_languages", "media_genres",
+        "media_formats", "release_year",
+    ),
+    "steam_releases": ("steam_mode", "steam_country", "steam_language", "steam_appids", "media_genres", "release_year", "min_rating", "content_ratings"),
+    "igdb_games": ("igdb_game_types", "igdb_region", "igdb_platforms", "media_genres", "media_formats", "release_year", "min_rating", "content_ratings"),
     "podcast_rss": ("itunes_podcast_id", "media_country", "media_genres", "media_languages"),
     "wikidata_movies": ("lookback_days", "genre_qids", "language", "media_country", "media_countries", "media_genres", "media_languages"),
     "itunes_movies": ("search_terms", "country", "media_country", "media_genres", "media_languages"),
@@ -625,7 +650,8 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         repeats a value, an FX quote equals its base or is not listed by that provider (ECB publishes no VND,
         so ``ecb`` accepts only its own reference set), more than ``MAX_COINS`` coins are requested, or
         media numeric bounds (``min_rating`` / ``release_year``) are violated. Podcast sources must select
-        exactly one HTTPS feed or iTunes ID, and iTunes movie searches require bounded search terms.
+        exactly one HTTPS feed or iTunes ID, Podcast Index options must fit their selected endpoint,
+        and iTunes movie searches require bounded search terms.
     """
     if provider == "nvd" and (cfg.get("max_items") or 0) > UPSTREAM_CAPS["nvd"]:
         raise ValueError("NVD returns at most 20 CVEs per sync")
@@ -662,6 +688,7 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         "mangadex_statuses",
         "publication_demographic",
         "genre_qids",
+        "trakt_certifications",
     ):
         values = cfg.get(name)
         if values is not None and len(set(values)) != len(values):
@@ -670,9 +697,12 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     validator = {
         "openlibrary_books": _validate_openlibrary_options,
         "gutendex_books": _validate_gutendex_options,
+        "listenbrainz_releases": validate_listenbrainz_options,
     }.get(provider)
     if validator is not None:
         validator(cfg)
+    if provider == "podcast_index":
+        validate_podcast_index_options(cfg)
     _validate_media_provider_options(provider, cfg)
     keywords = [k.casefold() for k in cfg.get("job_keywords") or ()]
     if len(set(keywords)) != len(keywords):
@@ -702,7 +732,11 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
 
 
 def _validate_media_provider_options(provider: str, cfg: Mapping[str, Any]) -> None:
-    """Reject incomplete or incompatible scoped values for keyless media collectors before persistence."""
+    """Reject incomplete or incompatible media options before persistence.
+
+    TMDB certification on the ID-only changes mode is invalid because that response cannot apply certification
+    without detail-request fan-out.
+    """
     if provider == "ann_news":
         mode = cfg.get("ann_mode") or "news"
         if mode == "news" and cfg.get("ann_media_type") is not None:
@@ -714,16 +748,192 @@ def _validate_media_provider_options(provider: str, cfg: Mapping[str, Any]) -> N
         translated = set(cfg.get("available_translated_languages") or ())
         if not translated <= {"en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"}:
             raise ValueError("MangaDex translated language is unsupported")
-    elif provider == "podcast_rss":
+    elif provider == "youtube_api":
+        validate_youtube_api_options(cfg)
+    elif provider in {"steam_releases", "igdb_games"}:
+        _validate_game_options(provider, cfg)
+    elif provider in {"podcast_rss", "itunes_movies"}:
+        _validate_rss_movie_options(provider, cfg)
+    elif provider in {"tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup"}:
+        _validate_keyed_media_provider_options(provider, cfg)
+    elif provider in {"mal_anime", "mal_manga"}:
+        validate_mal_target(provider, cfg)
+    elif provider == "google_books":
+        validate_google_books_target(cfg)
+
+
+def _validate_rss_movie_options(provider: str, cfg: Mapping[str, Any]) -> None:
+    """Validate podcast source exclusivity or the required iTunes search term."""
+    if provider == "podcast_rss":
         if bool(cfg.get("feed_url")) == bool(cfg.get("itunes_podcast_id")):
             raise ValueError("Choose exactly one podcast feed URL or iTunes podcast ID")
         feed_url = cfg.get("feed_url")
         if feed_url is not None and not str(feed_url).startswith("https://"):
             raise ValueError("Podcast feed URLs must use HTTPS")
-    elif provider == "itunes_movies":
+    else:
         terms = cfg.get("search_terms")
         if not isinstance(terms, str) or not 1 <= len(terms.strip()) <= 100:
             raise ValueError("iTunes movie search terms are required")
+
+
+def validate_youtube_api_options(cfg: Mapping[str, Any]) -> None:
+    """Prevent filters that depend on channel metadata in direct playlist scope."""
+    if cfg.get("youtube_playlist_ids") and (
+        cfg.get("youtube_filter") not in (None, "all") or cfg.get("media_countries")
+    ):
+        raise ValueError("YouTube format and country filters require a channel or handle")
+
+
+def validate_podcast_index_options(cfg: Mapping[str, Any]) -> None:
+    """Validate the documented recent-feed and term-search query shapes before storing a scope."""
+    query = cfg.get("podcast_index_query")
+    recent = ("podcast_index_languages", "podcast_index_categories", "podcast_index_excluded_categories", "podcast_index_since")
+    if query is not None:
+        if clean_query(query) != query or any(cfg.get(key) is not None for key in recent):
+            raise ValueError("Podcast Index term search cannot use recent feed options")
+    elif cfg.get("podcast_index_value") is not None or cfg.get("content_ratings"):
+        raise ValueError("Podcast Index value type and explicit rating filters require a search term")
+    languages = cfg.get("podcast_index_languages") or ()
+    if len(set(languages)) != len(languages) or any(not re.fullmatch(r"[a-z]{2}|unknown", lang) for lang in languages):
+        raise ValueError("Podcast Index languages must be distinct two-letter codes or unknown")
+    for key in ("podcast_index_categories", "podcast_index_excluded_categories"):
+        if (value := cfg.get(key)) is not None and not re.fullmatch(r"[A-Za-z0-9 &'-]+(?:,[A-Za-z0-9 &'-]+)*", value):
+            raise ValueError("Podcast Index categories must be comma-separated names or IDs")
+
+
+def validate_listenbrainz_options(cfg: Mapping[str, Any]) -> None:
+    """Bound ListenBrainz scope and prevent Lucene syntax from adding unrequested search clauses."""
+    tags = cfg.get("listenbrainz_tags") or ()
+    if len(set(tags)) != len(tags) or any(not re.fullmatch(r"[A-Za-z0-9 _-]{1,64}", tag) for tag in tags):
+        raise ValueError("ListenBrainz tags must be distinct plain text values")
+
+
+def validate_steam_options(cfg: Mapping[str, Any]) -> None:
+    """Bound Steam detail fanout and enforce the selected featured or news request shape."""
+    appids = cfg.get("steam_appids") or ()
+    if len(set(appids)) != len(appids):
+        raise ValueError("Steam app IDs must be distinct")
+    mode = cfg.get("steam_mode") or "featured"
+    if mode == "news" and not appids:
+        raise ValueError("Steam news mode requires app IDs")
+    if mode == "featured" and appids:
+        raise ValueError("Steam app IDs require news mode")
+
+
+def validate_igdb_options(cfg: Mapping[str, Any]) -> None:
+    """Reject duplicate IGDB selectors and require a bounded game type, region, or platform scope."""
+    for key in ("igdb_game_types", "igdb_platforms"):
+        if len(set(cfg.get(key) or ())) != len(cfg.get(key) or ()):
+            raise ValueError("IGDB selectors must be distinct")
+    if not any(cfg.get(key) for key in ("igdb_game_types", "igdb_region", "igdb_platforms")):
+        raise ValueError("IGDB requires a game type, release region, or platform")
+
+
+def _validate_game_options(provider: str, cfg: Mapping[str, Any]) -> None:
+    """Dispatch game-only selectors to their source-specific bounds and mutual-exclusion rules."""
+    (validate_steam_options if provider == "steam_releases" else validate_igdb_options)(cfg)
+
+
+def validate_mal_target(provider: str, cfg: Mapping[str, Any]) -> None:
+    """Reject ranking and season targets incompatible with the selected MAL v2 endpoint."""
+    mode = cfg.get("mal_mode", "ranking")
+    ranking = cfg.get("mal_ranking_type")
+    year, season = cfg.get("mal_season_year"), cfg.get("mal_season")
+    rankings = get_args(MalAnimeRanking if provider == "mal_anime" else MalMangaRanking)
+    if mode in (None, "ranking"):
+        if year is not None or season is not None or (ranking is not None and ranking not in rankings):
+            raise ValueError("MAL ranking target is invalid")
+    elif mode == "season" and provider == "mal_anime":
+        if type(year) is not int or not 1917 <= year <= 2100 or season not in get_args(AnimeSeason) or ranking is not None:
+            raise ValueError("MAL anime season requires a season and year without a ranking type")
+    else:
+        raise ValueError("MAL season collection is only available for anime")
+
+
+def validate_google_books_target(cfg: Mapping[str, Any]) -> None:
+    """Require bounded query or subject text and validate Google Books search filter modes."""
+    query, subject = cfg.get("google_books_query"), cfg.get("google_books_subject")
+    if query is None and subject is None:
+        raise ValueError("Google Books requires a query or subject")
+    for value, limit in ((query, 160), (subject, 100)):
+        if value is not None and (
+            not isinstance(value, str) or not value.strip() or len(value) > limit or _CONTROL.search(value)
+        ):
+            raise ValueError("Google Books query or subject is invalid")
+    if isinstance(subject, str) and ('"' in subject or "\\" in subject):
+        raise ValueError("Google Books subject must be plain text")
+    if cfg.get("google_books_print_type") not in (None, "all", "books", "magazines"):
+        raise ValueError("Google Books print type is unsupported")
+    if cfg.get("google_books_filter") not in (None, "ebooks", "free-ebooks", "paid-ebooks"):
+        raise ValueError("Google Books ebook filter is unsupported")
+
+
+def _validate_keyed_media_provider_options(provider: str, cfg: Mapping[str, Any]) -> None:
+    """Validate endpoint modes and required targets for keyed movie, TV, Trakt, and OMDb providers."""
+    if provider in {"tmdb_movies", "tmdb_tv"}:
+        validate_tmdb_options(provider, cfg)
+    elif provider == "trakt_media":
+        mode = cfg.get("trakt_mode") or "movies_trending"
+        if mode not in {"movies_trending", "movies_anticipated", "shows_trending", "shows_anticipated", "movies_calendar", "shows_calendar", "movies_search", "shows_search"}:
+            raise ValueError("Trakt mode is unsupported")
+        if mode.endswith("_search") and not str(cfg.get("trakt_query") or "").strip():
+            raise ValueError("Trakt search requires a query")
+        if not mode.endswith("_search") and cfg.get("trakt_query"):
+            raise ValueError("Trakt query is only valid in search mode")
+        days = cfg.get("trakt_calendar_days")
+        if days is not None and (type(days) is not int or not 1 <= days <= 31):
+            raise ValueError("Trakt calendar days must be between 1 and 31")
+        if days is not None and not mode.endswith("_calendar"):
+            raise ValueError("Trakt calendar days require calendar mode")
+    elif provider == "omdb_lookup":
+        mode = cfg.get("omdb_mode") or "title"
+        key = {"imdb_id": "omdb_imdb_id", "title": "omdb_title", "search": "omdb_search"}.get(mode)
+        value = cfg.get(key) if key else None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("OMDb selected lookup field is required")
+        if mode == "imdb_id" and not re.fullmatch(r"tt\d{7,12}", value):
+            raise ValueError("OMDb IMDb ID is invalid")
+        if cfg.get("omdb_type") not in (None, "movie", "series", "episode"):
+            raise ValueError("OMDb type is unsupported")
+        validate_omdb_search_filters(cfg)
+
+
+TMDB_DISCOVER_OPTIONS = (
+    "media_country", "media_countries", "media_genres", "media_languages",
+    "release_year", "min_rating", "exclude_adult", "tmdb_certification", "tmdb_certification_country",
+)
+
+
+def validate_tmdb_options(provider: str, cfg: Mapping[str, Any]) -> None:
+    """Reject modes and filters unavailable from the selected TMDB response shape."""
+    mode = cfg.get("tmdb_mode")
+    allowed = {"now_playing", "upcoming", "changes"} if provider == "tmdb_movies" else {"airing_today", "on_the_air"}
+    if mode is not None and mode not in allowed:
+        raise ValueError("TMDB mode is unsupported")
+    _validate_tmdb_certification(provider, mode, cfg)
+    if mode == "changes" and any(
+        cfg.get(name) is not None for name in (*TMDB_DISCOVER_OPTIONS, "tmdb_language")
+    ):
+        raise ValueError("TMDB metadata filters are unavailable in changes mode")
+
+
+def validate_omdb_search_filters(cfg: Mapping[str, Any]) -> None:
+    """Reject detail-only filters for the abbreviated OMDb search response."""
+    if cfg.get("omdb_mode") == "search" and any(
+        cfg.get(name) is not None
+        for name in ("media_country", "media_countries", "media_genres", "media_languages", "min_rating")
+    ):
+        raise ValueError("OMDb search does not return country, genre, language or rating details")
+
+
+def _validate_tmdb_certification(provider: str, mode: object, cfg: Mapping[str, Any]) -> None:
+    """Require a country for TMDB certification and reject the ID-only changes endpoint combination."""
+    if not cfg.get("tmdb_certification"):
+        return
+    if not cfg.get("tmdb_certification_country"):
+        raise ValueError("TMDB certification requires a certification country")
+    if provider == "tmdb_movies" and mode == "changes":
+        raise ValueError("TMDB certification is unavailable in changes mode")
 
 
 def _validate_openlibrary_options(cfg: Mapping[str, Any]) -> None:
@@ -1077,12 +1287,23 @@ def _parse_cursor(cursor: str | None) -> datetime | None:
         return None
 
 
+def _mal_fingerprint_defaults(provider: str, cfg: Mapping[str, Any]) -> dict[str, object]:
+    """Collapse equivalent omitted and explicit MAL defaults to the same continuation fingerprint."""
+    params: dict[str, object] = {"exclude_adult": cfg.get("exclude_adult") is not False}
+    if cfg.get("mal_mode") != "season":
+        params["mal_ranking_type"] = cfg.get("mal_ranking_type") or MAL_RANKING_DEFAULTS[provider]
+    if provider == "mal_anime":
+        params["mal_mode"] = cfg.get("mal_mode") or "ranking"
+    return params
+
+
 def native_fingerprint(provider: str, cfg: Mapping[str, Any]) -> str | None:
     """Return a short stable hash of the native query parameters, or ``None`` for providers without any.
 
-    Only providers with a cursor (``INCREMENTAL_PROVIDERS``, not dedup-only) and a native query option have
-    one. Unset options are normalised to their defaults, so "unset" equals "explicitly the default". Count
-    (``max_items``), client filters and region are excluded: they never change which upstream items exist.
+    Media snapshots include local display filters because they change which results a run accepts.
+    Podcast Index includes its effective query and filters so its high-water mark cannot cross selections.
+    Hardcover includes its catalog mode and filters so a keyset cursor cannot cross queries.
+    MAL treats omitted options as the default ranking and adult-content exclusion.
     """
     params: dict[str, Any]
     if provider == "gdelt_economy":
@@ -1108,6 +1329,21 @@ def native_fingerprint(provider: str, cfg: Mapping[str, Any]) -> str | None:
         params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
     elif provider == "gutendex_books":
         params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
+    elif provider == "hardcover_books":
+        params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
+        params["hardcover_mode"] = cfg.get("hardcover_mode") or "catalog"
+    elif provider == "listenbrainz_releases":
+        params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
+        params["listenbrainz_days"] = cfg.get("listenbrainz_days") or 14
+        params["listenbrainz_sort"] = cfg.get("listenbrainz_sort") or "release_date"
+    elif provider in {"steam_releases", "igdb_games"}:
+        params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
+        if provider == "steam_releases":
+            params["steam_mode"] = cfg.get("steam_mode") or "featured"
+    elif provider in {"tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga", "google_books", "podcast_index"}:
+        params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
+        if provider in {"mal_anime", "mal_manga"}:
+            params.update(_mal_fingerprint_defaults(provider, cfg))
     elif provider == "satnogs_observations":
         params = {"s": cfg.get("satnogs_status") or "good"}
     else:
