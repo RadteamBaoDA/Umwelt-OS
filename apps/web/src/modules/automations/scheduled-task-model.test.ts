@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { briefCron, describeSchedule, parseBriefCron, scheduledTaskKind, TEMPLATES } from './scheduled-task-model';
+import {
+  briefCron,
+  describeSchedule,
+  estimateTokens,
+  parseBriefCron,
+  scheduledTaskKind,
+  tokenCap,
+  topicOutcome,
+  TEMPLATES,
+} from './scheduled-task-model';
 
 const brief = (deliver_chat: boolean | undefined) => ({ type: 'generate_brief' as const, scope: 'daily' as const, deliver_chat });
 const schedule = { type: 'schedule' as const, cron: '0 7 * * *' };
@@ -30,7 +39,29 @@ describe('scheduled task model', () => {
     expect(scheduledTaskKind({ trigger: schedule, actions: [brief(true), brief(true)] })).toBeNull();
   });
 
-  it('ships exactly the daily brief template', () => {
-    expect(TEMPLATES.map((item) => item.id)).toEqual(['daily-brief']);
+  it('ships the daily brief and topic watch templates', () => {
+    expect(TEMPLATES.map((item) => item.id)).toEqual(['daily-brief', 'topic-watch']);
+  });
+
+  it('classifies a topic watch like the Python scheduled_task_kind', () => {
+    const watch = { type: 'collect_source' as const };
+    expect(scheduledTaskKind({ trigger: schedule, actions: [watch] })).toBe('topic_watch');
+    expect(scheduledTaskKind({ trigger: { type: 'webhook' }, actions: [watch] })).toBeNull();
+    expect(scheduledTaskKind({ trigger: schedule, actions: [watch, watch] })).toBeNull();
+    expect(scheduledTaskKind({ trigger: schedule, actions: [watch, brief(true)] })).toBeNull();
+  });
+
+  it('pins the token estimate to the backend value', () => {
+    expect(estimateTokens(5)).toBe(15600);
+    expect(tokenCap(5)).toBe(23400);
+  });
+
+  it('derives the topic outcome from the reason code and result reference', () => {
+    expect(topicOutcome({ error_code: 'consent_required', result_reference: null })).toBe('consent_required');
+    expect(topicOutcome({ error_code: 'no_new_data', result_reference: 'settled:r' })).toBe('no_new_data');
+    expect(topicOutcome({ error_code: 'collection_failed', result_reference: 'collection:r' })).toBe('failed');
+    expect(topicOutcome({ error_code: null, result_reference: 'settled:r' })).toBe('settled');
+    expect(topicOutcome({ error_code: null, result_reference: 'collection:r' })).toBe('collecting');
+    expect(topicOutcome({ error_code: null, result_reference: null })).toBeNull();
   });
 });

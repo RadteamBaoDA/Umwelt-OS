@@ -24,6 +24,7 @@ const ACTION_KEYS = {
   create_notification: 'action.createNotification',
   generate_brief: 'action.generateBrief',
   call_webhook: 'action.callWebhook',
+  collect_source: 'action.collectSource',
 } as const;
 const OPERATOR_KEYS = {
   eq: 'op.eq',
@@ -103,4 +104,5 @@ export type AutomationRequestErrorKey =
   | 'pauseBeforeBriefEdit'
   | 'invalidServer'
   | 'action.failed'
-  | 'saveFailed';
+  | 'saveFailed'
+  | 'scheduledTasks.topic.consentMismatch';

@@ -12,25 +12,64 @@ export type BriefDays = 'daily' | 'weekdays';
 /** A starting point offered on the Templates tab. */
 export interface ScheduledTaskTemplate {
   id: string;
-  kind: 'daily_brief';
-  icon: 'sun';
+  kind: 'daily_brief' | 'topic_watch';
+  icon: 'sun' | 'telescope';
   defaultTime: string;
   defaultDays: BriefDays;
 }
 
-/** Phase 1 ships only the Daily brief template; further kinds arrive in later phases. */
+/** Templates offered on the Templates tab: the single Daily brief and any number of Topic watches. */
 export const TEMPLATES: readonly ScheduledTaskTemplate[] = [
   { id: 'daily-brief', kind: 'daily_brief', icon: 'sun', defaultTime: '07:00', defaultDays: 'daily' },
+  { id: 'topic-watch', kind: 'topic_watch', icon: 'telescope', defaultTime: '08:00', defaultDays: 'daily' },
 ];
+
+/** Per-run token estimate constants; mirror the backend `topic_watch_rules` (a unit test pins `estimateTokens(5)`). */
+const PLAN_TOKENS = 600;
+const PAGE_TOKENS = 1500;
+
+/** Largest `max_items` a Topic watch accepts (backend limit). */
+export const MAX_TOPIC_ITEMS = 10;
+
+/**
+ * Per-run token estimate for a Topic watch that keeps at most `maxItems` items: planning plus two fetched pages per
+ * item. The server recomputes this and refuses a different grant (`consent_estimate_mismatch`), so the value shown to
+ * the owner is exactly the value they consent to.
+ */
+export function estimateTokens(maxItems: number): number {
+  return PLAN_TOKENS + maxItems * 2 * PAGE_TOKENS;
+}
+
+/** Hard per-run token cap the server enforces: 1.5x the estimate, rounded up. */
+export function tokenCap(maxItems: number): number {
+  return Math.ceil(1.5 * estimateTokens(maxItems));
+}
 
 /**
  * Classifies a rule as a scheduled task. Mirrors the Python `scheduled_task_kind`: a schedule trigger and exactly one
  * `generate_brief` action with `deliver_chat === true` is a daily brief; anything else is not a task.
  */
-export function scheduledTaskKind(rule: Pick<Automation, 'trigger' | 'actions'>): 'daily_brief' | null {
+export function scheduledTaskKind(rule: Pick<Automation, 'trigger' | 'actions'>): 'daily_brief' | 'topic_watch' | null {
   const [only] = rule.actions;
-  const isBrief = rule.trigger.type === 'schedule' && rule.actions.length === 1 && only.type === 'generate_brief';
-  return isBrief && only.deliver_chat === true ? 'daily_brief' : null;
+  const single = rule.trigger.type === 'schedule' && rule.actions.length === 1;
+  if (single && only.type === 'collect_source') return 'topic_watch';
+  return single && only.type === 'generate_brief' && only.deliver_chat === true ? 'daily_brief' : null;
+}
+
+/** Outcome of the newest Topic watch run, derived from its action's reason code and result reference. */
+export type TopicOutcome = 'collecting' | 'settled' | 'no_new_data' | 'failed' | 'consent_required';
+
+/**
+ * Classifies a `collect_source` run action: `consent_required` (skipped), `no_new_data`, `collection_*` (failed or
+ * rejected), `settled:` (items posted), `collection:` (queued, not yet settled); null when none applies.
+ */
+export function topicOutcome(action: { error_code: string | null; result_reference: string | null }): TopicOutcome | null {
+  if (action.error_code === 'consent_required') return 'consent_required';
+  if (action.error_code === 'no_new_data') return 'no_new_data';
+  if (action.error_code?.startsWith('collection_')) return 'failed';
+  if (action.result_reference?.startsWith('settled:')) return 'settled';
+  if (action.result_reference?.startsWith('collection:')) return 'collecting';
+  return null;
 }
 
 /** True for a rule that generates a brief but is not a scheduled task (legacy rule that still owns the brief slot). */

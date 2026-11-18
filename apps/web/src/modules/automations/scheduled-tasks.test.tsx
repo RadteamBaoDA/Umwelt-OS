@@ -23,6 +23,8 @@ vi.mock('./api', async (original) => ({
   getBriefTimezone: vi.fn(async () => 'Asia/Ho_Chi_Minh'),
   getBriefRoleModels: vi.fn(async () => ({ brief: 'model-x', chat: 'model-c', background: 'model-x' })),
   createScheduledTask: vi.fn(),
+  deleteAutomation: vi.fn(async () => undefined),
+  countSourceDocuments: vi.fn(async () => ({ count: 7, capped: false })),
   patchAutomation: vi.fn(),
 }));
 
@@ -61,7 +63,7 @@ describe('scheduled tasks workspace', () => {
     vi.mocked(api.listAutomations).mockResolvedValue({ items: [] });
     render(view(<ScheduledTasksWorkspace />));
     expect(await screen.findByText('No scheduled tasks yet')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Set up' })).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Set up' })).toHaveLength(2);
   });
 
   it('lists a task with its schedule sentence and next run, and disables the template', async () => {
@@ -74,11 +76,13 @@ describe('scheduled tasks workspace', () => {
   });
 
   it('returns to Yours after creating a task from Templates', async () => {
-    vi.mocked(api.listAutomations).mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [task] });
+    vi.mocked(api.listAutomations)
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [task] });
     vi.mocked(api.createScheduledTask).mockResolvedValue(task);
     render(view(<ScheduledTasksWorkspace />));
     fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Templates' }), { button: 0 });
-    fireEvent.click(await screen.findByRole('button', { name: 'Set up' }));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Set up' }))[0]);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Yours' })).toHaveAttribute('aria-selected', 'true'));
@@ -109,7 +113,7 @@ describe('scheduled tasks workspace', () => {
     vi.mocked(api.listAutomations).mockResolvedValue({ items: [legacy] });
     render(view(<ScheduledTasksWorkspace />));
     expect(await screen.findByRole('button', { name: 'Convert existing brief rule' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Set up' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Set up' })[0]).toBeDisabled();
   });
 
   it('renders Vietnamese copy', async () => {
@@ -215,5 +219,73 @@ describe('brief task editor', () => {
     locale = 'vi-vi';
     render(view(<BriefTaskEditor csrfToken="csrf" onClose={vi.fn()} />));
     expect(await screen.findByText('Múi giờ')).toBeTruthy();
+  });
+});
+
+describe('topic watch rows', () => {
+  const topic = {
+    ...task,
+    id: 'w1',
+    name: 'EV watch',
+    actions: [
+      {
+        type: 'collect_source',
+        watch: {
+          topic: 'Electric vehicles in Vietnam',
+          keep_rule: null,
+          languages: ['en'],
+          include_sites: [],
+          exclude_sites: [],
+          max_items: 5,
+        },
+        model_role: 'background',
+        source_id: 'src1',
+        consent: { hash: 'h', granted_at: '2026-11-18T00:00:00Z', est_tokens: 15600 },
+      },
+    ],
+  } as api.Automation;
+
+  it('shows the topic, kind and a Show on dashboard link to the Feed template', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [topic] });
+    render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByText('Electric vehicles in Vietnam')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Show on dashboard' })).toHaveAttribute('href', '/dashboard?addTemplate=feed&source=src1');
+  });
+
+  it('delete keeps the items by default and sends purge_items=false', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [topic] });
+    render(view(<ScheduledTasksWorkspace />));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    const box = await screen.findByRole('checkbox', { name: 'Also delete the 7 collected items' });
+    expect(box).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+    await waitFor(() => expect(api.deleteAutomation).toHaveBeenCalledWith('w1', 2, 'csrf', false));
+  });
+
+  it('ticking the checkbox sends purge_items=true', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [topic] });
+    render(view(<ScheduledTasksWorkspace />));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Also delete the/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete task' }));
+    await waitFor(() => expect(api.deleteAutomation).toHaveBeenCalledWith('w1', 2, 'csrf', true));
+  });
+
+  it('shows Needs consent when the stored watch has no consent', async () => {
+    const noConsent = { ...topic, actions: [{ ...topic.actions[0], consent: null }] } as api.Automation;
+    vi.mocked(api.getLastRun).mockResolvedValue({
+      items: [
+        {
+          id: 'r',
+          revision: 2,
+          status: 'skipped',
+          created_at: '2026-11-18T00:00:00Z',
+          actions: [{ error_code: 'consent_required', result_reference: null }],
+        },
+      ],
+    } as never);
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [noConsent] });
+    render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByText('Needs consent')).toBeTruthy();
   });
 });

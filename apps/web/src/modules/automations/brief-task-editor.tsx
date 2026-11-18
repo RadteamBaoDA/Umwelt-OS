@@ -105,7 +105,7 @@ type BriefForm = ReturnType<typeof initialState>;
  * Select over the three model roles, each labelled with the model Settings > Models resolves for it. A role with no
  * model (or while the settings are still loading) is disabled. Presentational; calls `onChange` with the role.
  */
-function ModelRoleSelect({
+export function ModelRoleSelect({
   value,
   models,
   onChange,

@@ -10,6 +10,34 @@ import { ApiError } from '@/core/api';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { decideAction, getRuleConversationId, listRuns, type Automation, type Run, type RunAction } from './api';
 import { actionLabel, actionStatusLabel, runStatusLabel, triggerLabel } from './message-keys';
+import { topicOutcome } from './scheduled-task-model';
+
+/** Literal catalog keys of the Topic watch run outcomes. */
+const TOPIC_OUTCOME_KEYS = {
+  collecting: 'scheduledTasks.topic.outcome.collecting',
+  settled: 'scheduledTasks.topic.outcome.settled',
+  no_new_data: 'scheduledTasks.topic.outcome.noNew',
+  failed: 'scheduledTasks.topic.outcome.failed',
+  consent_required: 'scheduledTasks.topic.needsConsent',
+} as const;
+
+/**
+ * Outcome line and thread link of a Topic watch (`collect_source`) action. The runs API carries no collection
+ * counters, so the outcome comes from the action's reason code and result reference, and the per-run stats
+ * (queries, fetched, duplicates, partial reason) are shown on the posted thread message that this opens.
+ */
+function TopicOutcomeLine({ action, onOpenChat }: { action: RunAction; onOpenChat: () => void }) {
+  const t = useTranslations('automations');
+  const outcome = topicOutcome(action);
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      {outcome && <span>{t(TOPIC_OUTCOME_KEYS[outcome])}</span>}
+      <Button type="button" variant="outline" size="sm" onClick={onOpenChat}>
+        {t('openInChat')}
+      </Button>
+    </div>
+  );
+}
 
 const activeStatuses = new Set(['queued', 'running', 'awaiting_approval']);
 
@@ -64,6 +92,7 @@ function ActionRow({
       {action.result_reference && (
         <p className="break-all text-xs text-muted-foreground">{t('resultReference', { reference: action.result_reference })}</p>
       )}
+      {action.type === 'collect_source' && <TopicOutcomeLine action={action} onOpenChat={onOpenChat} />}
       {pending && (
         <div role="group" aria-label={t('approval.title')} className="space-y-2 rounded-md border border-border bg-surface p-3">
           <p className="font-medium">{t('approval.title')}</p>

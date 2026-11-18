@@ -2,7 +2,18 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
-import { ClockIcon, HistoryIcon, MessageSquareIcon, PauseIcon, PencilIcon, PlayIcon, SunIcon } from 'lucide-react';
+import {
+  ClockIcon,
+  HistoryIcon,
+  LayoutDashboardIcon,
+  MessageSquareIcon,
+  PauseIcon,
+  PencilIcon,
+  PlayIcon,
+  SunIcon,
+  TelescopeIcon,
+  Trash2Icon,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
@@ -20,20 +31,40 @@ import {
   listAutomations,
   patchAutomation,
   runAutomation,
+  type Action,
   type Automation,
+  type Run,
 } from './api';
 import { BriefTaskEditor } from './brief-task-editor';
 import { runStatusLabel } from './message-keys';
 import { RuleEditor } from './rule-editor';
 import { RunDetail } from './run-detail';
-import { TEMPLATES, describeSchedule, isLegacyBrief, scheduledTaskKind, type ScheduledTaskTemplate } from './scheduled-task-model';
+import {
+  TEMPLATES,
+  describeSchedule,
+  isLegacyBrief,
+  scheduledTaskKind,
+  topicOutcome,
+  type ScheduledTaskTemplate,
+} from './scheduled-task-model';
+import { TopicWatchDeleteDialog } from './topic-watch-delete-dialog';
+import { TopicWatchEditor } from './topic-watch-editor';
 
-type Editor = { mode: 'new' } | { mode: 'edit'; rule: Automation } | { mode: 'convert' };
+/** Literal catalog keys of the Topic watch run outcomes. */
+const OUTCOME_KEYS = {
+  collecting: 'scheduledTasks.topic.outcome.collecting',
+  settled: 'scheduledTasks.topic.outcome.settled',
+  no_new_data: 'scheduledTasks.topic.outcome.noNew',
+  failed: 'scheduledTasks.topic.outcome.failed',
+} as const;
+
+type Editor = { mode: 'new'; kind: 'daily_brief' | 'topic_watch' } | { mode: 'edit'; rule: Automation } | { mode: 'convert' };
 type View = { kind: 'list' } | { kind: 'blank' } | { kind: 'runs'; ruleId: string };
 
 /**
  * Templates grid. The Daily brief card is disabled with "already set up" when a task exists, and with a convert link
- * when a legacy brief rule owns the slot; otherwise `onUse` opens the editor.
+ * when a legacy brief rule owns the slot; the Topic watch card is never disabled (many watches are allowed). `onUse`
+ * opens the editor of the chosen template.
  */
 function TemplateGrid({
   hasTask,
@@ -49,27 +80,39 @@ function TemplateGrid({
   const t = useTranslations('automations');
   return (
     <ul className="grid gap-3 sm:grid-cols-2">
-      {TEMPLATES.map((template) => (
-        <li key={template.id} className="space-y-3 rounded-lg border border-border bg-surface p-4">
-          <div className="flex items-center gap-2 font-semibold">
-            <SunIcon size={16} aria-hidden />
-            {t('scheduledTasks.templateBriefTitle')}
-          </div>
-          <p className="text-sm text-muted-foreground">{t('scheduledTasks.templateBriefBody')}</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" size="sm" disabled={hasTask || hasLegacy} onClick={() => onUse(template)}>
-              {hasTask ? t('scheduledTasks.alreadySetUp') : t('scheduledTasks.useTemplate')}
-            </Button>
-            {hasLegacy && !hasTask && (
-              <Button type="button" variant="link" size="sm" onClick={onConvert}>
-                {t('scheduledTasks.convertExisting')}
+      {TEMPLATES.map((template) => {
+        const brief = template.kind === 'daily_brief';
+        const blocked = brief && (hasTask || hasLegacy);
+        return (
+          <li key={template.id} className="space-y-3 rounded-lg border border-border bg-surface p-4">
+            <div className="flex items-center gap-2 font-semibold">
+              {brief ? <SunIcon size={16} aria-hidden /> : <TelescopeIcon size={16} aria-hidden />}
+              {brief ? t('scheduledTasks.templateBriefTitle') : t('scheduledTasks.templateTopicTitle')}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {brief ? t('scheduledTasks.templateBriefBody') : t('scheduledTasks.templateTopicBody')}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="button" size="sm" disabled={blocked} onClick={() => onUse(template)}>
+                {brief && hasTask ? t('scheduledTasks.alreadySetUp') : t('scheduledTasks.useTemplate')}
               </Button>
-            )}
-          </div>
-        </li>
-      ))}
+              {brief && hasLegacy && !hasTask && (
+                <Button type="button" variant="link" size="sm" onClick={onConvert}>
+                  {t('scheduledTasks.convertExisting')}
+                </Button>
+              )}
+            </div>
+          </li>
+        );
+      })}
     </ul>
   );
+}
+
+/** True when the editor state targets a Topic watch (a new one from its template, or an existing watch being edited). */
+function isTopicEditor(editor: Editor): boolean {
+  if (editor.mode === 'edit') return scheduledTaskKind(editor.rule) === 'topic_watch';
+  return editor.mode === 'new' && editor.kind === 'topic_watch';
 }
 
 /**
@@ -90,6 +133,78 @@ export function ScheduleText({ cron }: { cron: string }) {
   );
 }
 
+/**
+ * Last-run outcome of a Topic watch under its summary: collected, collecting, no new items, failed, or a "Needs
+ * consent" badge (the Edit action re-grants it). `consent_required` counts only for the rule's current revision, so
+ * re-consenting (which bumps the revision) clears it at once. Renders nothing when the run has no known outcome.
+ */
+function TopicRunLine({ rule, run, action }: { rule: Automation; run: Run; action: Action | undefined }) {
+  const t = useTranslations('automations');
+  const outcome = run.actions[0] ? topicOutcome(run.actions[0]) : null;
+  const needsConsent = !action?.consent || (outcome === 'consent_required' && run.revision === rule.revision);
+  return (
+    <div className="text-xs">
+      {needsConsent && <span className="rounded border border-border px-1.5 py-0.5">{t('scheduledTasks.topic.needsConsent')}</span>}
+      {!needsConsent && outcome && outcome !== 'consent_required' && (
+        <span className="text-muted-foreground">{t(OUTCOME_KEYS[outcome])}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Task cell under the name: the first line of the topic (Topic watch) or the extra instruction / section count
+ * (Daily brief); for a Topic watch also its kind and last-run outcome.
+ */
+function TaskSummary({ rule, run }: { rule: Automation; run: Run | undefined }) {
+  const t = useTranslations('automations');
+  const action = rule.actions[0];
+  const topic = scheduledTaskKind(rule) === 'topic_watch';
+  const firstLine = (topic ? action?.watch?.topic : action?.extra_instruction)?.split(/\r?\n/)[0];
+  return (
+    <>
+      <div className="text-xs text-muted-foreground">
+        {firstLine || t('scheduledTasks.briefSummary', { count: action?.sections?.length ?? 0 })}
+      </div>
+      {topic && <div className="text-xs text-muted-foreground">{t('scheduledTasks.topic.kind')}</div>}
+      {topic && run && <TopicRunLine rule={rule} run={run} action={action} />}
+    </>
+  );
+}
+
+/**
+ * Topic-watch-only row actions: "Show on dashboard" (links to the Feed template with the task's source preselected;
+ * hidden until the server has assigned a source) and Delete (opens the keep/purge dialog). Renders nothing for a brief.
+ */
+function TopicActions({
+  rule,
+  label,
+  onDelete,
+}: {
+  rule: Automation;
+  label: (key: string, text: string, handler: () => void, icon: React.ReactNode) => React.ReactNode;
+  onDelete: () => void;
+}) {
+  const t = useTranslations('automations');
+  if (scheduledTaskKind(rule) !== 'topic_watch') return null;
+  const sourceId = rule.actions[0]?.source_id;
+  return (
+    <>
+      {sourceId && (
+        <Button asChild variant="ghost" size="icon" title={t('scheduledTasks.topic.showOnDashboard')}>
+          <Link
+            href={`/dashboard?addTemplate=feed&source=${encodeURIComponent(sourceId)}`}
+            aria-label={t('scheduledTasks.topic.showOnDashboard')}
+          >
+            <LayoutDashboardIcon size={16} aria-hidden />
+          </Link>
+        </Button>
+      )}
+      {label('delete', t('scheduledTasks.topic.delete'), onDelete, <Trash2Icon size={16} aria-hidden />)}
+    </>
+  );
+}
+
 /** One task row; loads its newest run for the Last run column and wires the action buttons to the parent callbacks. */
 function TaskRow({
   rule,
@@ -99,6 +214,7 @@ function TaskRow({
   onEdit,
   onHistory,
   onThread,
+  onDelete,
 }: {
   rule: Automation;
   busy: boolean;
@@ -107,15 +223,13 @@ function TaskRow({
   onEdit: () => void;
   onHistory: () => void;
   onThread: () => void;
+  onDelete: () => void;
 }) {
   const t = useTranslations('automations');
   const display = useDisplayPreferences();
   const last = useQuery({ queryKey: ['automation-last-run', rule.id, rule.revision], queryFn: () => getLastRun(rule.id) });
   const conversation = useQuery({ queryKey: ['automation-conversation', rule.id], queryFn: () => getRuleConversationId(rule.id) });
   const run = last.data?.items[0];
-  const action = rule.actions[0];
-  const firstLine = action?.extra_instruction?.split('\n')[0];
-  const summary = firstLine || t('scheduledTasks.briefSummary', { count: action?.sections?.length ?? 0 });
   const cron = rule.trigger.cron ?? '';
   const label = (key: string, text: string, handler: () => void, icon: React.ReactNode, disabled = false) => (
     <Button key={key} type="button" variant="ghost" size="icon" aria-label={text} title={text} disabled={disabled} onClick={handler}>
@@ -126,7 +240,7 @@ function TaskRow({
     <TableRow>
       <TableCell>
         <div className="font-medium">{rule.name}</div>
-        <div className="text-xs text-muted-foreground">{summary}</div>
+        <TaskSummary rule={rule} run={run} />
       </TableCell>
       <TableCell>{rule.enabled ? t('scheduledTasks.state.active') : t('scheduledTasks.state.paused')}</TableCell>
       <TableCell>
@@ -156,6 +270,7 @@ function TaskRow({
           {label('edit', t('scheduledTasks.edit'), onEdit, <PencilIcon size={16} aria-hidden />)}
           {label('history', t('scheduledTasks.history'), onHistory, <HistoryIcon size={16} aria-hidden />)}
           {label('thread', t('scheduledTasks.openThread'), onThread, <MessageSquareIcon size={16} aria-hidden />, !conversation.data)}
+          <TopicActions rule={rule} label={label} onDelete={onDelete} />
         </div>
       </TableCell>
     </TableRow>
@@ -295,6 +410,46 @@ function useDeepLink(
 }
 
 /**
+ * Modal layer of the workspace: the Topic watch editor or the Daily brief editor for the current `editor` state, and
+ * the Topic watch delete dialog for `deleting`. Renders nothing while both are null.
+ */
+function TaskDialogs({
+  editor,
+  deleting,
+  legacy,
+  csrfToken,
+  onSaved,
+  onCloseEditor,
+  onCloseDelete,
+}: {
+  editor: Editor | null;
+  deleting: Automation | null;
+  legacy: Automation | undefined;
+  csrfToken: string;
+  onSaved: () => void;
+  onCloseEditor: () => void;
+  onCloseDelete: () => void;
+}) {
+  const rule = editor?.mode === 'edit' ? editor.rule : undefined;
+  return (
+    <>
+      {editor && isTopicEditor(editor) && <TopicWatchEditor rule={rule} csrfToken={csrfToken} onSaved={onSaved} onClose={onCloseEditor} />}
+      {editor && !isTopicEditor(editor) && (
+        <BriefTaskEditor
+          rule={rule}
+          legacyRule={legacy}
+          convert={editor.mode === 'convert'}
+          csrfToken={csrfToken}
+          onSaved={onSaved}
+          onClose={onCloseEditor}
+        />
+      )}
+      {deleting && <TopicWatchDeleteDialog rule={deleting} csrfToken={csrfToken} onClose={onCloseDelete} />}
+    </>
+  );
+}
+
+/**
  * Settings › Scheduled tasks workspace: Yours / Templates tabs, the "New task" menu, the task table and the Daily brief
  * editor dialog. Tasks are the rules classified by `scheduledTaskKind`; run, pause/resume, edit, history and open-thread
  * act on those rules through the automations API with revision fences. A successful save returns to the Yours tab. Errors surface as one localized status line.
@@ -305,6 +460,7 @@ export function ScheduledTasksWorkspace() {
   const [tab, setTab] = useState('yours');
   const [view, setView] = useState<View>({ kind: 'list' });
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [deleting, setDeleting] = useState<Automation | null>(null);
   const params = useSearchParams();
   const [notice, setNotice] = useState<string | null>(null);
   const rules = useQuery({ queryKey: ['automations'], queryFn: listAutomations });
@@ -320,7 +476,7 @@ export function ScheduledTasksWorkspace() {
     <TemplateGrid
       hasTask={tasks.length > 0}
       hasLegacy={legacy !== undefined}
-      onUse={() => setEditor({ mode: 'new' })}
+      onUse={(template) => setEditor({ mode: 'new', kind: template.kind })}
       onConvert={() => setEditor({ mode: 'convert' })}
     />
   );
@@ -373,6 +529,7 @@ export function ScheduledTasksWorkspace() {
                       onEdit={() => setEditor({ mode: 'edit', rule })}
                       onHistory={() => setView({ kind: 'runs', ruleId: rule.id })}
                       onThread={() => void openThread(rule)}
+                      onDelete={() => setDeleting(rule)}
                     />
                   ))}
                 </TableBody>
@@ -382,16 +539,15 @@ export function ScheduledTasksWorkspace() {
           <TabsContent value="templates">{templates}</TabsContent>
         </Tabs>
       )}
-      {editor && (
-        <BriefTaskEditor
-          rule={editor.mode === 'edit' ? editor.rule : undefined}
-          legacyRule={legacy}
-          convert={editor.mode === 'convert'}
-          csrfToken={csrfToken}
-          onSaved={() => setTab('yours')}
-          onClose={() => setEditor(null)}
-        />
-      )}
+      <TaskDialogs
+        editor={editor}
+        deleting={deleting}
+        legacy={legacy}
+        csrfToken={csrfToken}
+        onSaved={() => setTab('yours')}
+        onCloseEditor={() => setEditor(null)}
+        onCloseDelete={() => setDeleting(null)}
+      />
     </section>
   );
 }
