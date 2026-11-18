@@ -973,7 +973,7 @@ async def _generate_brief_content(run: _BriefRun, egress: _BriefEgress) -> tuple
                 resolve_prompt(config.system_prompts, "brief"),
                 run.extra_instruction,
             ),
-            max_tokens=500,
+            max_tokens=2048,  # hidden reasoning tokens count; the prompt caps length
             temperature=0.2,
             before_send=egress.send_fence,
             after_send=egress.release_fence,
