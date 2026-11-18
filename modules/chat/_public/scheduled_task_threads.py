@@ -181,9 +181,11 @@ async def scrub_task_messages(
 
 
 async def withheld_brief_ids(
-    session: AsyncSession, messages: Sequence[Message], *, scope: Scope
+    session: AsyncSession, metadatas: Sequence[Any], *, scope: Scope
 ) -> frozenset[str]:
-    """Return the ``brief_id`` of every scheduled-task brief message here that must not be shown.
+    """Return the ``brief_id`` of every scheduled-task brief among ``metadatas`` that must not be shown.
+
+    ``metadatas`` are the messages' stored ``metadata_json`` values (``None`` or non-task ones are ignored).
 
     A brief is withheld when Dashboard no longer reports it live (a captured source was deleted,
     paused or made local-only, or its support changed) or when its stored id is unreadable, so the
@@ -193,8 +195,8 @@ async def withheld_brief_ids(
     from modules.dashboard import public as dashboard  # local import: dashboard imports chat
 
     wanted: dict[str, UUID | None] = {}
-    for message in messages:
-        meta = parse_task_message_meta(getattr(message, "metadata_json", None))
+    for raw in metadatas:
+        meta = parse_task_message_meta(raw)
         if meta is None:
             continue
         try:

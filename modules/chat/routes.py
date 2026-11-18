@@ -458,7 +458,9 @@ async def get_conversation(
         current_citations,
         response_ids_by_user_message,
         web_search_by_assistant,
-        await withheld_brief_ids(session, messages_rows, scope=scope),
+        await withheld_brief_ids(
+            session, [getattr(m, "metadata_json", None) for m in messages_rows], scope=scope
+        ),
     )
     return ConversationDetailRead(
         id=conv.id,

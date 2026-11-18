@@ -29,6 +29,7 @@ from core.errors import (
 )
 from core.pagination import b64url_decode, b64url_encode
 from core.workspaces.schemas import WorkspaceContext
+from modules.chat._public.scheduled_task_threads import SCRUBBED_CONTENT, withheld_brief_ids
 from modules.chat.models import (
     Conversation,
     Message,
@@ -45,6 +46,7 @@ from modules.chat.schemas import (
     ChatMemoryExportOrigin,
     Citation,
     WebCitation,
+    parse_task_message_meta,
 )
 from modules.knowledge.documents.public import EvidenceReferenceRead
 
@@ -323,7 +325,7 @@ async def search_conversations(
     conversation once and inherits every owner and retention filter of the outer query.
 
     Search shows nothing when history storage is off, and never ephemeral,
-    expired or automation threads. Deleted rows are gone, so they never match.
+    expired or non-task automation threads. Deleted rows are gone, so they never match.
     """
     # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
     try:
@@ -368,11 +370,19 @@ async def search_conversations(
 
 
 def _chat_export_scope_retained(now: _datetime) -> tuple[ColumnElement[bool], ...]:
-    """Retention predicates shared by export scope and search (no snapshot cutoff)."""
+    """Retention predicates shared by export scope and search (no snapshot cutoff).
+
+    Automation threads are excluded except scheduled-task threads (metadata key ``scheduled_task``,
+    the same ``has_key`` test the conversation list uses).
+    """
     return (
         Conversation.ephemeral.is_(False),
         _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
-        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+        _or(
+            Conversation.context_kind.is_(None),
+            Conversation.context_kind != "automation",
+            Conversation.metadata_json.has_key("scheduled_task"),
+        ),
     )
 
 
@@ -615,6 +625,7 @@ async def _stream_export_message_candidates(
             Message.role.label("role"),
             Message.content.label("content"),
             Message.citations.label("citations"),
+            Message.metadata_json.label("metadata_json"),
             Message.response_id.label("response_id"),
             Message.revision_of_message_id.label("revision_of_message_id"),
             Message.created_at.label("message_created_at"),
@@ -767,10 +778,24 @@ async def _export_message_records(
     evidence = await _chat_export_evidence_fences(
         session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
+    # Task brief copies whose sources are no longer eligible export as the scrub placeholder.
+    withheld = await withheld_brief_ids(
+        session,
+        [c[0].get("metadata_json") for c in candidates],
+        scope=scope,
+    )
     for message_row, parsed, initially_omitted in candidates:
         citations, citation_fences, omitted = _rebuild_export_citations(
             parsed, evidence, initially_omitted
         )
+        meta = parse_task_message_meta(message_row.get("metadata_json"))
+        if meta is not None and meta.brief_id in withheld:
+            message_row["content"], citations, citation_fences, omitted = (
+                SCRUBBED_CONTENT,
+                [],
+                [],
+                0,
+            )
         message_item = ChatExportMessageRead(
             id=message_row["message_id"],
             conversation_id=message_row["conversation_id"],
@@ -917,7 +942,7 @@ async def _revalidate_export_rows(
     """Recheck every fenced conversation (and message) row against its recorded revision.
 
     Returns ``("record_changed", [])`` for the first row that vanished, changed, expired,
-    became ephemeral or automation-owned; otherwise ``(None, citation_fences)`` with the
+    became ephemeral or non-task automation-owned; otherwise ``(None, citation_fences)`` with the
     message fences' citation fences gathered for evidence revalidation. Read-only; fresh
     time is taken per fence.
 
@@ -935,6 +960,7 @@ async def _revalidate_export_rows(
                     Conversation.ephemeral,
                     Conversation.expires_at,
                     Conversation.context_kind,
+                    Conversation.metadata_json,
                 ).where(
                     Conversation.id == fence.conversation_id,
                     Conversation.workspace_id == scope.workspace_id,
@@ -947,7 +973,10 @@ async def _revalidate_export_rows(
             or conversation.ephemeral
             or conversation.expires_at is not None
             and conversation.expires_at <= now
-            or conversation.context_kind == "automation"
+            or (
+                conversation.context_kind == "automation"
+                and "scheduled_task" not in (conversation.metadata_json or {})
+            )
         ):
             return "record_changed", []
         if record_kind == "conversations":

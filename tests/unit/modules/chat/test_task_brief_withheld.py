@@ -63,14 +63,19 @@ async def test_ineligible_brief_is_withheld(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(dashboard, "live_brief_ids", live)
     plain = SimpleNamespace(metadata_json=None)
-    msgs = [_brief_message(BRIEF), _brief_message(live_id), _brief_message("not-a-uuid"), plain]
+    msgs = [
+        _brief_message(BRIEF).metadata_json,
+        _brief_message(live_id).metadata_json,
+        _brief_message("not-a-uuid").metadata_json,
+        plain.metadata_json,
+    ]
     out = await withheld_brief_ids(object(), msgs, scope=object())  # type: ignore[arg-type]
     assert out == {BRIEF, "not-a-uuid"} and len(seen) == 1
 
 
 @pytest.mark.asyncio
 async def test_no_brief_messages_skip_the_lookup() -> None:
-    out = await withheld_brief_ids(object(), [SimpleNamespace(metadata_json={})], scope=object())  # type: ignore[arg-type]
+    out = await withheld_brief_ids(object(), [{}], scope=object())  # type: ignore[arg-type]
     assert out == frozenset()
 
 
