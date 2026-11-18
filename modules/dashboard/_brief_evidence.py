@@ -290,9 +290,15 @@ async def _captured_support_eligible(
             multi_workspace_enabled=multi_workspace_enabled,
         )
         return set(locked) == captured_documents
+    # The driver returns its own UUID subclass; the documents contract accepts plain ``uuid.UUID``
+    # only (it raised ValueError, which read every document-backed brief as withheld). One ID per
+    # call keeps within its 100-ID batch bound.
     for document_id in captured_documents:
         if not await documents.existing_document_ids(
-            session, [document_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            session,
+            [UUID(str(document_id))],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ):
             return False
     return True
