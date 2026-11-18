@@ -29,6 +29,7 @@ from modules.chat.schemas import (
     SendMessageResponse,
     WebSearchOutcomeRead,
     parse_generative_ui_parts,
+    parse_task_message_meta,
 )
 
 
@@ -61,6 +62,7 @@ def _message_reads(
             reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
             suggestions=_message_suggestions(getattr(m, "metadata_json", None)),
             uncited=_message_uncited(getattr(m, "metadata_json", None)),
+            task=parse_task_message_meta(getattr(m, "metadata_json", None)),
         )
         for m, citations, parts in zip(
             messages_rows,

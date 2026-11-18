@@ -7,15 +7,6 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { BriefText } from '@/modules/dashboard/public-api';
 import type { ChatMessage } from './api';
 
-/** One citation of a posted brief, as stored in the message metadata (`brief_citations`). */
-interface BriefCitation {
-  ref: number;
-  kind: string;
-  id: string;
-  title: string;
-  source_ids: string[];
-}
-
 /**
  * True for a conversation that is a scheduled-task thread: an automation thread whose metadata carries `scheduled_task`.
  *
@@ -26,33 +17,43 @@ export function scheduledTaskThread(conv: { context_kind?: string | null; metada
 }
 
 /**
- * True for an assistant message posted by the daily-brief scheduled task (`metadata.task_kind === 'daily_brief'`).
+ * True for an assistant message posted by the daily-brief scheduled task (`task.task_kind === 'daily_brief'`).
  *
  * @param msg - Chat message to classify.
  */
 export function isTaskBriefMessage(msg: ChatMessage): boolean {
-  return msg.role === 'assistant' && msg.metadata?.task_kind === 'daily_brief';
+  return msg.role === 'assistant' && msg.task?.task_kind === 'daily_brief';
 }
 
 /**
  * Posted daily-brief message: a run line (generated time and a link to the run log in Settings), the brief text rendered
  * by the dashboard's `BriefText` (so translation of the saved revision works as on the gadget) and the brief's own
- * citations from `metadata.brief_citations`. Read-only; no side effects beyond the translation lookup in BriefText.
+ * citations from `task.brief_citations`. Read-only; no side effects beyond the translation lookup in BriefText.
  *
- * @param props - The assistant message carrying the brief metadata (`run_id`, `brief_id`, `brief_revision`, `brief_citations`).
+ * @param props - The assistant message carrying the brief metadata (`task.run_id`, `brief_id`, `brief_revision`, `brief_citations`).
  */
 export function TaskBriefMessage({ msg }: { msg: ChatMessage }) {
   const t = useTranslations('chat');
   const display = useDisplayPreferences();
-  const meta = msg.metadata ?? {};
-  const citations = (meta.brief_citations as BriefCitation[] | undefined) ?? [];
-  const runId = typeof meta.run_id === 'string' ? meta.run_id : null;
+  const meta = msg.task;
+  // Defensive: tolerate a malformed payload (non-array, items missing ref/title) instead of crashing the transcript.
+  const rawCitations: unknown = meta?.brief_citations;
+  const citations = (Array.isArray(rawCitations) ? rawCitations : [])
+    .filter((c) => Boolean(c) && typeof c.ref === 'number' && typeof c.title === 'string')
+    .map((c) => ({
+      ref: c.ref as number,
+      kind: String(c.kind ?? ''),
+      id: String(c.id ?? ''),
+      title: c.title as string,
+      source_ids: Array.isArray(c.source_ids) ? (c.source_ids as string[]) : [],
+    }));
+  const runId = typeof meta?.run_id === 'string' ? meta.run_id : null;
   // BriefText takes a saved revision; the posted message carries only the fields it reads (id, revision, content).
   const brief = {
-    id: String(meta.brief_id ?? msg.id),
+    id: String(meta?.brief_id ?? msg.id),
     brief_date: '',
     timezone: display.timezone,
-    revision: Number(meta.brief_revision ?? 0),
+    revision: Number(meta?.brief_revision ?? 0),
     status: 'current' as const,
     content: msg.content,
     citations,

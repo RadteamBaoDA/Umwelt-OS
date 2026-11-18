@@ -12958,6 +12958,7 @@ export interface components {
             role: string;
             /** Suggestions */
             suggestions?: string[];
+            task?: components["schemas"]["TaskMessageMeta"] | null;
             /**
              * Uncited
              * @default false
@@ -16021,6 +16022,22 @@ export interface components {
             visualization?: string | null;
         };
         /**
+         * TaskBriefCitationRead
+         * @description One citation of a brief posted by a scheduled task.
+         */
+        TaskBriefCitationRead: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: number;
+            /** Source Ids */
+            source_ids?: string[];
+            /** Title */
+            title: string;
+        };
+        /**
          * TaskCreate
          * @description Payload contract for creating an owner task.
          */
@@ -16059,6 +16076,25 @@ export interface components {
              * @enum {string}
              */
             type: "task_due";
+        };
+        /**
+         * TaskMessageMeta
+         * @description Allowlisted view of the scheduled-task keys stored in a message's private ``metadata_json``.
+         */
+        TaskMessageMeta: {
+            /** Brief Citations */
+            brief_citations?: components["schemas"]["TaskBriefCitationRead"][];
+            /** Brief Id */
+            brief_id: string;
+            /** Brief Revision */
+            brief_revision: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Task Kind
+             * @constant
+             */
+            task_kind: "daily_brief";
         };
         /**
          * TaskPage

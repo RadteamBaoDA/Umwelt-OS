@@ -17,8 +17,8 @@ const msg = {
   content: 'Markets are up [1].',
   created_at: '2026-11-18T07:00:00Z',
   citations: [],
-  metadata: {
-    origin: 'scheduled_task',
+  // Shape of the generated MessageRead.task (private metadata_json keys are never exposed).
+  task: {
     task_kind: 'daily_brief',
     run_id: 'run-9',
     brief_id: 'b1',
@@ -44,8 +44,25 @@ describe('TaskBriefMessage', () => {
 
   it('detects only daily-brief messages and task threads', () => {
     expect(isTaskBriefMessage(msg)).toBe(true);
-    expect(isTaskBriefMessage({ ...msg, metadata: {} } as ChatMessage)).toBe(false);
+    expect(isTaskBriefMessage({ ...msg, task: null } as ChatMessage)).toBe(false);
     expect(scheduledTaskThread({ context_kind: 'automation', metadata: { scheduled_task: { kind: 'daily_brief' } } })).toBe(true);
     expect(scheduledTaskThread({ context_kind: 'chat', metadata: {} })).toBe(false);
+  });
+
+  it('renders without crashing on malformed brief_citations', () => {
+    const bad = { ...msg, task: { ...msg.task, brief_citations: 'oops' } } as unknown as ChatMessage;
+    const mixed = {
+      ...msg,
+      task: { ...msg.task, brief_citations: [null, { ref: 'x' }, { ref: 2, title: 'Ok' }] },
+    } as unknown as ChatMessage;
+    for (const m of [bad, mixed]) {
+      const { unmount } = render(
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <TaskBriefMessage msg={m} />
+        </NextIntlClientProvider>,
+      );
+      expect(screen.getByText('Markets are up [1].')).toBeInTheDocument();
+      unmount();
+    }
   });
 });

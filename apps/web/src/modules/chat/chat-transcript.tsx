@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
 import { focusCitations } from './chat-citation-focus';
 import { CitationPanel } from './citation-panel';
-import { isTaskBriefMessage, TaskBriefMessage } from './task-brief-message';
+import { isTaskBriefMessage } from './task-brief-message';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
@@ -51,6 +51,8 @@ const ToolRendering = dynamic(() => import('./generative-ui/components/tool-rend
 const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.SaveTemplateButton), {
   loading: () => <div aria-hidden="true" className="h-8 w-32" />,
 });
+
+const TaskBriefMessage = dynamic(() => import('./task-brief-message').then((m) => m.TaskBriefMessage));
 
 type WebReasonKey =
   | 'web.reason_not_configured'

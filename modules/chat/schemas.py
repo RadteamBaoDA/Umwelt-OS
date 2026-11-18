@@ -411,6 +411,46 @@ def parse_generative_ui_parts(metadata: Any) -> list[GenerativeUIPayload]:
     return [part for part in (parse_generative_ui(item) for item in raw) if part is not None]
 
 
+class TaskBriefCitationRead(BaseModel):
+    """One citation of a brief posted by a scheduled task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: int
+    kind: str
+    id: str
+    title: str
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class TaskMessageMeta(BaseModel):
+    """Allowlisted view of the scheduled-task keys stored in a message's private ``metadata_json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_kind: Literal["daily_brief"]
+    run_id: str
+    brief_id: str
+    brief_revision: int
+    brief_citations: list[TaskBriefCitationRead] = Field(default_factory=list)
+
+
+def parse_task_message_meta(metadata: Any) -> TaskMessageMeta | None:
+    """Return the allowlisted task metadata of a message posted by a scheduled task, else ``None``.
+
+    Only rows whose ``metadata_json["origin"] == "scheduled_task"`` qualify; every other key is dropped so private
+    metadata never reaches clients. Malformed or incomplete data yields ``None`` rather than an error.
+    """
+    if not isinstance(metadata, dict) or metadata.get("origin") != "scheduled_task":
+        return None
+    try:
+        return TaskMessageMeta.model_validate(
+            {k: v for k, v in metadata.items() if k in TaskMessageMeta.model_fields}
+        )
+    except ValueError:
+        return None
+
+
 class MessageRead(BaseModel):
     """Public representation of a chat message within a conversation."""
 
@@ -435,6 +475,8 @@ class MessageRead(BaseModel):
     # True when the stored answer carries no verified citation; the text is kept as streamed and the UI
     # shows a "not based on your documents" label instead of a prefix inside the content.
     uncited: bool = False
+    # Scheduled-task posts only (allowlisted keys of metadata_json); None for ordinary messages.
+    task: TaskMessageMeta | None = None
 
 
 class ChatExportCitation(BaseModel):

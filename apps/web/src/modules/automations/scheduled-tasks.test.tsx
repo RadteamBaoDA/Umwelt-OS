@@ -81,6 +81,19 @@ describe('scheduled tasks workspace', () => {
     window.history.pushState({}, '', '/');
   });
 
+  it('?run opens the daily brief run history; an unknown ?edit id is a no-op', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [task] });
+    window.history.pushState({}, '', '/settings/scheduled-tasks?edit=missing');
+    const first = render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByText('Every day at 07:00')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    first.unmount();
+    window.history.pushState({}, '', '/settings/scheduled-tasks?run=run-9');
+    render(view(<ScheduledTasksWorkspace />));
+    await waitFor(() => expect(screen.queryByText('Every day at 07:00')).toBeNull());
+    window.history.pushState({}, '', '/');
+  });
+
   it('disables the template and offers conversion when a legacy brief rule exists', async () => {
     vi.mocked(api.listAutomations).mockResolvedValue({ items: [legacy] });
     render(view(<ScheduledTasksWorkspace />));
