@@ -12,4 +12,5 @@ export {
   patchGadgetDefinition,
   previewHighlightRules,
 } from './api';
+export { BriefText } from './brief-text';
 export { formatRelativeTime } from './gadgets/relative-time';

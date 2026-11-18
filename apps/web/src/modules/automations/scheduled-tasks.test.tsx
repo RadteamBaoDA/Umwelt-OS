@@ -11,7 +11,10 @@ import { ScheduledTasksWorkspace } from './scheduled-tasks';
 let locale: 'en-us' | 'vi-vi' = 'en-us';
 vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale, timezone: 'UTC' }) }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   listAutomations: vi.fn(),
@@ -68,6 +71,14 @@ describe('scheduled tasks workspace', () => {
     expect(screen.getByText(/Nov 19, 2026/)).toBeTruthy();
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Templates' }), { button: 0 });
     expect(await screen.findByRole('button', { name: 'Already set up' })).toBeDisabled();
+  });
+
+  it('opens the editor for the ?edit deep link', async () => {
+    window.history.pushState({}, '', '/settings/scheduled-tasks?edit=t1');
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [task] });
+    render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    window.history.pushState({}, '', '/');
   });
 
   it('disables the template and offers conversion when a legacy brief rule exists', async () => {

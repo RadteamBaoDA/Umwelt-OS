@@ -468,5 +468,11 @@
   "provider.gateDismiss": "Dismiss",
   "markdown.copy": "Copy",
   "markdown.copied": "Copied",
-  "markdown.copyCode": "Copy code"
+  "markdown.copyCode": "Copy code",
+  "conversationList.tasks": "Tasks",
+  "taskThread.badge": "Scheduled task",
+  "taskThread.edit": "Edit task",
+  "taskThread.runLine": "Daily brief · {time}",
+  "taskThread.runLog": "run log",
+  "taskThread.citations": "Brief sources"
 }

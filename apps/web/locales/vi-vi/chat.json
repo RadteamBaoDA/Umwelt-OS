@@ -468,5 +468,11 @@
   "provider.gateDismiss": "Đóng",
   "markdown.copy": "Sao chép",
   "markdown.copied": "Đã sao chép",
-  "markdown.copyCode": "Sao chép mã"
+  "markdown.copyCode": "Sao chép mã",
+  "conversationList.tasks": "Tác vụ",
+  "taskThread.badge": "Tác vụ định kỳ",
+  "taskThread.edit": "Sửa tác vụ",
+  "taskThread.runLine": "Bản tin hằng ngày · {time}",
+  "taskThread.runLog": "nhật ký chạy",
+  "taskThread.citations": "Nguồn của bản tin"
 }

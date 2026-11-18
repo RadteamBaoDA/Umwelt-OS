@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { ClockIcon, HistoryIcon, MessageSquareIcon, PauseIcon, PencilIcon, PlayIcon, SunIcon } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -269,6 +269,29 @@ function NewTaskMenu({ onTemplates, onBlank }: { onTemplates: () => void; onBlan
 }
 
 /**
+ * Applies the chat deep links once the rules load: `?edit={automation id}` opens that task's editor and `?run={run id}`
+ * opens the run history of the daily brief task (one per workspace; the run id only marks the intent). Each link is
+ * applied once per page load so closing the editor does not reopen it.
+ */
+function useDeepLink(
+  params: ReturnType<typeof useSearchParams>,
+  items: Automation[],
+  setEditor: (editor: Editor) => void,
+  setView: (view: View) => void,
+) {
+  const [applied, setApplied] = useState(false);
+  const editId = params?.get('edit');
+  const hasRun = Boolean(params?.get('run'));
+  // Adjusting state during render (not in an effect) once the rules first arrive, so the list never flashes first.
+  if (applied || items.length === 0) return;
+  const edited = editId ? items.find((rule) => rule.id === editId && scheduledTaskKind(rule)) : undefined;
+  const brief = hasRun ? items.find((rule) => scheduledTaskKind(rule) === 'daily_brief') : undefined;
+  setApplied(true);
+  if (edited) setEditor({ mode: 'edit', rule: edited });
+  else if (brief) setView({ kind: 'runs', ruleId: brief.id });
+}
+
+/**
  * Settings › Scheduled tasks workspace: Yours / Templates tabs, the "New task" menu, the task table and the Daily brief
  * editor dialog. Tasks are the rules classified by `scheduledTaskKind`; run, pause/resume, edit, history and open-thread
  * act on those rules through the automations API with revision fences. Errors surface as one localized status line.
@@ -279,11 +302,13 @@ export function ScheduledTasksWorkspace() {
   const [tab, setTab] = useState('yours');
   const [view, setView] = useState<View>({ kind: 'list' });
   const [editor, setEditor] = useState<Editor | null>(null);
+  const params = useSearchParams();
   const [notice, setNotice] = useState<string | null>(null);
   const rules = useQuery({ queryKey: ['automations'], queryFn: listAutomations });
   const { run, toggle, openThread } = useTaskActions(csrfToken, setNotice);
 
   const items = rules.data?.items ?? [];
+  useDeepLink(params, items, setEditor, setView);
   const tasks = items.filter((rule) => scheduledTaskKind(rule) !== null);
   const legacy = items.find(isLegacyBrief);
   const selected = view.kind === 'runs' ? items.find((rule) => rule.id === view.ruleId) : undefined;

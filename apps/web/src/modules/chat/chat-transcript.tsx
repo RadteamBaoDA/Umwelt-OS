@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
 import { focusCitations } from './chat-citation-focus';
 import { CitationPanel } from './citation-panel';
+import { isTaskBriefMessage, TaskBriefMessage } from './task-brief-message';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
@@ -464,6 +465,8 @@ function MessageBody({
 
       {isUser ? (
         <ChatMarkdown content={msg.content} locale={locale} />
+      ) : isTaskBriefMessage(msg) ? (
+        <TaskBriefMessage msg={msg} />
       ) : (
         <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />
       )}

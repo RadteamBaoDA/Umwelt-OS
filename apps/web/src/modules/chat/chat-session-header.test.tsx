@@ -66,3 +66,14 @@ describe('ChatSessionHeader action failure and menu layout', () => {
     expect(await screen.findByRole('separator')).toBeTruthy();
   });
 });
+
+describe('ChatSessionHeader scheduled task', () => {
+  it('shows the task badge and an edit-task link only for task threads', () => {
+    const { unmount } = renderHeader({ taskEditHref: '/settings/scheduled-tasks?edit=a1' });
+    expect(screen.getByText(t.taskThread.badge)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: t.taskThread.edit })).toHaveAttribute('href', '/settings/scheduled-tasks?edit=a1');
+    unmount();
+    renderHeader({});
+    expect(screen.queryByRole('link', { name: t.taskThread.edit })).toBeNull();
+  });
+});

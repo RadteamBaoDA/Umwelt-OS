@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { MoreHorizontalIcon, PlusIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -52,6 +53,8 @@ export interface ChatSessionHeaderProps {
   onSetArchived?: (archived: boolean) => void;
   /** Localized failure of the last pin/archive request for this conversation; shown here because the history rail may be collapsed. */
   actionError?: string | null;
+  /** Settings link that edits the scheduled task owning this thread; its presence marks a task thread (badge + edit link). */
+  taskEditHref?: string;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
 }
@@ -130,6 +133,7 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
     onSetPinned,
     onSetArchived,
     actionError,
+    taskEditHref,
     onSendPrompt,
     onNewChat,
   } = props;
@@ -165,6 +169,14 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
         </Button>
         {full && headerTrailing}
       </div>
+      {full && taskEditHref && (
+        <p className="flex w-full items-center gap-2 text-xs text-muted-foreground">
+          <span className="rounded bg-secondary px-2 py-0.5 font-semibold">{t('taskThread.badge')}</span>
+          <Link href={taskEditHref} className="underline">
+            {t('taskThread.edit')}
+          </Link>
+        </p>
+      )}
       {full && actionError && (
         <p role="alert" className="w-full text-xs text-destructive">
           {actionError}

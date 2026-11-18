@@ -9,6 +9,7 @@ import { PromptBridgeNotice, PromptBridgeProvider } from './generative-ui/bridge
 import { UserInputRequest } from './generative-ui/components/user-input-request';
 import { ProviderGateAlert } from './provider-gate';
 import { ChatSessionHeader } from './chat-session-header';
+import { scheduledTaskThread } from './task-brief-message';
 import { SessionComposer } from './chat-session-composer';
 import { SessionTranscript } from './chat-session-transcript';
 import { AgentPanels, RevisionBanners } from './chat-session-panels';
@@ -43,6 +44,20 @@ export interface ChatSessionProps {
   headerTrailing?: React.ReactNode;
   /** Optional callback to close the drawer presentation when hosted inside ChatDrawer. */
   onCloseDrawer?: () => void;
+}
+
+/**
+ * Settings link that edits the scheduled task owning a thread.
+ *
+ * @param conv - Open conversation detail, if loaded.
+ * @returns `/settings/scheduled-tasks?edit={automation id}` for a task thread with a known automation id, else undefined.
+ */
+function taskEditHref(
+  conv: { context_kind?: string | null; context_resource_id?: string | null; metadata?: Record<string, unknown> } | undefined,
+) {
+  return conv && conv.context_resource_id && scheduledTaskThread(conv)
+    ? `/settings/scheduled-tasks?edit=${encodeURIComponent(conv.context_resource_id)}`
+    : undefined;
 }
 
 /**
@@ -186,6 +201,7 @@ export function ChatSession({
           onSetPinned={onSetPinned}
           onSetArchived={onSetArchived}
           actionError={actionError}
+          taskEditHref={taskEditHref(d.detail.data)}
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}

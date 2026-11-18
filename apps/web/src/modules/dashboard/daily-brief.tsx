@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, RefreshCw, Sparkles } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
@@ -141,7 +142,10 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
   );
 }
 
-/** Saved brief body: stale notice, text and citations, or the empty message. */
+/**
+ * Saved brief body: stale notice, text, citations and an "open full brief" link, or the empty message. The brief slot's
+ * owning automation is not exposed to the web, so the link goes to Settings > Scheduled tasks, where the thread opens.
+ */
 function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
   const t = useTranslations('daily');
   if (!brief) return <p className="text-sm text-muted-foreground">{t('noBrief')}</p>;
@@ -162,6 +166,9 @@ function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
           ))}
         </ol>
       )}
+      <Link href="/settings/scheduled-tasks" className="text-xs underline">
+        {t('openFullBrief')}
+      </Link>
     </>
   );
 }
