@@ -11163,6 +11163,12 @@ export interface components {
             /** Extra Instruction */
             extra_instruction?: string | null;
             /**
+             * Model Role
+             * @default brief
+             * @enum {string}
+             */
+            model_role: "brief" | "chat" | "background";
+            /**
              * Scope
              * @default daily
              * @constant

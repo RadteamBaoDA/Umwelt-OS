@@ -490,6 +490,42 @@ def test_sections_change_fingerprint() -> None:
     assert a != briefs._fingerprint(DAY, TZ, facts, ["stories"], "short")
 
 
+def test_default_model_role_keeps_fingerprint() -> None:
+    facts = [_fact()]
+    legacy = briefs._fingerprint(DAY, TZ, facts, ["stories"], None)
+    assert legacy == briefs._fingerprint(DAY, TZ, facts, ["stories"], None, "brief")
+
+
+def test_model_role_changes_fingerprint() -> None:
+    facts = [_fact()]
+    base = briefs._fingerprint(DAY, TZ, facts, None, None)
+    assert base != briefs._fingerprint(DAY, TZ, facts, None, None, "chat")
+
+
+async def test_model_role_selects_role_mapping(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    roles: list[str] = []
+    real = briefs.settings_public.derive_for_role
+
+    def spy(config: Any, role: str) -> Any:
+        roles.append(role)
+        return real(config, role)
+
+    monkeypatch.setattr(briefs.settings_public, "derive_for_role", spy)
+    result = await briefs.generate_brief(
+        env.session,
+        DAY,
+        TZ,
+        scope=SCOPE,
+        multi_workspace_enabled=False,
+        settings=SimpleNamespace(),
+        redis=SimpleNamespace(),
+        force=False,
+        model_role="chat",
+    )
+    assert roles and set(roles) == {"chat"}
+    assert env.committed[0].model_alias == "chat" and result is not None
+
+
 def test_extra_instruction_goes_to_user_message() -> None:
     system, user = briefs._messages(DAY, [_fact()], "Brief.", " Viết tiếng Việt ")
     expected = "Owner preferences (style only; never a source of facts):\nViết tiếng Việt"

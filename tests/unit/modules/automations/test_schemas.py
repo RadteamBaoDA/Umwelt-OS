@@ -214,6 +214,13 @@ class TestGenerateBriefScheduledTask:
         assert action.sections == list(ALL_BRIEF_SECTIONS)
         assert action.extra_instruction is None
 
+    def test_model_role_default_and_validation(self) -> None:
+        """model_role defaults to brief and rejects an unknown role."""
+        assert GenerateBriefAction(type="generate_brief").model_role == "brief"
+        assert GenerateBriefAction(type="generate_brief", model_role="chat").model_role == "chat"
+        with pytest.raises(ValidationError):
+            GenerateBriefAction(type="generate_brief", model_role="gpt-9")
+
     def test_rejects_duplicate_sections(self) -> None:
         """A repeated section is invalid."""
         with pytest.raises(ValidationError):

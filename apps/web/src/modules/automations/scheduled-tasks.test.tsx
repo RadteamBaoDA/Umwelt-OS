@@ -18,7 +18,7 @@ vi.mock('./api', async (original) => ({
   getLastRun: vi.fn(async () => ({ items: [] })),
   getRuleConversationId: vi.fn(async () => null),
   getBriefTimezone: vi.fn(async () => 'Asia/Ho_Chi_Minh'),
-  getBriefModel: vi.fn(async () => 'model-x'),
+  getBriefRoleModels: vi.fn(async () => ({ brief: 'model-x', chat: 'model-c', background: 'model-x' })),
   createScheduledTask: vi.fn(),
   patchAutomation: vi.fn(),
 }));
@@ -104,6 +104,7 @@ describe('brief task editor', () => {
             sections: ['stories', 'markets', 'weather', 'hazards', 'agenda', 'source_health'],
             extra_instruction: null,
             deliver_chat: true,
+            model_role: 'brief',
           },
         ],
       },
@@ -134,6 +135,34 @@ describe('brief task editor', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Convert existing rule' }));
     await waitFor(() => expect(api.patchAutomation).toHaveBeenCalled());
     expect(vi.mocked(api.patchAutomation).mock.calls[0][2].actions?.[0]).toMatchObject({ instruction: 'keep me' });
+  });
+
+  it('sends the chosen model role and disables an unconfigured one', async () => {
+    vi.mocked(api.getBriefRoleModels).mockResolvedValue({ brief: 'model-x', chat: 'model-c', background: null });
+    vi.mocked(api.createScheduledTask).mockResolvedValue(task);
+    render(view(<BriefTaskEditor csrfToken="csrf" onClose={vi.fn()} />));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Model' }), { key: 'Enter' });
+    const options = await screen.findAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Brief model - model-x',
+      'Chat model - model-c',
+      'Background model - Not configured',
+    ]);
+    expect(options[2].getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(options[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.createScheduledTask).toHaveBeenCalled());
+    expect(vi.mocked(api.createScheduledTask).mock.calls[0][1].actions[0]).toMatchObject({ model_role: 'chat' });
+  });
+
+  it('converts with the workspace brief timezone, not the legacy rule timezone', async () => {
+    vi.mocked(api.patchAutomation).mockResolvedValue(legacy);
+    render(view(<BriefTaskEditor legacyRule={legacy} convert csrfToken="csrf" onClose={vi.fn()} />));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.patchAutomation).toHaveBeenCalled());
+    expect(vi.mocked(api.patchAutomation).mock.calls[0][2].trigger).toMatchObject({ timezone: 'Asia/Ho_Chi_Minh' });
   });
 
   it('edits an existing task with its revision and own timezone', async () => {

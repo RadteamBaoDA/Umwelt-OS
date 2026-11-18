@@ -39,6 +39,7 @@ export interface Action {
   sections?: BriefSection[];
   extra_instruction?: string | null;
   deliver_chat?: boolean;
+  model_role?: 'brief' | 'chat' | 'background';
   alias?: string;
   event?: string;
 }
@@ -223,8 +224,18 @@ export async function getBriefTimezone(): Promise<string> {
   return (await apiRequest<{ timezone: string }>('/api/v1/briefs/schedule')).timezone;
 }
 
-/** Reads the workspace `brief` role model name (read-only display); null when unset or not readable. */
-export async function getBriefModel(): Promise<string | null> {
-  const body = await apiRequest<ApiResponse<'/api/v1/settings/models'>>('/api/v1/settings/models');
-  return body.defaults.brief?.model || null;
+/** Model role a scheduled brief can run under; mirrors the backend `GenerateBriefAction.model_role`. */
+export type BriefModelRole = 'brief' | 'chat' | 'background';
+/** The selectable roles in display order. */
+export const BRIEF_MODEL_ROLES: BriefModelRole[] = ['brief', 'chat', 'background'];
+
+/**
+ * Reads the configured model name of each selectable role from Settings > Models (read-only). `background` falls
+ * back to `brief`, then `chat`, like the backend resolver; a role with no model maps to null.
+ */
+export async function getBriefRoleModels(): Promise<Record<BriefModelRole, string | null>> {
+  const { defaults } = await apiRequest<ApiResponse<'/api/v1/settings/models'>>('/api/v1/settings/models');
+  const brief = defaults.brief?.model || null;
+  const chat = defaults.chat?.model || null;
+  return { brief, chat, background: defaults.background?.model || brief || chat };
 }

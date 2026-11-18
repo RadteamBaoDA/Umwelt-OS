@@ -180,6 +180,8 @@ class GenerateBriefAction(_Action):
     extra_instruction: str | None = Field(default=None, max_length=500)
     # Default False so rules saved before scheduled tasks existed keep their behaviour.
     deliver_chat: bool = False
+    # The configured model role (Settings > Models) that runs the brief; never a free model string.
+    model_role: Literal["brief", "chat", "background"] = "brief"
 
     @field_validator("sections")
     @classmethod

@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -567,22 +567,17 @@ def _fingerprint(
     facts: list[dict[str, Any]],
     sections: Sequence[BriefSection] | None = None,
     extra_instruction: str | None = None,
+    model_role: str = "brief",
 ) -> str:
-    """Hash the exact fact set, section list and owner instruction.
+    """Hash the exact fact set, section list, owner instruction and model role.
 
-    Unchanged inputs never create a duplicate revision; a changed section list or instruction
-    always hashes differently so an old brief is never reused for it.
+    A changed section list, instruction or model role hashes differently, so an old brief is never
+    reused for it. The default ``brief`` role is left out so pre-role hashes stay valid.
     """
+    sec = list(sections) if sections is not None else None
+    parts = [day.isoformat(), timezone, facts, sec, extra_instruction]
     payload = json.dumps(
-        [
-            day.isoformat(),
-            timezone,
-            facts,
-            list(sections) if sections is not None else None,
-            extra_instruction,
-        ],
-        sort_keys=True,
-        separators=(",", ":"),
+        parts + [model_role] * (model_role != "brief"), sort_keys=True, separators=(",", ":")
     )
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -660,12 +655,13 @@ async def _relock_and_verify(
     as_of: datetime | None = None,
     sections: Sequence[BriefSection] | None = None,
     extra_instruction: str | None = None,
+    model_role: str = "brief",
 ) -> list[Any]:
     """Re-take the canonical fence (guard, Sources, Documents, Events) and prove the snapshot is current.
 
     Raises ``BriefUnavailable`` when the guard fails, a cited Source/Document became ineligible, or
     the rebuilt facts no longer hash to ``fingerprint``. ``as_of``, ``sections`` and
-    ``extra_instruction`` are the run's pinned values so every phase sees the same clock and inputs.
+    ``extra_instruction`` and ``model_role`` are the run's pinned values so every phase sees the same clock and inputs.
     The caller owns rollback.
     """
     from modules.dashboard import context  # local import: context imports this module
@@ -695,7 +691,7 @@ async def _relock_and_verify(
         multi_workspace_enabled=multi_workspace_enabled,
         lock_events=True,
     )
-    if _fingerprint(day, timezone, current, sections, extra_instruction) != fingerprint:
+    if _fingerprint(day, timezone, current, sections, extra_instruction, model_role) != fingerprint:
         raise BriefUnavailable("Daily brief facts changed during generation")
     return widgets
 
@@ -719,6 +715,7 @@ class _BriefRun:
     as_of: datetime | None = None
     sections: Sequence[BriefSection] | None = None
     extra_instruction: str | None = None
+    model_role: str = "brief"
 
 
 async def _relock_run(run: _BriefRun) -> list[Any]:
@@ -736,12 +733,13 @@ async def _relock_run(run: _BriefRun) -> list[Any]:
         as_of=run.as_of,
         sections=run.sections,
         extra_instruction=run.extra_instruction,
+        model_role=run.model_role,
     )
 
 
 @dataclass
 class _BriefEgress:
-    """Resolved model configuration for the ``brief`` role, frozen at the end of Phase A."""
+    """Resolved model configuration for the run's model role, frozen at the end of Phase A."""
 
     run: _BriefRun
     config: AIExecutionConfig
@@ -874,9 +872,9 @@ async def _snapshot_brief_facts(
     facts = await _facts(
         session, locked_widgets, scope=scope, multi_workspace_enabled=multi, lock_events=True
     )
-    sec, extra = run.sections, run.extra_instruction
-    if _fingerprint(day, timezone, initial_facts, sec, extra) != _fingerprint(
-        day, timezone, facts, sec, extra
+    sec, extra, mrole = run.sections, run.extra_instruction, run.model_role
+    if _fingerprint(day, timezone, initial_facts, sec, extra, mrole) != _fingerprint(
+        day, timezone, facts, sec, extra, mrole
     ):
         await session.rollback()
         raise BriefUnavailable("Daily brief facts changed before model egress")
@@ -889,7 +887,7 @@ async def _snapshot_brief_facts(
         {"key": f"brief:{scope.workspace_id}:{day}:{timezone}"},
     )
     run.facts = facts
-    run.fingerprint = _fingerprint(day, timezone, facts, sec, extra)
+    run.fingerprint = _fingerprint(day, timezone, facts, sec, extra, mrole)
     latest = await session.scalar(_latest_brief_statement(run))
     return reuse_candidate, latest, relation
 
@@ -936,14 +934,14 @@ async def _reuse_current_brief(
 
 
 async def _resolve_brief_egress(run: _BriefRun) -> _BriefEgress:
-    """Resolve and freeze the ``brief`` role's AI config, then end the Phase A transaction.
+    """Resolve and freeze the run's model-role AI config, then end the Phase A transaction.
 
     Rollback, not commit: nothing was written, and a caller transaction is never committed by mistake.
     """
     config = await settings_public.get_ai_execution_config(
         run.session, run.settings, run.redis, scope=run.scope
     )
-    role = "brief"
+    role = run.model_role
     config = settings_public.derive_for_role(config, role)
     egress = _BriefEgress(
         run=run,
@@ -1146,6 +1144,7 @@ async def generate_brief(
     publish_guard: Callable[[AsyncSession], Awaitable[bool]] | None = None,
     sections: Sequence[BriefSection] | None = None,
     extra_instruction: str | None = None,
+    model_role: Literal["brief", "chat", "background"] = "brief",
 ) -> BriefRead:
     """Generate and persist the next brief revision for a local day, in three short transactions.
 
@@ -1162,6 +1161,9 @@ async def generate_brief(
     owner style note (stripped, at most 500 characters else ``ValueError`` before any I/O) that goes
     to the user message only. Both join the fingerprint. One ``as_of`` minute is pinned here and
     passed to all three fact builds so a minute boundary cannot change facts between phases.
+
+    ``model_role`` picks the configured role (model, privacy, egress approval); it is stored as
+    ``model_alias`` and joins the fingerprint when not ``brief``.
     """
     extra_instruction = _clean_extra_instruction(extra_instruction)
     access_fence = await _admit(
@@ -1181,6 +1183,7 @@ async def generate_brief(
         as_of=datetime.now(UTC).replace(second=0, microsecond=0),
         sections=sections,
         extra_instruction=extra_instruction,
+        model_role=model_role,
     )
     reuse_candidate, latest, relation = await _snapshot_brief_facts(run)
     reused = await _reuse_current_brief(run, latest, reuse_candidate, force)

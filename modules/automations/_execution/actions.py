@@ -543,7 +543,7 @@ async def _generate_brief(
     """Generate through Dashboard only while the persisted trigger evidence remains eligible.
 
     ``rev`` is the run's pinned revision: its action spec supplies ``sections`` and
-    ``extra_instruction`` (absent on rules saved before they existed, meaning all sections), and
+    ``extra_instruction`` and ``model_role`` (absent on rules saved before they existed, meaning all sections), and
     ``deliver_chat`` makes a successful brief also post into the rule's chat thread. The post runs
     in its own short transaction after generation and is keyed on the brief id, so a retry after
     any failure (including a crash after the commit) never posts twice. ``BriefEmpty`` posts nothing.
@@ -635,6 +635,7 @@ async def _generate_brief(
                 publish_guard=evidence_guard,
                 sections=spec.get("sections"),
                 extra_instruction=spec.get("extra_instruction"),
+                model_role=spec.get("model_role", "brief"),
             )
         if await _deliver_brief(
             factory, run, row, brief, rev, spec, scope, multi_workspace_enabled

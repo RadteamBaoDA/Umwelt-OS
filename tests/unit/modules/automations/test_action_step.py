@@ -392,6 +392,7 @@ def _brief_harness(
 
     async def generate(*_a: Any, **kwargs: Any) -> Any:
         appended.append(("generate", kwargs.get("sections"), kwargs.get("extra_instruction")))
+        appended.append(("role", kwargs.get("model_role")))
         if not briefs:
             raise actions.dashboard.BriefEmpty()
         return SimpleNamespace(
@@ -458,6 +459,16 @@ async def test_brief_task_posts_to_thread(monkeypatch: pytest.MonkeyPatch) -> No
     meta = next(c[2] for c in calls if c[0] == "append")
     assert meta["brief_id"] == "B" and meta["task_kind"] == "daily_brief"
     assert marks == [("succeeded", "brief:B")]
+
+
+@pytest.mark.asyncio
+async def test_brief_task_passes_model_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    _store, calls, _marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev(model_role="background")) == "succeeded"
+    assert ("role", "background") in calls
+    _store, calls, _marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev()) == "succeeded"
+    assert ("role", "brief") in calls
 
 
 @pytest.mark.asyncio

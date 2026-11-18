@@ -14,11 +14,13 @@ import { ApiError } from '@/core/api';
 import {
   createScheduledTask,
   errorMessageKey,
-  getBriefModel,
+  BRIEF_MODEL_ROLES,
+  getBriefRoleModels,
   getBriefTimezone,
   patchAutomation,
   type Action,
   type Automation,
+  type BriefModelRole,
   type BriefSection,
 } from './api';
 import { ALL_BRIEF_SECTIONS, MAX_EXTRA_INSTRUCTION, briefCron, parseBriefCron, type BriefDays } from './scheduled-task-model';
@@ -31,6 +33,13 @@ const SECTION_KEYS = {
   hazards: 'scheduledTasks.section.hazards',
   agenda: 'scheduledTasks.section.agenda',
   source_health: 'scheduledTasks.section.source_health',
+} as const;
+
+/** Literal catalog keys for the model-role options. */
+const MODEL_ROLE_KEYS = {
+  brief: 'scheduledTasks.modelRole.brief',
+  chat: 'scheduledTasks.modelRole.chat',
+  background: 'scheduledTasks.modelRole.background',
 } as const;
 
 /** Props: `rule` edits an existing task; `convert` converts `legacyRule`; omit both to create a new task. */
@@ -53,27 +62,64 @@ function initialState(source?: Automation) {
     instruction: action?.extra_instruction ?? '',
     time: parsed?.time ?? '07:00',
     days: (parsed?.days ?? 'daily') as BriefDays,
+    modelRole: (action?.model_role ?? 'brief') as BriefModelRole,
   };
 }
 
-/** Editable brief state: selected sections, extra instruction, "HH:MM" time and day pattern. */
+/** Editable brief state: selected sections, extra instruction, "HH:MM" time, day pattern and model role. */
 type BriefForm = ReturnType<typeof initialState>;
 
 /**
+ * Select over the three model roles, each labelled with the model Settings > Models resolves for it. A role with no
+ * model (or while the settings are still loading) is disabled. Presentational; calls `onChange` with the role.
+ */
+function ModelRoleSelect({
+  value,
+  models,
+  onChange,
+}: {
+  value: BriefModelRole;
+  models: Record<BriefModelRole, string | null> | undefined;
+  onChange: (role: BriefModelRole) => void;
+}) {
+  const t = useTranslations('automations');
+  return (
+    <div className="space-y-1">
+      <Label htmlFor="brief-model-role">{t('scheduledTasks.modelLabel')}</Label>
+      <Select value={value} onValueChange={(next) => onChange(next as BriefModelRole)}>
+        <SelectTrigger id="brief-model-role">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {BRIEF_MODEL_ROLES.map((role) => {
+            const name = models?.[role];
+            return (
+              <SelectItem key={role} value={role} disabled={!name}>
+                {t(MODEL_ROLE_KEYS[role])} - {name ?? t('scheduledTasks.modelUnset')}
+              </SelectItem>
+            );
+          })}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/**
  * Presentational body of the editor: section checklist, extra instruction with counter, time and days inputs, the
- * read-only timezone and model lines and the delivery checkboxes (chat forced on, dashboard informational).
+ * read-only timezone line, the model-role select and the delivery checkboxes (chat forced on, dashboard informational).
  * Calls `setForm` with a full replacement state; performs no I/O.
  */
 function BriefFormFields({
   form,
   setForm,
   timezone,
-  model,
+  models,
 }: {
   form: BriefForm;
   setForm: (next: BriefForm) => void;
   timezone: string;
-  model: string | null;
+  models: Record<BriefModelRole, string | null> | undefined;
 }) {
   const t = useTranslations('automations');
   /** Adds or removes one section from the selection. */
@@ -133,11 +179,8 @@ function BriefFormFields({
           <dt className="text-muted-foreground">{t('scheduledTasks.timezoneLabel')}</dt>
           <dd className="font-mono">{timezone}</dd>
         </div>
-        <div className="flex gap-2">
-          <dt className="text-muted-foreground">{t('scheduledTasks.modelLabel')}</dt>
-          <dd>{model ?? t('scheduledTasks.modelUnset')}</dd>
-        </div>
       </dl>
+      <ModelRoleSelect value={form.modelRole} models={models} onChange={(modelRole) => setForm({ ...form, modelRole })} />
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium">{t('scheduledTasks.deliverLabel')}</legend>
         <div className="flex items-center gap-2">
@@ -183,15 +226,15 @@ function BriefError({
   );
 }
 
-/** An edited task already carries its timezone, so only a new task must wait for the workspace brief timezone. */
-function zoneBlocksSave(target: Automation | undefined, zonePending: boolean): boolean {
-  return !target && zonePending;
+/** An edited task already carries its timezone, so a new or converted task must wait for the workspace brief timezone. */
+function zoneBlocksSave(edited: Automation | undefined, zonePending: boolean): boolean {
+  return !edited && zonePending;
 }
 
 /**
  * Daily brief editor dialog. Creates an enabled schedule-triggered rule with one `generate_brief` action
  * (`deliver_chat: true`), edits an existing task with its `expected_revision`, or converts a legacy brief rule.
- * Sections are sent in canonical order; an edited task keeps its own timezone (the workspace brief timezone only applies to new tasks); a blank instruction is sent as null. A 409 `brief_slot_owned` response shows an
+ * Sections are sent in canonical order; an edited task keeps its own timezone (the workspace brief timezone applies to new and converted tasks); `model_role` carries the chosen model role; a blank instruction is sent as null. A 409 `brief_slot_owned` response shows an
  * inline error with a Convert action when `legacyRule` is known. Side effects: one POST or PATCH, then list invalidation.
  */
 export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, onClose }: BriefTaskEditorProps) {
@@ -202,8 +245,8 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
   const [errorKey, setErrorKey] = useState<ReturnType<typeof errorMessageKey> | null>(null);
   const [conflict, setConflict] = useState(false);
   const zone = useQuery({ queryKey: ['brief-timezone'], queryFn: getBriefTimezone, retry: false });
-  const model = useQuery({ queryKey: ['brief-model'], queryFn: getBriefModel, retry: false });
-  const timezone = target?.trigger.timezone ?? zone.data ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const models = useQuery({ queryKey: ['brief-models'], queryFn: getBriefRoleModels, retry: false });
+  const timezone = rule?.trigger.timezone ?? zone.data ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   /** Builds the generate_brief action from the form, keeping unrelated fields of the action being converted. */
   const buildAction = (previous?: Action): Action => ({
@@ -213,6 +256,7 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
     sections: ALL_BRIEF_SECTIONS.filter((section) => form.sections.has(section)),
     extra_instruction: form.instruction.trim() || null,
     deliver_chat: true,
+    model_role: form.modelRole,
   });
   const trigger = { type: 'schedule' as const, cron: briefCron(form.time, form.days), timezone };
 
@@ -233,7 +277,7 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
     },
   });
 
-  const invalid = form.sections.size === 0 || !/^\d{2}:\d{2}$/.test(form.time) || zoneBlocksSave(target, zone.isPending);
+  const invalid = form.sections.size === 0 || !/^\d{2}:\d{2}$/.test(form.time) || zoneBlocksSave(rule, zone.isPending);
 
   return (
     <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
@@ -242,7 +286,7 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
           <DialogTitle>{t(rule ? 'scheduledTasks.editorTitle' : 'scheduledTasks.editorNewTitle')}</DialogTitle>
           <DialogDescription>{t('scheduledTasks.description')}</DialogDescription>
         </DialogHeader>
-        <BriefFormFields form={form} setForm={setForm} timezone={timezone} model={model.data ?? null} />
+        <BriefFormFields form={form} setForm={setForm} timezone={timezone} models={models.data} />
         {errorKey && (
           <BriefError
             errorKey={errorKey}
