@@ -135,18 +135,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
   );
   const more = useShowMore(items, 5, `${selectedSources.join(',')}:${search}`);
   const terminal = useSkin() === 'terminal';
-  const firstItem = terminal ? items.find((item) => item.provider_metadata?.provider === 'youtube') : undefined;
-  const firstUrl = safeHttpUrl(firstItem?.canonical_url);
-  const first = firstItem && firstUrl && new URL(firstUrl).hostname.match(/^(www\.)?(youtube\.com|youtu\.be)$/)
-    ? {
-        id: firstItem.document_version_id,
-        title: firstItem.title,
-        channel: creatorOf(firstItem) ?? '',
-        videoUrl: firstUrl,
-        imageUrl: firstItem.image_url ?? null,
-        durationSeconds: firstItem.media?.duration_seconds ?? null,
-      }
-    : undefined;
+  const first = terminal ? terminalFirstVideo(items) : undefined;
   useReportGadgetFreshness(null, items.length ? daily('streamCount', { count: items.length }) : null);
 
   return (
@@ -216,7 +205,6 @@ function VideoPanelView({
   ask: (item: VideoRecord) => void;
 }) {
   const t = useTranslations('dashboard');
-  const dashboard = useTranslations('dashboard');
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={t('video.sourcesRequired')} />}
@@ -249,26 +237,28 @@ function VideoPanelView({
         <>
           <TerminalVideoFrame video={first} />
           <p className="video-term-note m-0" aria-hidden="true">
-            {dashboard('video.termNote', { count: items.length, channel: first.channel })}
+            {t('video.termNote', { count: items.length, channel: first.channel })}
           </p>
         </>
       )}
       <ul className="divide-y divide-border">
-        {visibleItems.filter((item) => item.document_version_id !== first?.id).map((item) => (
-          <VideoRow
-            key={item.document_version_id}
-            item={item}
-            isOwner={isOwner}
-            bookmarked={!!item.bookmarked_at}
-            read={!!item.read_at}
-            pending={pending}
-            timestamp={item.published_at ?? item.observed_at}
-            dateLabel={formatDateTime(item.published_at ?? item.observed_at, display.locale, display.timezone)}
-            ask={() => ask(item)}
-            toggleRead={() => mutate({ item, read: !item.read_at })}
-            toggleBookmark={() => mutate({ item, bookmarked: !item.bookmarked_at })}
-          />
-        ))}
+        {visibleItems
+          .filter((item) => item.document_version_id !== first?.id)
+          .map((item) => (
+            <VideoRow
+              key={item.document_version_id}
+              item={item}
+              isOwner={isOwner}
+              bookmarked={!!item.bookmarked_at}
+              read={!!item.read_at}
+              pending={pending}
+              timestamp={item.published_at ?? item.observed_at}
+              dateLabel={formatDateTime(item.published_at ?? item.observed_at, display.locale, display.timezone)}
+              ask={() => ask(item)}
+              toggleRead={() => mutate({ item, read: !item.read_at })}
+              toggleBookmark={() => mutate({ item, bookmarked: !item.bookmarked_at })}
+            />
+          ))}
       </ul>
       <ShowMoreButton state={more} />
       {query.hasNextPage && (
@@ -278,6 +268,29 @@ function VideoPanelView({
       )}
     </div>
   );
+}
+
+/**
+ * Picks the terminal-skin hero video: the first loaded item of any video-shaped source that has a safe
+ * http(s) canonical URL. Items without one are skipped; no provider or host is special-cased.
+ *
+ * @param items Loaded projection items in display order.
+ * @returns The hero video fields, or undefined when no item has a safe URL.
+ */
+function terminalFirstVideo(items: VideoRecord[]): VideoItem | undefined {
+  for (const item of items) {
+    const videoUrl = safeHttpUrl(item.canonical_url);
+    if (!videoUrl) continue;
+    return {
+      id: item.document_version_id,
+      title: item.title,
+      channel: creatorOf(item) ?? '',
+      videoUrl,
+      imageUrl: item.image_url ?? null,
+      durationSeconds: item.media?.duration_seconds ?? null,
+    };
+  }
+  return undefined;
 }
 
 /** Uses typed media creator metadata, falling back to legacy provider author only when available. */

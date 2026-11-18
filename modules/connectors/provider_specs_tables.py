@@ -207,6 +207,7 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
     "hardcover_books": 360,
     "youtube_api": 30,
     "podcast_index": 60,
+    "listenbrainz_releases": 360,
     "steam_releases": 360,
     "igdb_games": 360,
 }
@@ -289,7 +290,7 @@ class QuotaWindowPolicy:
 
     policy_key: str
     budget_kind: Literal["provider", "credential", "ip"]
-    window: Literal["second", "minute", "day", "month"]
+    window: Literal["second", "minute", "day", "day_pacific", "month"]
     unit: Literal["http_calls", "request_weight", "call_credits"]
     limit_units: int | None
     cost_per_send: int = 1

@@ -232,3 +232,36 @@ async def test_updated_discovery_for_the_same_group_is_enriched_again(monkeypatc
     repeat = await collect_listenbrainz_releases({}, cursor=updated.cursor_after, collected_at=now, fetch_bytes=fetch)
     assert not repeat.records
     assert enrichment == ["2025-03-11", "2025-03-09"]
+
+
+@pytest.mark.asyncio
+async def test_oversized_fresh_release_page_keeps_newest_rows_and_reports_truncated(monkeypatch):
+    """The real endpoint returns thousands of rows: keep the newest MAX_RELEASES and flag truncation."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(media_music.PACER, "pace", AsyncMock())
+    total = media_music.MAX_RELEASES + 5
+    ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(total)]
+    # Row i has date 2025-01-(i+1), so the newest rows are the highest indexes.
+    rows = [
+        {"release_group_mbid": group, "release_name": "Album", "release_date": f"2025-01-{index + 1:02d}"}
+        for index, group in enumerate(ids)
+    ]
+    fetched: list[str] = []
+
+    async def fetch(url: str, **kwargs) -> Fetched:
+        if "listenbrainz.org" in url:
+            return Fetched(json.dumps({"payload": {"releases": rows}}).encode())
+        if "musicbrainz.org" in url:
+            group = next(group for group in ids if group in url)
+            fetched.append(group)
+            return Fetched(json.dumps({"release-groups": [{"id": group, "title": "Album"}]}).encode())
+        raise ProviderHttpError(404)
+
+    page = await collect_listenbrainz_releases(
+        {}, cursor=None, collected_at=datetime(2025, 2, 1, tzinfo=UTC), fetch_bytes=fetch
+    )
+    assert page.coverage == "truncated"
+    assert fetched == ids[:4:-1]  # the 20 newest, newest first
+    assert len(page.records) == media_music.MAX_RELEASES
+    assert len(page.cursor_after) <= 4096

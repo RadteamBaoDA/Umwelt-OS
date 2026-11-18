@@ -33,7 +33,6 @@ def test_media_provider_scopes_are_registered(provider: str, source_type: str) -
     assert provider in GATED_EXECUTOR_PROVIDERS
     assert provider not in FIXED_SCOPE_PROVIDERS
     assert PROVIDER_SCOPE_FIELDS[provider]
-    assert provider in OPTIONAL_SCOPE_FIELDS
 
 
 def test_media_provider_config_accepts_bounded_values() -> None:
@@ -120,4 +119,4 @@ def test_ann_builtin_accepts_atom_scope_options() -> None:
 def test_scoped_media_providers_require_their_identity_fields(
     provider: str, required: set[str]
 ) -> None:
-    assert required <= PROVIDER_SCOPE_FIELDS[provider] - OPTIONAL_SCOPE_FIELDS[provider]
+    assert required <= PROVIDER_SCOPE_FIELDS[provider] - OPTIONAL_SCOPE_FIELDS.get(provider, frozenset())

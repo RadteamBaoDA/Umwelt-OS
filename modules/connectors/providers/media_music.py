@@ -187,15 +187,25 @@ def _cursor_state(cursor: str | None, fingerprint: str) -> dict[str, str]:
     }
 
 
-def _candidate_rows(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """Validate the ListenBrainz fresh-release envelope and stop before a partial snapshot is used."""
+def _candidate_rows(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], bool]:
+    """Validate the ListenBrainz fresh-release envelope and bound it to ``MAX_RELEASES`` rows.
+
+    The real endpoint returns thousands of rows, so an oversized page is not an error: the newest rows
+    (``release_date`` descending, then release-group MBID ascending for a deterministic tie-break) are kept
+    and the flag reports that the snapshot was truncated. A malformed envelope raises ``RestSchemaChanged``.
+
+    Returns:
+        ``(rows, truncated)``.
+    """
     nested = _object(payload.get("payload"))
     rows = nested.get("releases")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise rest.RestSchemaChanged("listenbrainz_response_invalid")
-    if len(rows) > MAX_RELEASES:
-        raise rest.CollectionIncomplete
-    return rows
+    if len(rows) <= MAX_RELEASES:
+        return rows, False
+    by_id = sorted(rows, key=lambda row: str(row.get("release_group_mbid") or ""))
+    newest = sorted(by_id, key=lambda row: str(row.get("release_date") or ""), reverse=True)
+    return newest[:MAX_RELEASES], True
 
 
 def _release_group(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -336,7 +346,7 @@ async def collect_listenbrainz_releases(
     collected_at: datetime,
     fetch_bytes: FetchBytes,
 ) -> MusicReleasePage:
-    """Fetch a complete bounded ListenBrainz snapshot and enrich each item before returning a receiptable page.
+    """Fetch a bounded ListenBrainz snapshot (newest ``MAX_RELEASES`` rows, coverage ``truncated`` beyond) and enrich each item before returning a receiptable page.
 
     Every MusicBrainz request is spaced by the process-wide one-second pacer and carries a descriptive
     User-Agent. The caller supplies SendGate-backed transport. A failed request aborts the
@@ -354,7 +364,7 @@ async def collect_listenbrainz_releases(
     response = await fetch_bytes(
         build_listenbrainz_url(config), headers=headers, max_bytes=MAX_RESPONSE_BYTES
     )
-    candidates = _candidate_rows(_json_object(response, "listenbrainz_response_invalid"))
+    candidates, truncated = _candidate_rows(_json_object(response, "listenbrainz_response_invalid"))
     records: list[IngestionRecord] = []
     processed_groups: set[str] = set()
     enriched_in_snapshot: dict[str, str] = {}
@@ -394,4 +404,6 @@ async def collect_listenbrainz_releases(
     )
     if len(cursor_after) > 4096:
         raise rest.CollectionIncomplete
-    return MusicReleasePage(tuple(filtered), cursor_after, "returned_snapshot")
+    return MusicReleasePage(
+        tuple(filtered), cursor_after, "truncated" if truncated else "returned_snapshot"
+    )

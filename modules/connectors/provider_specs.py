@@ -17,6 +17,7 @@ from modules.connectors.provider_specs_tables import (
     _LONG_RETENTION_IDS,
     _NON_FREE_QUOTA_POLICIES,
     _REALTIME_TIER_IDS,
+    CHECKED_ON,
     DISPATCHABLE,
     PROVIDER_MIN_INTERVAL_MINUTES,
 )

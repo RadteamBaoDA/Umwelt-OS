@@ -34,6 +34,7 @@ def test_non_catalog_shapes() -> None:
     assert "media" in get_args(DataShape)
     assert source_data_shapes("telegram", "api") == {"messages"}
     assert source_data_shapes("youtube", "rss") == {"video", "media"}
+    assert source_data_shapes("openlibrary_books", "api") == {"media"}
     assert source_data_shapes("github", "api") == {"project_activity"}
     assert {"measurement", "weather", "located"} <= source_data_shapes("open_meteo", "api")
     assert source_data_shapes(None, "rss") == {"news"}

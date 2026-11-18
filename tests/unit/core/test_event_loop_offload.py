@@ -227,14 +227,20 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
 
 async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     idents: list[int] = []
-    monkeypatch.setattr(feed_catalog, "_records_from_feed", _slow(idents, "page"))
-    monkeypatch.setattr(feed_catalog, "provider_feed_url", lambda _s: "https://example.test/feed")
+    from modules.connectors.providers import rest
 
-    async def read(_url: str, _before_request: Any) -> bytes:
-        return b"<feed/>"
+    page = SimpleNamespace(records=(), coverage="returned_snapshot")
+    monkeypatch.setattr(feed_catalog, "_records_from_feed", _slow(idents, page))
 
-    monkeypatch.setattr(feed_catalog, "_read_feed", read)
-    source = SimpleNamespace(provider="youtube")
+    async def fetch(_url: str, **_kwargs: Any) -> Any:
+        return SimpleNamespace(body=b"<feed/>", etag=None, last_modified=None)
+
+    monkeypatch.setattr(rest, "fetch_bounded", fetch)
+    source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={"youtube_channel_id": "UC" + "a" * 22, "history_mode": "returned_snapshot"},
+    )
 
     async def allow_request() -> None:
         return None

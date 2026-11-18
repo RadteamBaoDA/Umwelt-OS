@@ -36,6 +36,7 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         "tvmaze_schedule": frozenset({"media"}),
         "livechart_episodes": frozenset({"media"}),
         "gutendex_books": frozenset({"media"}),
+        "openlibrary_books": frozenset({"media"}),
         "ann_news": frozenset({"media"}),
         "mangaupdates_releases": frozenset({"media"}),
         "mangadex_releases": frozenset({"media"}),
