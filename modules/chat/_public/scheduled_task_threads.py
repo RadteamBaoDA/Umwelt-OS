@@ -17,6 +17,9 @@ from core.workspaces.schemas import Scope
 from modules.chat.models import Conversation, Message
 from modules.chat.schemas import MAX_SOURCE_SCOPE
 
+# Conversation metadata keys only the scheduler may write; client create/patch payloads cannot set them.
+RESERVED_METADATA_KEYS = frozenset({"scheduled_task", "task_source_scope", "task_kind"})
+
 # Chat has no pre-existing erased-content constant; this is the single placeholder for scrubbed briefs.
 SCRUBBED_CONTENT = "[This message was removed because its sources are no longer available.]"
 

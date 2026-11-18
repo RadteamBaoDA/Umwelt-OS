@@ -215,6 +215,17 @@ def _day_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> tupl
     return None
 
 
+_TASK_THREAD_DROPPED_KEYS = (
+    "selected_refs",
+    "selected_only",
+    "selection_fences",
+    "entity_ids",
+    "date_context",
+    "timezone",
+    "date",
+)
+
+
 def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> bool:
     """Pin a scheduled-task thread's retrieval scope to the server-stored one; True when it applied.
 
@@ -223,6 +234,11 @@ def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | N
     ``source_scope`` is overwritten in ``context`` so it cannot widen the scope, and every downstream reader
     (retrieval and ``query_collected_data``) sees the same list. A missing or empty list means "no sources".
     Malformed entries are dropped. Plain conversations are untouched and return False.
+
+    Every other client retrieval override is dropped too (``selected_refs``, ``selected_only``,
+    ``selection_fences``, ``entity_ids``, ``date_context``, ``timezone`` and a client day ``date``), so the
+    thread retrieves only from the pinned sources. Call this before ``_day_scope`` or any other reader of
+    ``context``; a day scope stored in conversation metadata may still apply afterwards.
     """
     meta = metadata or {}
     if "scheduled_task" not in meta:
@@ -235,6 +251,8 @@ def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | N
         except ValueError:
             continue
     context["source_scope"] = pinned
+    for key in _TASK_THREAD_DROPPED_KEYS:
+        context.pop(key, None)
     return True
 
 

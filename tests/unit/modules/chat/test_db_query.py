@@ -256,7 +256,7 @@ async def test_db_query_granted_by_source_gadget_and_fails_closed(
     from modules.chat._worker import setup as worker_setup
 
     c = SimpleNamespace(scope=SimpleNamespace(workspace_id=uuid4()), response_id=uuid4())
-    open_scope = SimpleNamespace(selected_only=False)
+    open_scope = SimpleNamespace(selected_only=False, source_scope_enforced=False)
     plain = SimpleNamespace(
         req_params={DB_QUERY_KEY: True}, answer_request=open_scope
     )  # legacy flag is ignored

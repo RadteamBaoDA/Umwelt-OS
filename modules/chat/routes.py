@@ -24,6 +24,7 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
+from modules.chat._public.scheduled_task_threads import RESERVED_METADATA_KEYS
 from modules.chat._routes.guards import (
     _TOKEN_RE as _TOKEN_RE,
 )
@@ -375,7 +376,10 @@ async def create_conversation(
         title=title,
         context_kind=payload.context_kind,
         context_resource_id=payload.context_resource_id,
-        metadata_json=payload.metadata,
+        # Reserved scheduler keys are dropped so a client cannot mint a task thread or its pinned scope.
+        metadata_json={
+            k: v for k, v in payload.metadata.items() if k not in RESERVED_METADATA_KEYS
+        },
         ephemeral=is_ephemeral,
         expires_at=datetime.now(UTC) + EPHEMERAL_TTL if is_ephemeral else None,
     )
@@ -513,7 +517,10 @@ async def patch_conversation(
         conv.archived = payload.archived
     if payload.metadata is not None:
         current_meta = dict(conv.metadata_json or {})
-        current_meta.update(payload.metadata)
+        # Reserved scheduler keys keep their stored values: the client cannot rewrite the pinned scope.
+        current_meta.update(
+            {k: v for k, v in payload.metadata.items() if k not in RESERVED_METADATA_KEYS}
+        )
         conv.metadata_json = current_meta
 
     conv.updated_at = func.now()

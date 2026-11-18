@@ -179,13 +179,14 @@ async def _load_turn_inputs(session: AsyncSession, c: _RunCtx, claimed: _Claimed
     # Parse and assemble AnswerContextRequest
     req_params = dict(claimed.context_req or {})
     # A day conversation scopes retrieval to that local day (message context first, then the
-    # immutable conversation metadata); malformed values are ignored rather than trusted.
+    # conversation metadata, which clients cannot rewrite for task threads); malformed values are ignored rather than trusted.
     conversation_metadata = await session.scalar(
         select(Conversation.metadata_json).where(Conversation.id == claimed.conversation_id)
     )
-    day_scope = _day_scope(req_params, conversation_metadata)
-    # Scheduled-task threads ignore the client's source_scope: the stored brief scope is the only allow-list.
+    # Scheduled-task threads ignore the client's scope overrides: the stored brief scope is the only
+    # allow-list. This must run before _day_scope so a client day context cannot survive.
     task_thread = _pin_task_thread_scope(req_params, conversation_metadata)
+    day_scope = _day_scope(req_params, conversation_metadata)
     if day_scope is not None:
         req_params["date_context"], req_params["timezone"] = day_scope
     answer_request = AnswerContextRequest(
@@ -732,6 +733,8 @@ async def _db_query_granted(
 ) -> bool:
     """Whether ``query_collected_data`` is offered this turn: gadget turns, or any active collected source.
 
+    A scheduled-task thread whose pinned scope is empty never gets the tool (it may read no source).
+
     Never offered on selected-only turns: the tool reads every permitted workspace source and ignores the
     selection fences, so it would leak beyond the documents the owner chose. A failed lookup withholds the
     tool (logged without content) instead of failing the turn.
@@ -740,6 +743,8 @@ async def _db_query_granted(
         return False
     if is_gadget_turn(turn.req_params):
         return True
+    if turn.answer_request.source_scope_enforced and not turn.answer_request.source_scope:
+        return False  # enforced non-gadget = task thread; an empty pinned scope may read no source
     try:
         return await has_collected_datasource(
             session, workspace_id=c.scope.workspace_id, allow_local_only=local_only_turn
