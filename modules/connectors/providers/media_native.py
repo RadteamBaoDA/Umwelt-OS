@@ -193,7 +193,9 @@ def _youtube_page_token_error(body: bytes) -> None:
         details = _object(_object(json.loads(body)).get("error")).get("errors")
     except (ValueError, UnicodeError):
         return
-    if isinstance(details, list) and any(_object(error).get("reason") == "invalidPageToken" for error in details):
+    if isinstance(details, list) and any(
+        _object(error).get("reason") == "invalidPageToken" for error in details
+    ):
         raise _InvalidYouTubePageToken(400)
 
 
@@ -218,12 +220,17 @@ async def _youtube_fetch(
 
 
 async def _youtube_video_records(
-    fetch: FetchBytes, key: str, items: list[dict[str, Any]], channel: str | None, country: str | None, now: datetime,
+    fetch: FetchBytes,
+    key: str,
+    items: list[dict[str, Any]],
+    channel: str | None,
+    country: str | None,
+    now: datetime,
 ) -> tuple[list[IngestionRecord], bool]:
     """Enrich one complete playlist page and report whether any requested video was omitted."""
-    videos = list(dict.fromkeys(
-        _text(_object(item.get("contentDetails")).get("videoId")) for item in items
-    ))
+    videos = list(
+        dict.fromkeys(_text(_object(item.get("contentDetails")).get("videoId")) for item in items)
+    )
     if any(not _VIDEO.fullmatch(video) for video in videos):
         raise rest.RestSchemaChanged("youtube_playlist_item_invalid")
     if not videos:
@@ -367,7 +374,11 @@ async def collect_youtube_api(
         saved_token = _text(previous.get("page_token"))
         resume_token = saved_token if re.fullmatch(r"[A-Za-z0-9_=-]{1,256}", saved_token) else ""
         # Old truncated checkpoints had no continuation, so their ETag must not block a fresh walk.
-        prior_etag = None if previous.get("truncated") is True or resume_token != saved_token else _etag(previous.get("etag"))
+        prior_etag = (
+            None
+            if previous.get("truncated") is True or resume_token != saved_token
+            else _etag(previous.get("etag"))
+        )
         mapped, etag, next_token = await _youtube_uploads(
             fetch,
             key,

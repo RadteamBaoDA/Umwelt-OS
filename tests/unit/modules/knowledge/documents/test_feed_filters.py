@@ -61,7 +61,9 @@ async def test_no_filters_leaves_language_unconstrained_so_unknown_matches_any()
 
 
 def test_media_projection_preserves_landscape_artwork_aspect() -> None:
-    media = _extract_media_projection(SimpleNamespace(source_fields={"media_type": "game", "artwork_aspect": "landscape"}))
+    media = _extract_media_projection(
+        SimpleNamespace(source_fields={"media_type": "game", "artwork_aspect": "landscape"})
+    )
     assert media is not None
     assert media.artwork_aspect == "landscape"
 

@@ -36,10 +36,18 @@ CFG = {
 # OpenWeather 2.5 current weather, OpenAQ v3 locations/{id}/sensors, FIRMS country CSV), trimmed but with the full
 # envelope and the extra fields real responses carry, so a mapper that only works on a minimal body is caught.
 BODIES = {
-    "tmdb_movies": {"results": [{"id": 42, "title": "Example movie", "release_date": "2026-12-01"}]},
+    "tmdb_movies": {
+        "results": [{"id": 42, "title": "Example movie", "release_date": "2026-12-01"}]
+    },
     "tmdb_tv": {"results": [{"id": 43, "name": "Example series", "first_air_date": "2026-12-01"}]},
     "trakt_media": [{"movie": {"title": "Example movie", "year": 2026, "ids": {"trakt": 44}}}],
-    "omdb_lookup": {"Response": "True", "Title": "Example movie", "Year": "2026", "imdbID": "tt1234567", "Type": "movie"},
+    "omdb_lookup": {
+        "Response": "True",
+        "Title": "Example movie",
+        "Year": "2026",
+        "imdbID": "tt1234567",
+        "Type": "movie",
+    },
     "mal_anime": {"data": [{"node": {"id": 41, "title": "Example anime", "media_type": "tv"}}]},
     "mal_manga": {"data": [{"node": {"id": 42, "title": "Example manga", "media_type": "manga"}}]},
     "google_books": {"items": [{"id": "example", "volumeInfo": {"title": "Example book"}}]},
@@ -500,4 +508,6 @@ async def test_fred_metadata_quota_deferral_is_not_swallowed(monkeypatch):
     with pytest.raises(quota.QuotaDeferred):
         await collection._run_keyed(run)
     assert not accepted
-    assert all("/fred/series?" in call[0] for call in run.gate.calls)  # no data send before the deferral
+    assert all(
+        "/fred/series?" in call[0] for call in run.gate.calls
+    )  # no data send before the deferral

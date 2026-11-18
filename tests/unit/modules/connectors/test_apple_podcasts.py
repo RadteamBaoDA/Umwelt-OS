@@ -20,12 +20,25 @@ def test_apple_books_url_is_canonical_and_bounded() -> None:
 
 def test_map_apple_books_normalizes_chart_record() -> None:
     records = media.map_apple_books(
-        {"feed": {"results": [{
-            "id": "123", "name": "A Story", "artistName": "A. Writer", "releaseDate": "2026-11-18",
-            "url": "https://books.apple.com/us/book/a-story/id123", "artworkUrl100": "http://is1-ssl.mzstatic.com/image.jpg",
-            "genres": [{"name": "Mystery"}], "contentAdvisoryRating": "Explicit",
-        }]}},
-        collected_at=NOW, config={}, kind="books",
+        {
+            "feed": {
+                "results": [
+                    {
+                        "id": "123",
+                        "name": "A Story",
+                        "artistName": "A. Writer",
+                        "releaseDate": "2026-11-18",
+                        "url": "https://books.apple.com/us/book/a-story/id123",
+                        "artworkUrl100": "http://is1-ssl.mzstatic.com/image.jpg",
+                        "genres": [{"name": "Mystery"}],
+                        "contentAdvisoryRating": "Explicit",
+                    }
+                ]
+            }
+        },
+        collected_at=NOW,
+        config={},
+        kind="books",
     )
     assert len(records) == 1
     fields = records[0].metadata["provider_record"]["source_fields"]
@@ -38,8 +51,14 @@ def test_map_apple_books_normalizes_chart_record() -> None:
 
 def test_unknown_apple_advisory_is_not_mislabeled_clean() -> None:
     records = media.map_apple_books(
-        {"feed": {"results": [{"id": "456", "name": "Unrated", "contentAdvisoryRating": "Not Rated"}]}},
-        collected_at=NOW, config={}, kind="books",
+        {
+            "feed": {
+                "results": [{"id": "456", "name": "Unrated", "contentAdvisoryRating": "Not Rated"}]
+            }
+        },
+        collected_at=NOW,
+        config={},
+        kind="books",
     )
     fields = records[0].metadata["provider_record"]["source_fields"]
     assert "content_rating" not in fields
@@ -68,7 +87,9 @@ def test_podcast_maps_duration_language_categories_and_explicit_rating() -> None
 
 def test_podcast_rejects_dtd_and_oversized_feed() -> None:
     with pytest.raises(ValueError, match="forbidden_xml_construct"):
-        media.map_podcast_feed(b"<!DOCTYPE rss [<!ENTITY x 'x'>]><rss/>", collected_at=NOW, config={})
+        media.map_podcast_feed(
+            b"<!DOCTYPE rss [<!ENTITY x 'x'>]><rss/>", collected_at=NOW, config={}
+        )
     many_items = b"<rss><channel>" + b"<item/>" * 101 + b"</channel></rss>"
     with pytest.raises(ValueError, match="podcast_feed_response_invalid"):
         media.map_podcast_feed(many_items, collected_at=NOW, config={})
@@ -88,10 +109,18 @@ async def test_collectors_send_conditional_headers_and_return_validators() -> No
 
     async def fetch(url: str, *, headers: dict[str, str], max_bytes: int) -> Fetched:
         calls.append((url, headers))
-        return Fetched(b'{"feed":{"results":[]}}', etag='"v1"', last_modified="Tue, 17 Nov 2026 12:00:00 GMT")
+        return Fetched(
+            b'{"feed":{"results":[]}}', etag='"v1"', last_modified="Tue, 17 Nov 2026 12:00:00 GMT"
+        )
 
     page = await media.collect_apple_books(
-        fetch, country="US", kind="books", chart="top-paid", collected_at=NOW, config={}, etag='"old"'
+        fetch,
+        country="US",
+        kind="books",
+        chart="top-paid",
+        collected_at=NOW,
+        config={},
+        etag='"old"',
     )
     assert calls[0][0].endswith("/us/books/top-paid/100/books.json")
     assert calls[0][1]["If-None-Match"] == '"old"'

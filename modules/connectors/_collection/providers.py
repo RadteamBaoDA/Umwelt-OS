@@ -333,6 +333,7 @@ async def _run_keyed(run: Run) -> None:
     else:
         await _accept_native(run, lease, records, _coverage(records), collected_at)
 
+
 async def _run_coingecko(run: Run) -> None:
     """CoinGecko Demo: the first keyed preset; kept as a named entry point for its executor wiring and tests."""
     await _run_keyed(run)
@@ -749,7 +750,11 @@ async def _run_hardcover(run: Run) -> None:
         header, secret = await _rest_secret(run)
     except rest.ProviderHttpError as exc:
         raise CredentialMissing from exc
-    if header != NATIVE_REST_PLACEMENTS[hardcover.PROVIDER] or not secret or attempt.credential_revision is None:
+    if (
+        header != NATIVE_REST_PLACEMENTS[hardcover.PROVIDER]
+        or not secret
+        or attempt.credential_revision is None
+    ):
         raise CredentialMissing
     run.gate.bind_credential(
         quota.credential_fingerprint(
@@ -762,19 +767,28 @@ async def _run_hardcover(run: Run) -> None:
     lease = await _lease(run)
     fingerprint = provider_options.native_fingerprint(hardcover.PROVIDER, cfg)
     state = await _state(run)
-    after = hardcover.cursor_id(lease.cursor_before) if state.continuation_state == fingerprint else 0
+    after = (
+        hardcover.cursor_id(lease.cursor_before) if state.continuation_state == fingerprint else 0
+    )
     records: list[IngestionRecord] = []
     for _ in range(hardcover.MAX_PAGES):
         request = hardcover.build_request(secret, cfg, now, after)
         fetched = await _get_body(run, request, max_bytes=hardcover.MAX_BODY_BYTES)
-        page, after = await _payload_async(hardcover.map_page, _require_body(fetched), cfg, now, after)
+        page, after = await _payload_async(
+            hardcover.map_page, _require_body(fetched), cfg, now, after
+        )
         records.extend(page)
         if after == 0:
             break
     # Keep the leased cursor and fingerprint intact until every fetched page can be accepted together.
     run.extras["native_fp"] = fingerprint
     await _accept_native(
-        run, lease, records, _coverage(records), now, cursor_after=str(after),
+        run,
+        lease,
+        records,
+        _coverage(records),
+        now,
+        cursor_after=str(after),
         provider_credential_revision=attempt.credential_revision,
     )
 

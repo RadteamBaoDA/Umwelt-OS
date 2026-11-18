@@ -88,6 +88,26 @@ function TerminalVideoFrame({ video }: { video: VideoItem }) {
 }
 
 /**
+ * Lead video for the terminal skin: the first YouTube record whose canonical URL is a safe youtube.com/youtu.be link.
+ *
+ * @param items Loaded, search-filtered records.
+ * @returns The lead player props, or undefined when no record qualifies.
+ */
+function terminalLead(items: VideoRecord[]) {
+  const item = items.find((candidate) => candidate.provider_metadata?.provider === 'youtube');
+  const videoUrl = safeHttpUrl(item?.canonical_url);
+  if (!item || !videoUrl || !new URL(videoUrl).hostname.match(/^(www\.)?(youtube\.com|youtu\.be)$/)) return undefined;
+  return {
+    id: item.document_version_id,
+    title: item.title,
+    channel: creatorOf(item) ?? '',
+    videoUrl,
+    imageUrl: item.image_url ?? null,
+    durationSeconds: item.media?.duration_seconds ?? null,
+  };
+}
+
+/**
  * Loads up to 32 bound sources through the owner-authorized projection API and renders their media/video records.
  * Source tabs and the opaque cursor remain server query inputs; search filters only loaded projections. Read and
  * bookmark writes are owner-only and identify the exact current version. Ask AI sends only source, document and
@@ -134,19 +154,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     `${item.title} ${item.excerpt} ${item.media?.creator ?? ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
   );
   const more = useShowMore(items, 5, `${selectedSources.join(',')}:${search}`);
-  const terminal = useSkin() === 'terminal';
-  const firstItem = terminal ? items.find((item) => item.provider_metadata?.provider === 'youtube') : undefined;
-  const firstUrl = safeHttpUrl(firstItem?.canonical_url);
-  const first = firstItem && firstUrl && new URL(firstUrl).hostname.match(/^(www\.)?(youtube\.com|youtu\.be)$/)
-    ? {
-        id: firstItem.document_version_id,
-        title: firstItem.title,
-        channel: creatorOf(firstItem) ?? '',
-        videoUrl: firstUrl,
-        imageUrl: firstItem.image_url ?? null,
-        durationSeconds: firstItem.media?.duration_seconds ?? null,
-      }
-    : undefined;
+  const first = useSkin() === 'terminal' ? terminalLead(items) : undefined;
   useReportGadgetFreshness(null, items.length ? daily('streamCount', { count: items.length }) : null);
 
   return (
@@ -216,25 +224,13 @@ function VideoPanelView({
   ask: (item: VideoRecord) => void;
 }) {
   const t = useTranslations('dashboard');
-  const dashboard = useTranslations('dashboard');
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={t('video.sourcesRequired')} />}
       {sourceIds.length > 1 && (
         <FeedSourceTabs sourceIds={sourceIds} sourceNames={sources} value={activeSource} onChange={setActiveSource} />
       )}
-      {sourceIds.length > 0 && (
-        <label className="relative block">
-          <Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={t('video.search')}
-            aria-label={t('video.search')}
-            className="pl-9"
-          />
-        </label>
-      )}
+      {sourceIds.length > 0 && <VideoSearch value={search} onChange={setSearch} label={t('video.search')} />}
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />}
       {query.isError && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
       {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && (
@@ -249,26 +245,28 @@ function VideoPanelView({
         <>
           <TerminalVideoFrame video={first} />
           <p className="video-term-note m-0" aria-hidden="true">
-            {dashboard('video.termNote', { count: items.length, channel: first.channel })}
+            {t('video.termNote', { count: items.length, channel: first.channel })}
           </p>
         </>
       )}
       <ul className="divide-y divide-border">
-        {visibleItems.filter((item) => item.document_version_id !== first?.id).map((item) => (
-          <VideoRow
-            key={item.document_version_id}
-            item={item}
-            isOwner={isOwner}
-            bookmarked={!!item.bookmarked_at}
-            read={!!item.read_at}
-            pending={pending}
-            timestamp={item.published_at ?? item.observed_at}
-            dateLabel={formatDateTime(item.published_at ?? item.observed_at, display.locale, display.timezone)}
-            ask={() => ask(item)}
-            toggleRead={() => mutate({ item, read: !item.read_at })}
-            toggleBookmark={() => mutate({ item, bookmarked: !item.bookmarked_at })}
-          />
-        ))}
+        {visibleItems
+          .filter((item) => item.document_version_id !== first?.id)
+          .map((item) => (
+            <VideoRow
+              key={item.document_version_id}
+              item={item}
+              isOwner={isOwner}
+              bookmarked={!!item.bookmarked_at}
+              read={!!item.read_at}
+              pending={pending}
+              timestamp={item.published_at ?? item.observed_at}
+              dateLabel={formatDateTime(item.published_at ?? item.observed_at, display.locale, display.timezone)}
+              ask={() => ask(item)}
+              toggleRead={() => mutate({ item, read: !item.read_at })}
+              toggleBookmark={() => mutate({ item, bookmarked: !item.bookmarked_at })}
+            />
+          ))}
       </ul>
       <ShowMoreButton state={more} />
       {query.hasNextPage && (
@@ -277,6 +275,16 @@ function VideoPanelView({
         </Button>
       )}
     </div>
+  );
+}
+
+/** Search box that filters the loaded projections client-side. */
+function VideoSearch({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
+  return (
+    <label className="relative block">
+      <Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input value={value} onChange={(event) => onChange(event.target.value)} placeholder={label} aria-label={label} className="pl-9" />
+    </label>
   );
 }
 

@@ -15237,7 +15237,7 @@ export interface components {
              * Window
              * @enum {string}
              */
-            window: "second" | "minute" | "day" | "month";
+            window: "second" | "minute" | "day" | "day_pacific" | "month";
         };
         /**
          * ReauthenticateRequest

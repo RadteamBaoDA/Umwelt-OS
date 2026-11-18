@@ -799,27 +799,8 @@ async def remove_provider_credential(
             raise HTTPException(
                 status_code=409, detail="Telegram credential revision changed"
             ) from exc
-        await commit_with_replay(
-            session,
-            [
-                make_source_change(
-                    saved_source.id,
-                    saved_source.generation,
-                    saved_source.status,
-                    connector_state=updated.state,
-                    scope=scope,
-                ),
-            ],
-            access_fence=access_fence,
-            multi_workspace_enabled=multi_workspace_enabled,
-            scope=scope,
-        )
-        return await _activation_read(
-            session,
-            source_id,
-            updated,
-            multi_workspace_enabled=multi_workspace_enabled,
-            scope=scope,
+        return await _commit_removal(
+            session, saved_source, updated, access_fence, multi_workspace_enabled, scope
         )
     intent = await provisioning.create_delete_intent_in_uow(
         session,
@@ -847,6 +828,20 @@ async def remove_provider_credential(
     else:
         updated, _, _ = intent
         updated.error_code = "credential_delete_pending"
+    return await _commit_removal(
+        session, saved_source, updated, access_fence, multi_workspace_enabled, scope
+    )
+
+
+async def _commit_removal(
+    session: AsyncSession,
+    saved_source: Any,
+    updated: ConnectorProvisioning,
+    access_fence: Any,
+    multi_workspace_enabled: bool,
+    scope: Any,
+) -> ActivationRead:
+    """Commit a credential removal with its realtime source change, then read the activation back."""
     await commit_with_replay(
         session,
         [
@@ -863,7 +858,11 @@ async def remove_provider_credential(
         scope=scope,
     )
     return await _activation_read(
-        session, source_id, updated, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        session,
+        saved_source.id,
+        updated,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
 
 
@@ -1101,35 +1100,14 @@ async def resolve_backend_transition(
     return await _drive_transition(session, request, scope, source_id, access_fence)
 
 
-@router.put("/{source_id}/credentials/native-rest", response_model=ActivationRead)
-async def reenter_native_rest_credential(
-    source_id: UUID,
-    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
-    session: Session,
-    request: Request,
-    _owner: OwnerWrite,
-) -> ActivationRead:
-    """Owner re-enters a native REST or local-service header secret (write-only, encrypted, never echoed).
+def _rest_header_name(source: Any, row: Any, desired: dict[str, Any]) -> tuple[str, bool, Any]:
+    """Return ``(header_name, keyed, row)`` for a source that authenticates with a REST header, else raise 422.
 
-    Bumps the credential revision and lifts an ``invalid_credential`` schedule gate; the secret is bound to
-    the current source generation and configuration revision, so a later settings save needs re-entry.
-    FHIR and Home Assistant accept only the fixed ``Authorization`` header. Notion, Slack, Mastodon and X use
-    the same encrypted write-only credential owner for their fixed bearer-token header; their
-    adapters apply the provider-required Bearer scheme when making requests. YouTube and
-    Podcast Index use the same revisioned slot with separate adapter-owned wire authentication.
-    Podcast Index and IGDB require both credentials, encrypted atomically in one bound envelope.
-    IGDB maps the API key field to Twitch's client ID and the API secret to the client secret.
+    ``row`` is the activation row, returned non-None (a missing row raises 422 like a non-header source).
+
+    Precedence: keyed preset placement, native REST placement, local-service ``Authorization``, workspace-app
+    bearer header (Notion, Slack, Mastodon, X), then a generic REST source's configured header name.
     """
-    scope = _owner
-    settings = request.app.state.settings
-    gate = settings.multi_workspace_enabled
-    key = settings.connector_credential_encryption_key.get_secret_value()
-    access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=gate, scope=scope)
-    row = await provisioning.activation_status(
-        session, source_id, multi_workspace_enabled=gate, scope=scope
-    )
-    desired = dict(row.desired_configuration) if row is not None else {}
     keyed_header = collection.KEYED_PROVIDERS.get(
         source.provider or ""
     )  # keyed preset: fixed placement (header | query:<param> | path:<token>)
@@ -1163,35 +1141,91 @@ async def reenter_native_rest_credential(
         raise HTTPException(
             status_code=422, detail="This source does not use REST header authentication"
         )
-    if row.desired_revision != payload.expected_revision:
-        raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
+    header_name = (
+        keyed_header
+        or native_header
+        or local_header
+        or workspace_app_header
+        or str(desired["auth_header_name"])
+    )
+    return header_name, keyed_header is not None, row
+
+
+def _validated_rest_secret(
+    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
+    provider: str | None,
+    *,
+    keyed: bool,
+) -> str:
+    """Return the credential secret to encrypt, or raise 422 when it does not fit the provider.
+
+    Podcast Index and IGDB take a key/secret pair serialised as one JSON envelope; every other provider takes a
+    single secret. YouTube API keys are ASCII ``[A-Za-z0-9_-]``; keyed presets run their own key validator.
+    """
     is_pair = isinstance(payload, PodcastIndexCredentialRequest)
-    if is_pair != (source.provider in {"podcast_index", "igdb_games"}):
+    if is_pair != (provider in {"podcast_index", "igdb_games"}):
         raise HTTPException(status_code=422, detail="Credential fields do not match this provider")
     if isinstance(payload, PodcastIndexCredentialRequest):
-        credential_secret = json.dumps(
-            {"apiKey": payload.apiKey.get_secret_value(), "apiSecret": payload.apiSecret.get_secret_value()},
+        secret = json.dumps(
+            {
+                "apiKey": payload.apiKey.get_secret_value(),
+                "apiSecret": payload.apiSecret.get_secret_value(),
+            },
             separators=(",", ":"),
         )
     else:
-        credential_secret = payload.secret.get_secret_value()
-    if source.provider == "youtube_api" and (
-        not credential_secret.isascii() or not all(char.isalnum() or char in "_-" for char in credential_secret)
+        secret = payload.secret.get_secret_value()
+    unacceptable = HTTPException(
+        status_code=422, detail="The API key is not acceptable for this provider"
+    )
+    if provider == "youtube_api" and (
+        not secret.isascii() or not all(char.isalnum() or char in "_-" for char in secret)
     ):
-        raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider")
-    if keyed_header is not None:
+        raise unacceptable
+    if keyed:
         from modules.connectors.providers.keyed import validate_key
         from modules.connectors.providers.macro import ProviderPayloadError
 
         try:
-            validate_key(str(source.provider), credential_secret)
+            validate_key(str(provider), secret)
         except ProviderPayloadError as exc:
-            raise HTTPException(
-                status_code=422, detail="The API key is not acceptable for this provider"
-            ) from exc
-    header_name = (
-        keyed_header or native_header or local_header or workspace_app_header or str(desired["auth_header_name"])
+            raise unacceptable from exc
+    return secret
+
+
+@router.put("/{source_id}/credentials/native-rest", response_model=ActivationRead)
+async def reenter_native_rest_credential(
+    source_id: UUID,
+    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
+) -> ActivationRead:
+    """Owner re-enters a native REST or local-service header secret (write-only, encrypted, never echoed).
+
+    Bumps the credential revision and lifts an ``invalid_credential`` schedule gate; the secret is bound to
+    the current source generation and configuration revision, so a later settings save needs re-entry.
+    FHIR and Home Assistant accept only the fixed ``Authorization`` header. Notion, Slack, Mastodon and X use
+    the same encrypted write-only credential owner for their fixed bearer-token header; their
+    adapters apply the provider-required Bearer scheme when making requests. YouTube and
+    Podcast Index use the same revisioned slot with separate adapter-owned wire authentication.
+    Podcast Index and IGDB require both credentials, encrypted atomically in one bound envelope.
+    IGDB maps the API key field to Twitch's client ID and the API secret to the client secret.
+    """
+    scope = _owner
+    settings = request.app.state.settings
+    gate = settings.multi_workspace_enabled
+    key = settings.connector_credential_encryption_key.get_secret_value()
+    access_fence = await _owner_access(session, request, scope)
+    source = await _source(session, source_id, multi_workspace_enabled=gate, scope=scope)
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=gate, scope=scope
     )
+    desired = dict(row.desired_configuration) if row is not None else {}
+    header_name, keyed, row = _rest_header_name(source, row, desired)
+    if row.desired_revision != payload.expected_revision:
+        raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
+    credential_secret = _validated_rest_secret(payload, source.provider, keyed=keyed)
     operation_id = uuid7()
     try:
         ciphertext = encrypt_rest_secret(

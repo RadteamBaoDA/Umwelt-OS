@@ -20,18 +20,31 @@ async def test_steam_featured_requests_one_appdetails_per_id_and_keeps_coming_so
         params = parse_qs(parsed.query)
         seen.append((parsed.path, params.get("appids", [""])[0], params))
         if parsed.path.endswith("featuredcategories"):
-            payload = {"status": 1, "new_releases": {"items": [{"id": 10}]}, "coming_soon": {"items": [{"id": 20}]}}
+            payload = {
+                "status": 1,
+                "new_releases": {"items": [{"id": 10}]},
+                "coming_soon": {"items": [{"id": 20}]},
+            }
         else:
             appid = params["appids"][0]
-            payload = {appid: {"success": True, "data": {
-                "name": f"Game {appid}", "release_date": {"coming_soon": appid == "20", "date": "Q4 2026"},
-                "price_overview": {"final": 999}, "genres": [{"description": "Action"}], "metacritic": {"score": 80},
-            }}}
+            payload = {
+                appid: {
+                    "success": True,
+                    "data": {
+                        "name": f"Game {appid}",
+                        "release_date": {"coming_soon": appid == "20", "date": "Q4 2026"},
+                        "price_overview": {"final": 999},
+                        "genres": [{"description": "Action"}],
+                        "metacritic": {"score": 80},
+                    },
+                }
+            }
         return rest.Fetched(json.dumps(payload).encode())
 
     page = await media_games.collect_steam(
         ConnectorConfig(steam_country="VN", steam_language="vietnamese"),
-        datetime(2026, 11, 18, tzinfo=UTC), fetch,
+        datetime(2026, 11, 18, tzinfo=UTC),
+        fetch,
     )
     details = [appid for path, appid, _ in seen if path.endswith("appdetails")]
     assert details == ["10", "20"]
@@ -43,7 +56,11 @@ async def test_steam_featured_requests_one_appdetails_per_id_and_keeps_coming_so
     assert source_fields["release_date_text"] == "Q4 2026"
     assert source_fields["final_price"] is None
     assert "release_date" not in source_fields
-    assert all(params["cc"] == ["VN"] and params["l"] == ["vietnamese"] for path, _, params in seen if path.endswith("appdetails"))
+    assert all(
+        params["cc"] == ["VN"] and params["l"] == ["vietnamese"]
+        for path, _, params in seen
+        if path.endswith("appdetails")
+    )
 
 
 @pytest.mark.asyncio
@@ -64,16 +81,31 @@ async def test_igdb_uses_form_oauth_then_text_apicalypse_and_maps_taxonomy():
         assert b"game_type = (0)" in query
         assert b"release_dates.release_region = (8)" in query
         assert kwargs["request_content_type"] == "text/plain"
-        return rest.Fetched(json.dumps([{
-            "id": 123, "name": "Game", "summary": "A game", "first_release_date": 1794960000,
-            "genres": [{"id": 31, "name": "Adventure"}], "themes": [{"id": 18, "name": "Science fiction"}],
-            "game_type": {"id": 0, "name": "Main Game"}, "rating": 91.0,
-            "age_ratings": [{"rating": {"name": "Teen"}}], "external_games": [],
-        }]).encode())
+        return rest.Fetched(
+            json.dumps(
+                [
+                    {
+                        "id": 123,
+                        "name": "Game",
+                        "summary": "A game",
+                        "first_release_date": 1794960000,
+                        "genres": [{"id": 31, "name": "Adventure"}],
+                        "themes": [{"id": 18, "name": "Science fiction"}],
+                        "game_type": {"id": 0, "name": "Main Game"},
+                        "rating": 91.0,
+                        "age_ratings": [{"rating": {"name": "Teen"}}],
+                        "external_games": [],
+                    }
+                ]
+            ).encode()
+        )
 
     page = await media_games.collect_igdb(
         ConnectorConfig(igdb_game_types=("0",), igdb_region="world"),
-        "client-id", "secret-value", datetime(2026, 11, 18, tzinfo=UTC), fetch,
+        "client-id",
+        "secret-value",
+        datetime(2026, 11, 18, tzinfo=UTC),
+        fetch,
     )
     game = page.records[0]
     source_fields = game.metadata["provider_record"]["source_fields"]
@@ -115,11 +147,27 @@ async def test_steam_news_fetches_each_selected_feed_and_detail_separately():
         appids = parse_qs(parsed.query).get("appids", [""])[0]
         seen.append((parsed.path, appids))
         if parsed.path.endswith("news.xml"):
-            return rest.Fetched(b"<rss><channel><item><title>Update</title><link>https://steamcommunity.com/games/10/announcements/detail/99</link><guid>99</guid><pubDate>Tue, 18 Nov 2026 00:00:00 GMT</pubDate><description>Patch</description></item></channel></rss>")
-        return rest.Fetched(json.dumps({"10": {"success": True, "data": {"name": "Game 10", "release_date": {"coming_soon": False, "date": "2026"}}}}).encode())
+            return rest.Fetched(
+                b"<rss><channel><item><title>Update</title><link>https://steamcommunity.com/games/10/announcements/detail/99</link><guid>99</guid><pubDate>Tue, 18 Nov 2026 00:00:00 GMT</pubDate><description>Patch</description></item></channel></rss>"
+            )
+        return rest.Fetched(
+            json.dumps(
+                {
+                    "10": {
+                        "success": True,
+                        "data": {
+                            "name": "Game 10",
+                            "release_date": {"coming_soon": False, "date": "2026"},
+                        },
+                    }
+                }
+            ).encode()
+        )
 
     page = await media_games.collect_steam(
-        ConnectorConfig(steam_mode="news", steam_appids=(10,)), datetime(2026, 11, 18, tzinfo=UTC), fetch,
+        ConnectorConfig(steam_mode="news", steam_appids=(10,)),
+        datetime(2026, 11, 18, tzinfo=UTC),
+        fetch,
     )
     assert seen == [
         ("/feeds/news.xml", "10"),
@@ -129,7 +177,9 @@ async def test_steam_news_fetches_each_selected_feed_and_detail_separately():
 
 
 @pytest.mark.asyncio
-async def test_igdb_rejects_a_token_that_expires_before_response_acceptance(monkeypatch: pytest.MonkeyPatch):
+async def test_igdb_rejects_a_token_that_expires_before_response_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A slow IGDB request cannot produce records or a cursor after the Twitch token expires."""
     start = datetime(2026, 11, 18, tzinfo=UTC)
 
@@ -150,7 +200,11 @@ async def test_igdb_rejects_a_token_that_expires_before_response_acceptance(monk
 
     with pytest.raises(rest.CollectionIncomplete):
         await media_games.collect_igdb(
-            ConnectorConfig(igdb_region="world"), "client-id", "secret", start, fetch,
+            ConnectorConfig(igdb_region="world"),
+            "client-id",
+            "secret",
+            start,
+            fetch,
         )
 
 
@@ -159,10 +213,16 @@ async def test_igdb_rejects_a_token_that_expires_before_response_acceptance(monk
 async def test_steam_featured_rejects_malformed_present_category_before_any_details(malformed):
     async def fetch(url, **kwargs):
         assert urlsplit(url).path.endswith("featuredcategories")
-        return rest.Fetched(json.dumps({
-            "new_releases": {"items": [{"id": 10}]},
-            "coming_soon": malformed,
-        }).encode())
+        return rest.Fetched(
+            json.dumps(
+                {
+                    "new_releases": {"items": [{"id": 10}]},
+                    "coming_soon": malformed,
+                }
+            ).encode()
+        )
 
     with pytest.raises(rest.RestSchemaChanged, match="steam_featured_invalid"):
-        await media_games.collect_steam(ConnectorConfig(), datetime(2026, 11, 18, tzinfo=UTC), fetch)
+        await media_games.collect_steam(
+            ConnectorConfig(), datetime(2026, 11, 18, tzinfo=UTC), fetch
+        )

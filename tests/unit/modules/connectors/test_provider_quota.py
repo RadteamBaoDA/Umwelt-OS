@@ -158,7 +158,9 @@ async def test_retry_after_only_extends_deadlines() -> None:
     assert "window_end >" in statement
 
 
-async def test_music_send_gate_records_every_sequence_but_only_debits_musicbrainz(monkeypatch) -> None:
+async def test_music_send_gate_records_every_sequence_but_only_debits_musicbrainz(
+    monkeypatch,
+) -> None:
     from unittest.mock import AsyncMock
 
     from modules.connectors._collection.base import SendGate
@@ -187,7 +189,13 @@ async def test_music_send_gate_records_every_sequence_but_only_debits_musicbrain
         return rest.Fetched(b"")
 
     monkeypatch.setattr(rest, "fetch_bounded", fetch_bounded)
-    gate = SendGate(lambda: session, attempt, settings=None, deadline=1000, quota_provider="listenbrainz_releases")
+    gate = SendGate(
+        lambda: session,
+        attempt,
+        settings=None,
+        deadline=1000,
+        quota_provider="listenbrainz_releases",
+    )
     urls = [media_music.LISTENBRAINZ_BASE, media_music.MUSICBRAINZ_BASE, media_music.CAA_BASE]
     for url in urls:
         await gate.fetch_bytes(url)
@@ -199,7 +207,13 @@ async def test_music_send_gate_records_every_sequence_but_only_debits_musicbrain
     assert sum("INSERT INTO connector_provider_sends" in sql for sql in session.sql) == 3
     assert len(session.added) == 1 and isinstance(session.added[0], ConnectorQuotaDebit)
 
-    retry = SendGate(lambda: session, attempt, settings=None, deadline=1000, quota_provider="listenbrainz_releases")
+    retry = SendGate(
+        lambda: session,
+        attempt,
+        settings=None,
+        deadline=1000,
+        quota_provider="listenbrainz_releases",
+    )
     with pytest.raises(quota.SendPermitConsumed):
         await retry.fetch_bytes(urls[0])
     assert retry.sends == 1

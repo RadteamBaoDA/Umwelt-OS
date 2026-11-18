@@ -234,7 +234,24 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
         return b"<feed/>"
 
     monkeypatch.setattr(feed_catalog, "_read_feed", read)
-    source = SimpleNamespace(provider="youtube")
+    # YouTube now has its own target sweep; arXiv is the remaining single-feed path that parses records.
+    source = SimpleNamespace(provider="arxiv")
+    clock = iter(float(n) for n in range(0, 1000, 3))
+    # Skip the 3 s arXiv spacing; a module stand-in keeps the event loop's own clock untouched.
+    monkeypatch.setattr(feed_catalog, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+
+    class Session:
+        async def __aenter__(self) -> Session:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        def begin(self) -> Session:
+            return self
+
+        async def scalar(self, *_args: object, **_kwargs: object) -> bool:
+            return True  # advisory lock granted
 
     async def allow_request() -> None:
         return None
@@ -243,7 +260,7 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
         feed_catalog.collect_provider_feed(  # type: ignore[arg-type]
             source,
             collected_at=datetime.now(UTC),
-            session_factory=None,
+            session_factory=Session,
             before_request=allow_request,
         )
     )

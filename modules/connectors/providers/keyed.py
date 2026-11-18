@@ -774,7 +774,9 @@ KEYED: dict[str, KeyedProvider] = {
         lambda secret, cfg: build_mal_request("mal_manga", secret, cfg),
         lambda payload, at, cfg: map_mal("mal_manga", payload, at, cfg),
     ),
-    "google_books": KeyedProvider(GOOGLE_BOOKS_KEY_PLACEMENT, build_google_books_request, map_google_books),
+    "google_books": KeyedProvider(
+        GOOGLE_BOOKS_KEY_PLACEMENT, build_google_books_request, map_google_books
+    ),
     "coingecko": KeyedProvider(
         COINGECKO_KEY_HEADER,
         lambda secret, cfg: coingecko_request(secret, assets=coingecko_assets(cfg)),

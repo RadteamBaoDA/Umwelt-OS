@@ -376,9 +376,29 @@ def test_media_option_validation_and_iso_countries():
     from typing import get_args
 
     countries = set(get_args(po.IsoCountry))
-    assert {"TW", "HK", "IE", "NZ", "SE", "NO", "DK", "FI", "PL", "PT", "BE", "AT", "AR"} <= countries
+    assert {
+        "TW",
+        "HK",
+        "IE",
+        "NZ",
+        "SE",
+        "NO",
+        "DK",
+        "FI",
+        "PL",
+        "PT",
+        "BE",
+        "AT",
+        "AR",
+    } <= countries
 
-    for field in ("media_countries", "media_genres", "media_languages", "media_formats", "content_ratings"):
+    for field in (
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "content_ratings",
+    ):
         with pytest.raises(ValueError, match="Selections must be unique"):
             po.validate_options("anilist_anime", {field: ["a", "a"]})
 
@@ -450,14 +470,29 @@ def test_filter_media_records_across_all_dimensions():
 
     rows = [jp, kr, sparse]
     assert [r.provider_id for r in po.filter_media_records({"media_country": "JP"}, rows)] == ["jp"]
-    assert [r.provider_id for r in po.filter_media_records({"media_countries": ["JP", "KR"]}, rows)] == ["jp", "kr"]
-    assert [r.provider_id for r in po.filter_media_records({"media_genres": ["sci_fi"]}, rows)] == ["jp"]
-    assert [r.provider_id for r in po.filter_media_records({"media_languages": ["ko"]}, rows)] == ["kr"]
-    assert [r.provider_id for r in po.filter_media_records({"media_formats": ["manhwa"]}, rows)] == ["kr"]
+    assert [
+        r.provider_id for r in po.filter_media_records({"media_countries": ["JP", "KR"]}, rows)
+    ] == ["jp", "kr"]
+    assert [r.provider_id for r in po.filter_media_records({"media_genres": ["sci_fi"]}, rows)] == [
+        "jp"
+    ]
+    assert [r.provider_id for r in po.filter_media_records({"media_languages": ["ko"]}, rows)] == [
+        "kr"
+    ]
+    assert [
+        r.provider_id for r in po.filter_media_records({"media_formats": ["manhwa"]}, rows)
+    ] == ["kr"]
     assert [r.provider_id for r in po.filter_media_records({"release_year": 2026}, rows)] == ["jp"]
-    assert [r.provider_id for r in po.filter_media_records({"anime_season": "fall"}, rows)] == ["jp"]
-    assert [r.provider_id for r in po.filter_media_records({"content_ratings": ["pg_13"]}, rows)] == ["jp"]
-    assert [r.provider_id for r in po.filter_media_records({"exclude_adult": True}, rows)] == ["jp", "sparse"]
+    assert [r.provider_id for r in po.filter_media_records({"anime_season": "fall"}, rows)] == [
+        "jp"
+    ]
+    assert [
+        r.provider_id for r in po.filter_media_records({"content_ratings": ["pg_13"]}, rows)
+    ] == ["jp"]
+    assert [r.provider_id for r in po.filter_media_records({"exclude_adult": True}, rows)] == [
+        "jp",
+        "sparse",
+    ]
     assert [r.provider_id for r in po.filter_media_records({"min_rating": 80.0}, rows)] == ["jp"]
     assert [
         r.provider_id
@@ -466,5 +501,7 @@ def test_filter_media_records_across_all_dimensions():
     # filter_records delegates to filter_media_records when media options are present.
     assert [
         r.provider_id
-        for r in po.filter_records("anilist_anime", {"media_countries": ["JP"], "min_rating": 85.0}, rows)
+        for r in po.filter_records(
+            "anilist_anime", {"media_countries": ["JP"], "min_rating": 85.0}, rows
+        )
     ] == ["jp"]

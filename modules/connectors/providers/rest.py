@@ -142,7 +142,9 @@ def _prepare_request_body(
     body = request_body if request_body is not None else json_body
     if request_body is not None:
         content_type = request_content_type or ""
-        existing = next((value for name, value in headers.items() if name.lower() == "content-type"), None)
+        existing = next(
+            (value for name, value in headers.items() if name.lower() == "content-type"), None
+        )
         if existing and existing.casefold() != content_type.casefold():
             raise ValueError("request_content_type_conflict")
         if existing is None:
@@ -221,11 +223,7 @@ async def fetch_bounded(
     Optional ``on_bad_request`` and ``on_forbidden`` classifiers receive bounded 400 and 403 bodies,
     respectively, and may raise typed, redacted provider errors.
     """
-    # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
-    # User-Agent) always win, compared case-insensitively.
-    merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
-    if not any(name.lower() == "user-agent" for name in merged):
-        merged["User-Agent"] = DEFAULT_USER_AGENT
+    merged = _default_headers(headers)
     method, post_body = _prepare_request_body(merged, json_body, request_body, request_content_type)
     current = url
     first_origin = _origin(url)
@@ -267,14 +265,12 @@ async def fetch_bounded(
                 if status == 304:
                     return Fetched(None)
                 if 300 <= status < 400:
-                    location = response.headers.get("location")
-                    # POST bodies are never replayed; only GET redirects are followed.
-                    if not allow_redirects or post_body is not None or not location or hop >= MAX_REDIRECTS:
-                        raise UnsafeDestination("redirect_blocked")
-                    target = urljoin(current, location)
-                    if parts.scheme == "https" and urlsplit(target).scheme != "https":
-                        raise UnsafeDestination("redirect_blocked")
-                    current = target
+                    current = _redirect_target(
+                        current,
+                        response.headers.get("location"),
+                        parts.scheme,
+                        followable=allow_redirects and post_body is None and hop < MAX_REDIRECTS,
+                    )
                     continue
                 if status >= 400:
                     await _raise_http_error(response, max_bytes, on_forbidden, on_bad_request)
@@ -290,6 +286,32 @@ async def fetch_bounded(
                     current if current != url else None,
                 )
     raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
+
+
+def _default_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    """Add compression and a default User-Agent to the caller's headers.
+
+    Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
+    User-Agent) always win, compared case-insensitively.
+    """
+    merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
+    if not any(name.lower() == "user-agent" for name in merged):
+        merged["User-Agent"] = DEFAULT_USER_AGENT
+    return merged
+
+
+def _redirect_target(current: str, location: str | None, scheme: str, *, followable: bool) -> str:
+    """Return the absolute next-hop URL of a redirect, or raise ``UnsafeDestination``.
+
+    ``followable`` is False when redirects are disabled, the request carried a body (POST bodies are never
+    replayed) or the hop budget is spent. An https page may never redirect to plain http.
+    """
+    if not followable or not location:
+        raise UnsafeDestination("redirect_blocked")
+    target = urljoin(current, location)
+    if scheme == "https" and urlsplit(target).scheme != "https":
+        raise UnsafeDestination("redirect_blocked")
+    return target
 
 
 async def _raise_http_error(

@@ -134,7 +134,9 @@ async def test_dashboard_projections_route_maps_value_error_to_422() -> None:
     )
     with (
         patch.object(
-            routes.public, "list_gadget_document_projections", AsyncMock(side_effect=ValueError("bad"))
+            routes.public,
+            "list_gadget_document_projections",
+            AsyncMock(side_effect=ValueError("bad")),
         ),
         patch.object(
             routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)

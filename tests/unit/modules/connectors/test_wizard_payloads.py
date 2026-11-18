@@ -229,7 +229,9 @@ def test_native_media_credential_slot_is_not_a_configuration_bearer_header(provi
     with pytest.raises(HTTPException) as settings_error:
         _require_matching_auth(source, ConnectorSettingsRequest(**payload))
     with pytest.raises(HTTPException) as draft_error:
-        _check_draft_auth_mode(source, DraftValidationRequest(expected_source_generation=1, **payload))
+        _check_draft_auth_mode(
+            source, DraftValidationRequest(expected_source_generation=1, **payload)
+        )
     assert settings_error.value.status_code == draft_error.value.status_code == 422
 
 

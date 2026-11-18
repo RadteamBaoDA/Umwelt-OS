@@ -51,36 +51,76 @@ def _media_options(config: Mapping[str, Any], provider: str) -> dict[str, str]:
     TMDB discover endpoints consume these filters. Trakt uses its own list and certification parameters.
     """
     params: dict[str, str] = {}
-    countries = config.get("media_countries") or (() if not config.get("media_country") else (config["media_country"],))
+    countries = config.get("media_countries") or (
+        () if not config.get("media_country") else (config["media_country"],)
+    )
     if countries:
-        params["with_origin_country" if provider.startswith("tmdb_") else "countries"] = ("|" if provider.startswith("tmdb_") else ",").join(sorted(countries))
+        params["with_origin_country" if provider.startswith("tmdb_") else "countries"] = (
+            "|" if provider.startswith("tmdb_") else ","
+        ).join(sorted(countries))
     if config.get("media_genres"):
         if provider.startswith("tmdb_"):
             from modules.connectors.providers._media_common import _PROVIDER_GENRE_IDS
 
             genre_map = _PROVIDER_GENRE_IDS[provider]
-            ids = sorted({genre_id for canonical in config["media_genres"] for genre_id, mapped in genre_map.items() if canonical in mapped}, key=int)
+            ids = sorted(
+                {
+                    genre_id
+                    for canonical in config["media_genres"]
+                    for genre_id, mapped in genre_map.items()
+                    if canonical in mapped
+                },
+                key=int,
+            )
             if ids:
                 params["with_genres"] = "|".join(ids)
         else:
             slugs = {"sci_fi": "science-fiction"}
-            params["genres"] = ",".join(sorted(slugs.get(value, value) for value in config["media_genres"]))
+            params["genres"] = ",".join(
+                sorted(slugs.get(value, value) for value in config["media_genres"])
+            )
     if config.get("media_languages"):
         key = "with_original_language" if provider.startswith("tmdb_") else "languages"
-        params[key] = ("|" if provider.startswith("tmdb_") else ",").join(sorted(config["media_languages"]))
+        params[key] = ("|" if provider.startswith("tmdb_") else ",").join(
+            sorted(config["media_languages"])
+        )
     if config.get("release_year") is not None:
-        params["primary_release_year" if provider == "tmdb_movies" else "first_air_date_year" if provider == "tmdb_tv" else "years"] = str(config["release_year"])
+        params[
+            "primary_release_year"
+            if provider == "tmdb_movies"
+            else "first_air_date_year"
+            if provider == "tmdb_tv"
+            else "years"
+        ] = str(config["release_year"])
         if provider == "tmdb_movies":
-            params.update({"primary_release_date.gte": f"{config['release_year']}-01-01", "primary_release_date.lte": f"{config['release_year']}-12-31"})
+            params.update(
+                {
+                    "primary_release_date.gte": f"{config['release_year']}-01-01",
+                    "primary_release_date.lte": f"{config['release_year']}-12-31",
+                }
+            )
         elif provider == "tmdb_tv":
-            params.update({"first_air_date.gte": f"{config['release_year']}-01-01", "first_air_date.lte": f"{config['release_year']}-12-31"})
+            params.update(
+                {
+                    "first_air_date.gte": f"{config['release_year']}-01-01",
+                    "first_air_date.lte": f"{config['release_year']}-12-31",
+                }
+            )
     if config.get("min_rating") is not None:
-        params["vote_average.gte" if provider.startswith("tmdb_") else "ratings"] = f"{float(config['min_rating']) / 10:g}" if provider.startswith("tmdb_") else f"{float(config['min_rating']):g}-100"
+        params["vote_average.gte" if provider.startswith("tmdb_") else "ratings"] = (
+            f"{float(config['min_rating']) / 10:g}"
+            if provider.startswith("tmdb_")
+            else f"{float(config['min_rating']):g}-100"
+        )
     if provider == "tmdb_movies" and config.get("media_country"):
         params["region"] = config["media_country"]
     if provider.startswith("tmdb_") and config.get("tmdb_language"):
         params["language"] = config["tmdb_language"]
-    if provider == "tmdb_movies" and config.get("tmdb_certification") and config.get("tmdb_certification_country"):
+    if (
+        provider == "tmdb_movies"
+        and config.get("tmdb_certification")
+        and config.get("tmdb_certification_country")
+    ):
         params["certification.lte"] = config["tmdb_certification"]
         params["certification_country"] = config["tmdb_certification_country"]
     if provider.startswith("tmdb_"):
@@ -123,7 +163,11 @@ def tmdb_changes_window(cursor: str | None, now: datetime) -> TmdbChangesWindow:
 
 def tmdb_changes_cursor(payload: object, window: TmdbChangesWindow, *, backlog: bool) -> str:
     """Checkpoint the next unread page, or retain this page while local record selection has a backlog."""
-    if not isinstance(payload, Mapping) or type(payload.get("page")) is not int or payload["page"] != window.page:
+    if (
+        not isinstance(payload, Mapping)
+        or type(payload.get("page")) is not int
+        or payload["page"] != window.page
+    ):
         raise ValueError("tmdb_changes_page_invalid")
     total = payload.get("total_pages")
     if type(total) is not int or not 0 <= total <= 500:
@@ -133,13 +177,20 @@ def tmdb_changes_cursor(payload: object, window: TmdbChangesWindow, *, backlog: 
     # Only a completely accepted page advances the remote page pointer.
     next_page = window.page if backlog else (window.page + 1 if window.page < total else None)
     return json.dumps(
-        {"kind": "tmdb_changes", "start": window.start.isoformat(), "end": window.end.isoformat(), "page": next_page},
+        {
+            "kind": "tmdb_changes",
+            "start": window.start.isoformat(),
+            "end": window.end.isoformat(),
+            "page": next_page,
+        },
         separators=(",", ":"),
     )
 
 
 def _tmdb_url(
-    provider: str, config: Mapping[str, Any], changes_window: TmdbChangesWindow | None = None,
+    provider: str,
+    config: Mapping[str, Any],
+    changes_window: TmdbChangesWindow | None = None,
 ) -> str:
     """Build one TMDB request with mode-appropriate filters and bounded, resumable UTC dates."""
     validate_tmdb_options(provider, config)
@@ -148,7 +199,11 @@ def _tmdb_url(
     today = datetime.now(UTC).date()
     if mode == "changes":
         window = changes_window or tmdb_changes_window(None, datetime.now(UTC))
-        params = {"start_date": window.start.isoformat(), "end_date": window.end.isoformat(), "page": str(window.page)}
+        params = {
+            "start_date": window.start.isoformat(),
+            "end_date": window.end.isoformat(),
+            "page": str(window.page),
+        }
         return f"{TMDB_BASE}/movie/changes?{urlencode(params)}"
     if not any(config.get(name) is not None for name in TMDB_DISCOVER_OPTIONS):
         # Native lists implement the unfiltered preset. Only localization belongs on those endpoints.
@@ -172,7 +227,9 @@ def _tmdb_url(
 
 
 def _tmdb_movie_date_options(
-    mode: str, config: Mapping[str, Any], today: date,
+    mode: str,
+    config: Mapping[str, Any],
+    today: date,
 ) -> dict[str, str]:
     """Select a theatrical date range and intersect it with an optional primary-release year."""
     upcoming = mode == "upcoming"
@@ -193,12 +250,18 @@ def _tmdb_movie_date_options(
 
 
 def build_tmdb_request(
-    provider: str, secret: str, config: Mapping[str, Any], *, changes_window: TmdbChangesWindow | None = None,
+    provider: str,
+    secret: str,
+    config: Mapping[str, Any],
+    *,
+    changes_window: TmdbChangesWindow | None = None,
 ) -> ProviderRequest:
     """Build one keyed TMDB request, using an optional leased window for movie changes pagination."""
     from modules.connectors.providers.keyed import place_secret
 
-    return place_secret(provider, _tmdb_url(provider, config, changes_window), "query:api_key", secret)
+    return place_secret(
+        provider, _tmdb_url(provider, config, changes_window), "query:api_key", secret
+    )
 
 
 def _tmdb_genres(raw_values: object, provider: str) -> list[str]:
@@ -214,7 +277,9 @@ def _tmdb_genres(raw_values: object, provider: str) -> list[str]:
     return normalize_genres(genre_ids, provider=provider)
 
 
-def _tmdb_record(row: object, provider: str, collected_at: datetime, *, allow_id_only: bool = False) -> IngestionRecord | None:
+def _tmdb_record(
+    row: object, provider: str, collected_at: datetime, *, allow_id_only: bool = False
+) -> IngestionRecord | None:
     """Normalize one TMDB Movie/TV list result into typed media provenance."""
     if not isinstance(row, Mapping) or type(row.get("id")) is not int or row["id"] <= 0:
         return None
@@ -227,12 +292,28 @@ def _tmdb_record(row: object, provider: str, collected_at: datetime, *, allow_id
     date_text, year, release_at = normalize_partial_date(date_raw)
     genres = _tmdb_genres(row.get("genre_ids") or row.get("genres"), provider)
     country_values = row.get("origin_country")
-    country = normalize_country(country_values[0]) if isinstance(country_values, list) and country_values else None
-    if country is None and isinstance(row.get("production_countries"), list) and row["production_countries"]:
-        country = normalize_country(row["production_countries"][0].get("iso_3166_1")) if isinstance(row["production_countries"][0], Mapping) else None
+    country = (
+        normalize_country(country_values[0])
+        if isinstance(country_values, list) and country_values
+        else None
+    )
+    if (
+        country is None
+        and isinstance(row.get("production_countries"), list)
+        and row["production_countries"]
+    ):
+        country = (
+            normalize_country(row["production_countries"][0].get("iso_3166_1"))
+            if isinstance(row["production_countries"][0], Mapping)
+            else None
+        )
     language = normalize_language(row.get("original_language"))
     rating = normalize_rating(row.get("vote_average"), scale=10)
-    poster = normalize_cover_url(f"https://image.tmdb.org/t/p/w500{row['poster_path']}" if isinstance(row.get("poster_path"), str) else None)
+    poster = normalize_cover_url(
+        f"https://image.tmdb.org/t/p/w500{row['poster_path']}"
+        if isinstance(row.get("poster_path"), str)
+        else None
+    )
     fields: dict[str, Any] = {
         "media_type": "movie" if provider == "tmdb_movies" else "tv",
         "artwork_aspect": "poster",
@@ -266,14 +347,27 @@ def _tmdb_record(row: object, provider: str, collected_at: datetime, *, allow_id
     )
 
 
-def map_tmdb(payload: object, collected_at: datetime, config: Mapping[str, Any], provider: str) -> list[IngestionRecord]:
+def map_tmdb(
+    payload: object, collected_at: datetime, config: Mapping[str, Any], provider: str
+) -> list[IngestionRecord]:
     """Map one TMDB page, retaining upstream country matches when movie rows omit that metadata."""
 
     rows = payload.get("results") if isinstance(payload, Mapping) else None
     if not isinstance(rows, list) or len(rows) > 100:
         raise ValueError(f"{provider}_response_invalid")
-    records = {record.provider_id: record for row in rows if (record := _tmdb_record(row, provider, collected_at, allow_id_only=config.get("tmdb_mode") == "changes")) is not None}
-    if provider != "tmdb_movies" or not (config.get("media_countries") or config.get("media_country")):
+    records = {
+        record.provider_id: record
+        for row in rows
+        if (
+            record := _tmdb_record(
+                row, provider, collected_at, allow_id_only=config.get("tmdb_mode") == "changes"
+            )
+        )
+        is not None
+    }
+    if provider != "tmdb_movies" or not (
+        config.get("media_countries") or config.get("media_country")
+    ):
         return filter_media_records(config, list(records.values()))
     # Discover already applied with_origin_country. Relax only country checks on abbreviated movie rows.
     country_fields = {"media_country", "media_countries"}
@@ -282,7 +376,9 @@ def map_tmdb(payload: object, collected_at: datetime, config: Mapping[str, Any],
         record
         for record in records.values()
         if filter_media_records(
-            config if record.metadata["provider_record"]["source_fields"].get("country") else without_country,
+            config
+            if record.metadata["provider_record"]["source_fields"].get("country")
+            else without_country,
             [record],
         )
     ]
@@ -322,10 +418,14 @@ def build_trakt_request(secret: str, config: Mapping[str, Any]) -> ProviderReque
     """Build one Trakt API v2 request with the key in its required header."""
     from modules.connectors.providers.keyed import place_secret
 
-    return place_secret("trakt_media", _trakt_url(config), "trakt-api-key", secret, {"trakt-api-version": "2"})
+    return place_secret(
+        "trakt_media", _trakt_url(config), "trakt-api-key", secret, {"trakt-api-version": "2"}
+    )
 
 
-def map_trakt(payload: object, collected_at: datetime, config: Mapping[str, Any]) -> list[IngestionRecord]:
+def map_trakt(
+    payload: object, collected_at: datetime, config: Mapping[str, Any]
+) -> list[IngestionRecord]:
     """Map the selected Trakt mode and deduplicate stable media or episode identities."""
     if not isinstance(payload, list) or len(payload) > 100:
         raise ValueError("trakt_media_response_invalid")
@@ -337,10 +437,16 @@ def map_trakt(payload: object, collected_at: datetime, config: Mapping[str, Any]
     return filter_media_records(config, list(records.values()))
 
 
-def _trakt_record(item: Mapping[str, Any], mode: str, collected_at: datetime) -> IngestionRecord | None:
+def _trakt_record(
+    item: Mapping[str, Any], mode: str, collected_at: datetime
+) -> IngestionRecord | None:
     """Use the envelope to identify shows and retain each calendar episode's ID and air date."""
-    kind = "tv" if item.get("show") is not None else "movie" if item.get("movie") is not None else (
-        "tv" if item.get("type") == "show" or mode.startswith("shows_") else "movie"
+    kind = (
+        "tv"
+        if item.get("show") is not None
+        else "movie"
+        if item.get("movie") is not None
+        else ("tv" if item.get("type") == "show" or mode.startswith("shows_") else "movie")
     )
     media = item.get("show" if kind == "tv" else "movie", item)
     if not isinstance(media, Mapping):
@@ -349,7 +455,12 @@ def _trakt_record(item: Mapping[str, Any], mode: str, collected_at: datetime) ->
     if not isinstance(ids, Mapping):
         return None
     trakt_id = ids.get("trakt")
-    if not isinstance(title, str) or not title.strip() or type(trakt_id) is not int or trakt_id <= 0:
+    if (
+        not isinstance(title, str)
+        or not title.strip()
+        or type(trakt_id) is not int
+        or trakt_id <= 0
+    ):
         return None
     slug = ids.get("slug")
     base_url = f"https://trakt.tv/{'movies' if kind == 'movie' else 'shows'}/{slug or trakt_id}"
@@ -359,14 +470,22 @@ def _trakt_record(item: Mapping[str, Any], mode: str, collected_at: datetime) ->
     fields, _ = _trakt_fields(media, kind, release, collected_at)
     fields["external_ids"] = build_external_ids(ids)
     return _movie_record(
-        provider="trakt_media", identity=build_media_identity("trakt", trakt_id),
-        title=title.strip(), collected_at=collected_at, fields=fields,
-        summary=str(media.get("overview") or ""), canonical_url=base_url,
+        provider="trakt_media",
+        identity=build_media_identity("trakt", trakt_id),
+        title=title.strip(),
+        collected_at=collected_at,
+        fields=fields,
+        summary=str(media.get("overview") or ""),
+        canonical_url=base_url,
     )
 
 
 def _trakt_episode(
-    item: Mapping[str, Any], show: Mapping[str, Any], show_title: str, base_url: str, collected_at: datetime,
+    item: Mapping[str, Any],
+    show: Mapping[str, Any],
+    show_title: str,
+    base_url: str,
+    collected_at: datetime,
 ) -> IngestionRecord | None:
     """Normalize one aired or upcoming episode with its own external IDs and show-level filters."""
     episode = item.get("episode")
@@ -377,27 +496,51 @@ def _trakt_episode(
         return None
     episode_id = ids.get("trakt")
     season, number = episode.get("season"), episode.get("number")
-    if type(episode_id) is not int or episode_id <= 0 or type(season) is not int or type(number) is not int:
+    if (
+        type(episode_id) is not int
+        or episode_id <= 0
+        or type(season) is not int
+        or type(number) is not int
+    ):
         return None
     release = item.get("first_aired") or episode.get("first_aired")
     fields, aired = _trakt_fields(show, "tv", release, collected_at)
     fields.update(
-        external_ids=build_external_ids(ids), season=str(season), episode=str(number), format="episodic",
+        external_ids=build_external_ids(ids),
+        season=str(season),
+        episode=str(number),
+        format="episodic",
     )
     title = episode.get("title")
-    display_title = f"{show_title.strip()} — {title.strip()}" if isinstance(title, str) and title.strip() else show_title.strip()
+    display_title = (
+        f"{show_title.strip()} — {title.strip()}"
+        if isinstance(title, str) and title.strip()
+        else show_title.strip()
+    )
     return _movie_record(
-        provider="trakt_media", identity=f"trakt:episode:{episode_id}", title=display_title,
-        collected_at=collected_at, fields=fields, summary=str(episode.get("overview") or ""),
-        canonical_url=f"{base_url}/seasons/{season}/episodes/{number}", observed_at=aired,
+        provider="trakt_media",
+        identity=f"trakt:episode:{episode_id}",
+        title=display_title,
+        collected_at=collected_at,
+        fields=fields,
+        summary=str(episode.get("overview") or ""),
+        canonical_url=f"{base_url}/seasons/{season}/episodes/{number}",
+        observed_at=aired,
     )
 
 
 def _trakt_fields(
-    media: Mapping[str, Any], kind: str, release: object, collected_at: datetime,
+    media: Mapping[str, Any],
+    kind: str,
+    release: object,
+    collected_at: datetime,
 ) -> tuple[dict[str, Any], datetime | None]:
     """Normalize filterable show/movie metadata and the selected release or air date."""
-    fields: dict[str, Any] = {"media_type": kind, "artwork_aspect": "poster", "attribution": "Data via Trakt"}
+    fields: dict[str, Any] = {
+        "media_type": kind,
+        "artwork_aspect": "poster",
+        "attribution": "Data via Trakt",
+    }
     if (rating := normalize_rating(media.get("rating"), scale=10)) is not None:
         fields["rating"] = rating
     for key, value in (
@@ -411,7 +554,8 @@ def _trakt_fields(
     date_text, year, release_at = normalize_partial_date(release)
     if date_text and year:
         fields.update(
-            release_date=date_text, release_year=year,
+            release_date=date_text,
+            release_year=year,
             release_status="upcoming" if release_at and release_at > collected_at else "released",
         )
     return fields, release_at
@@ -425,7 +569,9 @@ def _omdb_url(config: Mapping[str, Any]) -> str:
     mode = config.get("omdb_mode") or "title"
     params = {"r": "json"}
     key = {"imdb_id": "i", "title": "t", "search": "s"}.get(mode)
-    value = config.get({"imdb_id": "omdb_imdb_id", "title": "omdb_title", "search": "omdb_search"}.get(mode, ""))
+    value = config.get(
+        {"imdb_id": "omdb_imdb_id", "title": "omdb_title", "search": "omdb_search"}.get(mode, "")
+    )
     if key is None or not isinstance(value, str) or not value.strip():
         raise ValueError("omdb_lookup_scope_invalid")
     params[key] = value.strip()
@@ -443,7 +589,9 @@ def build_omdb_request(secret: str, config: Mapping[str, Any]) -> ProviderReques
     return place_secret("omdb_lookup", _omdb_url(config), "query:apikey", secret)
 
 
-def map_omdb(payload: object, collected_at: datetime, config: Mapping[str, Any]) -> list[IngestionRecord]:
+def map_omdb(
+    payload: object, collected_at: datetime, config: Mapping[str, Any]
+) -> list[IngestionRecord]:
     """Map OMDb detail or abbreviated search rows, classifying individual episodes as episodic TV."""
     from modules.connectors.provider_options import filter_media_records
 
@@ -459,13 +607,27 @@ def map_omdb(payload: object, collected_at: datetime, config: Mapping[str, Any])
             continue
         imdb = row.get("imdbID")
         title = row.get("Title")
-        if not isinstance(imdb, str) or not re.fullmatch(r"tt\d{7,12}", imdb) or not isinstance(title, str) or not title.strip():
+        if (
+            not isinstance(imdb, str)
+            or not re.fullmatch(r"tt\d{7,12}", imdb)
+            or not isinstance(title, str)
+            or not title.strip()
+        ):
             continue
         kind = "tv" if row.get("Type") in ("series", "episode") else "movie"
         year_raw = row.get("Year")
-        year_match = re.search(r"\b(18\d{2}|19\d{2}|20\d{2}|2100)\b", year_raw) if isinstance(year_raw, str) else None
-        fields: dict[str, Any] = {"media_type": kind, "artwork_aspect": "poster", "external_ids": {"imdb": imdb},
-                                  "attribution": "Data via OMDb API", "canonical_url": f"https://www.imdb.com/title/{imdb}/"}
+        year_match = (
+            re.search(r"\b(18\d{2}|19\d{2}|20\d{2}|2100)\b", year_raw)
+            if isinstance(year_raw, str)
+            else None
+        )
+        fields: dict[str, Any] = {
+            "media_type": kind,
+            "artwork_aspect": "poster",
+            "external_ids": {"imdb": imdb},
+            "attribution": "Data via OMDb API",
+            "canonical_url": f"https://www.imdb.com/title/{imdb}/",
+        }
         if row.get("Type") == "episode":
             fields["format"] = "episodic"
         if year_match:
@@ -489,8 +651,14 @@ def map_omdb(payload: object, collected_at: datetime, config: Mapping[str, Any])
         poster = normalize_cover_url(row.get("Poster"))
         if poster:
             fields["image_url"] = poster
-        record = _movie_record(provider="omdb_lookup", identity=build_media_identity("imdb", imdb), title=title.strip(),
-                               collected_at=collected_at, fields=fields, summary=str(row.get("Plot") or ""))
+        record = _movie_record(
+            provider="omdb_lookup",
+            identity=build_media_identity("imdb", imdb),
+            title=title.strip(),
+            collected_at=collected_at,
+            fields=fields,
+            summary=str(row.get("Plot") or ""),
+        )
         records.setdefault(record.provider_id, record)
     return filter_media_records(config, list(records.values()))
 

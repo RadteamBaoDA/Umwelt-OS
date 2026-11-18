@@ -16,7 +16,9 @@ INVALID = "provider_rate_deadline_invalid"
 
 
 @pytest.mark.asyncio
-async def test_youtube_feed_uses_bounded_transport_with_send_fence(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_youtube_feed_uses_bounded_transport_with_send_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from modules.connectors.providers import rest
 
     fetch = AsyncMock(return_value=Fetched(b'<feed xmlns="http://www.w3.org/2005/Atom"/>'))
@@ -68,7 +70,9 @@ async def test_youtube_snapshot_reuses_and_refreshes_url_scoped_validators(
     )
 
     assert fetch.await_args.kwargs["headers"]["If-None-Match"] == '"old"'
-    assert fetch.await_args.kwargs["headers"]["If-Modified-Since"] == "Fri, 01 May 2026 12:00:00 GMT"
+    assert (
+        fetch.await_args.kwargs["headers"]["If-Modified-Since"] == "Fri, 01 May 2026 12:00:00 GMT"
+    )
     assert page.validators == {
         feed_url: {"etag": '"next"', "last_modified": "Sat, 01 May 2026 12:00:00 GMT"}
     }
@@ -126,18 +130,23 @@ def test_youtube_targets_build_bounded_channel_and_playlist_scopes() -> None:
     )
     handle = ConnectorConfig.model_validate({"youtube_handles": ["@Example_Channel"]})
     assert fc._youtube_targets(handle) == (fc._YoutubeTarget(None, "example_channel", None),)
-    assert fc._youtube_channel_id_from_page(
-        f'<link rel="canonical" href="https://www.youtube.com/channel/{channel}">'.encode()
-    ) == channel
+    assert (
+        fc._youtube_channel_id_from_page(
+            f'<link rel="canonical" href="https://www.youtube.com/channel/{channel}">'.encode()
+        )
+        == channel
+    )
     legacy_source = SimpleNamespace(
-        provider="youtube", type="rss",
+        provider="youtube",
+        type="rss",
         configuration={"youtube_channel_id": channel, "history_mode": "returned_snapshot"},
     )
     assert fc.provider_feed_url(legacy_source) == (
         f"https://www.youtube.com/feeds/videos.xml?channel_id={channel}"
     )
     multi_source = SimpleNamespace(
-        provider="youtube", type="rss",
+        provider="youtube",
+        type="rss",
         configuration={
             "youtube_channels": [channel, "UC" + "B" * 22],
             "history_mode": "returned_snapshot",
@@ -171,7 +180,9 @@ def test_youtube_targets_build_bounded_channel_and_playlist_scopes() -> None:
 )
 @pytest.mark.asyncio
 async def test_youtube_handle_resolution_and_feed_are_both_send_gated(
-    monkeypatch: pytest.MonkeyPatch, youtube_filter: str, feed_prefix: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    youtube_filter: str,
+    feed_prefix: str | None,
 ) -> None:
     from modules.connectors.providers import rest
 
@@ -195,7 +206,8 @@ async def test_youtube_handle_resolution_and_feed_are_both_send_gated(
         provider="youtube",
         type="rss",
         configuration={
-            "youtube_handles": ["@Example_Channel"], "youtube_filter": youtube_filter,
+            "youtube_handles": ["@Example_Channel"],
+            "youtube_filter": youtube_filter,
             "history_mode": "returned_snapshot",
         },
     )

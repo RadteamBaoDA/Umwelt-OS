@@ -11,7 +11,7 @@ from modules.connectors.providers.rest import Fetched
 
 
 def test_livechart_maps_episode_identity_metadata_and_filters() -> None:
-    body = b'''<rss><channel><item><title>Series episode 2</title><link>https://www.livechart.me/episodes/2</link><guid>ep-2</guid><pubDate>Wed, 18 Nov 2026 20:00:00 GMT</pubDate><description><![CDATA[<p>Episode <b>summary</b></p>]]></description><category>Drama</category></item></channel></rss>'''
+    body = b"""<rss><channel><item><title>Series episode 2</title><link>https://www.livechart.me/episodes/2</link><guid>ep-2</guid><pubDate>Wed, 18 Nov 2026 20:00:00 GMT</pubDate><description><![CDATA[<p>Episode <b>summary</b></p>]]></description><category>Drama</category></item></channel></rss>"""
     now = datetime(2026, 11, 17, tzinfo=UTC)
     records = map_livechart_feed(body, collected_at=now, config={"media_genres": ["drama"]})
     assert len(records) == 1
@@ -27,7 +27,7 @@ def test_livechart_rejects_unsafe_xml_and_noncanonical_links() -> None:
     now = datetime(2026, 11, 17, tzinfo=UTC)
     with pytest.raises(ValueError):
         map_livechart_feed(b"<!DOCTYPE rss><rss/>", collected_at=now, config={})
-    body = b'''<rss><channel><item><title>Episode</title><link>https://attacker.example/episode</link><guid>x</guid><pubDate>Wed, 18 Nov 2026 20:00:00 GMT</pubDate></item></channel></rss>'''
+    body = b"""<rss><channel><item><title>Episode</title><link>https://attacker.example/episode</link><guid>x</guid><pubDate>Wed, 18 Nov 2026 20:00:00 GMT</pubDate></item></channel></rss>"""
     assert map_livechart_feed(body, collected_at=now, config={}) == []
 
 
