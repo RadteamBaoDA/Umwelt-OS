@@ -150,7 +150,7 @@ test('Run now generates a brief on real data and posts it into the task thread',
   const { conversation_id: conversationId } = await (await page.request.get(`/api/v1/automations/${task.id}/conversation`)).json() as { conversation_id: string | null };
   expect(conversationId, 'task thread created').toBeTruthy();
   await page.goto(`/chat/${conversationId}`);
-  await expect(page.getByText('Brief sources')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole('list', { name: 'Brief sources' })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole('link', { name: 'Edit task' })).toBeVisible();
   const history = page.getByRole('navigation').or(page.locator('aside')).first();
   await expect(history.getByText('Tasks')).toBeVisible();
