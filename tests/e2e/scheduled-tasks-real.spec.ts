@@ -88,11 +88,15 @@ async function waitForRun(page: Page, automationId: string, notBefore: Set<strin
 test('real sources collect data for the brief', async ({ page }) => {
   test.setTimeout(15 * 60_000);
   const outcomes: Record<string, string> = {};
+  await page.goto('/settings/sources');
+  const existing = await (await page.request.get('/api/v1/connectors/builtins')).json() as { id: string; source_id: string | null }[];
   for (const [id, label] of [...NEWS, ...OBSERVATIONS]) {
-    const result = await enableBuiltinViaSettings(page, id, label);
+    // A built-in enabled by an earlier spec (its card is disabled) is reused as-is.
+    const already = existing.find((x) => x.id === id)?.source_id ?? null;
+    const result = already ? { ok: true, text: 'already enabled', sourceId: already } : await enableBuiltinViaSettings(page, id, label);
     const records = result.ok && result.sourceId ? await collectedRecordCount(page, result.sourceId, 90_000) : 0;
     outcomes[id] = result.ok ? `${records} records` : `failed: ${result.text}`;
-    await page.keyboard.press('Escape');
+    if (!already) await page.keyboard.press('Escape');
   }
   const weather = WIZARD_CASES.find((c) => c.id === 'open_meteo')!;
   const weatherOutcome = await connectWizardSource(page, weather, 'E2E weather Ha Noi');
