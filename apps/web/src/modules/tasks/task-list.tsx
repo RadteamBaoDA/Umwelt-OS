@@ -165,7 +165,8 @@ function TaskListNotices({ vm }: { vm: TaskListVm }) {
 
 /**
  * Task rows with completion checkbox and select action. In the terminal skin the meta text is the compact relative due
- * label (`overdue 2d`, `today`, `Fri`) or the status for finished tasks; the default skin keeps status plus full date.
+ * label (`overdue 2d`, `today`, `Fri`) or the status for finished tasks, which are listed last (a sorted copy, the
+ * fetched order is untouched); the default skin keeps the fetched order, status plus full date.
  */
 function TaskRows({ vm }: { vm: TaskListVm }) {
   const { t, display, onSelectTask, isAdminViewer, toggleMutation, tasks, statusLabels, localDay, dueAtLocalDay } = vm;
@@ -175,9 +176,11 @@ function TaskRows({ vm }: { vm: TaskListVm }) {
     today: t('task.dueToday'),
     none: t('no.dueDate'),
   };
+  // Terminal view only: finished tasks sink to the bottom of a copy (stable sort); the fetched order is untouched.
+  const rows = terminal ? [...tasks].sort((a, b) => Number(a.status === 'done') - Number(b.status === 'done')) : tasks;
   return (
     <ul className="task-list flex flex-col gap-2">
-      {tasks.map((task) => (
+      {rows.map((task) => (
         <li key={task.id} className="task-row flex items-start gap-3 rounded-lg border border-border p-3">
           <Checkbox
             checked={task.status === 'done'}
@@ -191,6 +194,7 @@ function TaskRows({ vm }: { vm: TaskListVm }) {
               <span
                 className="task-row-meta text-xs text-muted-foreground"
                 data-due={isOpenTask(task) && task.due_date && task.due_date < localDay ? 'overdue' : undefined}
+                data-finished={isOpenTask(task) ? undefined : 'true'}
               >
                 {isOpenTask(task)
                   ? dueLabel(task.due_date ?? (task.due_at ? dueAtLocalDay(task.due_at) : null), localDay, display.locale, dueText)

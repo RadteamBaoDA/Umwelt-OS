@@ -477,6 +477,9 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
       <>
         {/* Terminal skin: `[ retry ]` in the pane title bar (demo weather error pane); refetches the same query. */}
         <TitleBarSlot>
+          <span className="gadget-failed" aria-hidden="true">
+            {t('gadget.metaFailed')}
+          </span>
           <Button type="button" size="sm" onClick={() => void query.refetch()}>
             {t('retry')}
           </Button>

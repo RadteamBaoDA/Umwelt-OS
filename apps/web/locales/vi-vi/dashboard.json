@@ -411,6 +411,7 @@
   "freshness.updated": "Cập nhật {time}",
   "gadget.metaFeed": "tail -f · {count} nguồn",
   "gadget.metaRules": "quy tắc",
+  "gadget.metaFailed": "lỗi",
   "freshness.summary": "{total} nguồn: {fresh} mới, {stale} cũ, {failing} lỗi",
   "freshness.tooltip": "{name} · {time}",
   "freshness.axisHours": "{hours} giờ",

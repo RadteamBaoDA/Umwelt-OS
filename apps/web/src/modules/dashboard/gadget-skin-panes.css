@@ -51,8 +51,26 @@ html[data-skin='terminal'] .gadget-head-slot [data-slot='button']:not([data-size
   color: var(--text);
   background: transparent;
 }
-html[data-skin='terminal'] .gadget-head-slot .feed-tool-opt {
+html[data-skin='terminal'] .gadget-head-slot .feed-tool-opt,
+html[data-skin='terminal'] .gadget-head-slot [data-slot='button'][data-size='icon'] {
   color: var(--muted);
+}
+/* Compact icon buttons keep the muted meta (`tail -f · N sources`) from being squeezed out of narrow panes. */
+html[data-skin='terminal'] .gadget-head-slot [data-slot='button'][data-size='icon'] {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+}
+/* A pressed toggle is accent ink on a quiet tint, never a filled accent box. */
+html[data-skin='terminal'] .gadget-head-slot [data-slot='button'][aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--active);
+}
+html[data-skin='terminal'] .gadget-failed {
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--danger);
 }
 html[data-skin='terminal'] .gadget-head-slot .feed-tool-icon {
   display: inline-block;
@@ -70,6 +88,9 @@ html[data-skin='terminal'] .task-summary {
   font-size: 12px;
   white-space: nowrap;
 }
+html[data-skin='terminal'] .task-row-meta[data-finished] {
+  text-transform: lowercase;
+}
 html[data-skin='terminal'] .task-view-select {
   align-self: flex-end;
   width: auto;
@@ -83,12 +104,9 @@ html[data-skin='terminal'] .task-view-select {
   box-shadow: none;
 }
 
-/* Goals: title left, percent right, ASCII bar under (no status / milestone / deadline line). */
+/* Goals: title, ASCII bar (with its percent) under; no status / milestone / deadline line and no second percent. */
 html[data-skin='terminal'] .goal-row-pct {
-  display: inline;
-  font-size: 12px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  display: none; /* the ASCII bar already prints the percent; goals carry no `current / target` pair for the right side */
 }
 
 /* Related signals (intelligence-panel.tsx): `region  date` over `↳ N signals · domains`. */
@@ -132,6 +150,7 @@ html[data-skin='terminal'] .corr-signals::before {
 /* Daily brief: date controls and actions share one row; paragraphs with a bold lead and blue `[n]` cites. */
 html[data-skin='terminal'] .brief-root {
   flex-direction: row;
+  align-content: flex-start; /* wrapped rows pack at the top instead of sharing the pane's spare height */
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
@@ -157,6 +176,14 @@ html[data-skin='terminal'] .brief-saved > .brief-actions {
 html[data-skin='terminal'] .brief-actions > [data-slot='button']:not([aria-pressed='true']) {
   color: var(--text);
   background: transparent;
+}
+/* Regenerate and Share read as icon-only buttons so the controls stay on one row (accessible names are kept). */
+html[data-skin='terminal'] .brief-actions {
+  flex-wrap: nowrap;
+}
+html[data-skin='terminal'] .brief-actions > [data-slot='button']:is(:first-child, :last-child:not(:nth-child(2))) {
+  font-size: 0;
+  gap: 0;
 }
 html[data-skin='terminal'] .brief-term-p {
   margin: 0 0 8px;
@@ -298,6 +325,9 @@ html[data-skin='terminal'] :is([data-gadget-notice='empty'], [data-gadget-notice
   align-items: center;
   padding: 24px 12px;
   text-align: center;
+}
+html[data-skin='terminal'] :is([data-gadget-notice='empty'], [data-gadget-notice='setup']) > p {
+  text-transform: lowercase;
 }
 html[data-skin='terminal'] [data-gadget-notice] a::before,
 html[data-skin='terminal'] [data-gadget-notice] button::before {

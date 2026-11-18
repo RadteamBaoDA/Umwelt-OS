@@ -411,6 +411,7 @@
   "freshness.updated": "Updated {time}",
   "gadget.metaFeed": "tail -f · {count, plural, one {# source} other {# sources}}",
   "gadget.metaRules": "rules",
+  "gadget.metaFailed": "failed",
   "freshness.summary": "{total, plural, one {# source} other {# sources}}: {fresh} fresh, {stale} stale, {failing} failing",
   "freshness.tooltip": "{name} · {time}",
   "freshness.axisHours": "{hours}h",

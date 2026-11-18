@@ -14,7 +14,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
-import { formatRelativeTime } from './relative-time';
+import { formatCompactAgo } from './relative-time';
 import { TitleBarSlot } from '@/components/gadget-title-slot';
 
 /** Returns the provider URL only when it is a plain github.com https link. */
@@ -108,7 +108,7 @@ function eventCode(event: TimelineEvent): { code: string; tone: 'info' | 'ok' | 
 
 /**
  * One recent activity event: type chip, time, title, provider link and repository entity link. The terminal skin
- * shows the short code and a relative time instead of the chip and full date (both stay in the DOM for assistive tech).
+ * shows the short code and a compact age (`2h`) instead of the chip and full date (both stay in the DOM for assistive tech).
  */
 function GithubEventItem({ event }: { event: TimelineEvent }) {
   const t = useTranslations('github');
@@ -126,7 +126,7 @@ function GithubEventItem({ event }: { event: TimelineEvent }) {
         </span>
         <time dateTime={when}>{formatDateTime(when, display.locale, display.timezone)}</time>
         <span className="github-event-ago" aria-hidden="true">
-          {formatRelativeTime(when, display.locale)}
+          {formatCompactAgo(when)}
         </span>
       </div>
       <p className="github-event-title text-xs font-medium leading-snug">{event.title}</p>
