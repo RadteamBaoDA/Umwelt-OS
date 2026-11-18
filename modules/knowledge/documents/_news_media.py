@@ -7,6 +7,7 @@ re-exports ``DEFAULT_CALENDAR_WINDOW_DAYS``.
 import math
 import re
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Literal, get_args
 
 from sqlalchemy import DateTime, Numeric, Select, and_, case, func, or_, select
@@ -207,7 +208,9 @@ def _media_provenance_predicates(
             (func.jsonb_typeof(rating_col) == "number", sa_cast(rating_col.astext, Numeric)),
             else_=None,
         )
-        preds.append(rating_num >= float(min_rating))
+        preds.append(
+            rating_num >= Decimal(str(min_rating))
+        )  # str() avoids float->Decimal binary expansion
     return preds
 
 

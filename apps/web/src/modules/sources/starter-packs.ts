@@ -13,7 +13,7 @@ export type ScopedPackItem = {
   provider: string;
   sourceType: ScopedSourceSpec['type'];
   /** Message key (`starter.name*`) for the default source name. */
-  nameKey: 'starter.nameArxiv' | 'starter.nameGithubReleases' | 'starter.nameOpenMeteo' | 'starter.nameGoogleNews';
+  nameKey: 'starter.nameArxiv' | 'starter.nameGithubReleases' | 'starter.nameOpenMeteo' | 'starter.nameGoogleNews' | 'starter.nameTvmaze';
   configuration: Partial<ConnectorConfig>;
   /** Preferred interval; raised to the provider floor from the catalog when needed. */
   intervalMinutes: ConnectorConfig['schedule_interval_minutes'];
@@ -38,7 +38,15 @@ export const STARTER_PACKS: StarterPack[] = [
     labelKey: 'starter.packMedia',
     items: [
       { id: 'livechart_episodes', kind: 'builtin', provider: 'livechart_episodes' },
-      { id: 'tvmaze_schedule', kind: 'builtin', provider: 'tvmaze_schedule' },
+      {
+        id: 'tvmaze_schedule',
+        kind: 'scoped',
+        provider: 'tvmaze_schedule',
+        sourceType: 'api',
+        nameKey: 'starter.nameTvmaze',
+        configuration: { tvmaze_mode: 'schedule_country', media_country: 'US' },
+        intervalMinutes: 60,
+      },
     ],
   },
   {

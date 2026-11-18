@@ -196,3 +196,33 @@ def test_openlibrary_recent_fanout_cap_fails_without_cursor_result() -> None:
             )
         )
     assert len(calls) == 1
+
+
+def test_openlibrary_pushes_down_release_year_and_single_genre() -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    search = parse_qs(
+        urlsplit(
+            openlibrary_request(
+                {
+                    "openlibrary_mode": "search",
+                    "openlibrary_query": "dune",
+                    "release_year": 1965,
+                    "media_genres": ["sci_fi"],
+                }
+            )
+        ).query
+    )
+    assert search["first_publish_year"] == ["1965"] and search["subject"] == ["science_fiction"]
+    several = openlibrary_request(
+        {
+            "openlibrary_mode": "search",
+            "openlibrary_query": "dune",
+            "media_genres": ["sci_fi", "drama"],
+        }
+    )
+    assert "subject=" not in several
+    subject = openlibrary_request(
+        {"openlibrary_mode": "subject", "openlibrary_subject": "history", "release_year": 1999}
+    )
+    assert "published_in=1999-1999" in subject

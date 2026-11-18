@@ -402,7 +402,10 @@ function acceptsProviderModeField(provider: NativeProvider, key: string, configu
   if (key === 'ann_media_type') return configuration.ann_mode === 'encyclopedia';
   if (key === 'tvmaze_global') return configuration.tvmaze_mode === 'schedule_web';
   if (key === 'tvmaze_show_ids') return configuration.tvmaze_mode === 'followed_shows';
-  if (provider === 'tvmaze_schedule' && (key === 'media_country' || key === 'media_countries')) return !configuration.tvmaze_global;
+  // Followed shows ignore the schedule country; global channels exclude it (server rule), so the country hides.
+  if (provider === 'tvmaze_schedule' && key === 'media_country') {
+    return configuration.tvmaze_mode !== 'followed_shows' && !configuration.tvmaze_global;
+  }
   const traktField = acceptsTraktField(key, configuration);
   if (traktField !== undefined) return traktField;
   const omdbField = acceptsOmdbField(key, configuration);
@@ -438,12 +441,7 @@ function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeCh
     onChange('ebooks_only', null as never);
   }
   if (key === 'ann_mode' && next !== 'encyclopedia') onChange('ann_media_type', null as never);
-  if (key === 'tvmaze_mode') onChange('tvmaze_global', null as never);
-  clearTvmazeShowIds(key, next, onChange);
-  if (key === 'tvmaze_global' && next === true) {
-    onChange('media_country', null as never);
-    onChange('media_countries', null as never);
-  }
+  clearTvmazeFields(key, next, onChange);
   if (key === 'trakt_mode') {
     if (typeof next !== 'string' || !next.endsWith('_search')) onChange('trakt_query', null as never);
     if (typeof next !== 'string' || !next.endsWith('_calendar')) onChange('trakt_calendar_days', null as never);
@@ -458,11 +456,20 @@ function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeCh
 }
 
 /**
- * Clears TVMaze show IDs when the endpoint leaves followed-shows mode, the only mode the server accepts them in
- * (a stale list would otherwise be sent and rejected with 422).
+ * Clears TVMaze fields a changed mode or toggle makes invalid, because the server rejects stale ones (422): global
+ * channels reset on any mode change, show IDs outside followed shows, the country in followed shows, and the country
+ * when global channels turn on.
  */
-function clearTvmazeShowIds(key: string, next: unknown, onChange: ScopeChange): void {
-  if (key === 'tvmaze_mode' && next !== 'followed_shows') onChange('tvmaze_show_ids', null as never);
+function clearTvmazeFields(key: string, next: unknown, onChange: ScopeChange): void {
+  if (key === 'tvmaze_mode') {
+    onChange('tvmaze_global', null as never);
+    if (next !== 'followed_shows') onChange('tvmaze_show_ids', null as never);
+    else onChange('media_country', null as never);
+  }
+  if (key === 'tvmaze_global' && next === true) {
+    onChange('media_country', null as never);
+    onChange('media_countries', null as never);
+  }
 }
 
 /** Clears Steam app IDs when leaving the only mode that consumes them. */
@@ -531,7 +538,7 @@ function MediaScope(props: ScopeSectionProps) {
             key={`${resetEpoch}-${spec.key}`}
             spec={spec}
             value={configuration[spec.key]}
-            disabled={disabled}
+            disabled={disabled || (spec.key === 'tvmaze_global' && Boolean(configuration.media_country))}
             onValue={(next) => {
               onChange(spec.key, (next === undefined || (Array.isArray(next) && next.length === 0) ? null : next) as never);
               // Recent-feed filters and search value blocks belong to different Podcast Index endpoints.

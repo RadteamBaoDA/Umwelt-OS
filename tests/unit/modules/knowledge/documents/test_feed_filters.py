@@ -232,6 +232,20 @@ async def test_media_filters_compile_jsonb_predicates_and_release_date_sort() ->
 
 
 @pytest.mark.asyncio
+async def test_min_rating_binds_exact_decimal_not_float_expansion() -> None:
+    from decimal import Decimal
+
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), min_rating=7.7, **KW
+    )
+    stmt = session.execute.await_args.args[0]
+    params = stmt.compile().params
+    assert Decimal("7.7") in params.values()
+    assert not any(isinstance(v, float) and v == 7.7 for v in params.values())
+
+
+@pytest.mark.asyncio
 async def test_media_type_filter_includes_legacy_youtube_provider_fallback() -> None:
     session = _session()
     await public.list_gadget_document_projections(

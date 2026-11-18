@@ -23,13 +23,14 @@ import {
   type RealtimeMode,
 } from './api';
 import { BuiltinOptions, type BuiltinOptionValues } from './builtin-options';
-import { OPTION_SPECS, optionAppliesTo } from './builtin-option-specs';
+import { OPTION_SPECS } from './builtin-option-specs';
 import { matchesShapes } from './shape-filter';
 import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
 import type { SourceAiOptions } from './api';
 import { useBuiltinTest, type TestState } from './use-builtin-test';
 import { BareButton } from '@/components/bare-button';
+import { AttributionBadge } from './attribution-badges';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'media'];
 const CATEGORY_KEY = {
@@ -191,7 +192,7 @@ export function BuiltinTermsFields({
       <h3 className="m-0 text-base font-semibold">{t('builtin.dialogTitle', { name: builtin.label })}</h3>
       <p className="text-muted-foreground">{t('builtin.termsHint')}</p>
       <p>
-        <strong>{t('guide.attribution')}:</strong> {builtin.attribution}
+        <strong>{t('guide.attribution')}:</strong> <AttributionBadge providerId={builtin.id} /> {builtin.attribution}
       </p>
       <p>
         <a
@@ -266,15 +267,15 @@ export function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinO
 }
 
 /**
- * Whether one per-type option goes into the enable body: the built-in accepts it, its mode (if any) is selected, and
- * the value is not empty. Mode-bound options (e.g. TVMaze show IDs) are skipped otherwise, because the server rejects them.
+ * Whether one per-type option goes into the enable body: the built-in accepts it and
+ * the value is not empty.
  *
  * @param key Option spec key.
  * @param allowed Option keys the built-in lists in `applicable_options`.
  * @param selected Current option values keyed by option name.
  */
 function sendsTypedOption(key: string, allowed: ReadonlySet<string>, selected: Record<string, unknown>): boolean {
-  return allowed.has(key) && optionAppliesTo(key, selected) && !isEmptyOptionValue(selected[key]);
+  return allowed.has(key) && !isEmptyOptionValue(selected[key]);
 }
 
 /** True when a per-type option value is "empty" (unset, blank text or an empty multi-select) and must be omitted from the body. */
@@ -339,7 +340,10 @@ function BuiltinPickRow({ row, selected, onPick }: { row: BuiltinSource; selecte
           {row.execution === 'experimental' && <Badge variant="outline">{t('builtin.experimental')}</Badge>}
           {row.eligibility === 'review' && <Badge variant="secondary">{t('builtin.reviewClass')}</Badge>}
         </span>
-        <span className="block text-sm text-muted-foreground">{row.attribution}</span>
+        <span className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <AttributionBadge providerId={row.id} link={false} />
+          {row.attribution}
+        </span>
       </span>
     </BareButton>
   );

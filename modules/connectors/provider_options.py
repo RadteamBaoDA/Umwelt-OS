@@ -630,6 +630,8 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
         "openlibrary_query",
         "ebooks_only",
         "media_languages",
+        "release_year",
+        "media_genres",
     ),
     "gutendex_books": (
         "media_languages",
@@ -705,6 +707,8 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
         "media_country",
         "media_genres",
         "media_languages",
+        "content_ratings",
+        "release_year",
     ),
     "youtube_api": ("media_countries", "media_languages", "release_year", "content_ratings"),
     "podcast_index": (
@@ -750,7 +754,14 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
         "min_rating",
         "content_ratings",
     ),
-    "podcast_rss": ("itunes_podcast_id", "media_country", "media_genres", "media_languages"),
+    "podcast_rss": (
+        "itunes_podcast_id",
+        "media_country",
+        "media_genres",
+        "media_languages",
+        "content_ratings",
+        "media_formats",
+    ),
     "wikidata_movies": (
         "lookback_days",
         "genre_qids",
@@ -766,6 +777,8 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
         "media_country",
         "media_genres",
         "media_languages",
+        "release_year",
+        "min_rating",
     ),
     "letterboxd_rss": (
         "letterboxd_username",
@@ -774,6 +787,7 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
         "media_genres",
         "media_languages",
         "release_year",
+        "min_rating",
     ),
     "hn_top": ("hn_list",),
     "gdelt_economy": ("gdelt_query", "gdelt_timespan", "gdelt_source_lang", "gdelt_source_country"),

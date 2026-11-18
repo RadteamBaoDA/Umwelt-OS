@@ -35,7 +35,7 @@ below have not been accepted against live services in this implementation pass.
   Adult results require explicit opt-in. Both share a conservative 60-request/minute durable cap and
   2.1-second in-process pacing. Live network and provider quota behavior remain unverified. `livechart_episodes`
   collects the official episode RSS with conditional requests and bounded
-  anime metadata. `ann_news` is a scoped source (not a fixed built-in) so one workspace can run several: its `ann_mode` selects the news Atom feed (`ann_category`, `ann_edition`) or the paced Encyclopedia XML (`ann_media_type`, 1 request/second); it is a superset of the spec's fixed news preset. `tvmaze_schedule` collects the current day's country or web schedule, with TVMaze
+  anime metadata. `ann_news` is a scoped source (not a fixed built-in) so one workspace can run several: its `ann_mode` selects the news Atom feed (`ann_category`, `ann_edition`) or the paced Encyclopedia XML (`ann_media_type`, 1 request/second); it is a superset of the spec's fixed news preset. `tvmaze_schedule` is a scoped source (not a fixed built-in) so one workspace can follow several schedules or show lists: its identity is `tvmaze_mode`, `media_country`, `tvmaze_global` and `tvmaze_show_ids` (all optional; a source saved before the conversion keeps working and keeps its documents), and genre, language, format, year and rating are filters outside the scope hash. It collects the current day's country or web schedule, with TVMaze
   attribution and source filters. `followed_shows` mode (option `tvmaze_show_ids`, at most 20 ids) issues one gated call per show for its previous and next episode within a 14-day-back, 60-day-ahead window. `openlibrary_books` collects
   subject, search, or recent-change work metadata from the official API, with a 100-item/4 MiB response
   bound, a 360-minute poll floor, CC0 attribution, and paginated recent-change cursors. Recent mode is
@@ -242,5 +242,12 @@ YouTube configurations stay editable. YouTube format choices are all videos, lon
 
 Media filters use the same canonical values as the Dashboard media editor. Leaving a filter empty uses the provider
 default. Configure sends explicit null when a saved option is cleared, while the built-in wizard omits empty options.
-The optional Media starter pack uses the existing LiveChart and TVMaze built-in contracts. These UI controls have
+The optional Media starter pack uses the LiveChart built-in contract; TVMaze is a scoped source created from the Sources editor. These UI controls have
 unit-test coverage. Live collection and authenticated browser acceptance remain separate verification gates.
+
+Wikidata pushes `media_genres` (Q41263 action, Q471839 sci-fi, Q2484376 thriller, Q200092 horror, Q157444 comedy,
+Q130232 drama, Q93204 documentary/non-fiction) down only when every selected genre has a QID, and turns
+`media_countries`/`media_country` (P495 to P297) and `media_languages`/`language` (P364 to P218, two-letter codes only)
+into required `VALUES` joins; all values are re-validated before they reach the query text. Open Library sends
+`release_year` as `first_publish_year` (search) or `published_in` (subject) and a single `media_genres` value as the
+search `subject`. Filter changes on TVMaze and LiveChart reset the stored ETag/Last-Modified validators.

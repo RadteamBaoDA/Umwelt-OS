@@ -680,6 +680,18 @@ function mediaDateKey(item: GadgetDocumentProjection, timezone: string): string 
   return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type)?.value).join('-');
 }
 
+/** Insertion-ordered Map grouping (replaces ES2024 `Object.groupBy`, absent in Safari < 17.4 / Chrome < 117). */
+function groupByKey<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const rows = groups.get(key);
+    if (rows) rows.push(item);
+    else groups.set(key, [item]);
+  }
+  return groups;
+}
+
 /** Groups the loaded shelf using display-local dates and localized headings, or delegates to calendar buckets. */
 function groupMediaItems(
   items: GadgetDocumentProjection[],
@@ -693,11 +705,11 @@ function groupMediaItems(
   return groupItems
     ? groupItems(items, timezone)
     : groupBy && groupBy !== 'none'
-      ? Object.entries(
-          Object.groupBy(items, (item) =>
+      ? [
+          ...groupByKey(items, (item) =>
             groupBy === 'source' ? item.source_id : groupBy === 'media_type' ? item.media!.media_type : mediaDateKey(item, timezone),
           ),
-        ).map(([key, rows]) => ({
+        ].map(([key, rows]) => ({
           key,
           label:
             groupBy === 'source'

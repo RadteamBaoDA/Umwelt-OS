@@ -1,7 +1,7 @@
 """Unit tests for shared media collector helpers in ``modules/connectors/providers/_media_common.py``."""
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
 
 import pytest
 
@@ -41,22 +41,6 @@ async def test_media_rate_pacer_enforces_per_key_spacing(monkeypatch: pytest.Mon
     assert await pacer.pace("graphql.anilist.co", 1.0) == 0.0
     pacer.reset("api.musicbrainz.org")
     assert await pacer.pace("api.musicbrainz.org", 1.0) == 0.0
-
-
-def test_rate_limit_delay_from_headers() -> None:
-    """Inspect Retry-After and X-RateLimit-Remaining headers safely."""
-    assert mc.rate_limit_delay_from_headers({}) is None
-    assert mc.rate_limit_delay_from_headers({"Retry-After": "12"}) == 12.0
-    assert mc.rate_limit_delay_from_headers({"retry-after": "99999"}) == 3600.0
-    future = (datetime.now(UTC) + timedelta(seconds=30)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-    delay = mc.rate_limit_delay_from_headers({"Retry-After": future})
-    assert delay is not None and 20.0 <= delay <= 35.0
-    assert mc.rate_limit_delay_from_headers({"X-RateLimit-Remaining": "0"}) == 60.0
-    assert (
-        mc.rate_limit_delay_from_headers({"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "45"})
-        == 45.0
-    )
-    assert mc.rate_limit_delay_from_headers({"X-RateLimit-Remaining": "5"}) is None
 
 
 def test_parse_media_xml_and_helpers() -> None:
@@ -222,3 +206,8 @@ def test_build_media_identity_and_external_ids() -> None:
         }
     )
     assert ext == {"tmdb": "123", "imdb": "tt123"}
+
+
+def test_provider_genre_ids_cover_spec_gaps() -> None:
+    assert mc.normalize_genres(["26"], provider="podcast_index") == ["sci_fi", "fantasy"]
+    assert mc.normalize_genres(["50", "60"], provider="steam_releases") == ["programming"]

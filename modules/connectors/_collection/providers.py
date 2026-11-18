@@ -590,7 +590,9 @@ async def _run_tvmaze(run: Run) -> None:
     )
     date = now.date().isoformat()
     url = tvmaze_schedule_url(country=country, date=date, web=web)
-    fingerprint = sha256(url.encode("utf-8")).hexdigest()
+    # URL alone is not enough: media filters live outside the scope, and replaying an old ETag after a filter
+    # change would 304 into the stale filtered snapshot.
+    fingerprint = f"{sha256(url.encode('utf-8')).hexdigest()}:{_media_scope_fingerprint('tvmaze_schedule', cfg)}"
     state = await _state(run)
     headers = (
         _conditional(state, run.attempt.connector_revision)
@@ -631,7 +633,11 @@ async def _run_livechart(run: Run) -> None:
 
     now = datetime.now(UTC)
     cfg = run.attempt.source.configuration or {}
-    fingerprint = sha256(LIVECHART_URL.encode("utf-8")).hexdigest()
+    # Filters are outside the scope: fold them in so a changed filter never replays the old ETag (304).
+    fingerprint = (
+        f"{sha256(LIVECHART_URL.encode('utf-8')).hexdigest()}:"
+        f"{_media_scope_fingerprint('livechart_episodes', cfg)}"
+    )
     state = await _state(run)
     headers = (
         _conditional(state, run.attempt.connector_revision)

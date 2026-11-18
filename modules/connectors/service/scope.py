@@ -30,6 +30,7 @@ from modules.connectors.backends import (
     LISTENBRAINZ_SCOPE_FIELDS,
     PODCAST_INDEX_SCOPE_FIELDS,
     STEAM_SCOPE_FIELDS,
+    TVMAZE_SCOPE_FIELDS,
     YOUTUBE_SCOPE_FIELDS,
     YOUTUBE_TARGET_FIELDS,
 )
@@ -95,6 +96,7 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "ann_news": frozenset({"ann_mode", "ann_media_type", "ann_category", "ann_edition"}),
     "mangaupdates_releases": frozenset({"series_ids"}),
     "mangadex_releases": frozenset({"manga_ids"}),
+    "tvmaze_schedule": TVMAZE_SCOPE_FIELDS,
     "podcast_rss": frozenset({"feed_url", "itunes_podcast_id"}),
     "wikidata_movies": frozenset({"lookback_days", "language"}),
 }

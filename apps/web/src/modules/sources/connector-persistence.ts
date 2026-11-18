@@ -174,10 +174,10 @@ export async function reloadServerConfiguration(ctx: EditorContext) {
     const { acceptedConfiguration, activationResult } = reloaded;
     draft.serverConfigurationRef.current = acceptedConfiguration;
     draft.draftVersion.current += 1;
-    draft.setSecret('');
+    draft.clearSecrets();
     ctx.sync.applyServerConfiguration(acceptedConfiguration);
     draft.setDirty(false);
-    draft.setSecret('');
+    draft.clearSecrets();
     draft.dirtyRef.current = false;
     draft.setConflict(false);
     draft.setError('');
@@ -399,7 +399,7 @@ export async function removeCredential(ctx: EditorContext) {
       draft.setDirty(false);
       draft.dirtyRef.current = false;
     }
-    draft.setSecret('');
+    draft.clearSecrets();
     await refreshOwnerState(ctx, id, token);
   } catch (cause) {
     if (requests.requestIsCurrent(token)) draft.setError(errorText(cause));

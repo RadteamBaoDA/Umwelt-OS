@@ -55,6 +55,36 @@ describe('ProviderGuide', () => {
     expect(screen.getByText(/masked afterwards/)).toBeTruthy();
     expect(screen.getByText(/year it covers/)).toBeTruthy();
   });
+  it('shows the keyless vs API-key split for TMDB and Wikidata movies, and none for other providers', () => {
+    const { unmount } = view(entry({ provider_id: 'wikidata_movies' }));
+    expect(screen.getByText('Keyless')).toBeTruthy();
+    expect(screen.getByText(/No key needed/)).toBeTruthy();
+    expect(screen.getByText('With an API key')).toBeTruthy();
+    expect(screen.getByText(/changes delta/)).toBeTruthy();
+    unmount();
+    const tv = view(entry({ provider_id: 'tmdb_tv', key_fields: ['api_key'] }));
+    expect(screen.getByText(/Unlocks airing today/)).toBeTruthy();
+    tv.unmount();
+    view(entry({}));
+    expect(screen.queryByText('Keyless')).toBeNull();
+  });
+  it('renders required attribution badges: TMDB, TVMaze CC BY-SA 4.0 link, MangaDex, MangaUpdates', () => {
+    const cases: [string, string, string][] = [
+      ['tmdb_movies', 'TMDB', 'https://www.themoviedb.org'],
+      ['tvmaze_schedule', 'TVMaze · CC BY-SA 4.0', 'https://www.tvmaze.com'],
+      ['mangadex_releases', 'MangaDex', 'https://mangadex.org'],
+      ['mangaupdates_releases', 'MangaUpdates', 'https://www.mangaupdates.com'],
+    ];
+    for (const [provider_id, label, href] of cases) {
+      const { unmount } = view(entry({ provider_id }));
+      const badge = screen.getByTestId('attribution-badge');
+      expect(badge.textContent).toBe(label);
+      expect(badge.getAttribute('href')).toBe(href);
+      unmount();
+    }
+    view(entry({}));
+    expect(screen.queryByTestId('attribution-badge')).toBeNull();
+  });
   it('flags stale data and keeps last success next to the error', () => {
     view(entry({}), source);
     expect(screen.getByRole('status').textContent).toMatch(/Stale/);

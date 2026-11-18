@@ -14,7 +14,13 @@ YOUTUBE_SCOPE_FIELDS = YOUTUBE_TARGET_FIELDS | {"youtube_filter"}
 PODCAST_INDEX_SCOPE_FIELDS = frozenset({"podcast_index_query"})
 LISTENBRAINZ_SCOPE_FIELDS = frozenset({"listenbrainz_username"})
 STEAM_SCOPE_FIELDS = frozenset({"steam_mode", "steam_country", "steam_language", "steam_appids"})
-IGDB_SCOPE_FIELDS = frozenset({"igdb_game_types", "igdb_region", "igdb_platforms"})
+# igdb_game_types is a format filter (OPTION_FIELDS + native fingerprint), not source identity.
+IGDB_SCOPE_FIELDS = frozenset({"igdb_region", "igdb_platforms"})
+# TVMaze identity: which schedule / which followed shows. Every field is optional so legacy built-in
+# sources (stored without them) keep the empty-scope hash and their documents stay visible.
+TVMAZE_SCOPE_FIELDS = frozenset(
+    {"tvmaze_mode", "media_country", "tvmaze_global", "tvmaze_show_ids"}
+)
 
 PROVIDER_SOURCE_TYPES = MappingProxyType(
     {
@@ -178,6 +184,7 @@ FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset(
         "ann_news",
         "mangaupdates_releases",
         "mangadex_releases",
+        "tvmaze_schedule",
         "apple_books_rss",
         "podcast_rss",
         "wikidata_movies",
@@ -223,6 +230,7 @@ GATED_EXECUTOR_PROVIDERS = (
         "ann_news",
         "mangaupdates_releases",
         "mangadex_releases",
+        "tvmaze_schedule",
         "apple_books_rss",
         "podcast_rss",
         "wikidata_movies",
@@ -283,6 +291,7 @@ PROVIDER_SCOPE_FIELDS = MappingProxyType(
         "ann_news": frozenset({"ann_mode", "ann_media_type", "ann_category", "ann_edition"}),
         "mangaupdates_releases": frozenset({"series_ids"}),
         "mangadex_releases": frozenset({"manga_ids"}),
+        "tvmaze_schedule": TVMAZE_SCOPE_FIELDS,
         "apple_books_rss": frozenset({"country", "kind", "chart"}),
         "podcast_rss": frozenset({"feed_url", "itunes_podcast_id"}),
         "wikidata_movies": frozenset({"lookback_days", "language"}),

@@ -118,7 +118,10 @@ async def test_runner_bounds_validators_to_url_and_clears_them_for_backlog(
     from modules.connectors._collection import providers
 
     url = tvmaze_schedule_url(country="GB", date=datetime.now(UTC).date().isoformat())
-    fingerprint = sha256(url.encode()).hexdigest()
+    fingerprint = (
+        f"{sha256(url.encode()).hexdigest()}:"
+        f"{providers._media_scope_fingerprint('tvmaze_schedule', {'media_country': 'GB'})}"
+    )
     state = SimpleNamespace(
         continuation_state=fingerprint, validators_revision=3, etag='"old"', last_modified=None
     )
@@ -655,3 +658,43 @@ async def test_runner_followed_shows_accepts_union_snapshot(
     await providers._run_tvmaze(run)
     assert fetch.await_count == 1 and len(accept.await_args.args[2]) == 1
     assert run.extras["native_fp"].startswith("media-v1:")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["tvmaze_schedule", "livechart_episodes"])
+async def test_runner_filter_change_never_replays_old_validators(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """Same URL, changed filter: the stored fingerprint no longer matches, so no If-None-Match is sent."""
+    from modules.connectors._collection import providers
+
+    runner = providers._run_tvmaze if provider == "tvmaze_schedule" else providers._run_livechart
+    fetch = AsyncMock(
+        return_value=Fetched(body=b"[]" if provider == "tvmaze_schedule" else b"<rss/>")
+    )
+
+    def make_run(cfg: dict[str, object]) -> SimpleNamespace:
+        return SimpleNamespace(
+            attempt=SimpleNamespace(
+                source=SimpleNamespace(configuration=cfg), connector_revision=1
+            ),
+            gate=SimpleNamespace(fetch_bytes=fetch),
+            extras={},
+        )
+
+    state = SimpleNamespace(
+        continuation_state=None, validators_revision=1, etag='"old"', last_modified=None
+    )
+    monkeypatch.setattr(providers, "_state", AsyncMock(return_value=state))
+    monkeypatch.setattr(providers, "_lease", AsyncMock(return_value=object()))
+    monkeypatch.setattr(providers, "_accept_native", AsyncMock())
+    monkeypatch.setattr(
+        providers, "_select", AsyncMock(side_effect=lambda r, lease, recs, now: (list(recs), None))
+    )
+    first = make_run({"media_genres": ["drama"]})
+    await runner(first)
+    state.continuation_state = first.extras["native_fp"]
+    await runner(make_run({"media_genres": ["drama"]}))
+    assert fetch.await_args.kwargs["headers"]["If-None-Match"] == '"old"'
+    await runner(make_run({"media_genres": ["comedy"]}))
+    assert "If-None-Match" not in (fetch.await_args.kwargs.get("headers") or {})

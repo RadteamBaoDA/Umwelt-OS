@@ -7,6 +7,8 @@ import { ConnectorCatalogEntry, ConnectorConfig, intervalBelowMinimum } from './
 export const intervals = [15, 30, 60, 360, 1440] as const;
 export const genericProviderIds = new Set(['rss', 'web', 'rest', 'mcp']);
 export type Provider = string;
+/** Providers whose write-only credential is a key plus secret pair (both required together). */
+export const PAIRED_CREDENTIAL_PROVIDERS: ReadonlySet<string> = new Set(['podcast_index', 'igdb_games']);
 
 /** Uses the backend catalog to identify scheduled preset capabilities instead of duplicating provider IDs here. */
 export function isPreset(entry: ConnectorCatalogEntry | undefined): boolean {

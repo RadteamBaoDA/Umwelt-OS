@@ -79,6 +79,9 @@ async def test_igdb_uses_form_oauth_then_text_apicalypse_and_maps_taxonomy():
         query = kwargs["request_body"]
         assert isinstance(query, bytes)
         assert b"game_type = (0)" in query
+        assert b"age_ratings.rating_category.rating,age_ratings.organization.name" in query
+        assert b"external_game_source" in query
+        assert b"age_ratings.category" not in query
         assert b"release_dates.release_region = (8)" in query
         assert kwargs["request_content_type"] == "text/plain"
         return rest.Fetched(
@@ -93,8 +96,10 @@ async def test_igdb_uses_form_oauth_then_text_apicalypse_and_maps_taxonomy():
                         "themes": [{"id": 18, "name": "Science fiction"}],
                         "game_type": {"id": 0, "name": "Main Game"},
                         "rating": 91.0,
-                        "age_ratings": [{"rating": {"name": "Teen"}}],
-                        "external_games": [],
+                        "age_ratings": [
+                            {"organization": {"name": "ESRB"}, "rating_category": {"rating": "T"}}
+                        ],
+                        "external_games": [{"uid": "570", "external_game_source": 1}],
                     }
                 ]
             ).encode()
@@ -113,8 +118,21 @@ async def test_igdb_uses_form_oauth_then_text_apicalypse_and_maps_taxonomy():
     assert source_fields["format"] == "main_game"
     assert source_fields["rating"] == 91.0
     assert source_fields["content_rating"] == "pg_13"
+    assert source_fields["external_ids"]["steam"] == "570"
     assert "short-lived-token" not in page.cursor_after
     assert "secret-value" not in seen[0][0]
+
+
+def test_igdb_age_rating_v4_mapping():
+    def row(org, rating):
+        return {"organization": {"name": org}, "rating_category": {"rating": rating}}
+
+    assert media_games._igdb_age_rating(row("ESRB", "E10+")) == "pg"
+    assert media_games._igdb_age_rating(row("PEGI", "Eighteen")) == "mature"
+    assert media_games._igdb_age_rating(row("ESRB", "AO")) == "explicit"
+    assert media_games._igdb_age_rating(row("ACB", "M")) == "pg_13"
+    assert media_games._igdb_age_rating(row("ESRB", "M")) == "mature"
+    assert media_games._igdb_age_rating(row("X", "Nope")) is None
 
 
 def test_igdb_apicalypse_splits_genre_and_theme_filters():

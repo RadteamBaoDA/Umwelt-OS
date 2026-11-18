@@ -397,3 +397,48 @@ describe('media Configure serialization', () => {
     expect(changeConfiguration).toHaveBeenCalledWith('anime_season', null);
   });
 });
+
+describe('TVMaze scoped panel', () => {
+  it('shows the show ID list and hides the country only in followed-shows mode', () => {
+    const { unmount } = view('tvmaze_schedule', { tvmaze_mode: 'schedule_country', media_country: 'US' });
+    expect(screen.queryByLabelText('TVMaze show IDs')).toBeNull();
+    expect(screen.getByLabelText('Country')).toBeTruthy();
+    unmount();
+    view('tvmaze_schedule', { tvmaze_mode: 'followed_shows', tvmaze_show_ids: [1] });
+    expect(screen.getByLabelText('TVMaze show IDs')).toBeTruthy();
+    expect(screen.queryByLabelText('Country')).toBeNull();
+    expect(screen.queryByLabelText('Global web channels')).toBeNull();
+  });
+  it('offers global channels only for the web schedule and disables them while a country is set', () => {
+    const { unmount } = view('tvmaze_schedule', { tvmaze_mode: 'schedule_web', media_country: 'US' });
+    expect(screen.getByLabelText('Global web channels')).toBeDisabled();
+    unmount();
+    view('tvmaze_schedule', { tvmaze_mode: 'schedule_web' });
+    expect(screen.getByLabelText('Global web channels')).not.toBeDisabled();
+  });
+  it('clears dependent fields when the mode changes', async () => {
+    const user = userEvent.setup();
+    const { onChange } = view('tvmaze_schedule', { tvmaze_mode: 'followed_shows', tvmaze_show_ids: [1] });
+    await user.click(screen.getByLabelText('TVMaze schedule'));
+    await user.click(screen.getByRole('option', { name: 'Web schedule' }));
+    expect(onChange).toHaveBeenCalledWith('tvmaze_mode', 'schedule_web');
+    expect(onChange).toHaveBeenCalledWith('tvmaze_show_ids', null);
+    expect(onChange).toHaveBeenCalledWith('tvmaze_global', null);
+  });
+  it('mirrors the server mode rules in the scope gate', () => {
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'followed_shows' })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'followed_shows', tvmaze_show_ids: [1, 2] })).toBe(true);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_web', tvmaze_show_ids: [1] })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_country', tvmaze_global: true })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_web', tvmaze_global: true, media_country: 'US' })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_web', tvmaze_global: true })).toBe(true);
+  });
+  it('exposes the new round-3 filters on the media providers', () => {
+    const fields = MEDIA_PROVIDER_FIELDS as Record<string, readonly string[]>;
+    expect(fields.itunes_movies).toEqual(expect.arrayContaining(['release_year', 'min_rating']));
+    expect(fields.letterboxd_rss).toContain('min_rating');
+    expect(fields.apple_books_rss).toEqual(expect.arrayContaining(['content_ratings', 'release_year']));
+    expect(fields.podcast_rss).toEqual(expect.arrayContaining(['content_ratings', 'media_formats']));
+    expect(fields.openlibrary_books).toEqual(expect.arrayContaining(['release_year', 'media_genres']));
+  });
+});

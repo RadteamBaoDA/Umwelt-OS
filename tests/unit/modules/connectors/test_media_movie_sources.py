@@ -29,10 +29,49 @@ def test_wikidata_url_has_validated_pushdown_and_bounded_dates() -> None:
     assert '"2026-10-18T00:00:00Z"' in query
     assert '"2027-05-16T23:59:59Z"' in query
     assert "VALUES ?genre { wd:Q130232 wd:Q157444 }" in query
-    assert 'FILTER(?languageCode = "en")' in query
+    assert 'VALUES ?languageCode { "en" }' in query
+    assert "?item wdt:P364/wdt:P218 ?languageCode." in query
+    assert "OPTIONAL { ?item wdt:P364" not in query
     assert "LIMIT 100" in query
     with pytest.raises(ValueError, match="wikidata_scope_invalid"):
         wikidata_query_url({"genre_qids": ["Q1) } SERVICE <https://attacker>"]}, NOW)
+
+
+def _query(config: dict[str, object]) -> str:
+    return parse_qs(urlsplit(wikidata_query_url(config, NOW)).query)["query"][0]
+
+
+def test_wikidata_pushes_down_spec_genre_qids_country_and_language() -> None:
+    query = _query(
+        {
+            "media_genres": ["horror", "action", "documentary", "non_fiction"],
+            "media_countries": ["JP", "US"],
+            "media_languages": ["ja", "zh-hk", "en"],
+        }
+    )
+    assert "VALUES ?genre { wd:Q200092 wd:Q41263 wd:Q93204 }" in query
+    assert 'VALUES ?countryCode { "JP" "US" }' in query
+    assert "?item wdt:P495/wdt:P297 ?countryCode." in query
+    assert "OPTIONAL { ?item wdt:P495" not in query
+    # zh-hk is not an ISO 639-1 code, so it can never match P218 and is dropped from the join.
+    assert 'VALUES ?languageCode { "ja" "en" }' in query
+
+
+def test_wikidata_partial_genre_mapping_and_unset_dimensions_stay_optional() -> None:
+    query = _query({"media_genres": ["drama", "fantasy"]})
+    assert "OPTIONAL { ?item wdt:P136 ?genre. }" in query
+    assert "VALUES ?genre" not in query
+    assert "OPTIONAL { ?item wdt:P495/wdt:P297 ?countryCode. }" in query
+    assert "OPTIONAL { ?item wdt:P364/wdt:P218 ?languageCode. }" in query
+    explicit = _query({"genre_qids": ["Q11424"], "media_genres": ["drama"]})
+    assert "VALUES ?genre { wd:Q11424 }" in explicit
+
+
+def test_wikidata_country_selectors_intersect_and_reject_unsafe_codes() -> None:
+    both = _query({"media_countries": ["US", "GB"], "media_country": "GB"})
+    assert 'VALUES ?countryCode { "GB" }' in both
+    with pytest.raises(ValueError, match="wikidata_scope_invalid"):
+        _query({"media_countries": ['US" } SERVICE <https://attacker> { "']})
 
 
 def test_wikidata_maps_deduplicated_genres_country_language_and_ids() -> None:

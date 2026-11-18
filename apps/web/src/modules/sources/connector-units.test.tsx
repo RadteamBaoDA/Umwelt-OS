@@ -145,6 +145,19 @@ describe('useConnectorDraft', () => {
     expect(result.current.dirtyRef.current).toBe(true);
   });
 
+  it('keeps the paired apiSecret when the primary secret is emptied, and clearSecrets clears both', () => {
+    const { result } = renderHook(() => useConnectorDraft(undefined));
+    act(() => {
+      result.current.setSecret('key');
+      result.current.setApiSecret('secret');
+    });
+    act(() => result.current.setSecret(''));
+    expect(result.current.apiSecret).toBe('secret');
+    act(() => result.current.clearSecrets());
+    expect(result.current.secret).toBe('');
+    expect(result.current.apiSecret).toBe('');
+  });
+
   it('exposes stable setters for field handlers', () => {
     const { result, rerender } = renderHook(() => useConnectorDraft(undefined));
     const first = result.current.setDirtyRef;

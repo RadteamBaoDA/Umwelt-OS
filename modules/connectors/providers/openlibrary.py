@@ -43,6 +43,24 @@ _LANGUAGE = {
     "th": "tha",
     "zh-hk": "chi",
 }
+# Spec 3.1 E: canonical MediaGenre -> Open Library subject slug (search ``subject=`` pushdown only).
+_SUBJECT_SLUG = {
+    "action": "action_adventure",
+    "adventure": "adventure",
+    "sci_fi": "science_fiction",
+    "fantasy": "fantasy",
+    "romance": "romance",
+    "thriller": "thrillers",
+    "horror": "horror",
+    "comedy": "humor",
+    "drama": "drama",
+    "mystery": "mystery_and_detective_stories",
+    "history": "history",
+    "music": "music",
+    "sports": "sports",
+    "non_fiction": "nonfiction",
+    "programming": "programming",
+}
 _WORK = re.compile(r"^/works/OL[1-9][0-9]*W$")
 _PACER: asyncio.Lock | None = None
 _LAST_SEND = 0.0
@@ -57,7 +75,12 @@ class OpenLibraryPage:
 
 
 def openlibrary_request(config: Mapping[str, object], cursor: str | None = None) -> str:
-    """Build a fixed-host, bounded Open Library URL from validated source options."""
+    """Build a fixed-host, bounded Open Library URL from validated source options.
+
+    ``release_year`` is pushed down as ``first_publish_year`` (search) or ``published_in`` (subject);
+    a single ``media_genres`` value with a spec 3.1 E subject slug is pushed down as ``subject`` in search
+    mode. Everything else (and the ``recent`` mode) is enforced by the post-fetch media filter.
+    """
     mode = config.get("openlibrary_mode") or "subject"
     if mode == "subject":
         subject = str(config.get("openlibrary_subject") or "").strip().lower().replace(" ", "_")
@@ -66,6 +89,8 @@ def openlibrary_request(config: Mapping[str, object], cursor: str | None = None)
         query: dict[str, str | int] = {"limit": MAX_RESULTS}
         if config.get("ebooks_only"):
             query["ebooks"] = "true"
+        if type(config.get("release_year")) is int:
+            query["published_in"] = f"{config['release_year']}-{config['release_year']}"
         return f"{BASE}/subjects/{subject}.json?{urlencode(query)}"
     if mode == "search":
         q = str(config.get("openlibrary_query") or "").strip()
@@ -78,6 +103,11 @@ def openlibrary_request(config: Mapping[str, object], cursor: str | None = None)
             query["language"] = _LANGUAGE[str(lang)]
         if config.get("ebooks_only"):
             query["ebook_access"] = "public"
+        if type(config.get("release_year")) is int:
+            query["first_publish_year"] = int(str(config["release_year"]))
+        genres = config.get("media_genres")
+        if isinstance(genres, (list, tuple)) and len(genres) == 1 and genres[0] in _SUBJECT_SLUG:
+            query["subject"] = _SUBJECT_SLUG[str(genres[0])]
         return f"{BASE}/search.json?{urlencode(query)}"
     if mode == "recent":
         offset = max(0, _recent_offset(cursor) - RECENT_OVERLAP)

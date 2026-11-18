@@ -18,19 +18,6 @@ export function inactiveMediaModeFilters(modeKey: string, selected: unknown): re
   return [];
 }
 
-/**
- * Whether a per-type option applies under the current selections. An option bound to one mode is hidden and left out
- * of the request in every other mode, because the server rejects it there (422) rather than ignoring it.
- *
- * @param key Option spec key.
- * @param selected Current option values keyed by option name.
- * @returns False when the option belongs to a mode that is not selected; true otherwise.
- */
-export function optionAppliesTo(key: string, selected: Record<string, unknown>): boolean {
-  if (key === 'tvmaze_show_ids') return selected.tvmaze_mode === 'followed_shows';
-  return true;
-}
-
 /** One per-type built-in option: how it renders and the bounds the server enforces. */
 export type OptionSpec = {
   key: keyof BuiltinTypeOptions;
@@ -278,7 +265,7 @@ const MEDIA_PROVIDER_SPECS: readonly OptionSpec[] = [
     labelled: true,
     native: true,
   },
-  { key: 'steam_appids', kind: 'tags', max: 8, maxLen: 10, numeric: true, pattern: '[0-9]*', native: true },
+  { key: 'steam_appids', kind: 'tags', max: 8, maxLen: 10, numeric: true, pattern: '[0-9, ]*', native: true },
   {
     key: 'igdb_game_types',
     kind: 'multi',
@@ -293,7 +280,7 @@ const MEDIA_PROVIDER_SPECS: readonly OptionSpec[] = [
     labelled: true,
     native: true,
   },
-  { key: 'igdb_platforms', kind: 'tags', max: 16, maxLen: 6, numeric: true, pattern: '[0-9]*', native: true },
+  { key: 'igdb_platforms', kind: 'tags', max: 16, maxLen: 6, numeric: true, pattern: '[0-9, ]*', native: true },
   { key: 'google_books_query', kind: 'text', maxLen: 160, native: true },
   { key: 'google_books_subject', kind: 'text', maxLen: 100, native: true },
   { key: 'google_books_print_type', kind: 'enum', values: ['all', 'books', 'magazines'], labelled: true, native: true },
@@ -328,7 +315,6 @@ const MEDIA_PROVIDER_SPECS: readonly OptionSpec[] = [
     labelled: true,
     native: true,
   },
-  // Only meaningful in followed_shows mode; see optionAppliesTo.
   { key: 'tvmaze_show_ids', kind: 'tags', max: 20, maxLen: 10, numeric: true, pattern: '[0-9, ]*', native: true },
   { key: 'tvmaze_global', kind: 'bool', nullable: true, native: true },
   { key: 'ann_mode', kind: 'enum', values: ['news', 'encyclopedia'], labelled: true, native: true },
@@ -423,6 +409,7 @@ export const MEDIA_PROVIDER_FIELDS = {
     'listenbrainz_sort',
     'listenbrainz_tags',
     'listenbrainz_status',
+    'media_country',
     'media_countries',
     'media_genres',
     'media_languages',
@@ -550,7 +537,15 @@ export const MEDIA_PROVIDER_FIELDS = {
     'release_year',
     'min_rating',
   ],
-  openlibrary_books: ['openlibrary_mode', 'openlibrary_subject', 'openlibrary_query', 'ebooks_only', 'media_languages'],
+  openlibrary_books: [
+    'openlibrary_mode',
+    'openlibrary_subject',
+    'openlibrary_query',
+    'ebooks_only',
+    'media_languages',
+    'release_year',
+    'media_genres',
+  ],
   gutendex_books: [
     'media_languages',
     'gutendex_topic',
@@ -585,11 +580,19 @@ export const MEDIA_PROVIDER_FIELDS = {
     'media_genres',
     'excluded_tags',
   ],
-  apple_books_rss: ['country', 'kind', 'chart', 'media_country', 'media_genres', 'media_languages'],
-  podcast_rss: ['itunes_podcast_id', 'media_country', 'media_genres', 'media_languages'],
+  apple_books_rss: ['country', 'kind', 'chart', 'media_country', 'media_genres', 'media_languages', 'content_ratings', 'release_year'],
+  podcast_rss: ['itunes_podcast_id', 'media_country', 'media_genres', 'media_languages', 'content_ratings', 'media_formats'],
   wikidata_movies: ['lookback_days', 'genre_qids', 'language', 'media_country', 'media_countries', 'media_genres', 'media_languages'],
-  itunes_movies: ['search_terms', 'country', 'media_country', 'media_genres', 'media_languages'],
-  letterboxd_rss: ['letterboxd_username', 'media_country', 'media_countries', 'media_genres', 'media_languages', 'release_year'],
+  itunes_movies: ['search_terms', 'country', 'media_country', 'media_genres', 'media_languages', 'release_year', 'min_rating'],
+  letterboxd_rss: [
+    'letterboxd_username',
+    'media_country',
+    'media_countries',
+    'media_genres',
+    'media_languages',
+    'release_year',
+    'min_rating',
+  ],
 } as const satisfies Record<string, readonly (keyof BuiltinTypeOptions)[]>;
 
 /**

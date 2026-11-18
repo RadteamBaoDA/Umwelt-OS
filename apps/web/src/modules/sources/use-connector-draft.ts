@@ -75,10 +75,11 @@ function useDraftFields(source: Source | null | undefined) {
   const [authHeaderName, setAuthHeaderName] = useState('Authorization');
   const [secret, setSecretValue] = useState('');
   const [apiSecret, setApiSecret] = useState('');
-  /** Clears the write-only pair whenever the editor resets its primary credential field. */
-  const setSecret = useCallback((value: string) => {
-    setSecretValue(value);
-    if (!value) setApiSecret('');
+  const setSecret = setSecretValue;
+  /** Clears both write-only credential fields; only for reset paths (activation result, reload, removal), never per keystroke. */
+  const clearSecrets = useCallback(() => {
+    setSecretValue('');
+    setApiSecret('');
   }, []);
   const [telegramSecretAction, setTelegramSecretAction] = useState<'keep' | 'replace'>('keep');
   const [revision, setRevision] = useState(0);
@@ -106,6 +107,7 @@ function useDraftFields(source: Source | null | undefined) {
     setAuthHeaderName,
     secret,
     setSecret,
+    clearSecrets,
     apiSecret,
     setApiSecret,
     telegramSecretAction,
@@ -222,7 +224,7 @@ export function selectProvider(
   draft.setConfiguration(defaultConfiguration(next, entry));
   draft.setAuthMethod('none');
   draft.setAuthHeaderName('Authorization');
-  draft.setSecret('');
+  draft.clearSecrets();
   // A new Telegram source has no stored token to keep, so it must start in replace mode.
   draft.setTelegramSecretAction(next === 'telegram' ? 'replace' : 'keep');
   draft.setBackendChoice(null);
