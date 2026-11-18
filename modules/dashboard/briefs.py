@@ -140,11 +140,12 @@ async def _with_live_status(
     scope: Scope,
     multi_workspace_enabled: bool,
     access_fence: AccessFence | None = None,
+    max_briefs: int = 100,
 ) -> list[BriefRead]:
     """Return saved output only when its full captured prompt is exactly current.
 
-    Reads never write. Citation-only legacy rows and changed support snapshots are
-    explicitly unavailable and return no copied prose or citation labels.
+    Reads never write. Citation-only legacy rows and changed support snapshots are unavailable and
+    return no copied prose or citation labels. ``max_briefs`` is the lock-page bound.
     """
     if not rows:
         return []
@@ -155,6 +156,7 @@ async def _with_live_status(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
+        max_briefs=max_briefs,
     )
     for row in rows:
         try:
@@ -486,17 +488,17 @@ async def prelock_captured_inputs(
     extra_sources: AbstractSet[UUID] = frozenset(),
     extra_documents: AbstractSet[UUID] = frozenset(),
     extra_events: AbstractSet[UUID] = frozenset(),
+    max_briefs: int = 100,
 ) -> AccessFence:
     """Lock the union of a bounded brief page's detached dependencies once, in canonical order.
 
-    History and export validate many revisions in one transaction; locking per revision would
-    accumulate Sources in revision order and can deadlock against another page or a mutator.
-    Only exact Document support (and its supported Events) is locked; independent facts are not.
-    The page is at most 100 briefs, each capturing at most 100 unique supports. The ``extra_*``
-    sets let generation merge its current facts (and Events) into the same single ordered acquisition.
+    Locks once per page, never per revision (that accumulates Sources out of order). Only exact
+    Document support (and its Events) is locked. At most ``max_briefs`` (default 100) briefs, still
+    ONE ordered acquisition, never chunked; more raise ``ValueError`` (callers truncate, fail closed).
     """
+    # ponytail: at 500 briefs this is up to ~500*100 supports locked in one pass (linear cost).
     ids = list(dict.fromkeys(brief_ids))
-    if len(ids) > 100:
+    if len(ids) > max_briefs:
         raise ValueError("Brief lock page exceeds its bound")
     rows = (
         []

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from modules.dashboard import briefs, gadgets, layouts  # noqa: F401
-from modules.dashboard._brief_reads import (  # deliberate late import
+from modules.dashboard._brief_reads import (
     get_brief,
     live_brief_ids,
 )

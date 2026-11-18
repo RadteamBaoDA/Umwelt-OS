@@ -1,12 +1,13 @@
 """``get_brief`` and ``live_brief_ids``: scoped point reads with fail-closed liveness."""
 
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from modules.dashboard import _brief_reads
+from modules.dashboard import _brief_reads, briefs
 
 SCOPE: Any = SimpleNamespace(workspace_id=uuid4(), actor_id=uuid4())
 
@@ -79,3 +80,56 @@ async def test_live_brief_ids_empty_input_does_no_query(monkeypatch: pytest.Monk
         multi_workspace_enabled=False,
     )
     assert out == set()
+
+
+class _LockSession(_Session):
+    """Session serving brief rows to ``scalars`` and no evidence rows to ``execute``."""
+
+    async def execute(self, _statement: Any) -> Any:
+        return SimpleNamespace(all=lambda: [])
+
+
+@pytest.mark.asyncio
+async def test_live_brief_ids_reaches_prelock_with_more_than_100_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A daily task thread past ~101 days must not trip the 100-id lock-page bound (one lock pass)."""
+
+    async def admit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    lock_calls: list[int] = []
+
+    async def lock(*_a: Any, **_k: Any) -> tuple[dict[Any, Any], set[Any]]:
+        lock_calls.append(1)
+        return {}, set()
+
+    async def matches(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(_brief_reads, "_admit", admit)
+    monkeypatch.setattr(_brief_reads, "_actor", lambda _scope: uuid4())
+    monkeypatch.setattr(briefs, "_admit", admit)
+    monkeypatch.setattr(briefs, "_lock_dependency_sets", lock)
+    monkeypatch.setattr(briefs, "_captured_inputs_match", matches)
+    rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            brief_date=date(2026, 1, 1),
+            timezone="UTC",
+            status="current",
+            revision=1,
+            content="c",
+            citations=[],
+            model_alias="m",
+            generated_at=datetime.now(UTC),
+        )
+        for _ in range(101)
+    ]
+    out = await _brief_reads.live_brief_ids(
+        _LockSession(rows),  # type: ignore[arg-type]
+        [r.id for r in rows],
+        scope=SCOPE,
+        multi_workspace_enabled=False,
+    )
+    assert out == {r.id for r in rows} and lock_calls == [1]

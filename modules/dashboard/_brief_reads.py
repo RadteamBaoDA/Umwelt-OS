@@ -14,6 +14,7 @@ from modules.dashboard.briefs import _admit, _with_live_status
 from modules.dashboard.daily_schemas import BriefRead
 from modules.dashboard.models import DailyBrief
 
+# Bound on ids per read; matches the lock-page bound passed to ``_with_live_status``.
 MAX_BRIEF_IDS = 500
 
 
@@ -50,7 +51,11 @@ async def get_brief(
         return None
     return (
         await _with_live_status(
-            session, rows, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            session,
+            rows,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            max_briefs=MAX_BRIEF_IDS,
         )
     )[0]
 
@@ -66,12 +71,19 @@ async def live_brief_ids(
 
     Missing, foreign or stale briefs (a captured source deleted, paused or made local-only, or a
     changed support snapshot) are absent from the result, so callers fail closed. At most
-    ``MAX_BRIEF_IDS`` distinct ids are considered. Never writes.
+    ``MAX_BRIEF_IDS`` distinct ids are considered; ids beyond that are dropped and therefore also
+    fail closed (reported as not live). Takes share locks on captured Sources/Documents in one
+    canonical-order acquisition; never writes rows.
     """
     rows = await _rows(
         session, brief_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
+    # One ordered lock acquisition for all (<= MAX_BRIEF_IDS) rows; see prelock_captured_inputs.
     live = await _with_live_status(
-        session, rows, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        session,
+        rows,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        max_briefs=MAX_BRIEF_IDS,
     )
     return {b.id for b in live if b.status == "current"}
