@@ -229,6 +229,12 @@ from modules.chat._public.scheduled_task_threads import (
 from modules.chat._public.scheduled_task_threads import (
     withheld_brief_ids as withheld_brief_ids,
 )
+from modules.chat._public.web_search_command import (
+    CollectorSearchOutcome as CollectorSearchOutcome,
+)
+from modules.chat._public.web_search_command import (
+    search_web_for_collection as search_web_for_collection,
+)
 from modules.chat.citations import (
     validate_answer_citations,
     validate_citations,
@@ -292,6 +298,8 @@ from modules.chat.worker import (
 )
 
 __all__ = [
+    "CollectorSearchOutcome",
+    "search_web_for_collection",
     "append_task_message",
     "delete_automation_conversation",
     "ensure_automation_conversation",
