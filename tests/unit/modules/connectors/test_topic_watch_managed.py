@@ -86,6 +86,34 @@ async def test_update_of_an_externally_archived_source_has_its_own_code(monkeypa
         )
 
 
+@pytest.mark.asyncio
+async def test_update_of_a_paused_source_has_the_inactive_code(monkeypatch) -> None:
+    """A paused (not archived) Source is reported as inactive, not archived."""
+
+    async def get(_s: Any, sid: Any, **_k: Any) -> Any:
+        return SimpleNamespace(id=sid, provider="topic_watch", status="paused")
+
+    monkeypatch.setattr(tw.sources, "get_connector_source", get)
+    with pytest.raises(ConflictError, match="topic_watch_source_inactive"):
+        await tw.update_topic_watch_source(
+            None,  # type: ignore[arg-type]
+            uuid4(),
+            CONFIG,
+            scope=SCOPE,  # type: ignore[arg-type]
+            multi_workspace_enabled=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_deactivate_route_refuses_a_topic_watch_source(monkeypatch) -> None:
+    """Pausing a watch Source through the generic route would silently stall its task."""
+    patch_routes_mp(monkeypatch, "_owner_access", _fence)
+    patch_routes_mp(monkeypatch, "_source", _watch_source)
+    with pytest.raises(HTTPException) as caught:
+        await provisioning_routes.deactivate_source(uuid4(), None, _request(), SimpleNamespace())
+    assert caught.value.status_code == 409 and caught.value.detail == "managed_by_scheduled_task"
+
+
 def _request() -> Any:
     settings = SimpleNamespace(multi_workspace_enabled=False)
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))

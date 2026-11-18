@@ -60,13 +60,14 @@ export function scheduledTaskKind(rule: Pick<Automation, 'trigger' | 'actions'>)
 export type TopicOutcome = 'collecting' | 'settled' | 'no_new_data' | 'failed' | 'consent_required';
 
 /**
- * Classifies a `collect_source` run action: `consent_required` (skipped), `no_new_data`, `collection_*` (failed or
+ * Classifies a `collect_source` run action: `consent_required` (skipped), `no_new_data`, any other error code (failed or
  * rejected), `settled:` (items posted), `collection:` (queued, not yet settled); null when none applies.
  */
 export function topicOutcome(action: { error_code: string | null; result_reference: string | null }): TopicOutcome | null {
   if (action.error_code === 'consent_required') return 'consent_required';
   if (action.error_code === 'no_new_data') return 'no_new_data';
-  if (action.error_code?.startsWith('collection_')) return 'failed';
+  // Any other reason code (collection_*, stale_revision, ...) is a failure; it must win over the references.
+  if (action.error_code) return 'failed';
   if (action.result_reference?.startsWith('settled:')) return 'settled';
   if (action.result_reference?.startsWith('collection:')) return 'collecting';
   return null;

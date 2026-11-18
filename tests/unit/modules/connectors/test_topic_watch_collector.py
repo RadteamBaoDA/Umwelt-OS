@@ -59,6 +59,23 @@ def test_title_key_and_budget_formula():
     assert token_cap(15600) == 23400
 
 
+def test_estimate_and_cap_are_pinned_for_every_item_count():
+    """The web editor mirrors this table (scheduled-task-model.test.ts); change both together."""
+    pinned = {
+        1: (3600, 5400),
+        2: (6600, 9900),
+        3: (9600, 14400),
+        4: (12600, 18900),
+        5: (15600, 23400),
+        6: (18600, 27900),
+        7: (21600, 32400),
+        8: (24600, 36900),
+        9: (27600, 41400),
+        10: (30600, 45900),
+    }
+    assert {n: (estimate_tokens(n), token_cap(estimate_tokens(n))) for n in pinned} == pinned
+
+
 # ---------------------------------------------------------------- pipeline harness
 
 

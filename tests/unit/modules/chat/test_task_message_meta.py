@@ -51,6 +51,7 @@ _TOPIC = {
     "origin": "scheduled_task",
     "task_kind": "topic_watch",
     "run_id": "r1",
+    "automation_id": "a1",
     "source_id": "s1",
     "coverage": "partial",
     "stats": {"queries": 2, "items": 1, "reason": "budget", "secret": "x"},
@@ -72,7 +73,7 @@ _TOPIC = {
 def test_topic_watch_meta_is_allowlisted() -> None:
     task = _read(_TOPIC).task  # type: ignore[attr-defined]
     dumped = task.model_dump(mode="json")
-    assert set(dumped) == {"task_kind", "run_id", "coverage", "stats", "items"}
+    assert set(dumped) == {"task_kind", "run_id", "automation_id", "coverage", "stats", "items"}
     assert set(dumped["items"][0]) == {"title", "url", "site", "summary", "document_id", "story_id"}
     assert "secret" not in dumped["stats"] and dumped["stats"]["reason"] == "budget"
     assert dumped["items"][1]["url"] is None  # non-http(s) links are dropped, never rendered

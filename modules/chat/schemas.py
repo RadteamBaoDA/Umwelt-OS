@@ -470,6 +470,7 @@ class TopicWatchStatsRead(BaseModel):
     blocked: int = 0
     timeout: int = 0
     failed: int = 0
+    seen: int = 0
     duplicates: int = 0
     off_topic: int = 0
     items: int = 0
@@ -487,6 +488,7 @@ class TopicWatchMessageMeta(BaseModel):
 
     task_kind: Literal["topic_watch"]
     run_id: str
+    automation_id: str | None = None
     coverage: Literal["complete", "partial"]
     stats: TopicWatchStatsRead = Field(default_factory=TopicWatchStatsRead)
     items: list[TopicWatchItemRead] = Field(default_factory=list, max_length=50)

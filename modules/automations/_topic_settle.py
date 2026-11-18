@@ -11,6 +11,7 @@ two steps only repeats a no-op post. No lock is held across an owner read.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -45,12 +46,18 @@ _STAT_KEYS = (
     "blocked",
     "timeout",
     "failed",
+    "seen",
     "duplicates",
     "off_topic",
     "items",
     "tokens",
 )
 _REFERENCE_PREFIX = "collection:"
+# URLs and bare domains: the posted text line must stay inert for the markdown fallback and plain export.
+_LINKISH = re.compile(
+    r"(?i)\b(?:https?://|www\.)\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}\b(?:/\S*)?"
+)
+_TERMINAL_RUN = ("succeeded", "failed", "needs_ocr")
 
 
 @dataclass(frozen=True)
@@ -76,8 +83,10 @@ class Post:
     dedupe_key: str
 
 
-def _one_line(text: str | None) -> str:
-    """Collapse all whitespace so one item stays one line of the posted text."""
+def _one_line(text: str | None, *, strip_links: bool = False) -> str:
+    """Collapse all whitespace so one item stays one line; ``strip_links`` also drops URLs and bare domains."""
+    if strip_links:
+        text = _LINKISH.sub("", text or "")
     return " ".join((text or "").split())
 
 
@@ -97,14 +106,17 @@ def build_post(cand: Candidate, docs: list[Any], stats: dict[str, Any] | None) -
     """Build the thread post of one run from its Documents and receipt stats; pure.
 
     Content is one ``- title: summary`` line per item (plain text; the web client never renders it as
-    markup). Metadata carries ``source_id`` (stored for withholding, never sent to clients), the item
+    markup; titles are link-stripped so the markdown fallback and export stay inert, while the
+    metadata item keeps the stored title). Metadata carries ``automation_id`` (for the run-log deep
+    link), ``source_id`` (stored for withholding, never sent to clients), the item
     list and ``coverage="partial"`` exactly when the receipt gave a stop ``reason``. The dedupe key is
     ``run:<run id>``, so a re-sweep or retry appends nothing.
     """
     clean = _clean_stats(stats)
     lines = []
     for doc in docs:
-        title, summary = _one_line(doc.title), _one_line(doc.summary)
+        title = _one_line(doc.title, strip_links=True) or "-"
+        summary = _one_line(doc.summary)
         lines.append(f"- {title}: {summary}" if summary else f"- {title}")
     items = [
         {
@@ -121,6 +133,7 @@ def build_post(cand: Candidate, docs: list[Any], stats: dict[str, Any] | None) -
         metadata={
             "task_kind": "topic_watch",
             "run_id": str(cand.run_id),
+            "automation_id": str(cand.automation_id),
             "source_id": str(cand.source_id),
             "items": items,
             "stats": clean,
@@ -199,17 +212,21 @@ async def _candidates(
     return found
 
 
-async def _run_stats(
+async def _receipt(
     session: AsyncSession,
     cand: Candidate,
     ingestion_run_id: UUID | None,
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> dict[str, Any] | None:
-    """Return the acceptance-receipt telemetry of the request's ingestion run, or None if unavailable."""
+) -> tuple[dict[str, Any] | None, datetime | None]:
+    """Return the request's ingestion-run telemetry and, once that run is terminal, its end time.
+
+    The end time (the run's last update) bounds the Document read so a later run's items never leak
+    into this post; it is None while the run is still going or unknown (no upper bound then).
+    """
     if ingestion_run_id is None:
-        return None
+        return None, None
     history = await ingestion.list_source_runs(
         session,
         cand.source_id,
@@ -219,8 +236,9 @@ async def _run_stats(
     )
     for run in history.items if history is not None else []:
         if run.run_id == ingestion_run_id:
-            return run.collection_stats
-    return None
+            until = run.updated_at if run.status in _TERMINAL_RUN else None
+            return run.collection_stats, until
+    return None, None
 
 
 async def _close(
@@ -310,7 +328,8 @@ async def settle_candidate(
     Reads the request through the connectors owner (a missing request closes the action as
     ``collection_unavailable``); ``queued``/``running`` stays ``pending`` for a later tick;
     ``failed``/``cancelled`` close as ``collection_<status>`` without a post. A settled request
-    reads at most ``max_items`` Documents of the Source created since the run began (newest first):
+    reads at most ``max_items`` Documents of the Source created since the run began and, when the
+    ingestion run is terminal, no later than its end (newest first):
     none closes as ``no_new_data``, otherwise one post is published.
     """
     kw: dict[str, Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
@@ -328,11 +347,10 @@ async def settle_candidate(
         docs: list[Any] = []
         stats: dict[str, Any] | None = None
         if request is not None and request.status in ("succeeded", "no_changes"):
+            stats, until = await _receipt(session, cand, request.ingestion_run_id, **kw)
             docs = await documents.list_recent_source_documents(
-                session, cand.source_id, cand.since, cand.max_items, **kw
+                session, cand.source_id, cand.since, cand.max_items, until=until, **kw
             )
-            if docs:
-                stats = await _run_stats(session, cand, request.ingestion_run_id, **kw)
         await session.rollback()
     if request is None:
         await _close(factory, cand, "collection_unavailable", **kw)

@@ -56,6 +56,29 @@ describe('scheduled task model', () => {
     expect(tokenCap(5)).toBe(23400);
   });
 
+  it('pins the estimate and cap for every item count (mirrors the backend table)', () => {
+    const pinned: Record<number, [number, number]> = {
+      1: [3600, 5400],
+      2: [6600, 9900],
+      3: [9600, 14400],
+      4: [12600, 18900],
+      5: [15600, 23400],
+      6: [18600, 27900],
+      7: [21600, 32400],
+      8: [24600, 36900],
+      9: [27600, 41400],
+      10: [30600, 45900],
+    };
+    for (const [n, [estimate, cap]] of Object.entries(pinned)) {
+      expect([estimateTokens(Number(n)), tokenCap(Number(n))]).toEqual([estimate, cap]);
+    }
+  });
+
+  it('treats any other error code as failed, before the reference checks', () => {
+    expect(topicOutcome({ error_code: 'stale_revision', result_reference: 'collection:r' })).toBe('failed');
+    expect(topicOutcome({ error_code: 'document_evidence_unavailable', result_reference: 'settled:r' })).toBe('failed');
+  });
+
   it('derives the topic outcome from the reason code and result reference', () => {
     expect(topicOutcome({ error_code: 'consent_required', result_reference: null })).toBe('consent_required');
     expect(topicOutcome({ error_code: 'no_new_data', result_reference: 'settled:r' })).toBe('no_new_data');

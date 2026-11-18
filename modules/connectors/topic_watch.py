@@ -184,7 +184,8 @@ async def update_topic_watch_source(
     """Rewrite a watch Source's configuration, re-activate it and keep its schedule disabled.
 
     Raises ``NotFoundError`` for a missing or foreign Source, ``ConflictError`` with
-    ``topic_watch_source_archived`` when the Source was archived outside the task, and
+    ``topic_watch_source_archived`` when the Source was archived outside the task,
+    ``topic_watch_source_inactive`` when it is paused or otherwise not active, and
     ``ConflictError`` as in provision otherwise.
     Flush-only; the caller commits.
     """
@@ -193,8 +194,10 @@ async def update_topic_watch_source(
     )
     if source is None or source.provider != "topic_watch":
         raise NotFoundError("Source not found")
-    if source.status != "active":
+    if source.status == "archived":
         raise ConflictError("topic_watch_source_archived")
+    if source.status != "active":
+        raise ConflictError("topic_watch_source_inactive")
     await _save_and_activate(
         session, source, config, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )

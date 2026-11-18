@@ -618,10 +618,19 @@ async def deactivate_source(
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    A Topic watch Source is refused (409 ``managed_by_scheduled_task``) before anything is paused.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
+    # A watch Source is paused only through its Scheduled task (pausing it here would stall the task).
+    connector_owner.refuse_managed_source(
+        (
+            await _source(
+                session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+            )
+        ).provider
+    )
     source = await sources.pause_source_for_connector(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )

@@ -53,6 +53,8 @@ class World:
         self.published: list[Any] = []
         self.closed: list[tuple[Any, str]] = []
         self.raise_missing = False
+        self.until: datetime | None = None
+        self.read_until: Any = "unset"
 
         async def get_request(
             _s: Any, _scope: Any, source_id: Any, request_id: Any, **_k: Any
@@ -61,8 +63,11 @@ class World:
                 raise NotFoundError("gone")
             return SimpleNamespace(status=self.status, ingestion_run_id=uuid4())
 
-        async def recent(_s: Any, source_id: Any, since: Any, limit: int, **_k: Any) -> list[Any]:
+        async def recent(
+            _s: Any, source_id: Any, since: Any, limit: int, *, until: Any = None, **_k: Any
+        ) -> list[Any]:
             assert limit == 5 and since == NOW
+            self.read_until = until
             return self.docs
 
         async def runs(_s: Any, source_id: Any, **_k: Any) -> Any:
@@ -78,13 +83,13 @@ class World:
         monkeypatch.setattr(settle.connectors, "get_collection_request", get_request)
         monkeypatch.setattr(settle.documents, "list_recent_source_documents", recent)
         monkeypatch.setattr(settle.ingestion, "list_source_runs", runs)
-        monkeypatch.setattr(settle, "_run_stats", self._stats)
+        monkeypatch.setattr(settle, "_receipt", self._receipt)
         monkeypatch.setattr(settle, "_publish", publish)
         monkeypatch.setattr(settle, "_close", close)
         monkeypatch.setattr(settle, "_read_session", _FakeSession)
 
-    async def _stats(self, *_a: Any, **_k: Any) -> dict[str, Any] | None:
-        return self.stats
+    async def _receipt(self, *_a: Any, **_k: Any) -> tuple[dict[str, Any] | None, datetime | None]:
+        return self.stats, self.until
 
 
 async def _noop() -> None:
@@ -177,3 +182,23 @@ def test_post_text_is_bounded_and_single_line_items() -> None:
     post = settle.build_post(_cand(), docs, None)
     assert post.content == "- A B: S [1]"
     assert post.metadata["coverage"] == "complete" and post.metadata["stats"] == {}
+
+
+@pytest.mark.asyncio
+async def test_document_read_is_bounded_by_the_run_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Documents of a later run must not leak into this run's post."""
+    w = World(monkeypatch)
+    w.docs = [_doc(1)]
+    w.until = NOW
+    await _run(_cand())
+    assert w.read_until == NOW
+
+
+def test_post_carries_the_task_id_seen_count_and_inert_titles() -> None:
+    cand = _cand()
+    docs = [_doc(1, title="Read www.evil.example/x now https://evil.example/y")]
+    post = settle.build_post(cand, docs, {"seen": 4, "items": 1})
+    assert post.metadata["automation_id"] == str(cand.automation_id)
+    assert post.metadata["stats"]["seen"] == 4
+    assert "evil" not in post.content and "http" not in post.content
+    assert post.metadata["items"][0]["title"].startswith("Read www.evil.example")

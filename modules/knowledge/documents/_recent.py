@@ -39,10 +39,11 @@ async def list_recent_source_documents(
     since: datetime,
     limit: int,
     *,
+    until: datetime | None = None,
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> list[DocumentBrief]:
-    """Return up to ``limit`` (1..50) Documents of ``source_id`` created at or after ``since``, newest first.
+    """Return up to ``limit`` (1..50) Documents of ``source_id`` created at or after ``since`` (and at or before ``until`` when given), newest first.
 
     Unlike ``list_documents`` this accepts the owner's ``InternalJobScope`` so background sweeps can
     read: it admits the scope as the owner (members and foreign sources see nothing), applies the
@@ -66,6 +67,7 @@ async def list_recent_source_documents(
         .where(
             Document.source_id == source_id,
             Document.created_at >= since,
+            *([Document.created_at <= until] if until is not None else []),
             *_document_scope(scope),
         )
         .order_by(desc(Document.created_at), desc(Document.id))
