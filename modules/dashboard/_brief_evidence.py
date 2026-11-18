@@ -56,7 +56,7 @@ def _validate_fact_group(
     full (document, version, chunk, source) tuple without repeats or be one independent marker row
     (never for stories). A story needs at least one real support row. Observation kinds
     (``MARKER_FACT_KINDS``) must be exactly one marker row with a 1..64 character id (not necessarily
-    a UUID). Mutates the three accumulators; returns False on the first violation.
+    a UUID) and a non-null ``source_id`` that joins ``captured_sources``. Mutates the three accumulators; returns False on the first violation.
     """
     exemplar = captured[0]
     if (
@@ -72,15 +72,20 @@ def _validate_fact_group(
     ):
         return False
     if exemplar.fact_kind in MARKER_FACT_KINDS:
-        # One marker row; the capture is never document-backed, so it adds no document identity.
-        return (
+        # One marker row; never document-backed, so it adds no document identity. Its source is
+        # captured whether or not the final prose cites the fact: the fact was in the prompt and can
+        # shape the text, so deleting/pausing/local_only-ing its source must withhold the brief.
+        if not (
             len(captured) == 1
             and 0 < len(exemplar.fact_id) <= MAX_FACT_ID
             and exemplar.document_id is None
             and exemplar.document_version_id is None
             and exemplar.chunk_id is None
-            and exemplar.source_id is None
-        )
+            and exemplar.source_id is not None
+        ):
+            return False
+        captured_sources.add(exemplar.source_id)
+        return True
     try:
         if str(UUID(exemplar.fact_id)) != exemplar.fact_id:
             return False
@@ -200,8 +205,7 @@ def _validate_citations(
 
     Pure. Each citation must have exactly the stored keys, a unique known ref whose kind/id match
     the captured fact, string title, unique canonical UUID source ids and exactly the captured
-    source set. Observation-kind markers carry no captured rows, so their citation must name exactly
-    one source (checked for eligibility later by ``_captured_inputs_match``). Returns ``None`` on any
+    source set (a marker row's single ``source_id`` included). Returns ``None`` on any
     mismatch.
     """
     citations = row.citations
@@ -236,10 +240,8 @@ def _validate_citations(
         captured_source_ids = sorted(
             {str(item.source_id) for item in grouped[reference] if item.source_id is not None}
         )
-        if grouped[reference][0].fact_kind in MARKER_FACT_KINDS:
-            if len(citation["source_ids"]) != 1:
-                return None
-        elif sorted(set(citation["source_ids"])) != captured_source_ids:
+        # A marker row's single source_id is captured, so one comparison covers every kind.
+        if sorted(set(citation["source_ids"])) != captured_source_ids:
             return None
     return citation_by_ref
 
@@ -418,11 +420,8 @@ async def _captured_inputs_match(
     citation_by_ref = _validate_citations(row, grouped)
     if citation_by_ref is None:
         return False
-    # Observation markers have no evidence rows, so their cited sources join the eligibility check:
-    # deleting a source or making it local_only withholds the brief.
-    for reference, citation in citation_by_ref.items():
-        if grouped[reference][0].fact_kind in MARKER_FACT_KINDS:
-            captured_sources.update(UUID(value) for value in citation["source_ids"])
+    # Every marker row's source (cited or not) is already in captured_sources via
+    # _validate_fact_group, so a deleted/paused/local_only observation source withholds the brief.
     if not await _captured_support_eligible(
         session,
         captured_sources,

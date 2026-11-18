@@ -19,7 +19,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
-from sqlalchemy import Select, delete, func, select, text
+from sqlalchemy import Select, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,9 @@ from core.realtime import commit_with_replay, make_dashboard_change
 from core.workspaces.admission import actor_id as _actor
 from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, Scope
+from modules.dashboard._brief_evidence import (
+    MARKER_FACT_KINDS as MARKER_FACT_KINDS,
+)
 from modules.dashboard._brief_evidence import (
     MAX_BRIEF_EVIDENCE as MAX_BRIEF_EVIDENCE,
 )
@@ -385,6 +388,10 @@ async def _lock_fact_dependencies(
     """
     support_rows = [support for fact in facts for support in fact["_supports"]]
     source_ids = {UUID(item["source_id"]) for item in support_rows}
+    # Observation markers have no documents, but their sources are fenced exactly like legacy ones.
+    for fact in facts:
+        if fact["kind"] in MARKER_FACT_KINDS:
+            source_ids.update(UUID(value) for value in fact["source_ids"])
     document_ids = {UUID(item["document_id"]) for item in support_rows}
     if len({_evidence_identity(item) for item in support_rows}) > MAX_BRIEF_EVIDENCE:
         raise BriefUnavailable("Daily brief evidence exceeds the 100-reference capture limit")
@@ -504,7 +511,11 @@ async def prelock_captured_inputs(
                 )
                 .where(
                     DailyBriefEvidence.brief_id.in_(ids),
-                    DailyBriefEvidence.document_id.is_not(None),
+                    # Marker rows have a source but no document; their sources are locked too.
+                    or_(
+                        DailyBriefEvidence.document_id.is_not(None),
+                        DailyBriefEvidence.source_id.is_not(None),
+                    ),
                 )
                 .distinct()
             )
@@ -995,6 +1006,13 @@ def _evidence_rows_for_fact(
         "fact_id": fact["id"],
         "fact_hash": fact["_fact_hash"],
     }
+    if fact["kind"] in MARKER_FACT_KINDS:
+        # Observation markers carry exactly one source; persisting it lets every read re-gate it even
+        # when the prose never cites the fact. Anything else is a capture bug: fail closed.
+        if len(fact["source_ids"]) != 1:
+            raise BriefUnavailable("An observation fact must carry exactly one source")
+        source_id = UUID(fact["source_ids"][0])
+        return [DailyBriefEvidence(**common, support_index=0, source_id=source_id)]
     if fact["_lineage_status"] == "independent":
         return [DailyBriefEvidence(**common, support_index=0)]
     return [

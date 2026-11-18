@@ -106,27 +106,65 @@ def test_fact_id_stays_within_column_for_long_metric_and_symbol() -> None:
     assert DailyBriefEvidence.__table__.c.fact_id.type.length == ev.MAX_FACT_ID  # type: ignore[attr-defined]
 
 
-@pytest.mark.asyncio
-async def test_marker_sources_join_the_eligibility_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    fact = _fact("markets")
-    grouped = _grouped([fact])
-    seen: dict[str, Any] = {}
+def test_marker_row_carries_its_source_id() -> None:
+    row = briefs._evidence_rows_for_fact(BRIEF_ID, 1, _fact("weather"))[0]
+    assert str(row.source_id) == SOURCE and row.document_id is None
+    bad = {**_fact("weather"), "source_ids": [SOURCE, str(uuid4())]}
+    with pytest.raises(briefs.BriefUnavailable):
+        briefs._evidence_rows_for_fact(BRIEF_ID, 1, bad)
 
-    async def load(*_a: Any, **_k: Any) -> Any:
-        return grouped, set(), set()
+
+def test_marker_group_requires_source_and_captures_it() -> None:
+    row = briefs._evidence_rows_for_fact(BRIEF_ID, 1, _fact("markets"))[0]
+    sources: set[Any] = set()
+    assert ev._validate_fact_group([row], set(), sources, set())
+    assert {str(value) for value in sources} == {SOURCE}
+    row.source_id = None
+    assert not ev._validate_fact_group([row], set(), set(), set())
+
+
+def test_tuple_check_allows_marker_source_only_for_marker_kinds() -> None:
+    text = next(
+        str(c.sqltext)
+        for c in DailyBriefEvidence.__table__.constraints  # type: ignore[attr-defined]
+        if getattr(c, "name", None) == "ck_daily_brief_evidence_document_tuple"
+    )
+    marker = (
+        "source_id IS NOT NULL AND fact_kind IN ('markets','weather','hazards','source_health')"
+    )
+    assert marker in text
+    assert "'tasks'" not in text
+
+
+@pytest.mark.asyncio
+async def test_uncited_marker_source_withholds_brief(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An uncited marker fact still re-gates its source: ineligible -> brief withheld."""
+    cited, uncited = _fact("markets"), _fact("weather")
+    other = str(uuid4())
+    uncited["source_ids"] = [other]
+    uncited["id"] = f"{other}:weather:"
+    grouped = _grouped([cited, uncited])
+    seen: dict[str, Any] = {}
 
     async def eligible(_s: Any, sources: set[Any], documents: set[Any], **_k: Any) -> bool:
         seen["sources"] = {str(value) for value in sources}
         return False
+
+    async def load(*_a: Any, **_k: Any) -> Any:
+        sources: set[Any] = set()
+        for rows in grouped.values():
+            assert ev._validate_fact_group(rows, set(), sources, set())
+        return grouped, sources, set()
 
     monkeypatch.setattr(ev, "_load_evidence_groups", load)
     monkeypatch.setattr(ev, "_captured_support_eligible", eligible)
     row = SimpleNamespace(
         evidence_capture_version=1,
         evidence_capture_status="captured",
-        evidence_fact_count=1,
+        evidence_fact_count=2,
         status="current",
-        citations=[{"ref": 1, **{k: fact[k] for k in ("kind", "id", "title", "source_ids")}}],
+        # Only the first fact is cited; the second still shaped the prompt.
+        citations=[{"ref": 1, **{k: cited[k] for k in ("kind", "id", "title", "source_ids")}}],
     )
     ok = await ev._captured_inputs_match(
         None,  # type: ignore[arg-type]
@@ -135,4 +173,4 @@ async def test_marker_sources_join_the_eligibility_check(monkeypatch: pytest.Mon
         multi_workspace_enabled=False,
         lock=False,
     )
-    assert ok is False and seen["sources"] == {SOURCE}
+    assert ok is False and seen["sources"] == {SOURCE, other}
