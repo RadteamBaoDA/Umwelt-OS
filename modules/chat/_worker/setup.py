@@ -39,6 +39,7 @@ from modules.chat._worker.base import (
     _admit_job,
     _day_scope,
     _lock_live_response,
+    _pin_task_thread_scope,
     is_run_cancelled,
     logger,
 )
@@ -179,18 +180,18 @@ async def _load_turn_inputs(session: AsyncSession, c: _RunCtx, claimed: _Claimed
     req_params = dict(claimed.context_req or {})
     # A day conversation scopes retrieval to that local day (message context first, then the
     # immutable conversation metadata); malformed values are ignored rather than trusted.
-    day_scope = _day_scope(
-        req_params,
-        await session.scalar(
-            select(Conversation.metadata_json).where(Conversation.id == claimed.conversation_id)
-        ),
+    conversation_metadata = await session.scalar(
+        select(Conversation.metadata_json).where(Conversation.id == claimed.conversation_id)
     )
+    day_scope = _day_scope(req_params, conversation_metadata)
+    # Scheduled-task threads ignore the client's source_scope: the stored brief scope is the only allow-list.
+    task_thread = _pin_task_thread_scope(req_params, conversation_metadata)
     if day_scope is not None:
         req_params["date_context"], req_params["timezone"] = day_scope
     answer_request = AnswerContextRequest(
         query=user_prompt,
         source_scope=req_params.get("source_scope", []),
-        source_scope_enforced=is_gadget_turn(req_params),
+        source_scope_enforced=task_thread or is_gadget_turn(req_params),
         entity_ids=req_params.get("entity_ids", []),
         date_context=req_params.get("date_context"),
         timezone=req_params.get("timezone"),

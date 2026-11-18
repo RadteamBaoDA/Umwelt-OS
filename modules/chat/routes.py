@@ -260,11 +260,13 @@ async def list_conversations(
                     Conversation.workspace_id == scope.workspace_id,
                     Conversation.archived == archived,
                 )
-                # Per-rule automation threads stay reachable from automation run detail, not the Chat list.
+                # Per-rule automation threads stay reachable from automation run detail, not the Chat list;
+                # scheduled-task threads (metadata key ``scheduled_task``) are the exception and are listed.
                 .where(
                     or_(
                         Conversation.context_kind.is_(None),
                         Conversation.context_kind != "automation",
+                        Conversation.metadata_json.has_key("scheduled_task"),
                     )
                 )
                 .where(or_(Conversation.ephemeral.is_(False), Conversation.expires_at > now))

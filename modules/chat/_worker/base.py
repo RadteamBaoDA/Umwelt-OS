@@ -215,6 +215,29 @@ def _day_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> tupl
     return None
 
 
+def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> bool:
+    """Pin a scheduled-task thread's retrieval scope to the server-stored one; True when it applied.
+
+    A thread whose metadata has ``scheduled_task`` may only retrieve from the sources its posted briefs
+    used (``task_source_scope``, written by the scheduler, never by the client). The client-supplied
+    ``source_scope`` is overwritten in ``context`` so it cannot widen the scope, and every downstream reader
+    (retrieval and ``query_collected_data``) sees the same list. A missing or empty list means "no sources".
+    Malformed entries are dropped. Plain conversations are untouched and return False.
+    """
+    meta = metadata or {}
+    if "scheduled_task" not in meta:
+        return False
+    raw = meta.get("task_source_scope")
+    pinned: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            pinned.append(str(UUID(str(item))))
+        except ValueError:
+            continue
+    context["source_scope"] = pinned
+    return True
+
+
 async def is_run_cancelled(response_id: UUID, redis: Redis) -> bool:
     """Check whether a cancellation request has been registered in Redis for this response.
 
