@@ -76,6 +76,38 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
 }
 
 
+# Task-managed providers have no catalog entry (owners never add them from Sources), so their content scope is fixed
+# here. Topic watch items belong to the topic, keep rule, languages and site lists; the item count, token budget and
+# model role tune a run, not what it is about, so changing them must not hide items already collected.
+_TASK_MANAGED_SCOPE_FIELDS: dict[str, tuple[str, ...]] = {
+    "topic_watch": (
+        "topic_watch_topic",
+        "topic_watch_keep_rule",
+        "topic_watch_languages",
+        "topic_watch_include_sites",
+        "topic_watch_exclude_sites",
+    ),
+}
+
+
+def _scope_fields(provider_id: str | None) -> tuple[str, ...] | None:
+    """Return the scope fields of a supported provider, or None so the caller fails closed.
+
+    Catalog providers must be available, implemented or credential-gated; task-managed providers
+    use their fixed fields. Unknown or unavailable providers have no verifiable scope.
+    """
+    from modules.connectors.catalog import get_catalog_entry
+
+    if provider_id is None:
+        return None
+    entry = get_catalog_entry(provider_id)
+    if entry is None:
+        return _TASK_MANAGED_SCOPE_FIELDS.get(provider_id)
+    if entry.availability not in {"available", "implemented", "requires_credentials"}:
+        return None
+    return entry.scope_fields
+
+
 def _scope_values(
     provider_id: str, scope_fields: Sequence[str], configuration: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -112,7 +144,6 @@ async def get_current_provider_scope(
     The result contains no connector configuration values. Unsupported providers,
     inactive sources, invalid config, and stale generations fail closed as None.
     """
-    from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
 
     fence = await sources.get_source_fence(
@@ -126,12 +157,8 @@ async def get_current_provider_scope(
     if source is None or source.status != fence.status or source.generation != fence.generation:
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
-    entry = get_catalog_entry(provider_id) if provider_id else None
-    if (
-        provider_id is None
-        or entry is None
-        or entry.availability not in {"available", "implemented", "requires_credentials"}
-    ):
+    scope_fields = _scope_fields(provider_id)
+    if provider_id is None or scope_fields is None:
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
@@ -139,7 +166,7 @@ async def get_current_provider_scope(
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
-    values = _scope_values(provider_id, entry.scope_fields, configuration)
+    values = _scope_values(provider_id, scope_fields, configuration)
     if values is None:
         return None
     encoded = json.dumps(
@@ -169,7 +196,6 @@ async def export_provider_scope(
     pause/archive alone does not erase portable owner evidence; changed or unsupported scope fails closed.
     Credential bytes and provider configuration are never returned.
     """
-    from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
     from modules.sources.public import SourceExportFence
 
@@ -192,12 +218,8 @@ async def export_provider_scope(
     if source is None or source.generation != expected_source_generation:
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
-    entry = get_catalog_entry(provider_id) if provider_id else None
-    if (
-        provider_id is None
-        or entry is None
-        or entry.availability not in {"available", "implemented", "requires_credentials"}
-    ):
+    scope_fields = _scope_fields(provider_id)
+    if provider_id is None or scope_fields is None:
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
@@ -205,7 +227,7 @@ async def export_provider_scope(
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
-    values = _scope_values(provider_id, entry.scope_fields, configuration)
+    values = _scope_values(provider_id, scope_fields, configuration)
     if values is None:
         return None
     encoded = json.dumps(
