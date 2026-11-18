@@ -13,3 +13,4 @@ export {
   previewHighlightRules,
 } from './api';
 export { formatRelativeTime } from './gadgets/relative-time';
+export { useReportGadgetFreshness } from './gadget-freshness';

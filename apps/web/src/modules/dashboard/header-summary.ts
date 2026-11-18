@@ -1,6 +1,6 @@
 /** Translator subset the summary needs: a key plus optional ICU values. */
 type Translate = (
-  key: 'summaryUpdated' | 'summarySources' | 'summaryLiveEvents' | 'staleSources.summary',
+  key: 'summaryUpdated' | 'summarySources' | 'summaryLiveEvents' | 'summaryGadgets' | 'staleSources.summary',
   values?: Record<string, string | number>,
 ) => string;
 
@@ -10,11 +10,13 @@ export interface TerminalSummaryCounts {
   sources: number;
   /** Events currently shown by the Overview live map; null while no live map is mounted. */
   liveEvents: number | null;
+  /** Gadgets on the active non-Overview group; null/omitted on Overview. */
+  gadgets?: number | null;
 }
 
 /**
  * Joins the header summary fragments with " · ": "Updated {age}", then (terminal skin only, when `counts` is given)
- * "{n} sources" and "{n} live events", then the failing-sources fragment. A fragment whose data is unknown or zero
+ * "{n} sources", "{n} live events" and "{n} gadgets", then the failing-sources fragment. A fragment whose data is unknown or zero
  * (no freshness time, no bound sources, no live map) is omitted.
  *
  * Pure: formatting only, no I/O.
@@ -35,6 +37,7 @@ export function buildHeaderSummary(
     updatedAge !== null ? t('summaryUpdated', { time: updatedAge }) : null,
     counts && counts.sources > 0 ? t('summarySources', { count: counts.sources }) : null,
     counts && counts.liveEvents !== null ? t('summaryLiveEvents', { count: counts.liveEvents }) : null,
+    counts && counts.gadgets != null ? t('summaryGadgets', { count: counts.gadgets }) : null,
     staleCount > 0 ? t('staleSources.summary', { count: staleCount }) : null,
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : null;

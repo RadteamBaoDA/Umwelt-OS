@@ -19,4 +19,10 @@ describe('buildHeaderSummary', () => {
     expect(buildHeaderSummary(t, null, 0, { sources: 0, liveEvents: null })).toBeNull();
     expect(buildHeaderSummary(t, null, 0, { sources: 0, liveEvents: 0 })).toBe('summaryLiveEvents:0');
   });
+
+  it('adds the gadget count for non-Overview groups after the other counts', () => {
+    expect(buildHeaderSummary(t, '9 min ago', 0, { sources: 0, liveEvents: null, gadgets: 17 })).toBe(
+      'summaryUpdated:9 min ago · summaryGadgets:17',
+    );
+  });
 });

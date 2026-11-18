@@ -2,11 +2,12 @@
 
 import { AlertTriangle, GripHorizontal, Info, Maximize2, MoreVertical, Settings, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import React, { useCallback, useMemo, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { GadgetSlotProvider, type GadgetSlotHosts } from '@/components/gadget-title-slot';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { collectAndWait, collectErrorKey, sourceKeys } from '@/modules/sources';
@@ -202,7 +203,7 @@ function useGadgetFooter() {
   // Terminal title-bar meta: narrow relative time ("5 min. ago") so the muted text never needs a mid-word ellipsis.
   const shortAgo = Number.isFinite(collectedMs) ? formatAgo(collectedMs, display.locale, 'narrow') : null;
   const shortText = [attribution, shortAgo].filter(Boolean).join(' · ');
-  return { reportFreshness, footerText, shortText, freshnessTitle, collectedAt };
+  return { reportFreshness, footerText, shortText, freshnessTitle, collectedAt, footNote: attribution, freshnessLabel };
 }
 
 /**
@@ -228,7 +229,7 @@ function SeverityBadge({ severity }: { severity: 'info' | 'warning' | 'critical'
   return (
     <Badge
       variant={severity === 'critical' ? 'destructive' : 'outline'}
-      className={`shrink-0 text-xs font-semibold ${severity === 'info' ? 'text-muted-foreground' : ''}`}
+      className={`gadget-severity shrink-0 text-xs font-semibold ${severity === 'info' ? 'text-muted-foreground' : ''}`}
     >
       {severity === 'critical' ? t('severity.critical') : severity === 'warning' ? t('severity.warning') : t('severity.info')}
     </Badge>
@@ -559,6 +560,75 @@ function ExpandedDialog({
   );
 }
 
+/**
+ * Renderer subtree with the frame's freshness reporter and slot hosts. `slotHosts` is undefined while expanded: the
+ * dialog has no title-bar or foot slot, so toolbars and notes render in place there. the planned-gadget body shows when
+ * the gadget supplies no renderer children.
+ */
+function RendererSubtree(p: {
+  report: (collectedAt: string | null, attribution?: string | null) => void;
+  slotHosts: GadgetSlotHosts | undefined;
+  instance: GadgetInstance;
+  children: React.ReactNode;
+}) {
+  return (
+    <GadgetFreshnessProvider report={p.report}>
+      <GadgetSlotProvider value={p.slotHosts}>{p.children ? p.children : <PlannedGadgetBody instance={p.instance} />}</GadgetSlotProvider>
+    </GadgetFreshnessProvider>
+  );
+}
+
+/** Title-bar and foot-note host elements for terminal slot portals; each is null until its element mounts. */
+function useSlotHosts() {
+  const [title, setSlotHost] = useState<HTMLElement | null>(null);
+  const [foot, setFootHost] = useState<HTMLElement | null>(null);
+  const slotHosts = useMemo(() => ({ title, foot }), [title, foot]);
+  return { slotHosts, setSlotHost, setFootHost };
+}
+
+/** Renderers whose design shows a pane foot (attribution/note left, "updated ..." right) in the terminal skin. */
+const FOOT_RENDERERS: ReadonlySet<string> = new Set([
+  'news_feed',
+  'feed',
+  'table_panel',
+  'finance_chart',
+  'metrics_chart',
+  'provider_observation',
+]);
+
+/**
+ * Terminal-only pane foot (demo `.pane-foot`): the renderer's attribution plus any note portaled via `FootBarSlot` on
+ * the left, "updated ..." on the right. Decorative (aria-hidden): the same facts stay in the visually hidden provenance
+ * footer. Hidden in the default skin and when the renderer has nothing to report.
+ *
+ * @param props.attachNote Callback ref of the note host that `FootBarSlot` portals into.
+ * @param props.renderer Renderer id; only those in `FOOT_RENDERERS` (and with something to show) get a foot.
+ * @param props.note Attribution text reported by the renderer, or null.
+ * @param props.updated Localized "updated ..." label, or null while freshness is unknown.
+ */
+function TerminalFoot({
+  attachNote,
+  renderer,
+  note,
+  updated,
+}: {
+  attachNote: (el: HTMLElement | null) => void;
+  renderer: string;
+  note: string | null;
+  updated: string | null;
+}) {
+  if (!FOOT_RENDERERS.has(renderer) || !(note || updated)) return null;
+  return (
+    <div className="gadget-foot hidden" aria-hidden="true">
+      <span className="gadget-foot-note">
+        {note}
+        <span ref={attachNote} />
+      </span>
+      <span className="gadget-foot-time">{updated}</span>
+    </div>
+  );
+}
+
 /** Provenance footer: a fixed one-line row inside the flex column; hidden when freshness is unknown. */
 function ProvenanceFooter({ text, title }: { text: string; title: string | undefined }) {
   if (!text) return null;
@@ -628,6 +698,8 @@ function GadgetHeader(p: {
   expandRef: React.RefObject<HTMLButtonElement | null>;
   onConfigure: GadgetFrameProps['onConfigure'];
   onRemove: GadgetFrameProps['onRemove'];
+  /** Callback ref of the terminal title-bar slot that gadget toolbars portal into. */
+  attachSlot: (el: HTMLElement | null) => void;
 }) {
   const { headerRef, titleId, displayTitle, instance, isEditMode, unreadCount, ruleMatch, sourceHealth, metaText } = p;
   // Terminal title-bar dot: failing sources read danger, stale ones warning, otherwise healthy (accent).
@@ -636,7 +708,7 @@ function GadgetHeader(p: {
     : sourceHealth?.some((tick) => tick.status === 'stale')
       ? 'warn'
       : 'ok';
-  const { onDragHandlePointerDown, onAsk, onExpand, expandRef, onConfigure, onRemove } = p;
+  const { onDragHandlePointerDown, onAsk, onExpand, expandRef, onConfigure, onRemove, attachSlot } = p;
   return (
     <header
       ref={headerRef}
@@ -665,6 +737,8 @@ function GadgetHeader(p: {
         )}
       </div>
       <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} sourceHealth={sourceHealth} />
+      {/* Terminal only: gadget toolbars portal here (components/gadget-title-slot.tsx); hidden otherwise. */}
+      <div ref={attachSlot} className="gadget-head-slot hidden" onPointerDown={(event) => event.stopPropagation()} />
       <HeaderActions
         isEditMode={isEditMode}
         onAsk={onAsk}
@@ -710,21 +784,20 @@ export function GadgetFrame({
   const inlineScrollRef = useRef<HTMLDivElement>(null);
   const expandTriggerRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const { slotHosts, setSlotHost, setFootHost } = useSlotHosts();
   const titleId = useId();
   const definition = instance.definition;
   const bodyFloor = getGadgetReadingBodyFloor(definition.renderer);
   const { rendererHost, attachExpandedHost } = useRendererHost(isExpanded, { inlineHostRef, inlineScrollRef, expandedHostRef });
   useHeaderMeasurement(headerRef, onHeaderMeasured);
-  const { reportFreshness, footerText, shortText, freshnessTitle, collectedAt } = useGadgetFooter();
+  const { reportFreshness, footerText, shortText, freshnessTitle, collectedAt, footNote, freshnessLabel } = useGadgetFooter();
   const metaText = useTerminalMeta(instance, shortText);
   // Each new collectedAt replays the data-refresh reveal on the body; the element itself is never remounted.
   useGadgetReveal(inlineScrollRef, collectedAt);
   const displayTitle = useDisplayTitle(instance);
 
-  /** Toggles expanded fullscreen modal view without modifying underlying grid layout. */
-  const toggleExpanded = useCallback(() => {
-    setIsExpanded((prev) => !prev);
-  }, []);
+  // Toggles the expanded fullscreen modal view without modifying the underlying grid layout.
+  const toggleExpanded = useCallback(() => setIsExpanded((prev) => !prev), []);
   const handleAskWithUmwelt = useAskWithUmwelt(instance, displayTitle);
 
   return (
@@ -753,6 +826,7 @@ export function GadgetFrame({
           expandRef={expandTriggerRef}
           onConfigure={onConfigure}
           onRemove={onRemove}
+          attachSlot={setSlotHost}
         />
 
         <div ref={inlineScrollRef} className="dashboard-gadget-body @container/gadget min-h-0 flex-1 overflow-auto overscroll-contain">
@@ -768,6 +842,7 @@ export function GadgetFrame({
           />
         </div>
         <ProvenanceFooter text={footerText} title={freshnessTitle} />
+        <TerminalFoot attachNote={setFootHost} renderer={definition.renderer} note={footNote} updated={freshnessLabel} />
       </Card>
 
       {/* Expanded Modal View (preserves filters, scroll position and local state) */}
@@ -781,9 +856,9 @@ export function GadgetFrame({
       {/* Supplies exactly one renderer subtree to the stable host; it is never invoked in two surfaces. */}
       {rendererHost &&
         createPortal(
-          <GadgetFreshnessProvider report={reportFreshness}>
-            {children ? children : <PlannedGadgetBody instance={instance} />}
-          </GadgetFreshnessProvider>,
+          <RendererSubtree report={reportFreshness} slotHosts={isExpanded ? undefined : slotHosts} instance={instance}>
+            {children}
+          </RendererSubtree>,
           rendererHost,
         )}
     </>

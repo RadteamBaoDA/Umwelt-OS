@@ -434,6 +434,68 @@ html[data-skin='terminal'] .weather-term-attr {
   }
 }
 
+/* The highlight severity badge duplicates the HIT rows (and their rule levels) in the terminal title bar; its text stays in the DOM. */
+html[data-skin='terminal'] .gadget-header .gadget-severity {
+  display: none;
+}
+
+/* Title-bar slot (components/gadget-title-slot.tsx): gadget toolbars (view toggle, refresh, unread only, select) sit at
+   the right of the pane title, before the hover actions. The title/meta (flex-1, min-w-0) give way first; the slot
+   only ever clips its own overflow. With a populated slot the hover actions stay in flow so they never cover it. */
+html[data-skin='terminal'] .gadget-head-slot {
+  display: flex;
+  min-width: 0;
+  flex-shrink: 1;
+  align-items: center;
+  overflow: hidden;
+}
+html[data-skin='terminal'] .gadget-head-slot:empty {
+  display: none;
+}
+html[data-skin='terminal'] .gadget-head-slot .gadget-toolbar {
+  gap: 4px;
+}
+html[data-skin='terminal'] .gadget-head-slot [data-slot='button']:not([data-size='icon']) {
+  height: 24px;
+  padding-inline: 6px;
+  font-size: 12px;
+}
+@media (pointer: fine) {
+  html[data-skin='terminal'] .gadget-header:has(.gadget-head-slot > *) .gadget-head-actions:not([data-edit]) {
+    position: static;
+    transform: none;
+  }
+}
+
+/* The embedded story gadget's slim meta row is empty once its toolbar and note moved into the title bar and foot. */
+html[data-skin='terminal'] .story-meta-row {
+  display: none;
+}
+html[data-skin='terminal'] .story-meta-row:has(> :not(:empty)) {
+  display: flex;
+}
+
+/* Pane foot (gadget-frame TerminalFoot): note left, "updated ..." right (demo `.pane-foot`). */
+html[data-skin='terminal'] .gadget-foot {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .gadget-foot-time {
+  text-transform: lowercase; /* design: "updated 2 min ago" */
+}
+html[data-skin='terminal'] .gadget-foot-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Source chips (feed-source-tabs.tsx): one `[x] name` / `[ ] name` chip per source instead of underlined tabs
    (developer-theme `.chips`). The active chip is accent ink; the strip never draws the tab underline. */
 html[data-skin='terminal'] .feed-source-tabs {
@@ -518,10 +580,6 @@ html[data-skin='terminal'] .msg-body:hover {
 }
 
 /* Record table (table-panel.tsx): TITLE / SOURCE / PUBLISHED columns with an uppercase muted header (demo `table.data`). */
-html[data-skin='terminal'] .tbl-toolbar {
-  display: flex;
-  justify-content: flex-end;
-}
 html[data-skin='terminal'] .tbl-list {
   --tbl-cols: minmax(0, 1fr) 12ch 14ch;
   margin: 0;
@@ -602,6 +660,9 @@ html[data-skin='terminal'] .task-row-meta {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
+}
+html[data-skin='terminal'] .task-row-meta[data-due='overdue'] {
+  color: var(--danger);
 }
 html[data-skin='terminal'] .task-row:has([data-state='checked']) .task-row-title {
   color: var(--muted);

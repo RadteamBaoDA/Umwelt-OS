@@ -140,6 +140,7 @@
   "summaryUpdated": "Updated {time}",
   "summarySources": "{count, plural, one {# source} other {# sources}}",
   "summaryLiveEvents": "{count, plural, one {# live event} other {# live events}}",
+  "summaryGadgets": "{count, plural, one {# gadget} other {# gadgets}}",
   "dismissNotice": "Dismiss notice",
   "setup.title": "Set up your first brief",
   "setup.desc": "Three quick steps and your day appears here.",

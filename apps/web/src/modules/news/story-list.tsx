@@ -8,6 +8,7 @@ import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { FeedImage } from '@/components/feed-image';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
+import { FootBarSlot, TitleBarSlot } from '@/components/gadget-title-slot';
 import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
 import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Button } from '@/components/ui/button';
@@ -22,7 +23,7 @@ import { TranslationNote } from '@/modules/translations';
 import { useContentTranslation } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
-import { formatRelativeTime } from '@/modules/dashboard/public-api';
+import { formatRelativeTime, useReportGadgetFreshness } from '@/modules/dashboard/public-api';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -251,13 +252,17 @@ function StoryListChrome({ vm }: { vm: StoryListVm }) {
   const { embedded, actionsHost, translation, incompleteNotice, showOriginal, setShowOriginal, refreshButton, pageActions } = vm;
   return embedded ? (
     // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
-    <div className="flex h-6 shrink-0 items-center justify-between gap-2">
-      <div className="min-w-0 truncate">{incompleteNotice}</div>
-      <div className="flex items-center gap-1">
-        {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
-        <FeedViewToggle view={vm.view} setView={vm.setView} />
-        {refreshButton}
+    <div className="story-meta-row flex h-6 shrink-0 items-center justify-between gap-2">
+      <div className="min-w-0 truncate">
+        <FootBarSlot>{incompleteNotice}</FootBarSlot>
       </div>
+      <TitleBarSlot>
+        <div className="flex items-center gap-1">
+          {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+          <FeedViewToggle view={vm.view} setView={vm.setView} />
+          {refreshButton}
+        </div>
+      </TitleBarSlot>
     </div>
   ) : actionsHost ? (
     createPortal(pageActions, actionsHost)
@@ -529,6 +534,8 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   // Only the stories currently loaded are requested for translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
+  // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
+  useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
   const shown = (story: Story) => (showOriginal ? undefined : (translation.results.get(story.id)?.translation ?? undefined));

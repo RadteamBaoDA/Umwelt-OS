@@ -14,6 +14,8 @@ import { fetchTasks, fetchTasksByIds, getTask, updateTask } from './api';
 import type { Task, TaskPage, TaskStatus, TaskView } from './types';
 import { BareButton } from '@/components/bare-button';
 import { getDateTimeFormat, ownerFailureKey } from '@/modules/shared';
+import { useSkin } from '@/core/use-skin';
+import { dueLabel } from './due-label';
 
 const VIEWS: TaskView[] = ['inbox', 'today', 'upcoming', 'blocked', 'completed', 'all'];
 
@@ -161,9 +163,18 @@ function TaskListNotices({ vm }: { vm: TaskListVm }) {
   );
 }
 
-/** Task rows with completion checkbox and select action. */
+/**
+ * Task rows with completion checkbox and select action. In the terminal skin the meta text is the compact relative due
+ * label (`overdue 2d`, `today`, `Fri`) or the status for finished tasks; the default skin keeps status plus full date.
+ */
 function TaskRows({ vm }: { vm: TaskListVm }) {
-  const { t, display, onSelectTask, isAdminViewer, toggleMutation, tasks, statusLabels } = vm;
+  const { t, display, onSelectTask, isAdminViewer, toggleMutation, tasks, statusLabels, localDay, dueAtLocalDay } = vm;
+  const terminal = useSkin() === 'terminal';
+  const dueText = {
+    overdue: (days: number) => t('task.dueOverdue', { days }),
+    today: t('task.dueToday'),
+    none: t('no.dueDate'),
+  };
   return (
     <ul className="task-list flex flex-col gap-2">
       {tasks.map((task) => (
@@ -176,10 +187,21 @@ function TaskRows({ vm }: { vm: TaskListVm }) {
           />
           <BareButton type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}>
             <span className="task-row-title block truncate text-sm font-medium">{task.title}</span>
-            <span className="task-row-meta text-xs text-muted-foreground">
-              {statusLabels[task.status]} ·{' '}
-              {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : (task.due_date ?? t('no.dueDate'))}
-            </span>
+            {terminal ? (
+              <span
+                className="task-row-meta text-xs text-muted-foreground"
+                data-due={isOpenTask(task) && task.due_date && task.due_date < localDay ? 'overdue' : undefined}
+              >
+                {isOpenTask(task)
+                  ? dueLabel(task.due_date ?? (task.due_at ? dueAtLocalDay(task.due_at) : null), localDay, display.locale, dueText)
+                  : statusLabels[task.status]}
+              </span>
+            ) : (
+              <span className="task-row-meta text-xs text-muted-foreground">
+                {statusLabels[task.status]} ·{' '}
+                {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : (task.due_date ?? t('no.dueDate'))}
+              </span>
+            )}
           </BareButton>
         </li>
       ))}

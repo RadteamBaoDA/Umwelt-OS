@@ -6,6 +6,7 @@ import React, { useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -86,10 +87,10 @@ function SelectModeToggle({ selectMode, onToggle }: { selectMode: boolean; onTog
   );
 }
 
-/** Terminal-only toolbar row that hosts the select toggle above the column header (it rides in the first row otherwise). */
+/** Terminal-only: hosts the select toggle in the gadget title bar (it rides in the first row otherwise). */
 function TableToolbar({ visible, toggle }: { visible: boolean; toggle: React.ReactNode }) {
   if (useSkin() !== 'terminal' || !visible) return null;
-  return <div className="tbl-toolbar">{toggle}</div>;
+  return <TitleBarSlot>{toggle}</TitleBarSlot>;
 }
 
 /** Terminal-only column header row (TITLE / SOURCE / PUBLISHED); decorative, so hidden from assistive technology. */

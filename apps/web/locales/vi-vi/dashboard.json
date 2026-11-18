@@ -140,6 +140,7 @@
   "summaryUpdated": "Cập nhật {time}",
   "summarySources": "{count} nguồn",
   "summaryLiveEvents": "{count} sự kiện trực tiếp",
+  "summaryGadgets": "{count} tiện ích",
   "dismissNotice": "Đóng thông báo",
   "setup.title": "Thiết lập bản tin đầu tiên",
   "setup.desc": "Ba bước nhanh là ngày của bạn sẽ hiện ở đây.",

@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FeedImage } from '@/components/feed-image';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
 import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
 import { formatDateTime } from '@/core/i18n';
@@ -474,52 +475,54 @@ export interface FeedToolbarProps {
   setView: (view: FeedView) => void;
 }
 
-/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. */
+/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. In the terminal skin it renders in the gadget title bar (`TitleBarSlot`). */
 export function FeedToolbar(props: FeedToolbarProps) {
   const t = useTranslations('dashboard');
   const { onlyUnread, selectMode, refreshing } = props;
   return (
-    <div className="flex items-center justify-between gap-2 text-xs">
-      <Button
-        type="button"
-        variant={onlyUnread ? 'default' : 'ghost'}
-        size="sm"
-        className="h-8 px-2 text-xs"
-        aria-pressed={onlyUnread}
-        onClick={props.toggleUnread}
-      >
-        {t('unread.only')} ({props.unreadCount})
-      </Button>
-
-      <div className="flex min-w-0 items-center gap-1">
-        {props.volume}
-        {props.filters}
-        <FeedViewToggle view={props.view} setView={props.setView} />
-        {props.canSelect && (
-          <Button
-            type="button"
-            variant={selectMode ? 'default' : 'ghost'}
-            size="sm"
-            className="h-8 px-2 text-xs"
-            aria-pressed={selectMode}
-            onClick={props.toggleSelectMode}
-          >
-            {selectMode ? t('feed.selectDone') : t('feed.selectMode')}
-          </Button>
-        )}
+    <TitleBarSlot>
+      <div className="gadget-toolbar flex items-center justify-between gap-2 text-xs">
         <Button
           type="button"
-          variant="ghost"
-          size="icon"
-          className="size-8"
-          onClick={props.onRefresh}
-          disabled={refreshing}
-          aria-label={t('feed.refresh')}
+          variant={onlyUnread ? 'default' : 'ghost'}
+          size="sm"
+          className="h-8 px-2 text-xs"
+          aria-pressed={onlyUnread}
+          onClick={props.toggleUnread}
         >
-          <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+          {t('unread.only')} ({props.unreadCount})
         </Button>
+
+        <div className="flex min-w-0 items-center gap-1">
+          {props.volume}
+          {props.filters}
+          <FeedViewToggle view={props.view} setView={props.setView} />
+          {props.canSelect && (
+            <Button
+              type="button"
+              variant={selectMode ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8 px-2 text-xs"
+              aria-pressed={selectMode}
+              onClick={props.toggleSelectMode}
+            >
+              {selectMode ? t('feed.selectDone') : t('feed.selectMode')}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            onClick={props.onRefresh}
+            disabled={refreshing}
+            aria-label={t('feed.refresh')}
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+          </Button>
+        </div>
       </div>
-    </div>
+    </TitleBarSlot>
   );
 }
 
