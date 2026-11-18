@@ -19,7 +19,6 @@ vi.mock('@/modules/automations/api', async (original) => ({
 
 const draft = {
   kind: 'daily_brief' as const,
-  name: 'Morning brief',
   time: '07:00',
   days: 'weekdays' as const,
   sections: ['stories', 'weather'] as ('stories' | 'weather')[],
@@ -48,17 +47,32 @@ describe('TaskDraftCard', () => {
   it('shows the unsaved summary and creates only after Save in the pre-filled editor', async () => {
     render(view());
     expect(screen.getByText('Not saved yet')).toBeTruthy();
-    expect(screen.getByText('Morning brief')).toBeTruthy();
+    expect(screen.getByText('Daily brief')).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Review and create' }));
     const time = (await screen.findByDisplayValue('07:00')) as HTMLInputElement;
     expect(time.value).toBe('07:00');
     expect(screen.getByDisplayValue('Reply in Vietnamese')).toBeTruthy();
+    // Checkboxes reflect the draft sections before Save.
+    for (const [label, on] of [
+      ['stories', true],
+      ['weather', true],
+      ['markets', false],
+      ['agenda', false],
+    ] as const) {
+      const box = screen.getByRole('checkbox', { name: new RegExp(label.replace('_', ' '), 'i') });
+      expect(box.getAttribute('aria-checked')).toBe(String(on));
+    }
     expect(api.createScheduledTask).not.toHaveBeenCalled();
     await waitFor(() => expect((screen.getByRole('button', { name: /save/i }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
     await waitFor(() => expect(api.createScheduledTask).toHaveBeenCalledTimes(1));
-    const rule = vi.mocked(api.createScheduledTask).mock.calls[0][1] as unknown as { actions: Record<string, unknown>[] };
+    const rule = vi.mocked(api.createScheduledTask).mock.calls[0][1] as unknown as {
+      trigger: { cron: string };
+      actions: Record<string, unknown>[];
+    };
+    expect(rule.trigger.cron).toBe('0 7 * * 1-5');
     expect(rule.actions[0]).toMatchObject({
+      model_role: 'brief',
       deliver_chat: true,
       sections: ['stories', 'weather'],
       extra_instruction: 'Reply in Vietnamese',

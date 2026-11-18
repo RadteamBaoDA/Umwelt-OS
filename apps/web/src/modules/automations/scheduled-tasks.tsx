@@ -26,15 +26,10 @@ import { BriefTaskEditor } from './brief-task-editor';
 import { runStatusLabel } from './message-keys';
 import { RuleEditor } from './rule-editor';
 import { RunDetail } from './run-detail';
-import { TEMPLATES, describeSchedule, scheduledTaskKind, type ScheduledTaskTemplate } from './scheduled-task-model';
+import { TEMPLATES, describeSchedule, isLegacyBrief, scheduledTaskKind, type ScheduledTaskTemplate } from './scheduled-task-model';
 
 type Editor = { mode: 'new' } | { mode: 'edit'; rule: Automation } | { mode: 'convert' };
 type View = { kind: 'list' } | { kind: 'blank' } | { kind: 'runs'; ruleId: string };
-
-/** True for a rule that generates a brief but is not a scheduled task (legacy rule that still owns the brief slot). */
-function isLegacyBrief(rule: Automation): boolean {
-  return scheduledTaskKind(rule) === null && rule.actions.some((action) => action.type === 'generate_brief');
-}
 
 /**
  * Templates grid. The Daily brief card is disabled with "already set up" when a task exists, and with a convert link

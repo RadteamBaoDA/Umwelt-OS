@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 import modules.automations.public as automations_public
+from modules.chat._routes.mutation import _message_reads
 from modules.chat._worker import tools as worker_tools
 from modules.chat._worker.finalize import _assistant_metadata
 from modules.chat._worker.setup import _task_draft_offered
@@ -23,7 +24,6 @@ from modules.dashboard import public as dashboard_public
 
 VALID: dict[str, Any] = {
     "kind": "daily_brief",
-    "name": "Morning brief",
     "time": "07:00",
     "days": "weekdays",
     "sections": ["stories", "weather"],
@@ -48,16 +48,14 @@ def test_draft_never_saves_without_confirmation(monkeypatch: pytest.MonkeyPatch)
         raise AssertionError("automations write from chat")
 
     for name in ("create_automation", "update_automation"):
-        if hasattr(automations_public, name):
-            monkeypatch.setattr(automations_public, name, boom)
+        monkeypatch.setattr(automations_public, name, boom, raising=True)
     env = _env()
     result = _run(env, VALID)
     assert result["saved"] is False
     assert result["status"] == "shown_to_owner"
     assert env.ts.task_draft["time"] == "07:00"
     assert env.ts.task_draft["sections"] == ["stories", "weather"]
-    # The handler touches no DB session at all (env carries none).
-    assert not hasattr(env, "c")
+    # The handler touches no DB session at all: env carries none, so any DB access would raise.
 
 
 @pytest.mark.parametrize(
@@ -67,6 +65,8 @@ def test_draft_never_saves_without_confirmation(monkeypatch: pytest.MonkeyPatch)
         {"sections": ["stories", "stories"]},
         {"kind": "topic_watch"},
         {"surprise": 1},
+        {"extra_instruction": "ok\u202e hidden"},
+        {"extra_instruction": "a\x00b"},
     ],
 )
 def test_invalid_draft_is_reported_not_stored(patch: dict[str, Any]) -> None:
@@ -115,11 +115,11 @@ def test_parse_task_draft_lenient() -> None:
     assert parse_task_draft({"task_draft": {"time": "99"}}) is None
     assert parse_task_draft({"task_draft": "x"}) is None
     parsed = parse_task_draft({"task_draft": VALID})
-    assert parsed is not None and parsed.name == "Morning brief"
+    assert parsed is not None and parsed.time == "07:00"
 
 
 def test_draft_defaults_and_validation() -> None:
-    d = ScheduledTaskDraft.model_validate({"kind": "daily_brief", "name": "n", "time": "06:30"})
+    d = ScheduledTaskDraft.model_validate({"kind": "daily_brief", "time": "06:30"})
     assert d.days == "daily" and d.sections == list(DRAFT_SECTIONS)
     with pytest.raises(ValidationError):
         ScheduledTaskDraft.model_validate({**VALID, "sections": []})
@@ -127,3 +127,62 @@ def test_draft_defaults_and_validation() -> None:
 
 def test_draft_sections_match_dashboard() -> None:
     assert DRAFT_SECTIONS == tuple(dashboard_public.ALL_BRIEF_SECTIONS)
+
+
+def test_extra_instruction_allows_newline_and_tab() -> None:
+    d = ScheduledTaskDraft.model_validate({**VALID, "extra_instruction": "a\n\tb"})
+    assert d.extra_instruction == "a\n\tb"
+
+
+def test_handler_unavailable_when_flag_off() -> None:
+    handler = worker_tools._TOOL_HANDLERS[TOOL_DRAFT_SCHEDULED_TASK]
+    assert handler.available(_env(False)) is False
+    assert handler.available(_env(True)) is True
+
+
+def _msg(metadata: Any) -> Any:
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    return SimpleNamespace(
+        id=uuid4(),
+        conversation_id=uuid4(),
+        role="assistant",
+        content="x",
+        client_request_id=None,
+        model_identity=None,
+        response_id=None,
+        revision_of_message_id=None,
+        created_at=datetime.now(UTC),
+        citations=[],
+        metadata_json=metadata,
+    )
+
+
+def test_message_reads_exposes_allowlisted_draft_only() -> None:
+    read = _message_reads([_msg({"task_draft": {**VALID, "stray": 1}})], [[]], {}, {})[0]
+    assert read.task_draft is None  # a stray key fails the strict model, so nothing leaks
+    read = _message_reads([_msg({"task_draft": VALID, "other": "secret"})], [[]], {}, {})[0]
+    assert read.task_draft is not None
+    assert set(read.task_draft.model_dump()) == set(ScheduledTaskDraft.model_fields)
+
+
+def test_message_reads_withheld_has_no_draft() -> None:
+    brief = "b1"
+    meta = {
+        "origin": "scheduled_task",
+        "task_kind": "daily_brief",
+        "run_id": "r1",
+        "brief_id": brief,
+        "brief_revision": 1,
+        "brief_citations": [],
+        "task_draft": VALID,
+    }
+    read = _message_reads([_msg(meta)], [[]], {}, {}, frozenset({brief}))[0]
+    assert read.task_draft is None
+
+
+def test_message_reads_malformed_draft_is_none() -> None:
+    assert (
+        _message_reads([_msg({"task_draft": {"time": "99"}})], [[]], {}, {})[0].task_draft is None
+    )

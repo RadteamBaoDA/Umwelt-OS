@@ -15265,8 +15265,6 @@ export interface components {
              * @enum {string}
              */
             model_role: "brief" | "chat" | "background";
-            /** Name */
-            name: string;
             /** Sections */
             sections?: ("stories" | "markets" | "weather" | "hazards" | "agenda" | "source_health")[];
             /**

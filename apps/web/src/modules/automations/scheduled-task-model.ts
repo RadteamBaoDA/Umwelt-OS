@@ -33,6 +33,11 @@ export function scheduledTaskKind(rule: Pick<Automation, 'trigger' | 'actions'>)
   return isBrief && only.deliver_chat === true ? 'daily_brief' : null;
 }
 
+/** True for a rule that generates a brief but is not a scheduled task (legacy rule that still owns the brief slot). */
+export function isLegacyBrief(rule: Pick<Automation, 'trigger' | 'actions'>): boolean {
+  return scheduledTaskKind(rule) === null && rule.actions.some((action) => action.type === 'generate_brief');
+}
+
 /** Builds the cron for "HH:MM" and a day pattern (`M H * * *` or `M H * * 1-5`); assumes a valid time. */
 export function briefCron(time: string, days: BriefDays): string {
   const [hour, minute] = time.split(':').map(Number);

@@ -4,6 +4,7 @@ A draft is only shown to the owner as a card; the server never creates or update
 The owner confirms by saving in the web editor, which uses the normal automations API.
 """
 
+import unicodedata
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -22,7 +23,6 @@ class ScheduledTaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["daily_brief"]
-    name: str = Field(min_length=1, max_length=200)
     time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="Local HH:MM")
     days: Literal["daily", "weekdays"] = "daily"
     sections: list[DraftSection] = Field(
@@ -30,6 +30,16 @@ class ScheduledTaskDraft(BaseModel):
     )
     extra_instruction: str | None = Field(default=None, max_length=500)
     model_role: Literal["brief", "chat", "background"] = "brief"
+
+    @field_validator("extra_instruction")
+    @classmethod
+    def no_control_chars(cls, value: str | None) -> str | None:
+        """Reject control/format characters (Cc, Cf) other than newline and tab; the text is model output."""
+        if value is not None and any(
+            ch not in "\n\t" and unicodedata.category(ch) in {"Cc", "Cf"} for ch in value
+        ):
+            raise ValueError("extra_instruction must not contain control characters")
+        return value
 
     @field_validator("sections")
     @classmethod
