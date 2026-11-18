@@ -52,7 +52,15 @@ function ActionRow({
         </strong>
         <span className="rounded-full bg-muted px-2 py-1 text-xs">{actionStatusLabel(t, action.status)}</span>
       </div>
-      {action.error_code && <p className="text-xs text-muted-foreground">{t('errorCode', { code: action.error_code })}</p>}
+      {action.error_code === 'no_new_data' && (
+        // A reused brief: the action succeeded without generating, so the run's own finish time is the "since" anchor.
+        <p className="text-xs text-muted-foreground">
+          {t('run.noNewDataSince', { time: formatDateTime(run.finished_at ?? run.created_at, display.locale, display.timezone) })}
+        </p>
+      )}
+      {action.error_code && action.error_code !== 'no_new_data' && (
+        <p className="text-xs text-muted-foreground">{t('errorCode', { code: action.error_code })}</p>
+      )}
       {action.result_reference && (
         <p className="break-all text-xs text-muted-foreground">{t('resultReference', { reference: action.result_reference })}</p>
       )}
