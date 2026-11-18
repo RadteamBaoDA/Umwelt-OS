@@ -401,6 +401,7 @@ function acceptsProviderModeField(provider: NativeProvider, key: string, configu
   if (key === 'mal_ranking_type') return configuration.mal_mode !== 'season';
   if (key === 'ann_media_type') return configuration.ann_mode === 'encyclopedia';
   if (key === 'tvmaze_global') return configuration.tvmaze_mode === 'schedule_web';
+  if (key === 'tvmaze_show_ids') return configuration.tvmaze_mode === 'followed_shows';
   if (provider === 'tvmaze_schedule' && (key === 'media_country' || key === 'media_countries')) return !configuration.tvmaze_global;
   const traktField = acceptsTraktField(key, configuration);
   if (traktField !== undefined) return traktField;
@@ -438,6 +439,7 @@ function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeCh
   }
   if (key === 'ann_mode' && next !== 'encyclopedia') onChange('ann_media_type', null as never);
   if (key === 'tvmaze_mode') onChange('tvmaze_global', null as never);
+  clearTvmazeShowIds(key, next, onChange);
   if (key === 'tvmaze_global' && next === true) {
     onChange('media_country', null as never);
     onChange('media_countries', null as never);
@@ -453,6 +455,14 @@ function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeCh
     onChange('omdb_title', null as never);
     onChange('omdb_search', null as never);
   }
+}
+
+/**
+ * Clears TVMaze show IDs when the endpoint leaves followed-shows mode, the only mode the server accepts them in
+ * (a stale list would otherwise be sent and rejected with 422).
+ */
+function clearTvmazeShowIds(key: string, next: unknown, onChange: ScopeChange): void {
+  if (key === 'tvmaze_mode' && next !== 'followed_shows') onChange('tvmaze_show_ids', null as never);
 }
 
 /** Clears Steam app IDs when leaving the only mode that consumes them. */

@@ -130,4 +130,24 @@ describe('VideoPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Load more' }));
     expect(await screen.findByText('Could not load more items. Try again.')).toBeTruthy();
   });
+
+  it('keeps loaded videos and shows only the load-more alert when a later page fails', async () => {
+    mocks.list.mockImplementation(async (_sources: string[], _channels: string[], cursor?: string) => {
+      if (cursor) throw new Error('boom');
+      return { items: [projection('a')], next_cursor: 'c1' };
+    });
+    renderPanel(['s1']);
+    await screen.findByText('Media a');
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Could not load more items. Try again.')).toBeTruthy();
+    expect(screen.queryByText('Could not load selected source records.')).toBeNull();
+    expect(screen.getByText('Media a')).toBeTruthy();
+  });
+
+  it('shows the generic load failure when the first page fails', async () => {
+    mocks.list.mockRejectedValue(new Error('boom'));
+    renderPanel(['s1']);
+    expect(await screen.findByText('Could not load selected source records.')).toBeTruthy();
+    expect(screen.queryByText('Could not load more items. Try again.')).toBeNull();
+  });
 });

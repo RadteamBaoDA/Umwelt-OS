@@ -371,3 +371,66 @@ class FreeProviderSpec:
     realtime_tier: Literal["realtime", "near_realtime"] = "near_realtime"
     skip_embedding: bool = True
     default_retention_days: int | None = 60
+
+
+def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) -> QuotaWindowPolicy:
+    """Build the conservative quota window for a provider whose official daily limit is unpublished."""
+    return QuotaWindowPolicy(
+        "official_unknown_calls_utc_day",
+        kind,  # type: ignore[arg-type]
+        "day",
+        unit,  # type: ignore[arg-type]
+        None,
+        cost,
+        "official_unknown",
+    )
+
+
+def _day(
+    limit: int,
+    kind: str = "provider",
+    unit: str = "http_calls",
+    cost: int = 1,
+    key: str = "pilot_calls_utc_day",
+) -> QuotaWindowPolicy:
+    """Build a UTC-day quota window with a fixed pilot ``limit`` of ``cost``-weighted calls."""
+    return QuotaWindowPolicy(key, kind, "day", unit, limit, cost)  # type: ignore[arg-type]
+
+
+def _spec(
+    id_: str,
+    label: str,
+    category: str,
+    hosts: tuple[str, ...],
+    kind: str,
+    interval: int,
+    terms_url: str,
+    eligibility: str,
+    attribution: str,
+    endpoints: tuple[str, ...],
+    quota: tuple[QuotaWindowPolicy, ...],
+    execution: str = "supported",
+    key: bool = False,
+    secret: str | None = None,
+    implemented: bool = False,
+    checked_on: str = CHECKED_ON,
+) -> FreeProviderSpec:
+    """Build one free-provider spec; ``code_implemented`` is true when flagged or the id is dispatchable."""
+    return FreeProviderSpec(
+        id=id_,
+        hosts=hosts,
+        data_kind=kind,  # type: ignore[arg-type]
+        key_required=key,
+        default_interval_minutes=interval,
+        terms_url=terms_url,
+        eligibility=eligibility,  # type: ignore[arg-type]
+        attribution=attribution,
+        execution=execution,  # type: ignore[arg-type]
+        label=label,
+        category=category,  # type: ignore[arg-type]
+        endpoints=endpoints,
+        quota=quota,
+        secret_location=secret,  # type: ignore[arg-type]
+        code_implemented=implemented or id_ in DISPATCHABLE,
+        checked_on=checked_on,
+    )

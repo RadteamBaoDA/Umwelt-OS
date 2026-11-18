@@ -228,7 +228,9 @@ export type BuiltinTypeOptions = {
   country_of_origin?: 'JP' | 'KR' | 'CN' | 'TW' | 'ALL';
   media_tags?: string[];
   media_statuses?: ('finished' | 'releasing' | 'not_yet_released' | 'cancelled' | 'hiatus')[];
-  tvmaze_mode?: 'schedule_country' | 'schedule_web';
+  tvmaze_mode?: 'schedule_country' | 'schedule_web' | 'followed_shows';
+  /** Show IDs watched in `followed_shows` mode only (1-20 positive IDs); the server rejects them in other modes. */
+  tvmaze_show_ids?: number[] | null;
   tvmaze_global?: boolean;
   ann_mode?: 'news' | 'encyclopedia';
   ann_media_type?: 'anime' | 'manga';

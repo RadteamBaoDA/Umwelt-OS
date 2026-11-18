@@ -688,6 +688,76 @@ async def _capture_telegram_revocation(
     return revocation_snapshot
 
 
+async def _commit_source_state(
+    session: AsyncSession,
+    source: Any,
+    connector_state: str,
+    *,
+    access_fence: AccessFence,
+    multi_workspace_enabled: bool,
+    scope: WorkspaceContext,
+) -> None:
+    """Commit the open unit of work and publish a source-change replay event for ``source``.
+
+    ``source`` supplies id, generation and status; ``connector_state`` is the connector state announced.
+    Commits the caller's transaction under the given access fence and scope.
+    """
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id,
+                source.generation,
+                source.status,
+                connector_state=connector_state,
+                scope=scope,
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
+
+
+def _native_credential_secret(
+    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
+    provider: str | None,
+    *,
+    keyed: bool,
+) -> str:
+    """Return the secret string to encrypt for a native REST credential request.
+
+    Pair credentials (Podcast Index, IGDB) are serialised to compact JSON; others use the single secret.
+    Pure apart from a lazy import of the keyed validators; never logs or echoes the secret.
+
+    Raises:
+        HTTPException: 422 when a YouTube key has characters outside ``[A-Za-z0-9_-]`` or a keyed
+            provider's key validator rejects the value.
+    """
+    if isinstance(payload, PodcastIndexCredentialRequest):
+        credential_secret = json.dumps(
+            {"apiKey": payload.apiKey.get_secret_value(), "apiSecret": payload.apiSecret.get_secret_value()},
+            separators=(",", ":"),
+        )
+    else:
+        credential_secret = payload.secret.get_secret_value()
+    if provider == "youtube_api" and (
+        not credential_secret.isascii() or not all(char.isalnum() or char in "_-" for char in credential_secret)
+    ):
+        raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider")
+    if keyed:
+        from modules.connectors.providers.keyed import validate_key
+        from modules.connectors.providers.macro import ProviderPayloadError
+
+        try:
+            validate_key(str(provider), credential_secret)
+        except ProviderPayloadError as exc:
+            raise HTTPException(
+                status_code=422, detail="The API key is not acceptable for this provider"
+            ) from exc
+    return credential_secret
+
+
 @router.delete("/{source_id}/credentials/provider", response_model=ActivationRead)
 async def remove_provider_credential(
     source_id: UUID,
@@ -788,17 +858,10 @@ async def remove_provider_credential(
             raise HTTPException(
                 status_code=409, detail="Telegram credential revision changed"
             ) from exc
-        await commit_with_replay(
+        await _commit_source_state(
             session,
-            [
-                make_source_change(
-                    saved_source.id,
-                    saved_source.generation,
-                    saved_source.status,
-                    connector_state=updated.state,
-                    scope=scope,
-                ),
-            ],
+            saved_source,
+            updated.state,
             access_fence=access_fence,
             multi_workspace_enabled=multi_workspace_enabled,
             scope=scope,
@@ -836,17 +899,10 @@ async def remove_provider_credential(
     else:
         updated, _, _ = intent
         updated.error_code = "credential_delete_pending"
-    await commit_with_replay(
+    await _commit_source_state(
         session,
-        [
-            make_source_change(
-                saved_source.id,
-                saved_source.generation,
-                saved_source.status,
-                connector_state=updated.state,
-                scope=scope,
-            ),
-        ],
+        saved_source,
+        updated.state,
         access_fence=access_fence,
         multi_workspace_enabled=multi_workspace_enabled,
         scope=scope,
@@ -1156,27 +1212,9 @@ async def reenter_native_rest_credential(
     is_pair = isinstance(payload, PodcastIndexCredentialRequest)
     if is_pair != (source.provider in {"podcast_index", "igdb_games"}):
         raise HTTPException(status_code=422, detail="Credential fields do not match this provider")
-    if isinstance(payload, PodcastIndexCredentialRequest):
-        credential_secret = json.dumps(
-            {"apiKey": payload.apiKey.get_secret_value(), "apiSecret": payload.apiSecret.get_secret_value()},
-            separators=(",", ":"),
-        )
-    else:
-        credential_secret = payload.secret.get_secret_value()
-    if source.provider == "youtube_api" and (
-        not credential_secret.isascii() or not all(char.isalnum() or char in "_-" for char in credential_secret)
-    ):
-        raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider")
-    if keyed_header is not None:
-        from modules.connectors.providers.keyed import validate_key
-        from modules.connectors.providers.macro import ProviderPayloadError
-
-        try:
-            validate_key(str(source.provider), credential_secret)
-        except ProviderPayloadError as exc:
-            raise HTTPException(
-                status_code=422, detail="The API key is not acceptable for this provider"
-            ) from exc
+    credential_secret = _native_credential_secret(
+        payload, source.provider, keyed=keyed_header is not None
+    )
     header_name = (
         keyed_header or native_header or local_header or workspace_app_header or str(desired["auth_header_name"])
     )
@@ -1231,13 +1269,10 @@ async def reenter_native_rest_credential(
         credential_revision=row.credential_revision,
         workspace_id=scope.workspace_id,
     )
-    await commit_with_replay(
+    await _commit_source_state(
         session,
-        [
-            make_source_change(
-                source.id, source.generation, source.status, connector_state=row.state, scope=scope
-            ),
-        ],
+        source,
+        row.state,
         access_fence=access_fence,
         multi_workspace_enabled=gate,
         scope=scope,

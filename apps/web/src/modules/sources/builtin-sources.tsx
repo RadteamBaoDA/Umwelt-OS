@@ -23,7 +23,7 @@ import {
   type RealtimeMode,
 } from './api';
 import { BuiltinOptions, type BuiltinOptionValues } from './builtin-options';
-import { OPTION_SPECS } from './builtin-option-specs';
+import { OPTION_SPECS, optionAppliesTo } from './builtin-option-specs';
 import { matchesShapes } from './shape-filter';
 import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
@@ -246,7 +246,7 @@ export function BuiltinTermsFields({
  * Builds the enable-body fields for the options this built-in accepts (`applicable_options`); anything the owner left
  * empty is omitted so the server default applies. Returns nothing for servers that predate the option list.
  */
-function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionValues): Record<string, unknown> {
+export function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionValues): Record<string, unknown> {
   const allowed = new Set(builtin.applicable_options ?? []);
   const payload: Record<string, unknown> = {};
   const name = (values.name ?? builtin.label).trim();
@@ -258,11 +258,23 @@ function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionVa
     if (allowed.has(key) && values[key]?.length) payload[key] = values[key];
   }
   // Per-type options: undefined, empty text and empty multi-selects are omitted so the server default applies.
+  const selected = values as Record<string, unknown>;
   for (const spec of OPTION_SPECS) {
-    const value = (values as Record<string, unknown>)[spec.key];
-    if (allowed.has(spec.key) && !isEmptyOptionValue(value)) payload[spec.key] = value;
+    if (sendsTypedOption(spec.key, allowed, selected)) payload[spec.key] = selected[spec.key];
   }
   return payload;
+}
+
+/**
+ * Whether one per-type option goes into the enable body: the built-in accepts it, its mode (if any) is selected, and
+ * the value is not empty. Mode-bound options (e.g. TVMaze show IDs) are skipped otherwise, because the server rejects them.
+ *
+ * @param key Option spec key.
+ * @param allowed Option keys the built-in lists in `applicable_options`.
+ * @param selected Current option values keyed by option name.
+ */
+function sendsTypedOption(key: string, allowed: ReadonlySet<string>, selected: Record<string, unknown>): boolean {
+  return allowed.has(key) && optionAppliesTo(key, selected) && !isEmptyOptionValue(selected[key]);
 }
 
 /** True when a per-type option value is "empty" (unset, blank text or an empty multi-select) and must be omitted from the body. */

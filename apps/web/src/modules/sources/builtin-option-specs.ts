@@ -18,6 +18,19 @@ export function inactiveMediaModeFilters(modeKey: string, selected: unknown): re
   return [];
 }
 
+/**
+ * Whether a per-type option applies under the current selections. An option bound to one mode is hidden and left out
+ * of the request in every other mode, because the server rejects it there (422) rather than ignoring it.
+ *
+ * @param key Option spec key.
+ * @param selected Current option values keyed by option name.
+ * @returns False when the option belongs to a mode that is not selected; true otherwise.
+ */
+export function optionAppliesTo(key: string, selected: Record<string, unknown>): boolean {
+  if (key === 'tvmaze_show_ids') return selected.tvmaze_mode === 'followed_shows';
+  return true;
+}
+
 /** One per-type built-in option: how it renders and the bounds the server enforces. */
 export type OptionSpec = {
   key: keyof BuiltinTypeOptions;
@@ -308,7 +321,15 @@ const MEDIA_PROVIDER_SPECS: readonly OptionSpec[] = [
   { key: 'gutendex_mime_type', kind: 'text', maxLen: 80, native: true },
   { key: 'gutendex_author_year_start', kind: 'int', min: 0, hi: 2100, native: true },
   { key: 'gutendex_author_year_end', kind: 'int', min: 0, hi: 2100, native: true },
-  { key: 'tvmaze_mode', kind: 'enum', values: ['schedule_country', 'schedule_web'], labelled: true, native: true },
+  {
+    key: 'tvmaze_mode',
+    kind: 'enum',
+    values: ['schedule_country', 'schedule_web', 'followed_shows'],
+    labelled: true,
+    native: true,
+  },
+  // Only meaningful in followed_shows mode; see optionAppliesTo.
+  { key: 'tvmaze_show_ids', kind: 'tags', max: 20, maxLen: 10, numeric: true, pattern: '[0-9, ]*', native: true },
   { key: 'tvmaze_global', kind: 'bool', nullable: true, native: true },
   { key: 'ann_mode', kind: 'enum', values: ['news', 'encyclopedia'], labelled: true, native: true },
   { key: 'ann_media_type', kind: 'enum', values: ['anime', 'manga'], labelled: true, native: true },
@@ -519,6 +540,7 @@ export const MEDIA_PROVIDER_FIELDS = {
   livechart_episodes: ['media_genres', 'release_year'],
   tvmaze_schedule: [
     'tvmaze_mode',
+    'tvmaze_show_ids',
     'tvmaze_global',
     'media_country',
     'media_countries',

@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { minIntervalMinutes, type BuiltinSource, type BuiltinTypeOptions, type ConnectorConfig } from './api';
 import { optionLabelKey, optionValueKey } from './builtin-option-keys';
-import { OPTION_SPECS, type OptionSpec } from './builtin-option-specs';
+import { OPTION_SPECS, optionAppliesTo, type OptionSpec } from './builtin-option-specs';
 
 const INTERVALS = [15, 30, 60, 360, 1440] as const;
 const MAX_SECTIONS = 6;
@@ -525,7 +525,7 @@ export function BuiltinOptions({
 }) {
   const t = useTranslations('sources');
   const applicable = new Set(builtin.applicable_options ?? []);
-  const typed = OPTION_SPECS.filter((spec) => applicable.has(spec.key));
+  const typed = OPTION_SPECS.filter((spec) => applicable.has(spec.key) && optionAppliesTo(spec.key, values as Record<string, unknown>));
   if (!hasVisibleOptions(applicable, builtin, typed.length, showName, showSchedule)) return null;
   const common = { applicable, values, onChange, disabled };
   return (

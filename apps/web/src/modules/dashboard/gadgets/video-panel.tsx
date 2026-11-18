@@ -205,6 +205,9 @@ function VideoPanelView({
   ask: (item: VideoRecord) => void;
 }) {
   const t = useTranslations('dashboard');
+  // TanStack sets isError after a failed next-page fetch too, while earlier pages stay in `data`. The generic
+  // failure notice is only for a first-page failure (no loaded data); a later failure shows the load-more alert.
+  const firstPageFailed = query.isError && query.data === undefined;
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={t('video.sourcesRequired')} />}
@@ -224,8 +227,8 @@ function VideoPanelView({
         </label>
       )}
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />}
-      {query.isError && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
-      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && (
+      {firstPageFailed && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
+      {sourceIds.length > 0 && !query.isPending && !firstPageFailed && items.length === 0 && (
         <GadgetNotice
           kind="empty"
           className="p-0"

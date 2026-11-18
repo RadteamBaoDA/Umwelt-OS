@@ -7824,7 +7824,9 @@ export interface components {
             /** Tvmaze Global */
             tvmaze_global?: boolean | null;
             /** Tvmaze Mode */
-            tvmaze_mode?: ("schedule_country" | "schedule_web") | null;
+            tvmaze_mode?: ("schedule_country" | "schedule_web" | "followed_shows") | null;
+            /** Tvmaze Show Ids */
+            tvmaze_show_ids?: number[] | null;
             /** Updated At Since */
             updated_at_since?: string | null;
             /** Usgs Min Magnitude */
@@ -8956,7 +8958,9 @@ export interface components {
             /** Tvmaze Global */
             tvmaze_global?: boolean | null;
             /** Tvmaze Mode */
-            tvmaze_mode?: ("schedule_country" | "schedule_web") | null;
+            tvmaze_mode?: ("schedule_country" | "schedule_web" | "followed_shows") | null;
+            /** Tvmaze Show Ids */
+            tvmaze_show_ids?: number[] | null;
             /** Updated At Since */
             updated_at_since?: string | null;
             /** Updated Field */
