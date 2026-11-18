@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy import delete, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
@@ -268,7 +269,15 @@ async def _next_run_at(
 
 
 async def _read(session: AsyncSession, head: Automation, rev: AutomationRevision) -> AutomationRead:
-    """Join a rule head with its current revision snapshot and its next scheduled run."""
+    """Join a rule head with its current revision snapshot and its next scheduled run.
+
+    Callers read right after a commit, which can leave server-maintained columns (``updated_at``)
+    expired; touching them synchronously would lazy-load outside the async context
+    (``MissingGreenlet``), so expired attributes are refreshed with an awaited query first.
+    """
+    state = sa_inspect(head, raiseerr=False)
+    if state is not None and state.expired_attributes:
+        await session.refresh(head)
     return AutomationRead(
         id=head.id,
         name=head.name,

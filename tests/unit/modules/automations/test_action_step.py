@@ -886,3 +886,33 @@ async def test_non_uuid_pending_marker_generates(monkeypatch: pytest.MonkeyPatch
     store, calls, _marks = _brief_harness(monkeypatch, ["B"])
     assert await _run_brief(_brief_rev(), reference="brief_pending:daily") == "succeeded"
     assert not any(c[0] == "get_brief" for c in calls) and list(store) == ["brief:B"]
+
+
+@pytest.mark.asyncio
+async def test_read_refreshes_expired_head_before_sync_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a commit expires ``updated_at``, ``_read`` must refresh with an awaited query first."""
+    from datetime import UTC, datetime
+
+    from modules.automations import public
+
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    head = SimpleNamespace(
+        id=uuid4(), name="n", enabled=False, revision=1, created_at=now, updated_at=now
+    )
+    rev = SimpleNamespace(trigger={"type": "webhook"}, conditions=[], actions=[])
+    refreshed: list[Any] = []
+
+    class Sess:
+        async def refresh(self, obj: Any) -> None:
+            refreshed.append(obj)
+
+    monkeypatch.setattr(
+        public,
+        "sa_inspect",
+        lambda obj, raiseerr=True: SimpleNamespace(expired_attributes={"updated_at"}),
+    )
+    read = await public._read(Sess(), head, rev)  # type: ignore[arg-type]
+    assert refreshed == [head]
+    assert read.updated_at == now
