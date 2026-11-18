@@ -27,6 +27,7 @@ from modules.chat import public as chat_public
 from modules.chat._public.scheduled_task_threads import (
     RESERVED_METADATA_KEYS,
     withheld_brief_ids,
+    withheld_topic_messages,
 )
 from modules.chat._routes.guards import (
     _TOKEN_RE as _TOKEN_RE,
@@ -456,6 +457,7 @@ async def get_conversation(
     current_citations = await _filter_citation_lists(
         session, [m.citations or [] for m in messages_rows], scope
     )
+    task_metadatas = [getattr(m, "metadata_json", None) for m in messages_rows]
     messages_list = _message_reads(
         messages_rows,
         current_citations,
@@ -463,10 +465,10 @@ async def get_conversation(
         web_search_by_assistant,
         # Lock-free, fail-closed: withholding only decides what to display.
         await withheld_brief_ids(
-            session,
-            [getattr(m, "metadata_json", None) for m in messages_rows],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled(),
+            session, task_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+        ),
+        await withheld_topic_messages(
+            session, task_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
         ),
     )
     return ConversationDetailRead(

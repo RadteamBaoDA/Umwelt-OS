@@ -86,6 +86,7 @@ async def test_latest_brief_sql_filters_and_limits(monkeypatch: pytest.MonkeyPat
     sql = str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
     assert "conversations.workspace_id = " in sql
     assert "messages.role = 'assistant'" in sql
+    assert "'daily_brief'" in sql  # topic-watch posts never become the follow-up brief
     assert "'scheduled_task'" in sql
     assert "messages.created_at <" in sql
     assert "LIMIT 1" in sql

@@ -145,6 +145,7 @@ from modules.connectors.provider_specs import (
     get_quota_policies,
 )
 from modules.connectors.providers import rest
+from modules.connectors.selection import run_deadline_seconds
 from modules.ingestion import public as ingestion
 from modules.ingestion.public import CollectionState  # noqa: F401
 from modules.sources import public as sources  # noqa: F401
@@ -408,12 +409,18 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
         await _settle(factory, admission, outcome="failed", error_code="collection_unsupported")
         return
     quota_policies = get_quota_policies(attempt.source.provider)
+    # Per-provider budget: only topic_watch is raised (selection.run_deadline_seconds); others keep 90 s.
+    hard_deadline = (
+        rest.RUN_DEADLINE_SECONDS
+        if attempt.source.provider != "topic_watch"
+        else run_deadline_seconds("topic_watch")
+    )
     state: dict[str, Any] = {"attempt": attempt, "factory": factory, "settings": settings}
     gate = SendGate(
         factory,
         attempt,
         settings=settings,
-        deadline=time.monotonic() + rest.RUN_DEADLINE_SECONDS,
+        deadline=time.monotonic() + hard_deadline,
         quota_provider=attempt.source.provider if quota_policies else None,
         fingerprint=_alpha_fingerprint(state)
         if attempt.source.provider == "alpha_vantage"
@@ -429,7 +436,7 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     )
     settle: dict[str, Any] | None = None
     try:
-        async with asyncio.timeout(rest.RUN_DEADLINE_SECONDS):
+        async with asyncio.timeout(hard_deadline):
             await adapter(run)
         return  # accepted: the ingestion owner already settled request + slot in its own commit
     except asyncio.CancelledError:

@@ -9164,6 +9164,25 @@ export interface components {
             csrfToken: string;
         };
         /**
+         * DailyBriefMessageMeta
+         * @description Allowlisted view of the Daily brief keys stored in a message's private ``metadata_json``.
+         */
+        DailyBriefMessageMeta: {
+            /** Brief Citations */
+            brief_citations?: components["schemas"]["TaskBriefCitationRead"][];
+            /** Brief Id */
+            brief_id: string;
+            /** Brief Revision */
+            brief_revision: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            task_kind: "daily_brief";
+        };
+        /**
          * DailyContext
          * @description Selected-day context: the saved brief (if any) plus widgets built from current records.
          */
@@ -13005,7 +13024,8 @@ export interface components {
             role: string;
             /** Suggestions */
             suggestions?: string[];
-            task?: components["schemas"]["TaskMessageMeta"] | null;
+            /** Task */
+            task?: (components["schemas"]["DailyBriefMessageMeta"] | components["schemas"]["TopicWatchMessageMeta"]) | null;
             task_draft?: components["schemas"]["ScheduledTaskDraft"] | null;
             /**
              * Uncited
@@ -16158,25 +16178,6 @@ export interface components {
             type: "task_due";
         };
         /**
-         * TaskMessageMeta
-         * @description Allowlisted view of the scheduled-task keys stored in a message's private ``metadata_json``.
-         */
-        TaskMessageMeta: {
-            /** Brief Citations */
-            brief_citations?: components["schemas"]["TaskBriefCitationRead"][];
-            /** Brief Id */
-            brief_id: string;
-            /** Brief Revision */
-            brief_revision: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Task Kind
-             * @constant
-             */
-            task_kind: "daily_brief";
-        };
-        /**
          * TaskPage
          * @description Paginated collection of tasks returned to clients.
          */
@@ -16578,6 +16579,47 @@ export interface components {
             weight?: number | null;
         };
         /**
+         * TopicWatchItemRead
+         * @description One collected item of a Topic watch post; every field is untrusted text shown as plain text.
+         */
+        TopicWatchItemRead: {
+            /** Document Id */
+            document_id?: string | null;
+            /** Site */
+            site?: string | null;
+            /** Story Id */
+            story_id?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Title */
+            title: string;
+            /** Url */
+            url?: string | null;
+        };
+        /**
+         * TopicWatchMessageMeta
+         * @description Allowlisted view of the Topic watch keys stored in a message's private ``metadata_json``.
+         *
+         *     ``source_id`` is deliberately absent: it is stored for withholding only and never sent to clients.
+         */
+        TopicWatchMessageMeta: {
+            /**
+             * Coverage
+             * @enum {string}
+             */
+            coverage: "complete" | "partial";
+            /** Items */
+            items?: components["schemas"]["TopicWatchItemRead"][];
+            /** Run Id */
+            run_id: string;
+            stats?: components["schemas"]["TopicWatchStatsRead"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            task_kind: "topic_watch";
+        };
+        /**
          * TopicWatchSpec
          * @description What a Topic watch looks for: the topic, an optional keep rule, languages, sites and item cap.
          */
@@ -16597,6 +16639,64 @@ export interface components {
             max_items: number;
             /** Topic */
             topic: string;
+        };
+        /**
+         * TopicWatchStatsRead
+         * @description Bounded run telemetry of a Topic watch post (counts plus an optional partial-run reason).
+         */
+        TopicWatchStatsRead: {
+            /**
+             * Blocked
+             * @default 0
+             */
+            blocked: number;
+            /**
+             * Duplicates
+             * @default 0
+             */
+            duplicates: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Fetched
+             * @default 0
+             */
+            fetched: number;
+            /**
+             * Items
+             * @default 0
+             */
+            items: number;
+            /**
+             * Off Topic
+             * @default 0
+             */
+            off_topic: number;
+            /**
+             * Queries
+             * @default 0
+             */
+            queries: number;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Results
+             * @default 0
+             */
+            results: number;
+            /**
+             * Timeout
+             * @default 0
+             */
+            timeout: number;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
         };
         /**
          * TraceContext

@@ -19,6 +19,7 @@ from core.workspaces.schemas import Scope
 from modules.chat._public.conversations import delete_conversation_in_scope
 from modules.chat.models import Conversation, Message
 from modules.chat.schemas import MAX_SOURCE_SCOPE, SelectedEvidenceRef
+from modules.sources import public as sources_public
 
 # Retrieval drops selected_refs longer than MAX_SELECTED_REFS (retrieval.py), so brief refs get a
 # smaller fixed share; this stops the brief from pushing the request over that limit.
@@ -194,14 +195,92 @@ def task_brief_key(metadata: Any) -> str | None:
     """Return the brief key a stored message's metadata is withheld by, or ``None`` for a non-task message.
 
     ``None`` when ``metadata`` is not a mapping or its ``origin`` is not ``"scheduled_task"``.
-    Otherwise ``str(metadata.get("brief_id") or "")``: a missing, malformed or extra-key-laden
+    Also ``None`` for ``task_kind == "topic_watch"`` posts: they have no brief, so brief liveness
+    must not withhold them (see :func:`topic_source_key`). Otherwise
+    ``str(metadata.get("brief_id") or "")``: a missing, malformed or extra-key-laden
     task message still yields a key (possibly ``""``) that never matches a live brief, so it is
     withheld instead of shown in full (fail closed). Pure; unlike ``parse_task_message_meta`` it
     never validates the rest of the payload.
     """
     if not isinstance(metadata, dict) or metadata.get("origin") != "scheduled_task":
         return None
+    if metadata.get("task_kind") == "topic_watch":
+        return None
     return str(metadata.get("brief_id") or "")
+
+
+def topic_source_key(metadata: Any) -> str | None:
+    """Return the Source key a stored topic-watch post is withheld by, or ``None`` for any other message.
+
+    ``None`` unless ``origin == "scheduled_task"`` and ``task_kind == "topic_watch"``. Otherwise
+    ``str(metadata.get("source_id") or "")``; a missing or malformed id yields a key that is never
+    eligible, so the post is withheld (fail closed). Pure.
+    """
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("origin") != "scheduled_task"
+        or metadata.get("task_kind") != "topic_watch"
+    ):
+        return None
+    return str(metadata.get("source_id") or "")
+
+
+def is_withheld_task_message(
+    metadata: Any, withheld_brief_keys: frozenset[str], withheld_topic_keys: frozenset[str]
+) -> bool:
+    """True when a stored message is a scheduled-task post whose brief or Source is in a withheld set.
+
+    Briefs are matched by :func:`task_brief_key`, topic-watch posts by :func:`topic_source_key`;
+    any other message is never withheld. Pure; shared by the read path and the export path so both
+    scrub exactly the same posts.
+    """
+    if (brief := task_brief_key(metadata)) is not None:
+        return brief in withheld_brief_keys
+    if (topic := topic_source_key(metadata)) is not None:
+        return topic in withheld_topic_keys
+    return False
+
+
+async def withheld_topic_messages(
+    session: AsyncSession,
+    metadatas: Sequence[Any],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> frozenset[str]:
+    """Return the Source key of every topic-watch post among ``metadatas`` that must not be shown.
+
+    A post is withheld when its ``source_id`` is missing or malformed, the Source is absent from the
+    scope, is not ``active`` (archived, paused, deleting) or is ``local_only``: the collected items
+    must not outlive the Source that authorised them. One batched ``get_source_fences`` read (at
+    most 500 distinct Sources; any more are withheld), no row locks and no writes, so it is safe on a
+    long export session and in any lock order. Non-topic metadata is ignored and costs no query.
+    """
+    parsed: dict[str, UUID | None] = {}
+    for raw in metadatas:
+        key = topic_source_key(raw)
+        if key is None:
+            continue
+        try:
+            parsed[key] = UUID(key)
+        except ValueError:
+            parsed[key] = None
+    ids = [u for u in parsed.values() if u is not None][:500]
+    fences = (
+        await sources_public.get_source_fences(
+            session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if ids
+        else {}
+    )
+    return frozenset(
+        key
+        for key, source_id in parsed.items()
+        if source_id is None
+        or (fence := fences.get(source_id)) is None
+        or fence.status != "active"
+        or fence.local_only
+    )
 
 
 async def withheld_brief_ids(
@@ -288,6 +367,8 @@ async def latest_task_brief(
                 Conversation.workspace_id == scope.workspace_id,
                 Message.role == "assistant",
                 Message.metadata_json["origin"].as_string() == "scheduled_task",
+                # Topic-watch posts live in the same thread; only briefs ground a follow-up here.
+                Message.metadata_json["task_kind"].as_string() == "daily_brief",
                 Message.created_at < cutoff,
             )
             .order_by(Message.created_at.desc(), Message.id.desc())

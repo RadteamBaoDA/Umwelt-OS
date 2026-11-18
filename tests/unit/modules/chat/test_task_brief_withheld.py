@@ -156,3 +156,106 @@ async def test_get_conversation_withholds_on_the_request_session(
         SimpleNamespace(headers={}),  # type: ignore[arg-type]
     )
     assert detail.messages[0].content == SCRUBBED_CONTENT and detail.messages[0].task is None
+
+
+# --- topic watch posts: withheld by their Source, never by brief liveness -----------------------
+
+TOPIC_SOURCE = str(uuid4())
+
+
+def _topic_meta(source_id: str = TOPIC_SOURCE) -> dict[str, Any]:
+    """Stored metadata of a topic-watch post."""
+    return {
+        "origin": "scheduled_task",
+        "task_kind": "topic_watch",
+        "run_id": "r1",
+        "source_id": source_id,
+        "items": [{"title": "T", "url": "https://example.com/a", "site": "example.com"}],
+        "stats": {"items": 1},
+        "coverage": "complete",
+    }
+
+
+def test_brief_key_ignores_topic_posts() -> None:
+    from modules.chat._public.scheduled_task_threads import task_brief_key, topic_source_key
+
+    assert task_brief_key(_topic_meta()) is None
+    assert topic_source_key(_topic_meta()) == TOPIC_SOURCE
+    assert topic_source_key({"origin": "scheduled_task", "task_kind": "topic_watch"}) == ""
+    assert topic_source_key(_brief_message().metadata_json) is None
+    assert topic_source_key({"task_kind": "topic_watch"}) is None  # origin gate
+
+
+@pytest.mark.asyncio
+async def test_topic_posts_withheld_for_inactive_local_missing_or_malformed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.chat._public import scheduled_task_threads as threads
+
+    live, archived, local, missing = (str(uuid4()) for _ in range(4))
+    calls: list[list[UUID]] = []
+
+    async def fences(_s: Any, ids: list[UUID], **_k: Any) -> dict[UUID, Any]:
+        calls.append(ids)
+        table = {
+            live: ("active", False),
+            archived: ("archived", False),
+            local: ("active", True),
+        }
+        return {
+            UUID(k): SimpleNamespace(status=v[0], local_only=v[1])
+            for k, v in table.items()
+            if UUID(k) in ids
+        }
+
+    monkeypatch.setattr(threads.sources_public, "get_source_fences", fences)
+    metas = [_topic_meta(s) for s in (live, archived, local, missing, "not-a-uuid", "")]
+    metas += [_brief_message().metadata_json, None]
+    out = await threads.withheld_topic_messages(  # type: ignore[arg-type]
+        object(), metas, scope=object(), multi_workspace_enabled=False
+    )
+    assert out == {archived, local, missing, "not-a-uuid", ""} and len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_topic_posts_skip_the_source_lookup() -> None:
+    from modules.chat._public.scheduled_task_threads import withheld_topic_messages
+
+    out = await withheld_topic_messages(  # type: ignore[arg-type]
+        object(), [_brief_message().metadata_json], scope=object(), multi_workspace_enabled=False
+    )
+    assert out == frozenset()
+
+
+def test_withheld_topic_post_is_scrubbed_in_reads() -> None:
+    m = _brief_message()
+    m.metadata_json = _topic_meta()
+    m.content = "- Secret: summary"
+    read = _message_reads([m], [[{"x": 1}]], {}, {}, frozenset(), frozenset({TOPIC_SOURCE}))[0]
+    assert read.content == SCRUBBED_CONTENT and read.task is None and read.citations == []
+    live = _message_reads([m], [[]], {}, {}, frozenset(), frozenset())[0]
+    assert live.content == "- Secret: summary" and live.task is not None
+
+
+def test_read_and_export_share_one_withhold_rule() -> None:
+    """Export and read paths call the same pure predicate, so a topic post scrubs on both."""
+    from modules.chat._public.scheduled_task_threads import is_withheld_task_message as gone
+
+    assert gone(_topic_meta(), frozenset(), frozenset({TOPIC_SOURCE}))
+    assert not gone(
+        _topic_meta(), frozenset({TOPIC_SOURCE}), frozenset()
+    )  # brief set is irrelevant
+    assert gone(_brief_message().metadata_json, frozenset({BRIEF}), frozenset())
+    assert not gone(_brief_message().metadata_json, frozenset(), frozenset({BRIEF}))
+    assert not gone({"role": "x"}, frozenset({BRIEF}), frozenset({TOPIC_SOURCE}))
+    assert not gone(None, frozenset(), frozenset())
+
+
+def test_export_module_wires_topic_withholding() -> None:
+    """The export page and its final-fence recheck both use the topic lookup (source-level check)."""
+    import inspect
+
+    from modules.chat._public import export
+
+    src = inspect.getsource(export)
+    assert src.count("withheld_topic_messages(") >= 2 and "is_withheld_task_message(" in src

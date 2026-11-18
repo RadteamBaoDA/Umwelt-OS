@@ -31,8 +31,11 @@ from core.pagination import b64url_decode, b64url_encode
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat._public.scheduled_task_threads import (
     SCRUBBED_CONTENT,
+    is_withheld_task_message,
     task_brief_key,
+    topic_source_key,
     withheld_brief_ids,
+    withheld_topic_messages,
 )
 from modules.chat.models import (
     Conversation,
@@ -779,8 +782,9 @@ async def _export_message_records(
 
     Order: stream candidate rows (stream closed), resolve the page's exact evidence fences in
     one owner call, then build records under the page byte budget. ``has_more`` also holds when
-    the byte budget left candidates unserved. Scheduled-task brief messages whose sources are no
-    longer eligible (one batched, lock-free ``withheld_brief_ids`` lookup) export as
+    the byte budget left candidates unserved. Scheduled-task brief and topic-watch messages whose
+    sources are no longer eligible (batched, lock-free ``withheld_brief_ids`` and
+    ``withheld_topic_messages`` lookups) export as
     the scrub placeholder with no citations, and each such message's fence records
     ``brief_withheld`` so the final fence check can detect a later change. Writes nothing.
 
@@ -801,18 +805,22 @@ async def _export_message_records(
         session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
     # Task brief copies whose sources are no longer eligible export as the scrub placeholder.
+    page_metadatas = [c[0].get("metadata_json") for c in candidates]
     withheld = await withheld_brief_ids(
-        session,
-        [c[0].get("metadata_json") for c in candidates],
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
+        session, page_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    withheld_topics = await withheld_topic_messages(
+        session, page_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
     for message_row, parsed, initially_omitted in candidates:
         citations, citation_fences, omitted = _rebuild_export_citations(
             parsed, evidence, initially_omitted
         )
-        brief_key = task_brief_key(message_row.get("metadata_json"))
-        is_withheld = brief_key is not None and brief_key in withheld
+        task_metadata = message_row.get("metadata_json")
+        is_task = (
+            task_brief_key(task_metadata) is not None or topic_source_key(task_metadata) is not None
+        )
+        is_withheld = is_withheld_task_message(task_metadata, withheld, withheld_topics)
         if is_withheld:
             message_row["content"], citations, citation_fences, omitted = (
                 SCRUBBED_CONTENT,
@@ -850,7 +858,7 @@ async def _export_message_records(
                 message_created_at=message_row["message_created_at"],
                 message_updated_at=message_row["message_updated_at"],
                 citations=citation_fences,
-                brief_withheld=None if brief_key is None else is_withheld,
+                brief_withheld=is_withheld if is_task else None,
             )
         )
     if len(candidates) > len(items):
@@ -1034,8 +1042,14 @@ async def _revalidate_export_rows(
             if fence.brief_withheld is False:
                 published_live.append(message.metadata_json)
             citation_fences.extend(fence.citations)
-    if published_live and await withheld_brief_ids(
-        session, published_live, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    # Briefs and topic-watch posts share the fence flag: either one withheld now invalidates the page.
+    if published_live and (
+        await withheld_brief_ids(
+            session, published_live, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        or await withheld_topic_messages(
+            session, published_live, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     ):
         return "record_changed", []
     return None, citation_fences

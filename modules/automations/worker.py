@@ -12,7 +12,7 @@ from core.config import Settings
 from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
-from modules.automations import execution, producers, scheduler
+from modules.automations import _topic_settle, execution, producers, scheduler
 from modules.automations.models import Automation
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ async def reconcile_automation_runs(ctx: dict[str, Any]) -> int:
     """Every few seconds: fire due schedule slots, sweep trigger producers, fan out inbox triggers, then (re)enqueue runs.
 
     Order matters: slots and triggers create ``queued`` rows first so the same pass can dispatch
-    them. Every step is idempotent (run identity, inbox status), so overlapping or restarted
+    them; the Topic watch settle sweep then posts finished collections into their threads. Every step is idempotent (run identity, inbox status), so overlapping or restarted
     passes only repeat work that the database already absorbs. Returns jobs enqueued.
 
     Discovery pages workspaces that still have any non-deleted automation (not only enabled ones) so
@@ -75,6 +75,7 @@ async def reconcile_automation_runs(ctx: dict[str, Any]) -> int:
             await scheduler.tick(factory, scope=scope, multi_workspace_enabled=flag)
             await producers.sweep(factory, scope=scope, multi_workspace_enabled=flag)
             await execution.fan_out_triggers(factory, scope=scope, multi_workspace_enabled=flag)
+            await _topic_settle.sweep(factory, scope=scope, multi_workspace_enabled=flag)
             enqueued += await execution.dispatch_runs(
                 factory, cast(ArqRedis, ctx["redis"]), scope=scope, multi_workspace_enabled=flag
             )

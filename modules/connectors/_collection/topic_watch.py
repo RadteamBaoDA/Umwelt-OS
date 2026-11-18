@@ -52,7 +52,8 @@ MAX_PAGE_BYTES = 2 * 1024 * 1024
 PAGE_TIMEOUT_SECONDS = 20
 SUMMARY_CHARS = 400
 MAX_PROVIDER_ID_CHARS = 480  # ingestion allows 512; longer URLs are skipped, not hashed
-SOFT_DEADLINE_SECONDS = rest.RUN_DEADLINE_SECONDS - 15  # leave time to accept before the hard cut
+# Hard cut is selection.TOPIC_WATCH_DEADLINE_SECONDS (240 s); stop collecting ~20 s earlier to leave time to accept.
+SOFT_DEADLINE_SECONDS = 220
 _BRACKETS = str.maketrans("[]", "()")
 _HTML_TYPES = ("text/html", "application/xhtml")
 

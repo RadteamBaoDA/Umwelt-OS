@@ -172,7 +172,7 @@ export interface ChatMessage {
   suggestions?: string[];
   response_id: string | null;
   /** Allowlisted scheduled-task fields (server `MessageRead.task`); null/absent for ordinary messages. */
-  task?: components['schemas']['TaskMessageMeta'] | null;
+  task?: components['schemas']['DailyBriefMessageMeta'] | components['schemas']['TopicWatchMessageMeta'] | null;
   /** Model-proposed scheduled task awaiting owner confirmation (server `MessageRead.task_draft`); never saved by the server. */
   task_draft?: components['schemas']['ScheduledTaskDraft'] | null;
   /** Message whose prompt or assistant response this append-only revision follows. */

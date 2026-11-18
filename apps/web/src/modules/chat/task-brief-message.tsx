@@ -35,7 +35,8 @@ export function isTaskBriefMessage(msg: ChatMessage): boolean {
 export function TaskBriefMessage({ msg }: { msg: ChatMessage }) {
   const t = useTranslations('chat');
   const display = useDisplayPreferences();
-  const meta = msg.task;
+  // The message is dispatched here only for a daily brief; narrow the task-metadata union to that variant.
+  const meta = msg.task?.task_kind === 'daily_brief' ? msg.task : undefined;
   // Defensive: tolerate a malformed payload (non-array, items missing ref/title) instead of crashing the transcript.
   const rawCitations: unknown = meta?.brief_citations;
   const citations = (Array.isArray(rawCitations) ? rawCitations : [])

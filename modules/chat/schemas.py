@@ -424,8 +424,8 @@ class TaskBriefCitationRead(BaseModel):
     source_ids: list[str] = Field(default_factory=list)
 
 
-class TaskMessageMeta(BaseModel):
-    """Allowlisted view of the scheduled-task keys stored in a message's private ``metadata_json``."""
+class DailyBriefMessageMeta(BaseModel):
+    """Allowlisted view of the Daily brief keys stored in a message's private ``metadata_json``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -436,18 +436,88 @@ class TaskMessageMeta(BaseModel):
     brief_citations: list[TaskBriefCitationRead] = Field(default_factory=list)
 
 
-def parse_task_message_meta(metadata: Any) -> TaskMessageMeta | None:
+class TopicWatchItemRead(BaseModel):
+    """One collected item of a Topic watch post; every field is untrusted text shown as plain text."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(max_length=500)
+    url: str | None = Field(default=None, max_length=2048)
+    site: str | None = Field(default=None, max_length=255)
+    summary: str | None = Field(default=None, max_length=400)
+    document_id: str | None = Field(default=None, max_length=64)
+    story_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("url")
+    @classmethod
+    def _http_only(cls, value: str | None) -> str | None:
+        """Drop any non-http(s) URL so a stored ``javascript:`` or ``data:`` link can never be rendered."""
+        return (
+            value
+            if value is not None and value.lower().startswith(("http://", "https://"))
+            else None
+        )
+
+
+class TopicWatchStatsRead(BaseModel):
+    """Bounded run telemetry of a Topic watch post (counts plus an optional partial-run reason)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    queries: int = 0
+    results: int = 0
+    fetched: int = 0
+    blocked: int = 0
+    timeout: int = 0
+    failed: int = 0
+    duplicates: int = 0
+    off_topic: int = 0
+    items: int = 0
+    tokens: int = 0
+    reason: str | None = Field(default=None, max_length=32)
+
+
+class TopicWatchMessageMeta(BaseModel):
+    """Allowlisted view of the Topic watch keys stored in a message's private ``metadata_json``.
+
+    ``source_id`` is deliberately absent: it is stored for withholding only and never sent to clients.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_kind: Literal["topic_watch"]
+    run_id: str
+    coverage: Literal["complete", "partial"]
+    stats: TopicWatchStatsRead = Field(default_factory=TopicWatchStatsRead)
+    items: list[TopicWatchItemRead] = Field(default_factory=list, max_length=50)
+
+
+TaskMessageMeta = Annotated[
+    DailyBriefMessageMeta | TopicWatchMessageMeta, Field(discriminator="task_kind")
+]
+_TASK_META_MODELS: dict[str, type[DailyBriefMessageMeta] | type[TopicWatchMessageMeta]] = {
+    "daily_brief": DailyBriefMessageMeta,
+    "topic_watch": TopicWatchMessageMeta,
+}
+
+
+def parse_task_message_meta(
+    metadata: Any,
+) -> DailyBriefMessageMeta | TopicWatchMessageMeta | None:
     """Return the allowlisted task metadata of a message posted by a scheduled task, else ``None``.
 
-    Only rows whose ``metadata_json["origin"] == "scheduled_task"`` qualify; every other key is dropped so private
-    metadata never reaches clients. Malformed or incomplete data yields ``None`` rather than an error.
+    Only rows whose ``metadata_json["origin"] == "scheduled_task"`` qualify; the variant is chosen by
+    ``task_kind`` and every key outside that variant's allowlist is dropped so private metadata
+    (for example a topic post's ``source_id``) never reaches clients. Malformed, incomplete or
+    unknown-kind data yields ``None`` rather than an error.
     """
     if not isinstance(metadata, dict) or metadata.get("origin") != "scheduled_task":
         return None
+    model = _TASK_META_MODELS.get(str(metadata.get("task_kind")))
+    if model is None:
+        return None
     try:
-        return TaskMessageMeta.model_validate(
-            {k: v for k, v in metadata.items() if k in TaskMessageMeta.model_fields}
-        )
+        return model.model_validate({k: v for k, v in metadata.items() if k in model.model_fields})
     except ValueError:
         return None
 

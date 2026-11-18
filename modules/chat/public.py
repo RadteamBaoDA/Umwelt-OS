@@ -229,6 +229,9 @@ from modules.chat._public.scheduled_task_threads import (
 from modules.chat._public.scheduled_task_threads import (
     withheld_brief_ids as withheld_brief_ids,
 )
+from modules.chat._public.scheduled_task_threads import (
+    withheld_topic_messages as withheld_topic_messages,
+)
 from modules.chat._public.web_search_command import (
     CollectorSearchOutcome as CollectorSearchOutcome,
 )
