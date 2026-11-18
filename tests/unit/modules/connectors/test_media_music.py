@@ -31,8 +31,30 @@ def test_listenbrainz_url_only_uses_its_documented_scope_filters():
             "media_languages": ("en",),
         }
     )
-    query = parse_qs(urlsplit(url).query)
-    assert query == {"days": ["45"], "sort": ["release_date"], "user_name": ["owner"]}
+    parts = urlsplit(url)
+    # Per-user endpoint: user_name must never reach the sitewide explore endpoint.
+    assert parts.path == "/1/user/owner/fresh_releases"
+    assert parse_qs(parts.query) == {"past": ["true"], "future": ["true"]}
+    sitewide = urlsplit(build_listenbrainz_url({"listenbrainz_days": 45}))
+    assert sitewide.path == "/1/explore/fresh-releases/"
+    assert parse_qs(sitewide.query) == {"days": ["45"], "sort": ["release_date"]}
+    with pytest.raises(ValueError):
+        build_listenbrainz_url({"listenbrainz_username": "../x"})
+
+
+@pytest.mark.asyncio
+async def test_cover_url_accepts_archive_subdomains_and_rejects_lookalikes():
+    from modules.connectors.providers.media_music import _cover_url
+
+    async def final(url: str):
+        async def fetch(*_a, **_k) -> Fetched:
+            return Fetched(b"x", final_url=url)
+
+        return await _cover_url("f3a5b6b7-62ec-4be7-bfc8-62ac2c2ea3d9", "ua", fetch)
+
+    assert await final("https://ia800000.us.archive.org/1/items/mbid/front-500.jpg")
+    assert await final("https://evilarchive.org/x.jpg") is None
+    assert await final("https://archive.org.evil.example/x.jpg") is None
 
 
 def test_listenbrainz_filter_changes_reset_query_fingerprint_without_changing_target_scope():

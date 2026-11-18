@@ -369,3 +369,13 @@ async def test_send_fence_trace_uses_explicit_recheck_for_wrapped_gates():
     await hook("http11.send_request_headers.started", {})
     await hook("http11.send_request_body.started", {})
     assert calls == ["recheck"]
+
+
+def test_youtube_handle_page_accepts_current_identifier_itemprop() -> None:
+    """YouTube now emits ``itemprop="identifier"`` for the channel id; the legacy ``channelId`` still works."""
+    from modules.connectors.providers.feed_catalog import _youtube_channel_id_from_page
+
+    channel = "UC" + "a" * 22
+    for prop in ("identifier", "channelId"):
+        page = f'<meta itemprop="{prop}" content="{channel}">'.encode()
+        assert _youtube_channel_id_from_page(page) == channel

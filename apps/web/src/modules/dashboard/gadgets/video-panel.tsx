@@ -1,7 +1,7 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bookmark, Search, Sparkles } from 'lucide-react';
+import { Bookmark, Play, Search, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -77,7 +77,7 @@ function TerminalVideoFrame({ video }: { video: VideoItem }) {
         <img src={video.imageUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className="video-frame-img" />
       )}
       <span className="video-frame-play" aria-hidden="true">
-        ▶
+        <Play aria-hidden="true" className="size-4 fill-current" />
       </span>
       <span className="video-frame-cap" aria-hidden="true">
         <span>{video.title}</span>
@@ -261,12 +261,27 @@ function VideoPanelView({
           ))}
       </ul>
       <ShowMoreButton state={more} />
+      <VideoLoadMore query={query} />
+    </div>
+  );
+}
+
+/** Cursor "Load more" control with a failure alert; the server cursor is forwarded unchanged by the infinite query. */
+function VideoLoadMore({ query }: { query: ReturnType<typeof useInfiniteQuery> }) {
+  const t = useTranslations('dashboard');
+  return (
+    <>
+      {query.isFetchNextPageError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('feed.loadMoreError')}
+        </p>
+      )}
       {query.hasNextPage && (
         <Button type="button" variant="outline" size="sm" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
-          {query.isFetchingNextPage ? t('gadget.dataLoading') : t('video.loadMore')}
+          {query.isFetchingNextPage ? t('feed.loadingMore') : t('video.loadMore')}
         </Button>
       )}
-    </div>
+    </>
   );
 }
 
@@ -361,7 +376,7 @@ function VideoRow({
             {dateLabel}
           </time>
           {creator ? ` · ${creator}` : ''}
-          {duration != null ? ` · ${t('video.duration', { duration: Math.round(duration / 60) })}` : ''}
+          {duration != null ? ` · ${t('video.duration', { duration: Math.max(1, Math.ceil(duration / 60)) })}` : ''}
         </p>
         {isOwner && (
           <div className="mt-1 flex flex-wrap gap-1">

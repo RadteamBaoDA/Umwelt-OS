@@ -45,6 +45,7 @@ FIFTEEN_MINUTE_PROVIDERS = frozenset(
         "health",
         "mastodon",
         "x",
+        "youtube",
     }
 )
 # Floors pre-registered for a provider with no adapter yet (none: ITviec shipped on the owner's 2026-11-04 decision).
@@ -215,3 +216,19 @@ async def test_collect_now_after_the_floor_or_for_fast_providers_is_queued(
     assert (await _collect(session)).status == "queued"  # type: ignore[attr-defined]
     queued.assert_awaited_once()
     session.scalar.assert_not_awaited()  # the last-start lookup is skipped for floor < 6 h
+
+
+def test_media_floors_match_spec_table() -> None:
+    """Spec 3.1 tables A/B poll floors (minutes) for every media provider."""
+    expected = {
+        "wikidata_movies": 360, "itunes_movies": 360, "letterboxd_rss": 60, "anilist_anime": 30,
+        "livechart_episodes": 30, "ann_news": 60, "anilist_manga": 60, "mangaupdates_releases": 60,
+        "mangadex_releases": 60, "openlibrary_books": 360, "gutendex_books": 1440,
+        "apple_books_rss": 360, "youtube": 15, "podcast_rss": 60, "tvmaze_schedule": 60,
+        "listenbrainz_releases": 360, "steam_releases": 360, "tmdb_movies": 360, "tmdb_tv": 360,
+        "trakt_media": 360, "omdb_lookup": 1440, "mal_anime": 360, "mal_manga": 360,
+        "google_books": 1440, "hardcover_books": 360, "youtube_api": 30, "podcast_index": 60,
+        "igdb_games": 360,
+    }  # fmt: skip
+    for provider, minutes in expected.items():
+        assert min_interval_minutes(provider) == minutes, provider

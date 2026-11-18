@@ -1833,7 +1833,8 @@ export interface paths {
          *     the same encrypted write-only credential owner for their fixed bearer-token header; their
          *     adapters apply the provider-required Bearer scheme when making requests. YouTube and
          *     Podcast Index use the same revisioned slot with separate adapter-owned wire authentication.
-         *     Podcast Index requires a pair, which is encrypted atomically in one bound envelope.
+         *     Podcast Index and IGDB require both credentials, encrypted atomically in one bound envelope.
+         *     IGDB maps the API key field to Twitch's client ID and the API secret to the client secret.
          */
         put: operations["reenter_native_rest_credential_api_v1_connectors__source_id__credentials_native_rest_put"];
         post?: never;
@@ -1860,7 +1861,7 @@ export interface paths {
          *     Owner-write authorization is enforced by the route dependency. The local
          *     configuration and delete intent commit before reconciliation; the external
          *     n8n credential remains until the later delete acknowledgement clears it. Native local-service
-         *     bearer tokens have no external operation and are erased in the same transaction.
+         *     bearer tokens and encrypted keyed/native REST secrets have no external deletion operation and are erased in the same transaction.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
          *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
@@ -7570,10 +7571,16 @@ export interface components {
             ann_media_type?: ("anime" | "manga") | null;
             /** Ann Mode */
             ann_mode?: ("news" | "encyclopedia") | null;
+            /** Available Translated Languages */
+            available_translated_languages?: ("en" | "ja" | "ko" | "zh" | "zh-hk" | "vi" | "fr" | "de" | "es")[] | null;
+            /** Chart */
+            chart?: string | null;
             /** Coin Ids */
             coin_ids?: ("btc-bitcoin" | "eth-ethereum" | "bnb-binance-coin" | "sol-solana" | "xrp-xrp" | "ada-cardano" | "doge-dogecoin" | "ltc-litecoin" | "dot-polkadot" | "trx-tron")[] | null;
             /** Content Ratings */
             content_ratings?: ("safe" | "pg" | "pg_13" | "r" | "suggestive" | "mature" | "explicit" | "clean")[] | null;
+            /** Country */
+            country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
             /** Country Of Origin */
             country_of_origin?: ("JP" | "KR" | "CN" | "TW" | "ALL") | null;
             /** Crypto Symbols */
@@ -7596,8 +7603,12 @@ export interface components {
             eonet_status?: ("open" | "all") | null;
             /** Exclude Adult */
             exclude_adult?: boolean | null;
+            /** Exclude Genre */
+            exclude_genre?: ("action" | "adventure" | "sci_fi" | "fantasy" | "romance" | "thriller" | "horror" | "comedy" | "drama" | "mystery" | "documentary" | "animation" | "slice_of_life" | "history" | "music" | "sports" | "non_fiction" | "programming" | "rpg" | "strategy")[] | null;
             /** Exclude Keywords */
             exclude_keywords?: string[] | null;
+            /** Excluded Tags */
+            excluded_tags?: string[] | null;
             /** Feed Sections */
             feed_sections?: string[] | null;
             /** Fx Base */
@@ -7616,6 +7627,16 @@ export interface components {
             gdelt_source_lang?: ("english" | "vietnamese" | "chinese" | "japanese" | "korean" | "french" | "german" | "spanish") | null;
             /** Gdelt Timespan */
             gdelt_timespan?: ("1h" | "6h" | "24h" | "3d" | "7d") | null;
+            /** Genre Qids */
+            genre_qids?: string[] | null;
+            /** Google Books Filter */
+            google_books_filter?: ("ebooks" | "free-ebooks" | "paid-ebooks") | null;
+            /** Google Books Print Type */
+            google_books_print_type?: ("all" | "books" | "magazines") | null;
+            /** Google Books Query */
+            google_books_query?: string | null;
+            /** Google Books Subject */
+            google_books_subject?: string | null;
             /** Graph Enabled */
             graph_enabled?: boolean | null;
             /** Gutendex Author Year End */
@@ -7632,10 +7653,18 @@ export interface components {
             gutendex_topic?: string | null;
             /** Hn List */
             hn_list?: ("top" | "new" | "best" | "ask" | "show") | null;
+            /** Igdb Game Types */
+            igdb_game_types?: ("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" | "12" | "13")[] | null;
+            /** Igdb Platforms */
+            igdb_platforms?: number[] | null;
+            /** Igdb Region */
+            igdb_region?: ("europe" | "north_america" | "australia" | "new_zealand" | "japan" | "china" | "asia" | "world") | null;
             /** Include Keywords */
             include_keywords?: string[] | null;
             /** Ioda Country */
             ioda_country?: string | null;
+            /** Itunes Podcast Id */
+            itunes_podcast_id?: number | null;
             /** Job Cities */
             job_cities?: ("ho_chi_minh" | "ha_noi" | "da_nang")[] | null;
             /** Job Keywords */
@@ -7646,8 +7675,16 @@ export interface components {
             job_min_salary_usd?: number | null;
             /** Kev Ransomware Only */
             kev_ransomware_only?: boolean | null;
+            /** Kind */
+            kind?: ("books" | "audio-books") | null;
             /** Kp Min */
             kp_min?: number | null;
+            /** Language */
+            language?: string | null;
+            /** Letterboxd Username */
+            letterboxd_username?: string | null;
+            /** Licensed Only */
+            licensed_only?: boolean | null;
             /** Listenbrainz Days */
             listenbrainz_days?: number | null;
             /** Listenbrainz Sort */
@@ -7658,6 +7695,24 @@ export interface components {
             listenbrainz_tags?: string[] | null;
             /** Listenbrainz Username */
             listenbrainz_username?: string | null;
+            /** Lookback Days */
+            lookback_days?: number | null;
+            /** Mal Mode */
+            mal_mode?: ("ranking" | "season") | null;
+            /** Mal Ranking Type */
+            mal_ranking_type?: ("all" | "airing" | "upcoming" | "tv" | "ova" | "movie" | "special" | "bypopularity" | "favorite") | ("manga" | "novels" | "oneshots" | "doujin" | "manhwa" | "manhua" | "bypopularity" | "favorite") | null;
+            /** Mal Season */
+            mal_season?: ("winter" | "spring" | "summer" | "fall") | null;
+            /** Mal Season Year */
+            mal_season_year?: number | null;
+            /** Manga Ids */
+            manga_ids?: string[] | null;
+            /** Mangadex Content Ratings */
+            mangadex_content_ratings?: ("safe" | "suggestive" | "erotica" | "pornographic")[] | null;
+            /** Mangadex Statuses */
+            mangadex_statuses?: ("ongoing" | "completed" | "hiatus" | "cancelled")[] | null;
+            /** Mangaupdates Types */
+            mangaupdates_types?: ("Manga" | "Manhwa" | "Manhua" | "Novel" | "Doujinshi")[] | null;
             /** Max Age Days */
             max_age_days?: number | null;
             /** Max Items */
@@ -7694,12 +7749,38 @@ export interface components {
             nws_severity?: ("Extreme" | "Severe" | "Moderate" | "Minor")[] | null;
             /** Oecd Countries */
             oecd_countries?: ("USA" | "CHN" | "JPN" | "DEU" | "GBR" | "FRA" | "ITA" | "CAN" | "KOR" | "IND" | "BRA" | "AUS" | "ESP" | "MEX" | "TUR" | "IDN")[] | null;
+            /** Omdb Imdb Id */
+            omdb_imdb_id?: string | null;
+            /** Omdb Mode */
+            omdb_mode?: ("imdb_id" | "title" | "search") | null;
+            /** Omdb Search */
+            omdb_search?: string | null;
+            /** Omdb Title */
+            omdb_title?: string | null;
+            /** Omdb Type */
+            omdb_type?: ("movie" | "series" | "episode") | null;
             /** Openlibrary Mode */
             openlibrary_mode?: ("subject" | "search" | "recent") | null;
             /** Openlibrary Query */
             openlibrary_query?: string | null;
             /** Openlibrary Subject */
             openlibrary_subject?: string | null;
+            /** Original Languages */
+            original_languages?: ("ja" | "ko" | "zh" | "zh-hk")[] | null;
+            /** Podcast Index Categories */
+            podcast_index_categories?: string | null;
+            /** Podcast Index Excluded Categories */
+            podcast_index_excluded_categories?: string | null;
+            /** Podcast Index Languages */
+            podcast_index_languages?: string[] | null;
+            /** Podcast Index Query */
+            podcast_index_query?: string | null;
+            /** Podcast Index Since */
+            podcast_index_since?: number | null;
+            /** Podcast Index Value */
+            podcast_index_value?: ("any" | "lightning" | "hive" | "webmonetization") | null;
+            /** Publication Demographic */
+            publication_demographic?: ("shounen" | "shoujo" | "josei" | "seinen" | "none")[] | null;
             /** Rag Index Enabled */
             rag_index_enabled?: boolean | null;
             /** Realtime Mode */
@@ -7712,10 +7793,40 @@ export interface components {
             satnogs_status?: ("good" | "bad" | "unknown") | null;
             /** Schedule Interval Minutes */
             schedule_interval_minutes?: (15 | 30 | 60 | 360 | 1440) | null;
+            /** Search Terms */
+            search_terms?: string | null;
+            /** Series Ids */
+            series_ids?: number[] | null;
+            /** Steam Appids */
+            steam_appids?: number[] | null;
+            /** Steam Country */
+            steam_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
+            /** Steam Language */
+            steam_language?: ("english" | "vietnamese" | "japanese" | "schinese" | "koreana" | "french" | "german" | "spanish") | null;
+            /** Steam Mode */
+            steam_mode?: ("featured" | "news") | null;
+            /** Tmdb Certification */
+            tmdb_certification?: string | null;
+            /** Tmdb Certification Country */
+            tmdb_certification_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
+            /** Tmdb Language */
+            tmdb_language?: string | null;
+            /** Tmdb Mode */
+            tmdb_mode?: ("now_playing" | "upcoming" | "changes" | "airing_today" | "on_the_air") | null;
+            /** Trakt Calendar Days */
+            trakt_calendar_days?: number | null;
+            /** Trakt Certifications */
+            trakt_certifications?: ("G" | "PG" | "PG-13" | "R" | "NC-17")[] | null;
+            /** Trakt Mode */
+            trakt_mode?: ("movies_trending" | "movies_anticipated" | "shows_trending" | "shows_anticipated" | "movies_calendar" | "shows_calendar" | "movies_search" | "shows_search") | null;
+            /** Trakt Query */
+            trakt_query?: string | null;
             /** Tvmaze Global */
             tvmaze_global?: boolean | null;
             /** Tvmaze Mode */
             tvmaze_mode?: ("schedule_country" | "schedule_web") | null;
+            /** Updated At Since */
+            updated_at_since?: string | null;
             /** Usgs Min Magnitude */
             usgs_min_magnitude?: ("significant" | "4.5" | "2.5" | "1.0" | "all") | null;
             /** Usgs Period */
@@ -22808,7 +22919,7 @@ export interface operations {
                 release_year?: number | null;
                 release_year_from?: number | null;
                 release_year_to?: number | null;
-                release_season?: string | null;
+                release_season?: ("winter" | "spring" | "summer" | "fall") | null;
                 min_rating?: number | null;
                 release_window_days?: number | null;
                 sort?: "created_at_desc" | "release_date_asc";

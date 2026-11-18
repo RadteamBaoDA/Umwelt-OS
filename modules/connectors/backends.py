@@ -227,6 +227,7 @@ GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | NATIVE_SIGNED_MEDIA_PROVIDERS
     "wikidata_movies",
     "itunes_movies",
     "letterboxd_rss",
+    "omdb_lookup",
     "mal_anime",
     "mal_manga",
     "google_books",

@@ -165,7 +165,7 @@ def test_tvmaze_has_a_shared_short_window_pilot_quota() -> None:
     spec = get_provider_spec("tvmaze_schedule")
     assert spec is not None
     minute = next(window for window in spec.quota if window.window == "minute")
-    assert minute.budget_kind == "provider" and minute.limit_units == 1
+    assert minute.budget_kind == "provider" and minute.limit_units == 20
 
 
 def test_catalog_exposes_all_specs_additively_and_honestly() -> None:

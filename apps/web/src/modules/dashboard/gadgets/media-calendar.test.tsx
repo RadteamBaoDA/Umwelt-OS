@@ -63,6 +63,11 @@ describe('calendarGroups', () => {
     ]);
   });
 
+  it('reads date-only release dates as calendar days in any display timezone', () => {
+    const now = Date.parse('2026-11-17T10:00:00Z');
+    expect(calendarGroups([release('d', '2026-11-17')], 'America/Los_Angeles', now)).toMatchObject([{ key: 'today' }]);
+  });
+
   it('uses display-timezone calendar days across DST and lets tomorrow precede the next week', () => {
     const now = Date.parse('2026-11-01T07:30:00Z');
     const items = [release('today', '2026-11-02T07:30:00Z'), release('tomorrow', '2026-11-02T08:30:00Z')];
@@ -74,6 +79,12 @@ describe('calendarGroups', () => {
 });
 
 describe('MediaCalendarGadget', () => {
+  it('shows the empty notice when no record has a valid release date', async () => {
+    mocks.list.mockResolvedValue({ items: [release('nodate', null)], next_cursor: null });
+    renderMedia(<MediaCalendarGadget instance={mediaInstance({ renderer: 'media_calendar' })} />);
+    expect(await screen.findByText('No media matches these filters.')).toBeInTheDocument();
+  });
+
   it('uses effective scope/filter selectors and the ascending release cursor contract', async () => {
     mocks.list.mockImplementation(async (_sources, _channels, cursor) => ({
       items: [release(cursor ? 'next' : 'today', cursor ? '2026-11-18T12:00:00Z' : '2026-11-17T12:00:00Z')],

@@ -259,7 +259,10 @@ class BuiltinEnableRequest(BaseModel):
         default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True
     )
     exclude_adult: StrictBool | None = None
-    tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
+    tvmaze_mode: Literal["schedule_country", "schedule_web", "followed_shows"] | None = None
+    tvmaze_show_ids: tuple[PositiveSeriesId, ...] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
     ann_mode: Literal["news", "encyclopedia"] | None = None
     ann_media_type: Literal["anime", "manga"] | None = None
     ann_category: (

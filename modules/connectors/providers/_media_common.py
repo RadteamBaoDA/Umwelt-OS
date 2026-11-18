@@ -386,7 +386,15 @@ def media_user_agent(provider: str | None = None, contact: str | None = None) ->
 
 
 class MediaRatePacer:
-    """Cooperative async per-key/host rate pacer using monotonic clocks and ``asyncio.sleep``."""
+    """Cooperative async per-key/host rate pacer using monotonic clocks and ``asyncio.sleep``.
+
+    Smoothing only, and per process: arq runs several worker processes (main, cron, replicas under the
+    PgBouncer overlay) and ``max_jobs`` > 1 slots each, so this cannot enforce per-IP upstream terms
+    (MusicBrainz 1/s, MangaDex 5/s, ANN 1/s, MangaUpdates 1/s) by itself. The cross-process guarantee is
+    the durable ``second`` quota window each of those providers declares in ``provider_specs`` and the
+    SendGate debits per request: an over-limit call is deferred, never sent. The pacer keeps one process
+    from tripping that window on every call.
+    """
 
     def __init__(self) -> None:
         """Initialize per-key lock and last-dispatch monotonic timestamp tables."""

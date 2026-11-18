@@ -435,7 +435,10 @@ class ConnectorConfig(BaseModel):
     google_books_print_type: Literal["all", "books", "magazines"] | None = None
     google_books_filter: Literal["ebooks", "free-ebooks", "paid-ebooks"] | None = None
     hardcover_mode: Literal["catalog", "upcoming"] | None = None
-    tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
+    tvmaze_mode: Literal["schedule_country", "schedule_web", "followed_shows"] | None = None
+    tvmaze_show_ids: tuple[PositiveSeriesId, ...] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
     tvmaze_global: StrictBool | None = None
     ann_mode: Literal["news", "encyclopedia"] | None = None
     ann_media_type: Literal["anime", "manga"] | None = None

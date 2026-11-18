@@ -87,3 +87,13 @@ def test_builtin_rows_expose_series_shape() -> None:
         assert spec is not None, provider
         shapes = builtins._read(spec, None, False).data_shapes
         assert ("series" in shapes) is (provider in SERIES_PROVIDERS), provider
+
+
+def test_keyed_media_providers_are_media_only_and_omdb_is_gated_only() -> None:
+    """Spec 3.1 table B: keyed media providers emit only `media`; omdb is collected by the gated executor only."""
+    from modules.connectors.backends import GATED_EXECUTOR_PROVIDERS
+
+    for provider in ("tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga",
+                     "google_books", "hardcover_books", "youtube_api", "podcast_index", "igdb_games"):
+        assert source_data_shapes(provider, "api") == {"media"} | ({"video"} if provider == "youtube_api" else set()), provider
+        assert provider in GATED_EXECUTOR_PROVIDERS, provider

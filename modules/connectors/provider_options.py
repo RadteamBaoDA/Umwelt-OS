@@ -478,7 +478,7 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
     "tmdb_tv": ("tmdb_mode", "tmdb_language", "media_country", "media_countries", "media_genres", "media_languages", "release_year", "min_rating", "exclude_adult"),
     "trakt_media": ("trakt_mode", "trakt_query", "trakt_calendar_days", "trakt_certifications", "media_countries", "media_genres", "media_languages", "release_year", "min_rating"),
     "omdb_lookup": ("omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search", "omdb_type", "release_year", "media_country", "media_countries", "media_genres", "media_languages", "min_rating"),
-    "tvmaze_schedule": ("tvmaze_mode", "tvmaze_global", "media_country", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
+    "tvmaze_schedule": ("tvmaze_mode", "tvmaze_show_ids", "tvmaze_global", "media_country", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
     "livechart_episodes": ("media_genres", "release_year"),
     "openlibrary_books": ("openlibrary_mode", "openlibrary_subject", "openlibrary_query", "ebooks_only", "media_languages"),
     "gutendex_books": ("media_languages", "gutendex_topic", "gutendex_search", "gutendex_copyright", "gutendex_mime_type", "gutendex_author_year_start", "gutendex_author_year_end", "media_genres"),
@@ -668,6 +668,22 @@ def _validate_media_options(cfg: Mapping[str, Any]) -> None:
         raise ValueError("release_year must be between 1800 and 2100")
 
 
+def _validate_tvmaze_options(cfg: Mapping[str, Any]) -> None:
+    """Reject TVMaze mode/scope combinations the field types cannot express.
+
+    Raises:
+        ValueError: global channels outside a country-less web schedule; ``followed_shows`` without
+        show ids or with global channels; or show ids supplied for a schedule mode.
+    """
+    mode = cfg.get("tvmaze_mode")
+    if cfg.get("tvmaze_global") and (mode != "schedule_web" or cfg.get("media_country") is not None):
+        raise ValueError("Global channels require web schedule without a country")
+    if mode == "followed_shows" and not cfg.get("tvmaze_show_ids"):
+        raise ValueError("Followed shows require at least one TVMaze show id")
+    if mode != "followed_shows" and cfg.get("tvmaze_show_ids"):
+        raise ValueError("Show ids apply only to followed shows mode")
+
+
 def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     """Reject option combinations the field types alone cannot catch.
 
@@ -682,9 +698,8 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     """
     if provider == "nvd" and (cfg.get("max_items") or 0) > UPSTREAM_CAPS["nvd"]:
         raise ValueError("NVD returns at most 20 CVEs per sync")
-    if provider == "tvmaze_schedule" and cfg.get("tvmaze_global"):
-        if cfg.get("tvmaze_mode") != "schedule_web" or cfg.get("media_country") is not None:
-            raise ValueError("Global channels require web schedule without a country")
+    if provider == "tvmaze_schedule":
+        _validate_tvmaze_options(cfg)
     for name in (
         "eonet_categories",
         "gdacs_event_types",
@@ -707,6 +722,7 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
         "mangaupdates_types",
         "exclude_genre",
         "series_ids",
+        "tvmaze_show_ids",
         "manga_ids",
         "excluded_tags",
         "original_languages",

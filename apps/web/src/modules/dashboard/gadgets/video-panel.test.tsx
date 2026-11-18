@@ -70,7 +70,7 @@ describe('VideoPanel', () => {
     renderPanel(['s1']);
     expect(await screen.findByText('Media a')).toBeTruthy();
     expect(screen.getByText(/Creator/)).toBeTruthy();
-    expect(screen.getByText(/2 min/)).toBeTruthy();
+    expect(screen.getByText(/3 min/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Media a' }).getAttribute('href')).toBe('https://media.example/a');
   });
 
@@ -118,5 +118,16 @@ describe('VideoPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Mark read' }));
     expect(mocks.interact).toHaveBeenCalledWith('a', 1, { read: true, bookmarked: undefined }, 'csrf');
     expect(screen.getByRole('button', { name: 'Bookmark' })).toBeTruthy();
+  });
+
+  it('shows a load-more error alert when the next cursor page fails', async () => {
+    mocks.list.mockImplementation(async (_sources: string[], _channels: string[], cursor?: string) => {
+      if (cursor) throw new Error('boom');
+      return { items: [projection('a')], next_cursor: 'c1' };
+    });
+    renderPanel(['s1']);
+    await screen.findByText('Media a');
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(await screen.findByText('Could not load more items. Try again.')).toBeTruthy();
   });
 });

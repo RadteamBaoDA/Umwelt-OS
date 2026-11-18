@@ -548,12 +548,15 @@ async def _run_openalex(run: Run) -> None:
 
 
 async def _run_tvmaze(run: Run) -> None:
-    """Collect one TVMaze schedule through the send gate with URL-bound validators.
+    """Collect one TVMaze schedule, or the followed shows' episodes, through the send gate.
+
+    Schedule modes use URL-bound validators; ``followed_shows`` issues one gated call per show id.
 
     A new date or scope never replays another URL's validators. A 304 retains existing
     records; accepted records, validator state, and the dedup-only selection commit together.
     """
     from modules.connectors.providers.media_movies_tv import (
+        collect_tvmaze_followed_shows,
         collect_tvmaze_schedule,
         tvmaze_schedule_url,
     )
@@ -561,6 +564,23 @@ async def _run_tvmaze(run: Run) -> None:
     source = run.attempt.source
     cfg: dict[str, Any] = source.configuration or {}
     now = datetime.now(UTC)
+    if cfg.get("tvmaze_mode") == "followed_shows":
+        # One gated call per followed show; no conditional validators (many URLs), so every run
+        # replaces the snapshot and the ids/window are part of the fingerprint.
+        fingerprint = _media_scope_fingerprint("tvmaze_schedule", cfg)
+        lease = await _lease(run)
+        followed = await collect_tvmaze_followed_shows(
+            run.gate.fetch_bytes,
+            show_ids=tuple(cfg.get("tvmaze_show_ids") or ()),
+            config=cfg,
+            collected_at=now,
+        )
+        run.extras["native_fp"] = fingerprint
+        records, cursor_after = await _select(run, lease, followed, now)
+        await _accept_native(
+            run, lease, records, _coverage(records), now, cursor_after=cursor_after
+        )
+        return
     web = cfg.get("tvmaze_mode") == "schedule_web"
     country = (
         ("" if cfg.get("tvmaze_global") else cfg.get("media_country"))

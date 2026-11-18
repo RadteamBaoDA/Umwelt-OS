@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl';
 import type { GadgetDocumentProjection } from '@/modules/knowledge/public-api';
 import type { GadgetInstance } from '../api';
-import { MediaCollection } from './media-parts';
+import { MediaCollection, releaseTimeZone } from './media-parts';
 
 /** Literal calendar section labels, ordered chronologically with recently released records first. */
 const CALENDAR_BUCKET_KEY = {
@@ -42,7 +42,7 @@ export function calendarGroups(items: GadgetDocumentProjection[], timezone: stri
     (a, b) =>
       Date.parse(a.media?.release_date ?? '') - Date.parse(b.media?.release_date ?? '') || a.document_id.localeCompare(b.document_id),
   )) {
-    const day = calendarDay(item.media!.release_date!, timezone);
+    const day = calendarDay(item.media!.release_date!, releaseTimeZone(item.media!.release_date!, timezone));
     const bucket = day < today ? 'recent' : day === today ? 'today' : day === today + 1 ? 'tomorrow' : day < weekEnd ? 'week' : 'upcoming';
     groups[bucket].push(item);
   }

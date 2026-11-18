@@ -221,8 +221,7 @@ async def fetch_bounded(
     Optional ``on_bad_request`` and ``on_forbidden`` classifiers receive bounded 400 and 403 bodies,
     respectively, and may raise typed, redacted provider errors.
     """
-    # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
-    # User-Agent) always win, compared case-insensitively.
+    # Several public APIs reject UA-less clients; caller headers (e.g. SEC's User-Agent) win, case-insensitively.
     merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
     if not any(name.lower() == "user-agent" for name in merged):
         merged["User-Agent"] = DEFAULT_USER_AGENT

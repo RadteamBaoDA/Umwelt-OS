@@ -80,7 +80,7 @@ class _YoutubeChannelIdParser(HTMLParser):
         """Read channel identity from the meta field or canonical YouTube channel URL."""
         tag = tag.lower()
         values = {key.lower(): value for key, value in attrs if value is not None}
-        if tag == "meta" and values.get("itemprop", "").lower() == "channelid":
+        if tag == "meta" and values.get("itemprop", "").lower() in {"channelid", "identifier"}:
             candidate = values.get("content", "")
             if re.fullmatch(r"UC[A-Za-z0-9_-]{22}", candidate):
                 self.channel_ids.add(candidate)
@@ -878,7 +878,14 @@ async def _collect_youtube_feeds(
     before_request: Callable[[], Awaitable[None]],
     validators: Mapping[str, Mapping[str, str | None]] | None = None,
 ) -> YoutubeSnapshotPage:
-    """Fetch each bounded YouTube target with URL-specific validators; return only a complete sweep for receipt."""
+    """Fetch each bounded YouTube target with URL-specific validators; return only a complete sweep for receipt.
+
+    A target answering 304 contributes no records but keeps its validators. The page still reports
+    ``returned_snapshot``: coverage is receipt metadata only and nothing downstream tombstones or deletes
+    documents that a snapshot omits (documents are upserted by identity), so a 304'd target's previously
+    accepted items stay readable. A 304 without a prior validator raises ``ProviderHttpError(304)``. A rate
+    limit mid-sweep returns no records, the prior validators and ``next_eligible_at`` instead.
+    """
     from modules.connectors.providers.rest import ProviderHttpError, fetch_bounded
 
     mapped: dict[str, IngestionRecord] = {}

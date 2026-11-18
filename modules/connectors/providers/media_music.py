@@ -26,6 +26,7 @@ from modules.connectors.providers.media_anime_manga_sources import _record
 from modules.ingestion.public import IngestionRecord
 
 LISTENBRAINZ_BASE = "https://api.listenbrainz.org/1/explore/fresh-releases/"
+LISTENBRAINZ_USER_BASE = "https://api.listenbrainz.org/1/user"
 MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
 CAA_BASE = "https://coverartarchive.org/release-group"
 MAX_RELEASES = 20
@@ -91,16 +92,26 @@ def _json_object(response: rest.Fetched, code: str) -> Mapping[str, Any]:
 def build_listenbrainz_url(config: Mapping[str, Any]) -> str:
     """Build the fixed-host fresh-release request using only ListenBrainz-supported options.
 
-    Country, genre, language and format filters belong to MusicBrainz enrichment and are never
-    sent to the ListenBrainz endpoint.
+    Without a username this is the sitewide explore endpoint (``days``/``sort``). With a validated
+    ``listenbrainz_username`` it is the per-user ``/1/user/{name}/fresh_releases`` endpoint, which
+    returns the same ``payload.releases`` envelope for that user's artists and accepts only
+    ``past``/``future`` (so ``days``/``sort`` do not apply). The sitewide endpoint ignores
+    ``user_name``, so it must never be sent there. Country, genre, language and format filters belong
+    to MusicBrainz enrichment and are never sent to ListenBrainz.
+
+    Raises:
+        ValueError: ``listenbrainz_username_invalid`` when the name is not ``[A-Za-z0-9_-]{1,30}``.
     """
+    username = config.get("listenbrainz_username")
+    if username:
+        if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,30}", username):
+            raise ValueError("listenbrainz_username_invalid")
+        query = urlencode({"past": "true", "future": "true"})
+        return f"{LISTENBRAINZ_USER_BASE}/{username}/fresh_releases?{query}"
     params: dict[str, str | int] = {
         "days": config.get("listenbrainz_days") or 14,
         "sort": config.get("listenbrainz_sort") or "release_date",
     }
-    username = config.get("listenbrainz_username")
-    if username:
-        params["user_name"] = username
     return f"{LISTENBRAINZ_BASE}?{urlencode(params)}"
 
 
@@ -334,7 +345,10 @@ async def _cover_url(group_id: str, user_agent: str, fetch_bytes: FetchBytes) ->
             return None
         raise
     final_url = response.final_url or f"{CAA_BASE}/{group_id}/front-500.jpg"
-    if (urlsplit(final_url).hostname or "").lower() not in {"coverartarchive.org", "archive.org"}:
+    host = (urlsplit(final_url).hostname or "").lower()
+    # CAA answers 307 to an Internet Archive storage node (e.g. ia800000.us.archive.org), never to the bare
+    # apex, so accept the exact fixed hosts or any ``*.archive.org`` subdomain (dot-anchored, no suffix tricks).
+    if host not in {"coverartarchive.org", "archive.org"} and not host.endswith(".archive.org"):
         return None
     return normalize_cover_url(final_url)
 

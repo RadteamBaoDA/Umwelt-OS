@@ -365,4 +365,36 @@ describe('MediaFeedGadget', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Bookmark' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not save this item action. Try again.');
   });
+
+  it('counts only visible selections toward the cap and shows a limit hint', async () => {
+    mocks.list.mockResolvedValue({ items: Array.from({ length: 34 }, (_, i) => mediaItem(String(i))), next_cursor: null });
+    renderMedia(<MediaFeedGadget instance={mediaInstance()} />);
+    await screen.findByText('Title 33');
+    for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+    expect(screen.getByText('You can select up to 32 items at once.')).toBeInTheDocument();
+    await userEvent.click(within(screen.getByText('Title 0').closest('article')!).getByRole('button', { name: 'Not relevant' }));
+    // Item 0 is hidden but still held in state; it must not block selecting another visible record.
+    fireEvent.click(within(screen.getByText('Title 32').closest('article')!).getByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: 'Ask AI about selection' }));
+    expect(mocks.openDrawer.mock.lastCall![0].context.items).toHaveLength(32);
+  });
+
+  it('shows a single alert when hiding fails', async () => {
+    mocks.interaction.mockRejectedValue(new Error('hide failed'));
+    renderMedia(<MediaFeedGadget instance={mediaInstance()} />);
+    await screen.findByText('Title doc-1');
+    await userEvent.click(screen.getByRole('button', { name: 'Not relevant' }));
+    await screen.findByRole('alert');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.queryByText('Could not save this item action. Try again.')).toBeNull();
+  });
+
+  it('renders date-only release dates without a timezone shift', async () => {
+    mocks.timezone = 'America/Los_Angeles';
+    const item = mediaItem('dated');
+    mocks.list.mockResolvedValue({ items: [{ ...item, media: { ...item.media!, release_date: '2026-11-17' } }], next_cursor: null });
+    renderMedia(<MediaFeedGadget instance={mediaInstance({ filters: { group_by: 'date' } })} />);
+    expect(await screen.findByRole('heading', { name: 'Nov 17, 2026' })).toBeInTheDocument();
+    expect(screen.getAllByText('Nov 17, 2026').length).toBeGreaterThan(1);
+  });
 });

@@ -448,7 +448,7 @@ export function MetricPicker({
   const t = useTranslations('gadgetSettings');
   /** Localized metric name (see {@link METRIC_NAME_KEY}) falling back to the raw id, with the unit appended when known. */
   const label = (metric: string) => {
-    const name = metric in METRIC_NAME_KEY ? t(METRIC_NAME_KEY[metric as keyof typeof METRIC_NAME_KEY]) : metric;
+    const name = Object.hasOwn(METRIC_NAME_KEY, metric) ? t(METRIC_NAME_KEY[metric as keyof typeof METRIC_NAME_KEY]) : metric;
     const unit = catalog.metrics.find((item) => item.id === metric)?.unit;
     return unit ? `${name} (${unit})` : name;
   };

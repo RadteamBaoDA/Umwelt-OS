@@ -8,6 +8,7 @@ import type { DraftAccess, SectionFacts } from './gadget-editor-sections';
 import type { GadgetScope } from './api';
 
 import {
+  MEDIACOUNTRY,
   MEDIA_VALUE_KEY,
   MEDIATYPE,
   MEDIAGENRE,
@@ -77,10 +78,12 @@ export function MediaFiltersSection({ draft, set, facts }: DraftAccess & { facts
   const countryNames = new Intl.DisplayNames([locale], { type: 'region' });
   /** Labels canonical enums through static keys and ISO country codes through the active locale. */
   const label = (value: string) =>
-    value in MEDIA_VALUE_KEY ? t(MEDIA_VALUE_KEY[value as keyof typeof MEDIA_VALUE_KEY]) : `${countryNames.of(value) ?? value} (${value})`;
+    Object.hasOwn(MEDIA_VALUE_KEY, value)
+      ? t(MEDIA_VALUE_KEY[value as keyof typeof MEDIA_VALUE_KEY])
+      : `${countryNames.of(value) ?? value} (${value})`;
   const lists = [
     ['media_types', MEDIATYPE],
-    ['countries', ['JP', 'KR', 'CN', 'TW', 'HK', 'VN', 'US', 'GB', 'FR', 'DE', 'CA', 'AU', 'IN', 'IT', 'ES', 'BR', 'TH', 'ID']],
+    ['countries', MEDIACOUNTRY],
     ['genres', MEDIAGENRE],
     ['languages', MEDIALANGUAGE],
     ['formats', MEDIAFORMAT],

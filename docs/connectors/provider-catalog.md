@@ -35,8 +35,8 @@ below have not been accepted against live services in this implementation pass.
   Adult results require explicit opt-in. Both share a conservative 60-request/minute durable cap and
   2.1-second in-process pacing. Live network and provider quota behavior remain unverified. `livechart_episodes`
   collects the official episode RSS with conditional requests and bounded
-  anime metadata. `tvmaze_schedule` collects the current day's country or web schedule, with TVMaze
-  attribution and source filters. Followed-show collection is not implemented. `openlibrary_books` collects
+  anime metadata. `ann_news` is a scoped source (not a fixed built-in) so one workspace can run several: its `ann_mode` selects the news Atom feed (`ann_category`, `ann_edition`) or the paced Encyclopedia XML (`ann_media_type`, 1 request/second); it is a superset of the spec's fixed news preset. `tvmaze_schedule` collects the current day's country or web schedule, with TVMaze
+  attribution and source filters. `followed_shows` mode (option `tvmaze_show_ids`, at most 20 ids) issues one gated call per show for its previous and next episode within a 14-day-back, 60-day-ahead window. `openlibrary_books` collects
   subject, search, or recent-change work metadata from the official API, with a 100-item/4 MiB response
   bound, a 360-minute poll floor, CC0 attribution, and paginated recent-change cursors. Recent mode is
   capped at ten change rows plus ten work lookups per run, locally paced at three requests per second,
@@ -140,7 +140,7 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `podcast_rss` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
 | `wikidata_movies` | `implemented` | open | supported | yes | no | 360 | 2026-11-17 |
 | `itunes_movies` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
-| `letterboxd_rss` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `letterboxd_rss` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
 | `tmdb_movies` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
 | `tmdb_tv` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
 | `trakt_media` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
