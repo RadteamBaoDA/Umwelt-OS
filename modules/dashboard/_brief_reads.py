@@ -12,11 +12,13 @@ from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import Scope
 from modules.dashboard import briefs
 from modules.dashboard.briefs import BriefUnavailable, _admit, _with_live_status
-from modules.dashboard.daily_schemas import BriefRead
-from modules.dashboard.models import DailyBrief
+from modules.dashboard.daily_schemas import BriefDocumentRef, BriefRead
+from modules.dashboard.models import DailyBrief, DailyBriefEvidence
 
 # Bound on ids per read; matches the lock-page bound passed to ``_with_live_status``.
 MAX_BRIEF_IDS = 500
+# Bound on document support rows returned for one brief (fact_ref <= 40, support_index <= 99).
+MAX_BRIEF_DOCUMENT_REFS = 100
 
 
 async def _rows(
@@ -114,3 +116,35 @@ async def live_brief_ids(
         max_briefs=MAX_BRIEF_IDS,
     )
     return {b.id for b in live if b.status == "current"}
+
+
+async def brief_document_refs(
+    session: AsyncSession, brief_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> list[BriefDocumentRef]:
+    """Return the document-backed support of one of the caller's saved briefs, in fact/support order.
+
+    ``[]`` when the brief is absent or belongs to another workspace or owner. Workspace- and
+    owner-scoped like ``_rows``; read-only, no row locks; at most ``MAX_BRIEF_DOCUMENT_REFS`` rows.
+    Liveness is NOT checked here: callers decide visibility first (chat uses ``withheld_brief_ids``).
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    rows = await session.execute(
+        select(
+            DailyBriefEvidence.fact_ref,
+            DailyBriefEvidence.fact_kind,
+            DailyBriefEvidence.source_id,
+            DailyBriefEvidence.document_id,
+            DailyBriefEvidence.document_version_id,
+            DailyBriefEvidence.chunk_id,
+        )
+        .join(DailyBrief, DailyBrief.id == DailyBriefEvidence.brief_id)
+        .where(
+            DailyBrief.id == brief_id,
+            DailyBrief.workspace_id == scope.workspace_id,
+            DailyBrief.owner_id == _actor(scope),
+            DailyBriefEvidence.document_id.is_not(None),
+        )
+        .order_by(DailyBriefEvidence.fact_ref, DailyBriefEvidence.support_index)
+        .limit(MAX_BRIEF_DOCUMENT_REFS)
+    )
+    return [BriefDocumentRef(**row._mapping) for row in rows]

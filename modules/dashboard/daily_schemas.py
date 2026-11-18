@@ -47,6 +47,17 @@ class BriefRead(BaseModel):
     generated_at: datetime
 
 
+class BriefDocumentRef(BaseModel):
+    """One document chunk that supports a fact of a saved brief (ids only, no content)."""
+
+    fact_ref: int
+    fact_kind: str
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+
+
 class BriefCleanupProgress(BaseModel):
     """Report one flush-only bounded page of copied briefs affected by a Document cleanup."""
 

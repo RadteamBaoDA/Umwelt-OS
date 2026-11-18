@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from modules.dashboard import briefs, gadgets, layouts  # noqa: F401
 from modules.dashboard._brief_reads import (
+    brief_document_refs,
     get_brief,
     live_brief_ids,
 )
@@ -323,6 +324,7 @@ from modules.dashboard.briefs import (  # deliberate late import
 from modules.dashboard.context import build_daily_context  # deliberate late import
 from modules.dashboard.daily_schemas import (  # deliberate late import
     ALL_BRIEF_SECTIONS,
+    BriefDocumentRef,
     BriefRead,
     BriefSection,
     DailyContext,
@@ -335,6 +337,7 @@ __all__ = [
     "BriefSection",
     "BriefEmpty",
     "BriefEvidenceRevoked",
+    "BriefDocumentRef",
     "BriefRead",
     "BriefSlotOwned",
     "BriefUnavailable",
@@ -346,6 +349,7 @@ __all__ = [
     "clean_document_brief_evidence",
     "count_source_gadgets",
     "generate_brief",
+    "brief_document_refs",
     "get_brief",
     "latest_brief",
     "legacy_brief_coverage",
