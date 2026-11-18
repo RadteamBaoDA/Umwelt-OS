@@ -250,13 +250,26 @@ __all__ = [
 ]
 
 
-def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
+def _classify(
+    exc: BaseException, *, keyless: bool = False, provider: str | None = None
+) -> dict[str, Any]:
     """Map an adapter failure to ``settle_admission`` arguments (never response text).
+
+    A ``topic_watch`` failure is never retryable: each attempt re-plans and re-charges up to four
+    searches and a model budget the owner consented to once, so a retry would multiply the spend.
 
     ``keyless`` marks a source that sends no credential: a 401/403 from it is the provider blocking or
     refusing the request (geo/IP policy, missing user agent), not a bad owner credential, so it settles as
     ``provider_rejected`` instead of the misleading ``invalid_credential``.
     """
+    settled = _classify_failure(exc, keyless=keyless)
+    if provider == "topic_watch":
+        settled.pop("retryable", None)
+    return settled
+
+
+def _classify_failure(exc: BaseException, *, keyless: bool) -> dict[str, Any]:
+    """Map an adapter failure to its settle arguments before provider-specific retry policy."""
     from modules.connectors.mcp import McpCollectionError
 
     if isinstance(exc, McpCollectionError):
@@ -463,7 +476,9 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
             "provider_deadline": exc.next_eligible_at,
         }
     except Exception as exc:  # deliberate boundary: every failure must settle the request
-        settle = _classify(exc, keyless=_sends_no_credential(attempt.source))
+        settle = _classify(
+            exc, keyless=_sends_no_credential(attempt.source), provider=attempt.source.provider
+        )
         if isinstance(exc, rest.ProviderHttpError):
             # The settled code hides the upstream status; log it (never the body or URL) to tell throttles from rejects.
             logger.warning(
