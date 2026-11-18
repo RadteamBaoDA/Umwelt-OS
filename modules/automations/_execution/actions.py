@@ -794,6 +794,14 @@ async def _brief_failure(
             multi_workspace_enabled=multi_workspace_enabled,
         )
         return "dropped"
+    # Retryable failures were silent before: log the class and message (no prompts, keys or content)
+    # so an operator can tell a model/egress failure from a facts-changed race or an uncited answer.
+    logger.warning(
+        "automation brief action failed, will retry: run=%s %s: %s",
+        run.id,
+        type(exc).__name__,
+        str(exc)[:300],
+    )
     return await _transient(
         factory,
         run.id,
