@@ -360,7 +360,7 @@ class DailyBriefEvidence(Base):
             "support_index BETWEEN 0 AND 99", name="ck_daily_brief_evidence_support_index"
         ),
         CheckConstraint(
-            "fact_kind IN ('tasks','goals','stories','events')",
+            "fact_kind IN ('tasks','goals','stories','events','markets','weather','hazards','source_health')",
             name="ck_daily_brief_evidence_fact_kind",
         ),
         CheckConstraint("fact_hash ~ '^[0-9a-f]{64}$'", name="ck_daily_brief_evidence_fact_hash"),

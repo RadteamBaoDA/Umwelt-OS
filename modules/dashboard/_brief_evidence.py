@@ -23,6 +23,11 @@ from modules.sources import public as sources
 MAX_FACTS = 40
 MAX_BRIEF_EVIDENCE = 100
 MAX_PROMPT_TITLE = 200
+MAX_FACT_ID = 64  # daily_brief_evidence.fact_id column width
+# Observation-derived kinds: always independent markers (no document support); their only source
+# identity is the single ``source_id`` carried by the stored citation.
+MARKER_FACT_KINDS = frozenset({"markets", "weather", "hazards", "source_health"})
+DOCUMENT_FACT_KINDS = frozenset({"tasks", "goals", "stories", "events"})
 
 
 def _prompt_title(title: str) -> str:
@@ -47,12 +52,13 @@ def _validate_fact_group(
 
     Pure (no I/O). Rows must share kind/id/hash, have contiguous support indexes, and either carry a
     full (document, version, chunk, source) tuple without repeats or be one independent marker row
-    (never for stories). A story needs at least one real support row. Mutates the three
-    accumulators; returns False on the first violation.
+    (never for stories). A story needs at least one real support row. Observation kinds
+    (``MARKER_FACT_KINDS``) must be exactly one marker row with a 1..64 character id (not necessarily
+    a UUID). Mutates the three accumulators; returns False on the first violation.
     """
     exemplar = captured[0]
     if (
-        exemplar.fact_kind not in {"tasks", "goals", "stories", "events"}
+        exemplar.fact_kind not in DOCUMENT_FACT_KINDS | MARKER_FACT_KINDS
         or not re.fullmatch(r"[0-9a-f]{64}", exemplar.fact_hash)
         or any(
             item.fact_kind != exemplar.fact_kind
@@ -63,6 +69,16 @@ def _validate_fact_group(
         or [item.support_index for item in captured] != list(range(len(captured)))
     ):
         return False
+    if exemplar.fact_kind in MARKER_FACT_KINDS:
+        # One marker row; the capture is never document-backed, so it adds no document identity.
+        return (
+            len(captured) == 1
+            and 0 < len(exemplar.fact_id) <= MAX_FACT_ID
+            and exemplar.document_id is None
+            and exemplar.document_version_id is None
+            and exemplar.chunk_id is None
+            and exemplar.source_id is None
+        )
     try:
         if str(UUID(exemplar.fact_id)) != exemplar.fact_id:
             return False
@@ -146,7 +162,9 @@ def _validate_citations(
 
     Pure. Each citation must have exactly the stored keys, a unique known ref whose kind/id match
     the captured fact, string title, unique canonical UUID source ids and exactly the captured
-    source set. Returns ``None`` on any mismatch.
+    source set. Observation-kind markers carry no captured rows, so their citation must name exactly
+    one source (checked for eligibility later by ``_captured_inputs_match``). Returns ``None`` on any
+    mismatch.
     """
     citations = row.citations
     if not isinstance(citations, list) or not citations or len(citations) > MAX_FACTS:
@@ -180,7 +198,10 @@ def _validate_citations(
         captured_source_ids = sorted(
             {str(item.source_id) for item in grouped[reference] if item.source_id is not None}
         )
-        if sorted(set(citation["source_ids"])) != captured_source_ids:
+        if grouped[reference][0].fact_kind in MARKER_FACT_KINDS:
+            if len(citation["source_ids"]) != 1:
+                return None
+        elif sorted(set(citation["source_ids"])) != captured_source_ids:
             return None
     return citation_by_ref
 
@@ -359,6 +380,11 @@ async def _captured_inputs_match(
     citation_by_ref = _validate_citations(row, grouped)
     if citation_by_ref is None:
         return False
+    # Observation markers have no evidence rows, so their cited sources join the eligibility check:
+    # deleting a source or making it local_only withholds the brief.
+    for reference, citation in citation_by_ref.items():
+        if grouped[reference][0].fact_kind in MARKER_FACT_KINDS:
+            captured_sources.update(UUID(value) for value in citation["source_ids"])
     if not await _captured_support_eligible(
         session,
         captured_sources,

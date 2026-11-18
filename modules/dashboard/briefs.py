@@ -81,6 +81,7 @@ from modules.settings.public import resolve_prompt
 from modules.sources import public as sources
 
 _CITATION = re.compile(r"\[(\d{1,3})\]")
+_AGENDA_KINDS = frozenset({"tasks", "goals", "events"})
 
 
 async def _admit(
@@ -330,7 +331,8 @@ async def _facts(
 
     A fact is kept only when every source it references resolves to an existing, active, non
     local-only source. Story facts with no source and any unresolved ID are dropped. Owner-authored
-    task/goal facts and source-less manual events carry no source and are kept. This fact-only
+    task/goal facts and source-less manual events carry no source and are kept. Agenda facts
+    (tasks, goals, events) are ordered ahead of the rest before the ``MAX_FACTS`` cut. This fact-only
     contract deliberately does not load the saved brief, revision history or notifications.
     Every prompt fact carries its complete bounded support set; incomplete lineage aborts.
     """
@@ -338,7 +340,10 @@ async def _facts(
     allowed = await _allowed_source_ids(
         session, wanted, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-    facts = [fact for fact in candidates if set(fact["source_ids"]) <= allowed][:MAX_FACTS]
+    vetted = [fact for fact in candidates if set(fact["source_ids"]) <= allowed]
+    # Stable partition: agenda kinds survive the MAX_FACTS cut ahead of news/market candidates.
+    vetted.sort(key=lambda fact: fact["kind"] not in _AGENDA_KINDS)
+    facts = vetted[:MAX_FACTS]
     from modules.news import public as news
     from modules.timeline import public as timeline
 

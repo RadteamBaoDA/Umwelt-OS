@@ -1,5 +1,6 @@
 """Market, weather, hazard and source-health brief fact widgets, pinned to one ``as_of``."""
 
+import hashlib
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
@@ -174,7 +175,7 @@ async def test_markets_latest_and_change(world: SimpleNamespace) -> None:
     assert widget.status == "ok"
     assert widget.items[0]["detail"] == "103 USD (+3.0% 24h)"
     assert widget.items[0]["source_id"] == str(src.id)
-    assert widget.items[0]["id"] == f"{src.id}:close:AAA"
+    assert widget.items[0]["id"] == f"{src.id}:" + hashlib.sha256(b"close:AAA").hexdigest()[:16]
 
 
 async def test_observation_widgets_are_pinned_to_as_of(world: SimpleNamespace) -> None:
@@ -232,3 +233,92 @@ def test_fact_candidates_prefers_detail() -> None:
     )
     candidates, _ = briefs._fact_candidates([widget])
     assert candidates[0]["detail"] == "103 USD"
+
+
+async def test_model_check_covers_every_emittable_fact_kind(world: SimpleNamespace) -> None:
+    """The DB CHECK on daily_brief_evidence must accept each widget id the brief can prompt."""
+    from modules.dashboard.models import DailyBriefEvidence
+
+    check = next(
+        str(c.sqltext)  # type: ignore[attr-defined]
+        for c in DailyBriefEvidence.__table__.constraints
+        if getattr(c, "name", None) == "ck_daily_brief_evidence_fact_kind"
+    )
+    emitted = {w.id for w in await _build(None)}
+    assert emitted and all(f"'{kind}'" in check for kind in emitted)
+
+
+async def test_day_context_keeps_legacy_widget_order(
+    world: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def latest(*_a: Any, **_k: Any) -> None:
+        return None
+
+    async def count(*_a: Any, **_k: Any) -> int:
+        return 0
+
+    async def unread(*_a: Any, **_k: Any) -> SimpleNamespace:
+        return SimpleNamespace(unread_count=0)
+
+    monkeypatch.setattr(briefs, "latest_brief", latest)
+    monkeypatch.setattr(briefs, "revision_count", count)
+    monkeypatch.setattr(context.notifications, "list_notifications", unread)
+    ctx = await context.build_daily_context(
+        None,  # type: ignore[arg-type]
+        date(2026, 11, 18),
+        "UTC",
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert [w.id for w in ctx.widgets] == ["tasks", "goals", "stories", "events"]
+
+
+async def test_observation_widgets_cap_items_at_five(world: SimpleNamespace) -> None:
+    src = _source("econ")
+    world.sources = [src]
+    at = AS_OF - timedelta(hours=1)
+    world.obs = [_obs(src, "price", 1.0 + i, at, symbol=f"S{i}") for i in range(9)]
+    (widget,) = await _build(["markets"])
+    assert len(widget.items) == 5
+
+
+async def test_agenda_facts_survive_the_fact_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """40+ story/market candidates must not push tasks past MAX_FACTS."""
+    sid = str(uuid4())
+    widgets = [
+        DailyWidget(
+            id="stories",
+            module="news",
+            title_key="x",
+            status="ok",
+            items=[{"id": str(uuid4()), "title": "s", "source_ids": [sid]} for _ in range(30)],
+        ),
+        DailyWidget(
+            id="markets",
+            module="dashboard",
+            title_key="x",
+            status="ok",
+            items=[{"id": f"m{i}", "title": "m", "source_id": sid} for i in range(20)],
+        ),
+        DailyWidget(
+            id="tasks",
+            module="tasks",
+            title_key="x",
+            status="ok",
+            items=[{"id": str(uuid4()), "title": "t"} for _ in range(3)],
+        ),
+    ]
+
+    async def allowed(*_a: Any, **_k: Any) -> set[str]:
+        return {sid}
+
+    async def support(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(complete=True, evidence=[], independent=True)
+
+    monkeypatch.setattr(briefs, "_allowed_source_ids", allowed)
+    from modules.news import public as news
+
+    monkeypatch.setattr(news, "brief_story_support", support)
+    facts = await briefs._facts(None, widgets, scope=SCOPE, multi_workspace_enabled=False)  # type: ignore[arg-type]
+    assert len(facts) == briefs.MAX_FACTS
+    assert [f["kind"] for f in facts[:3]] == ["tasks"] * 3

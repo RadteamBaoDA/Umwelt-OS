@@ -4,6 +4,7 @@ Widgets always use *current* records filtered to the selected date and carry ``u
 they are never presented as historical task-state snapshots. Only the saved brief is historical.
 """
 
+import hashlib
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -35,7 +36,7 @@ from modules.timeline.public import TimelineQuery
 
 MAX_ITEMS = 25
 WEATHER_PROVIDERS = frozenset({"open_meteo"})
-_HEALTH_MAX = 5
+_FACT_ITEMS_MAX = 5  # per observation/health widget, so agenda facts keep room under MAX_FACTS
 _SOURCE_PAGES = 5  # ponytail: 500 newest sources; page further only if a workspace outgrows it.
 
 
@@ -208,7 +209,7 @@ def _fact_widget(widget_id: str, items: list[dict[str, str]], as_of: datetime) -
     """Wrap fact items (``id``/``title``/``detail``/``source_id``) into a widget.
 
     No items gives ``status="empty"`` so the brief fact filter produces nothing for the section.
-    At most ``MAX_ITEMS`` items are kept.
+    At most ``_FACT_ITEMS_MAX`` items are kept.
     """
     return DailyWidget(
         id=widget_id,
@@ -216,7 +217,7 @@ def _fact_widget(widget_id: str, items: list[dict[str, str]], as_of: datetime) -
         title_key=_FACT_TITLE_KEYS[widget_id],
         status="ok" if items else "empty",
         updated_at=as_of if items else None,
-        items=items[:MAX_ITEMS],
+        items=items[:_FACT_ITEMS_MAX],
     )
 
 
@@ -280,8 +281,13 @@ async def _points(
 
 
 def _obs_id(row: Any) -> str:
-    """Stable fact id ``source:metric:symbol`` of one observation series."""
-    return f"{row.source_id}:{row.metric}:{row.symbol or ''}"
+    """Stable fact id ``<source uuid>:<16 hex of sha256(metric:symbol)>`` of one observation series.
+
+    The metric/symbol are hashed because they are provider-controlled and can push the id past the
+    64-character ``daily_brief_evidence.fact_id`` column (36 + 1 + 16 = 53 here).
+    """
+    digest = hashlib.sha256(f"{row.metric}:{row.symbol or ''}".encode()).hexdigest()[:16]
+    return f"{row.source_id}:{digest}"
 
 
 def _markets_items(points: list[Any]) -> list[dict[str, str]]:
@@ -389,7 +395,7 @@ def _health_widget(rows: list[Any], as_of: datetime) -> DailyWidget:
         if r.last_error_at is not None
         and (r.last_success_at is None or r.last_error_at > r.last_success_at)
     ]
-    return _fact_widget("source_health", items[:_HEALTH_MAX], as_of)
+    return _fact_widget("source_health", items[:_FACT_ITEMS_MAX], as_of)
 
 
 async def build_daily_widgets(
@@ -452,7 +458,8 @@ async def build_daily_context(
 
     Retained brief history is presentation data; callers needing only fact support should use
     ``build_daily_widgets`` so malformed saved citations cannot prevent independent current reads.
-    Only the legacy ``agenda`` and ``stories`` widgets are returned (tasks, goals, events, stories).
+    Only the legacy ``agenda`` and ``stories`` widgets are returned, in the legacy server order
+    tasks, goals, stories, events (the web renders in server order).
     """
     await briefs._admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     relation = relation_to_today(day, timezone)
@@ -466,6 +473,8 @@ async def build_daily_context(
         # Brief-only fact widgets (markets, weather, hazards, source health) stay off the day view.
         sections=("agenda", "stories"),
     )
+    legacy_order = {"tasks": 0, "goals": 1, "stories": 2, "events": 3}
+    widgets.sort(key=lambda widget: legacy_order[widget.id])
     now = datetime.now(UTC)
     return DailyContext(
         selected_date=day,
