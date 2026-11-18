@@ -226,6 +226,9 @@ from modules.chat._public.scheduled_task_threads import (
 from modules.chat._public.scheduled_task_threads import (
     scrub_task_messages as scrub_task_messages,
 )
+from modules.chat._public.scheduled_task_threads import (
+    withheld_brief_ids as withheld_brief_ids,
+)
 from modules.chat.citations import (
     validate_answer_citations,
     validate_citations,

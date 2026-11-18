@@ -24,7 +24,7 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
-from modules.chat._public.scheduled_task_threads import RESERVED_METADATA_KEYS
+from modules.chat._public.scheduled_task_threads import RESERVED_METADATA_KEYS, withheld_brief_ids
 from modules.chat._routes.guards import (
     _TOKEN_RE as _TOKEN_RE,
 )
@@ -419,7 +419,8 @@ async def get_conversation(
         response: HTTP response object for no-store header attachment.
 
     Returns:
-        ConversationDetailRead schema containing conversation metadata and messages.
+        ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task
+        brief messages whose sources are no longer eligible come back as the scrub placeholder.
 
     Raises:
         HTTPException: 404 if conversation is not found.
@@ -457,6 +458,7 @@ async def get_conversation(
         current_citations,
         response_ids_by_user_message,
         web_search_by_assistant,
+        await withheld_brief_ids(session, messages_rows, scope=scope),
     )
     return ConversationDetailRead(
         id=conv.id,

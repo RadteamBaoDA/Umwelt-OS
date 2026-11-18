@@ -16,7 +16,8 @@ from core.workspaces.admission import actor_id
 from core.workspaces.schemas import Scope
 from modules.chat._public.conversations import delete_conversation_in_scope
 from modules.chat.models import Conversation, Message
-from modules.chat.schemas import MAX_SOURCE_SCOPE
+from modules.chat.schemas import MAX_SOURCE_SCOPE, parse_task_message_meta
+from modules.chat.scope import multi_workspace_enabled
 
 # Conversation metadata keys only the scheduler may write; client create/patch payloads cannot set them.
 RESERVED_METADATA_KEYS = frozenset({"scheduled_task", "task_source_scope", "task_kind"})
@@ -177,3 +178,38 @@ async def scrub_task_messages(
         count += 1
     await session.flush()
     return count
+
+
+async def withheld_brief_ids(
+    session: AsyncSession, messages: Sequence[Message], *, scope: Scope
+) -> frozenset[str]:
+    """Return the ``brief_id`` of every scheduled-task brief message here that must not be shown.
+
+    A brief is withheld when Dashboard no longer reports it live (a captured source was deleted,
+    paused or made local-only, or its support changed) or when its stored id is unreadable, so the
+    check fails closed. Messages that are not task briefs are ignored. Read-only; one batched
+    Dashboard lookup for the whole transcript, scoped to ``scope``.
+    """
+    from modules.dashboard import public as dashboard  # local import: dashboard imports chat
+
+    wanted: dict[str, UUID | None] = {}
+    for message in messages:
+        meta = parse_task_message_meta(getattr(message, "metadata_json", None))
+        if meta is None:
+            continue
+        try:
+            wanted[meta.brief_id] = UUID(meta.brief_id)
+        except ValueError:
+            wanted[meta.brief_id] = None
+    ids = [u for u in wanted.values() if u is not None]
+    live = (
+        {
+            str(i)
+            for i in await dashboard.live_brief_ids(
+                session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+            )
+        }
+        if ids
+        else set()
+    )
+    return frozenset(key for key in wanted if key not in live)

@@ -10,6 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.chat import conversation_service
+from modules.chat._public.scheduled_task_threads import SCRUBBED_CONTENT
 from modules.chat._routes.guards import (
     _message_mutation_digest,
     _message_reasoning,
@@ -38,21 +39,26 @@ def _message_reads(
     current_citations: list[Any],
     response_ids_by_user_message: dict[UUID, UUID],
     web_search_by_assistant: dict[UUID, WebSearchOutcomeRead],
+    withheld_brief_ids: frozenset[str] = frozenset(),
 ) -> list[MessageRead]:
     """Translate stored messages into API DTOs using already-filtered current citations.
 
     Pure mapping: ``current_citations`` aligns one-to-one with ``messages_rows`` (strict zip).
-    The first generative-UI part is mirrored into ``generative_ui`` for older clients.
+    The first generative-UI part is mirrored into ``generative_ui`` for older clients. A scheduled-task
+    brief message whose ``brief_id`` is in ``withheld_brief_ids`` (its sources are no longer eligible)
+    is returned with the scrub placeholder, no citations and ``task=None``, so the copy fails closed.
     """
+    task_metas = [parse_task_message_meta(getattr(m, "metadata_json", None)) for m in messages_rows]
+    withheld = [t is not None and t.brief_id in withheld_brief_ids for t in task_metas]
     return [
         MessageRead(
             id=m.id,
             conversation_id=m.conversation_id,
             role=m.role,
-            content=m.content,
+            content=SCRUBBED_CONTENT if gone else m.content,
             client_request_id=m.client_request_id,
             model_identity=m.model_identity,
-            citations=citations,
+            citations=[] if gone else citations,
             response_id=m.response_id or response_ids_by_user_message.get(m.id),
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
@@ -62,12 +68,14 @@ def _message_reads(
             reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
             suggestions=_message_suggestions(getattr(m, "metadata_json", None)),
             uncited=_message_uncited(getattr(m, "metadata_json", None)),
-            task=parse_task_message_meta(getattr(m, "metadata_json", None)),
+            task=None if gone else task,
         )
-        for m, citations, parts in zip(
+        for m, citations, parts, task, gone in zip(
             messages_rows,
             current_citations,
             (parse_generative_ui_parts(getattr(m, "metadata_json", None)) for m in messages_rows),
+            task_metas,
+            withheld,
             strict=True,
         )
     ]
