@@ -7636,6 +7636,14 @@ export interface components {
             gdelt_timespan?: ("1h" | "6h" | "24h" | "3d" | "7d") | null;
             /** Genre Qids */
             genre_qids?: string[] | null;
+            /** Google Books Filter */
+            google_books_filter?: ("ebooks" | "free-ebooks" | "paid-ebooks") | null;
+            /** Google Books Print Type */
+            google_books_print_type?: ("all" | "books" | "magazines") | null;
+            /** Google Books Query */
+            google_books_query?: string | null;
+            /** Google Books Subject */
+            google_books_subject?: string | null;
             /** Graph Enabled */
             graph_enabled?: boolean | null;
             /** Gutendex Author Year End */
@@ -7652,6 +7660,12 @@ export interface components {
             gutendex_topic?: string | null;
             /** Hn List */
             hn_list?: ("top" | "new" | "best" | "ask" | "show") | null;
+            /** Igdb Game Types */
+            igdb_game_types?: ("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" | "12" | "13")[] | null;
+            /** Igdb Platforms */
+            igdb_platforms?: number[] | null;
+            /** Igdb Region */
+            igdb_region?: ("europe" | "north_america" | "australia" | "new_zealand" | "japan" | "china" | "asia" | "world") | null;
             /** Include Keywords */
             include_keywords?: string[] | null;
             /** Ioda Country */
@@ -7690,6 +7704,14 @@ export interface components {
             listenbrainz_username?: string | null;
             /** Lookback Days */
             lookback_days?: number | null;
+            /** Mal Mode */
+            mal_mode?: ("ranking" | "season") | null;
+            /** Mal Ranking Type */
+            mal_ranking_type?: ("all" | "airing" | "upcoming" | "tv" | "ova" | "movie" | "special" | "bypopularity" | "favorite") | ("manga" | "novels" | "oneshots" | "doujin" | "manhwa" | "manhua" | "bypopularity" | "favorite") | null;
+            /** Mal Season */
+            mal_season?: ("winter" | "spring" | "summer" | "fall") | null;
+            /** Mal Season Year */
+            mal_season_year?: number | null;
             /** Manga Ids */
             manga_ids?: string[] | null;
             /** Mangadex Content Ratings */
@@ -7734,6 +7756,16 @@ export interface components {
             nws_severity?: ("Extreme" | "Severe" | "Moderate" | "Minor")[] | null;
             /** Oecd Countries */
             oecd_countries?: ("USA" | "CHN" | "JPN" | "DEU" | "GBR" | "FRA" | "ITA" | "CAN" | "KOR" | "IND" | "BRA" | "AUS" | "ESP" | "MEX" | "TUR" | "IDN")[] | null;
+            /** Omdb Imdb Id */
+            omdb_imdb_id?: string | null;
+            /** Omdb Mode */
+            omdb_mode?: ("imdb_id" | "title" | "search") | null;
+            /** Omdb Search */
+            omdb_search?: string | null;
+            /** Omdb Title */
+            omdb_title?: string | null;
+            /** Omdb Type */
+            omdb_type?: ("movie" | "series" | "episode") | null;
             /** Openlibrary Mode */
             openlibrary_mode?: ("subject" | "search" | "recent") | null;
             /** Openlibrary Query */
@@ -7742,6 +7774,18 @@ export interface components {
             openlibrary_subject?: string | null;
             /** Original Languages */
             original_languages?: ("ja" | "ko" | "zh" | "zh-hk")[] | null;
+            /** Podcast Index Categories */
+            podcast_index_categories?: string | null;
+            /** Podcast Index Excluded Categories */
+            podcast_index_excluded_categories?: string | null;
+            /** Podcast Index Languages */
+            podcast_index_languages?: string[] | null;
+            /** Podcast Index Query */
+            podcast_index_query?: string | null;
+            /** Podcast Index Since */
+            podcast_index_since?: number | null;
+            /** Podcast Index Value */
+            podcast_index_value?: ("any" | "lightning" | "hive" | "webmonetization") | null;
             /** Publication Demographic */
             publication_demographic?: ("shounen" | "shoujo" | "josei" | "seinen" | "none")[] | null;
             /** Rag Index Enabled */
@@ -7760,6 +7804,30 @@ export interface components {
             search_terms?: string | null;
             /** Series Ids */
             series_ids?: number[] | null;
+            /** Steam Appids */
+            steam_appids?: number[] | null;
+            /** Steam Country */
+            steam_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
+            /** Steam Language */
+            steam_language?: ("english" | "vietnamese" | "japanese" | "schinese" | "koreana" | "french" | "german" | "spanish") | null;
+            /** Steam Mode */
+            steam_mode?: ("featured" | "news") | null;
+            /** Tmdb Certification */
+            tmdb_certification?: string | null;
+            /** Tmdb Certification Country */
+            tmdb_certification_country?: ("VN" | "US" | "JP" | "CN" | "GB" | "DE" | "FR" | "IN" | "KR" | "SG" | "AU" | "CA" | "BR" | "ID" | "TH" | "MY" | "PH" | "IT" | "ES" | "RU" | "MX" | "ZA" | "TR" | "NL" | "CH" | "TW" | "HK" | "IE" | "NZ" | "SE" | "NO" | "DK" | "FI" | "PL" | "PT" | "BE" | "AT" | "AR") | null;
+            /** Tmdb Language */
+            tmdb_language?: string | null;
+            /** Tmdb Mode */
+            tmdb_mode?: ("now_playing" | "upcoming" | "changes" | "airing_today" | "on_the_air") | null;
+            /** Trakt Calendar Days */
+            trakt_calendar_days?: number | null;
+            /** Trakt Certifications */
+            trakt_certifications?: ("G" | "PG" | "PG-13" | "R" | "NC-17")[] | null;
+            /** Trakt Mode */
+            trakt_mode?: ("movies_trending" | "movies_anticipated" | "shows_trending" | "shows_anticipated" | "movies_calendar" | "shows_calendar" | "movies_search" | "shows_search") | null;
+            /** Trakt Query */
+            trakt_query?: string | null;
             /** Tvmaze Global */
             tvmaze_global?: boolean | null;
             /** Tvmaze Mode */

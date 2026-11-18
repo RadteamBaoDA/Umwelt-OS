@@ -14,7 +14,14 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import is_instance_operator
@@ -54,6 +61,8 @@ from modules.connectors.provider_options import (
     JobCity,
     JobKeyword,
     JobLevel,
+    MalAnimeRanking,
+    MalMangaRanking,
     MediaFormat,
     MediaGenre,
     MediaLanguage,
@@ -239,7 +248,9 @@ class BuiltinEnableRequest(BaseModel):
     media_formats: tuple[MediaFormat, ...] | None = Field(
         default=None, min_length=1, max_length=MAX_MEDIA_FORMATS
     )
-    listenbrainz_username: str | None = Field(default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    listenbrainz_username: str | None = Field(
+        default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$"
+    )
     listenbrainz_days: StrictInt | None = Field(default=None, ge=1, le=90)
     listenbrainz_sort: Literal["release_date", "release_group_date"] | None = None
     listenbrainz_tags: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
@@ -304,6 +315,100 @@ class BuiltinEnableRequest(BaseModel):
     letterboxd_username: str | None = Field(
         default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$"
     )
+    # Keyed media catalog options (mirrored from ConnectorConfig: Google Books, IGDB, MAL, OMDb, Podcast Index,
+    # Steam, TMDB, Trakt). ``_desired_configuration`` reads every name in ``ALL_OPTION_NAMES`` from this request.
+    google_books_filter: Literal["ebooks", "free-ebooks", "paid-ebooks"] | None = None
+    google_books_print_type: Literal["all", "books", "magazines"] | None = None
+    google_books_query: str | None = Field(default=None, min_length=1, max_length=160, strict=True)
+    google_books_subject: str | None = Field(
+        default=None, min_length=1, max_length=100, strict=True
+    )
+    igdb_game_types: (
+        tuple[
+            Literal["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"], ...
+        ]
+        | None
+    ) = Field(default=None, min_length=1, max_length=8)
+    igdb_platforms: tuple[Annotated[StrictInt, Field(gt=0)], ...] | None = Field(
+        default=None, min_length=1, max_length=16
+    )
+    igdb_region: (
+        Literal[
+            "europe", "north_america", "australia", "new_zealand", "japan", "china", "asia", "world"
+        ]
+        | None
+    ) = None
+    mal_mode: Literal["ranking", "season"] | None = None
+    mal_ranking_type: MalAnimeRanking | MalMangaRanking | None = None
+    mal_season: AnimeSeason | None = None
+    mal_season_year: StrictInt | None = Field(default=None, ge=1917, le=2100)
+    omdb_imdb_id: str | None = Field(
+        default=None, min_length=9, max_length=14, pattern=r"^tt\d{7,12}$", strict=True
+    )
+    omdb_mode: Literal["imdb_id", "title", "search"] | None = None
+    omdb_search: str | None = Field(default=None, min_length=1, max_length=120, strict=True)
+    omdb_title: str | None = Field(default=None, min_length=1, max_length=120, strict=True)
+    omdb_type: Literal["movie", "series", "episode"] | None = None
+    podcast_index_categories: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_excluded_categories: str | None = Field(
+        default=None, min_length=1, max_length=160
+    )
+    podcast_index_languages: tuple[str, ...] | None = Field(
+        default=None, min_length=1, max_length=12
+    )
+    podcast_index_query: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_since: StrictInt | None = Field(default=None, ge=1, le=4_102_444_800)
+    podcast_index_value: Literal["any", "lightning", "hive", "webmonetization"] | None = None
+    steam_appids: tuple[Annotated[StrictInt, Field(gt=0)], ...] | None = Field(
+        default=None, min_length=1, max_length=8
+    )
+    steam_country: IsoCountry | None = None
+    steam_language: (
+        Literal[
+            "english",
+            "vietnamese",
+            "japanese",
+            "schinese",
+            "koreana",
+            "french",
+            "german",
+            "spanish",
+        ]
+        | None
+    ) = None
+    steam_mode: Literal["featured", "news"] | None = None
+    tmdb_certification: str | None = Field(
+        default=None, min_length=1, max_length=12, pattern=r"^[A-Za-z0-9+-]+$", strict=True
+    )
+    tmdb_certification_country: IsoCountry | None = None
+    tmdb_language: str | None = Field(
+        default=None,
+        min_length=2,
+        max_length=16,
+        pattern=r"^[a-z]{2}(?:-[a-z0-9]{2,8})?$",
+        strict=True,
+    )
+    tmdb_mode: (
+        Literal["now_playing", "upcoming", "changes", "airing_today", "on_the_air"] | None
+    ) = None
+    trakt_calendar_days: StrictInt | None = Field(default=None, ge=1, le=31)
+    trakt_certifications: tuple[Literal["G", "PG", "PG-13", "R", "NC-17"], ...] | None = Field(
+        default=None, min_length=1, max_length=5
+    )
+    trakt_mode: (
+        Literal[
+            "movies_trending",
+            "movies_anticipated",
+            "shows_trending",
+            "shows_anticipated",
+            "movies_calendar",
+            "shows_calendar",
+            "movies_search",
+            "shows_search",
+        ]
+        | None
+    ) = None
+    trakt_query: str | None = Field(default=None, min_length=1, max_length=100, strict=True)
 
 
 _DEFAULT_ENABLE = BuiltinEnableRequest()  # body is optional; the model is never mutated
