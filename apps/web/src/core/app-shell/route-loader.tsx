@@ -114,7 +114,7 @@ export function RouteSpinner() {
       aria-busy="true"
       data-route-loader=""
     >
-      <Spinner className="size-8 text-2xl text-primary" />
+      <Spinner className="size-8 text-4xl leading-none text-primary" />
       <span className="sr-only">{t('loadingWorkspace')}</span>
     </div>
   );
