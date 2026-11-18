@@ -426,7 +426,11 @@ async def test_youtube_continues_capped_playlist_before_using_head_validator():
         headers = kwargs["headers"]
         if parsed.path.endswith("/videos"):
             video = query["id"][0]
-            return rest.Fetched(json.dumps({"items": [{"id": video, "snippet": {"channelId": CHANNEL, "title": video}}]}).encode())
+            return rest.Fetched(
+                json.dumps(
+                    {"items": [{"id": video, "snippet": {"channelId": CHANNEL, "title": video}}]}
+                ).encode()
+            )
         token = query.get("pageToken", [None])[0]
         sends.append((token, headers.get("If-None-Match")))
         if headers.get("If-None-Match"):
@@ -449,7 +453,7 @@ async def test_youtube_continues_capped_playlist_before_using_head_validator():
     assert not unchanged.records and unchanged.cursor_after == second.cursor_after
 
     legacy = json.loads(second.cursor_after)
-    route, = legacy["etags"]
+    (route,) = legacy["etags"]
     legacy["etags"][route]["truncated"] = True
     restarted = await collect_youtube_api(config, "mock-key", NOW, fetch, json.dumps(legacy))
     assert sends[-2:] == [(None, None), ("next1", None)]
@@ -481,7 +485,10 @@ async def test_youtube_only_restarts_for_the_rejected_saved_page_token(status, r
         requests.append((path, token, request.headers.get("If-None-Match")))
         if path == "videos":
             video = params["id"]
-            return httpx.Response(200, json={"items": [{"id": video, "snippet": {"channelId": CHANNEL, "title": video}}]})
+            return httpx.Response(
+                200,
+                json={"items": [{"id": video, "snippet": {"channelId": CHANNEL, "title": video}}]},
+            )
         if restart and token == "stale":
             return httpx.Response(status, json={"error": {"errors": [{"reason": reason}]}})
         index = int(token == "second") + (10 if restart else 0)
@@ -492,7 +499,9 @@ async def test_youtube_only_restarts_for_the_rejected_saved_page_token(status, r
         return httpx.Response(200, json=page, headers={"ETag": '"new"' if restart else '"old"'})
 
     async def fetch(url, **kwargs):
-        return await rest.fetch_bounded(url, before_send=gate, resolve=resolve, transport=httpx.MockTransport(respond), **kwargs)
+        return await rest.fetch_bounded(
+            url, before_send=gate, resolve=resolve, transport=httpx.MockTransport(respond), **kwargs
+        )
 
     cfg = ConnectorConfig(youtube_playlist_ids=("PL0123456789",))
     first = await collect_youtube_api(cfg, "mock-key", NOW, fetch, None)
@@ -501,10 +510,14 @@ async def test_youtube_only_restarts_for_the_rejected_saved_page_token(status, r
     requests.clear()
     if recovers:
         page = await collect_youtube_api(cfg, "mock-key", NOW, fetch, first.cursor_after)
-        assert requests == [("playlistItems", "stale", None), ("playlistItems", None, None), ("videos", None, None)]
+        assert requests == [
+            ("playlistItems", "stale", None),
+            ("playlistItems", None, None),
+            ("videos", None, None),
+        ]
         assert [r.provider_id for r in page.records] == [f"youtube:{CHANNEL}:00000000010"]
         assert page.coverage == "returned_snapshot"
-        saved, = json.loads(page.cursor_after)["etags"].values()
+        (saved,) = json.loads(page.cursor_after)["etags"].values()
         assert saved == {"etag": '"new"'}
     else:
         with pytest.raises(rest.ProviderHttpError) as caught:

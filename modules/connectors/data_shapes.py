@@ -51,8 +51,16 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         # offer themselves to news/timeline gadgets.
         **dict.fromkeys(
             (
-                "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime",
-                "mal_manga", "hardcover_books", "google_books", "steam_releases", "igdb_games",
+                "tmdb_movies",
+                "tmdb_tv",
+                "trakt_media",
+                "omdb_lookup",
+                "mal_anime",
+                "mal_manga",
+                "hardcover_books",
+                "google_books",
+                "steam_releases",
+                "igdb_games",
             ),
             frozenset({"media"}),
         ),

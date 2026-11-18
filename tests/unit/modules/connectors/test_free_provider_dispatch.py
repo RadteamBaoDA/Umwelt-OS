@@ -270,11 +270,12 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "openaq": {"openaq_location_id": 8118},
         "nasa_firms": {"firms_country": "VNM"},
         "coingecko": {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}]},
-
         "anilist_anime": {"media_ids": [1]},
         "anilist_manga": {"media_ids": [1]},
         "ann_news": {
-            "ann_mode": "encyclopedia", "ann_media_type": "anime", "ann_category": "review",
+            "ann_mode": "encyclopedia",
+            "ann_media_type": "anime",
+            "ann_category": "review",
             "ann_edition": "us",
         },
         "apple_books_rss": {"country": "US", "kind": "books", "chart": "top-free"},
@@ -301,7 +302,10 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
     }.get(provider, {})
     assert native_dispatch_supported(source_type, provider)
     required = PROVIDER_SCOPE_FIELDS[provider] - frozenset(OPTIONAL_SCOPE_FIELDS.get(provider, ()))
-    assert provider in PROVIDER_SCOPE_FIELDS and required <= frozenset(scope) <= PROVIDER_SCOPE_FIELDS[provider]
+    assert (
+        provider in PROVIDER_SCOPE_FIELDS
+        and required <= frozenset(scope) <= PROVIDER_SCOPE_FIELDS[provider]
+    )
     source = SimpleNamespace(
         id=uuid4(),
         status="active",

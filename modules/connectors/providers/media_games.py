@@ -39,11 +39,47 @@ _IGDB_GAMES = "https://api.igdb.com/v4/games"
 _MAX_APPS = 8
 _MAX_NEWS = 20
 _MAX_IGDB = 50
-_STEAM_LANGUAGES = {"english", "vietnamese", "japanese", "schinese", "koreana", "french", "german", "spanish"}
-_IGDB_REGIONS = {"europe": 1, "north_america": 2, "australia": 3, "new_zealand": 4, "japan": 5, "china": 6, "asia": 7, "world": 8}
+_STEAM_LANGUAGES = {
+    "english",
+    "vietnamese",
+    "japanese",
+    "schinese",
+    "koreana",
+    "french",
+    "german",
+    "spanish",
+}
+_IGDB_REGIONS = {
+    "europe": 1,
+    "north_america": 2,
+    "australia": 3,
+    "new_zealand": 4,
+    "japan": 5,
+    "china": 6,
+    "asia": 7,
+    "world": 8,
+}
 _IGDB_GENRES = {"adventure": 31, "sports": 14, "rpg": 12, "strategy": 15}
-_IGDB_THEMES = {"action": 1, "sci_fi": 18, "fantasy": 17, "thriller": 20, "horror": 19, "mystery": 43}
-_AGE_RATINGS = {"3": "safe", "everyone": "safe", "everyone 10+": "pg", "7": "pg", "12": "pg_13", "teen": "pg_13", "16": "r", "mature 17+": "r", "18": "mature", "adults only 18+": "explicit"}
+_IGDB_THEMES = {
+    "action": 1,
+    "sci_fi": 18,
+    "fantasy": 17,
+    "thriller": 20,
+    "horror": 19,
+    "mystery": 43,
+}
+_AGE_RATINGS = {
+    "3": "safe",
+    "everyone": "safe",
+    "everyone 10+": "pg",
+    "7": "pg",
+    "12": "pg_13",
+    "teen": "pg_13",
+    "16": "r",
+    "mature 17+": "r",
+    "18": "mature",
+    "adults only 18+": "explicit",
+}
 _PACER = MediaRatePacer()
 
 
@@ -73,7 +109,9 @@ def _json(response: rest.Fetched, code: str) -> dict[str, Any]:
     return value
 
 
-def _steam_game(appid: int, details: Mapping[str, Any], config: Mapping[str, Any], now: datetime) -> IngestionRecord:
+def _steam_game(
+    appid: int, details: Mapping[str, Any], config: Mapping[str, Any], now: datetime
+) -> IngestionRecord:
     """Normalize Steam appdetails while retaining fuzzy dates and the coming-soon null-price contract."""
     title = details.get("name")
     if not isinstance(title, str) or not title.strip():
@@ -89,8 +127,12 @@ def _steam_game(appid: int, details: Mapping[str, Any], config: Mapping[str, Any
         "artwork_aspect": "video",
         "canonical_url": f"https://store.steampowered.com/app/{appid}/",
         "external_ids": build_external_ids({"steam": appid}),
-        "release_status": "upcoming" if coming_soon or (observed_at is not None and observed_at > now) else "released",
-        "final_price": None if coming_soon or type(final_price) is not int or final_price < 0 else final_price,
+        "release_status": "upcoming"
+        if coming_soon or (observed_at is not None and observed_at > now)
+        else "released",
+        "final_price": None
+        if coming_soon or type(final_price) is not int or final_price < 0
+        else final_price,
     }
     if not coming_soon and isinstance(price.get("currency"), str):
         fields["price_currency"] = price["currency"][:3]
@@ -108,20 +150,44 @@ def _steam_game(appid: int, details: Mapping[str, Any], config: Mapping[str, Any
     if isinstance(score, int) and not isinstance(score, bool) and 0 <= score <= 100:
         fields["rating"] = float(score)
     if isinstance(details.get("required_age"), int):
-        fields["content_rating"] = "safe" if details["required_age"] == 0 else "pg_13" if details["required_age"] < 17 else "mature"
+        fields["content_rating"] = (
+            "safe"
+            if details["required_age"] == 0
+            else "pg_13"
+            if details["required_age"] < 17
+            else "mature"
+        )
     country = normalize_country(config.get("steam_country"))
     if country:
         fields["country"] = country
     if image := details.get("header_image"):
         if isinstance(image, str):
             fields["image_url"] = image
-    return _record("steam_releases", f"steam:{appid}", title, str(details.get("short_description") or ""), now, fields, observed_at=observed_at)
+    return _record(
+        "steam_releases",
+        f"steam:{appid}",
+        title,
+        str(details.get("short_description") or ""),
+        now,
+        fields,
+        observed_at=observed_at,
+    )
 
 
-async def _steam_details(fetch: FetchBytes, appid: int, config: Mapping[str, Any]) -> Mapping[str, Any]:
+async def _steam_details(
+    fetch: FetchBytes, appid: int, config: Mapping[str, Any]
+) -> Mapping[str, Any]:
     """Fetch exactly one appdetails record per app, never using Steam's multi-appids shortcut."""
-    params = urlencode({"appids": str(appid), "cc": config.get("steam_country") or "US", "l": config.get("steam_language") or "english"})
-    response = await fetch(f"{_STEAM}/api/appdetails?{params}", max_bytes=512_000, allow_redirects=False)
+    params = urlencode(
+        {
+            "appids": str(appid),
+            "cc": config.get("steam_country") or "US",
+            "l": config.get("steam_language") or "english",
+        }
+    )
+    response = await fetch(
+        f"{_STEAM}/api/appdetails?{params}", max_bytes=512_000, allow_redirects=False
+    )
     root = _json(response, "steam_appdetails_invalid")
     entry = _object(root.get(str(appid)))
     data = entry.get("data")
@@ -132,8 +198,13 @@ async def _steam_details(fetch: FetchBytes, appid: int, config: Mapping[str, Any
 
 async def _steam_featured_appids(fetch: FetchBytes, config: Mapping[str, Any]) -> list[int]:
     """Return up to eight IDs, rejecting any malformed present featured category before enrichment."""
-    params = urlencode({"cc": config.get("steam_country") or "US", "l": config.get("steam_language") or "english"})
-    payload = _json(await fetch(f"{_STEAM}/api/featuredcategories?{params}", max_bytes=512_000), "steam_featured_invalid")
+    params = urlencode(
+        {"cc": config.get("steam_country") or "US", "l": config.get("steam_language") or "english"}
+    )
+    payload = _json(
+        await fetch(f"{_STEAM}/api/featuredcategories?{params}", max_bytes=512_000),
+        "steam_featured_invalid",
+    )
     categories = ("new_releases", "coming_soon")
     if not any(category in payload for category in categories):
         raise rest.RestSchemaChanged("steam_featured_invalid")
@@ -167,8 +238,14 @@ async def collect_steam(config: ConnectorConfig, now: datetime, fetch: FetchByte
     cfg = config.model_dump(exclude_none=True)
     validate_steam_options(cfg)
     mode = cfg.get("steam_mode") or "featured"
-    appids = list(cfg.get("steam_appids") or ()) if mode == "news" else await _steam_featured_appids(fetch, cfg)
-    news_rows = {appid: await _steam_news(fetch, appid, cfg) for appid in appids} if mode == "news" else {}
+    appids = (
+        list(cfg.get("steam_appids") or ())
+        if mode == "news"
+        else await _steam_featured_appids(fetch, cfg)
+    )
+    news_rows = (
+        {appid: await _steam_news(fetch, appid, cfg) for appid in appids} if mode == "news" else {}
+    )
     if len(appids) > _MAX_APPS:
         raise rest.CollectionIncomplete
     games = {}
@@ -179,7 +256,9 @@ async def collect_steam(config: ConnectorConfig, now: datetime, fetch: FetchByte
     if mode == "news":
         for appid, items in news_rows.items():
             game = games[appid]
-            source_fields = _object(_object(game.metadata.get("provider_record")).get("source_fields"))
+            source_fields = _object(
+                _object(game.metadata.get("provider_record")).get("source_fields")
+            )
             for item in items:
                 title = xml_child_text(item, "title") or ""
                 link = xml_child_text(item, "link") or ""
@@ -192,12 +271,26 @@ async def collect_steam(config: ConnectorConfig, now: datetime, fetch: FetchByte
                 fields["canonical_url"] = link
                 if date:
                     fields["release_date"] = date
-                records.append(_record("steam_releases", f"steam-news:{appid}:{sha256(guid.encode()).hexdigest()[:32]}", title, xml_child_text(item, "description") or "", now, fields, observed_at=observed))
+                records.append(
+                    _record(
+                        "steam_releases",
+                        f"steam-news:{appid}:{sha256(guid.encode()).hexdigest()[:32]}",
+                        title,
+                        xml_child_text(item, "description") or "",
+                        now,
+                        fields,
+                        observed_at=observed,
+                    )
+                )
     filtered = filter_records("steam_releases", cfg, records)
     fingerprint = native_fingerprint("steam_releases", cfg)
     if fingerprint is None:
         raise ValueError("steam_fingerprint_missing")
-    return GamePage(tuple(filtered), "returned_snapshot", json.dumps({"scope": fingerprint}, separators=(",", ":")))
+    return GamePage(
+        tuple(filtered),
+        "returned_snapshot",
+        json.dumps({"scope": fingerprint}, separators=(",", ":")),
+    )
 
 
 def _igdb_apicalypse(config: Mapping[str, Any]) -> str:
@@ -252,7 +345,13 @@ def _igdb_game(row: Mapping[str, Any], config: Mapping[str, Any], now: datetime)
     theme_names = [str(_object(item).get("name") or "") for item in themes[:32]]
     normalized = normalize_genres((*genre_names, *theme_names))
     game_type = _object(row.get("game_type")).get("name")
-    format_map = {"Main Game": "main_game", "DLC": "dlc", "Expansion": "expansion", "Remake": "remake", "Remaster": "remaster"}
+    format_map = {
+        "Main Game": "main_game",
+        "DLC": "dlc",
+        "Expansion": "expansion",
+        "Remake": "remake",
+        "Remaster": "remaster",
+    }
     external_games = row.get("external_games")
     external_games = external_games if isinstance(external_games, list) else []
     external_steam = next(
@@ -266,7 +365,9 @@ def _igdb_game(row: Mapping[str, Any], config: Mapping[str, Any], now: datetime)
     fields: dict[str, object] = {
         "media_type": "game",
         "artwork_aspect": "video",
-        "canonical_url": row.get("url") if isinstance(row.get("url"), str) and row["url"].startswith("https://www.igdb.com/") else f"https://www.igdb.com/games/{game_id}",
+        "canonical_url": row.get("url")
+        if isinstance(row.get("url"), str) and row["url"].startswith("https://www.igdb.com/")
+        else f"https://www.igdb.com/games/{game_id}",
         "external_ids": build_external_ids({"igdb": game_id, "steam": external_steam}),
     }
     cover = _object(row.get("cover")).get("url")
@@ -285,13 +386,28 @@ def _igdb_game(row: Mapping[str, Any], config: Mapping[str, Any], now: datetime)
         fields["rating"] = float(rating)
     age_rows = row.get("age_ratings")
     age_rows = age_rows if isinstance(age_rows, list) else []
-    age_names = [str(_object(_object(item).get("rating")).get("name") or "").casefold() for item in age_rows[:16]]
-    ratings = [normalize_content_rating(_AGE_RATINGS[name]) for name in age_names if name in _AGE_RATINGS]
+    age_names = [
+        str(_object(_object(item).get("rating")).get("name") or "").casefold()
+        for item in age_rows[:16]
+    ]
+    ratings = [
+        normalize_content_rating(_AGE_RATINGS[name]) for name in age_names if name in _AGE_RATINGS
+    ]
     if ratings:
-        fields["content_rating"] = max(ratings, key=("safe", "pg", "pg_13", "r", "mature", "explicit").index)
+        fields["content_rating"] = max(
+            ratings, key=("safe", "pg", "pg_13", "r", "mature", "explicit").index
+        )
     if summary := row.get("summary"):
         fields["summary"] = str(summary)[:8000]
-    return _record("igdb_games", f"igdb:{game_id}", title, str(row.get("summary") or ""), now, fields, observed_at=observed)
+    return _record(
+        "igdb_games",
+        f"igdb:{game_id}",
+        title,
+        str(row.get("summary") or ""),
+        now,
+        fields,
+        observed_at=observed,
+    )
 
 
 async def collect_igdb(
@@ -307,7 +423,9 @@ async def collect_igdb(
     fingerprint = native_fingerprint("igdb_games", cfg)
     if fingerprint is None:
         raise ValueError("igdb_fingerprint_missing")
-    oauth_body = urlencode({"client_id": client_id, "client_secret": client_secret, "grant_type": "client_credentials"}).encode()
+    oauth_body = urlencode(
+        {"client_id": client_id, "client_secret": client_secret, "grant_type": "client_credentials"}
+    ).encode()
     oauth = await fetch(
         _TWITCH_TOKEN,
         request_body=oauth_body,
@@ -318,13 +436,23 @@ async def collect_igdb(
     token_data = _json(oauth, "igdb_oauth_invalid")
     token = token_data.get("access_token")
     expires_in = token_data.get("expires_in")
-    if not isinstance(token, str) or not token or len(token) > 4096 or type(expires_in) is not int or expires_in <= 30:
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > 4096
+        or type(expires_in) is not int
+        or expires_in <= 30
+    ):
         raise rest.RestSchemaChanged("igdb_oauth_invalid")
     expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
     await _PACER.pace("api.igdb.com", 0.25)
     response = await fetch(
         _IGDB_GAMES,
-        headers={"Accept": "application/json", "Client-ID": client_id, "Authorization": f"Bearer {token}"},
+        headers={
+            "Accept": "application/json",
+            "Client-ID": client_id,
+            "Authorization": f"Bearer {token}",
+        },
         request_body=_igdb_apicalypse(cfg).encode("ascii"),
         request_content_type="text/plain",
         max_bytes=1024_000,
@@ -336,8 +464,16 @@ async def collect_igdb(
         rows = json.loads(response.body or b"")
     except (ValueError, UnicodeError):
         raise rest.RestSchemaChanged("igdb_response_invalid") from None
-    if not isinstance(rows, list) or len(rows) > _MAX_IGDB or any(not isinstance(row, dict) for row in rows):
-        raise rest.CollectionIncomplete if isinstance(rows, list) else rest.RestSchemaChanged("igdb_response_invalid")
+    if (
+        not isinstance(rows, list)
+        or len(rows) > _MAX_IGDB
+        or any(not isinstance(row, dict) for row in rows)
+    ):
+        raise (
+            rest.CollectionIncomplete
+            if isinstance(rows, list)
+            else rest.RestSchemaChanged("igdb_response_invalid")
+        )
     records = filter_records("igdb_games", cfg, [_igdb_game(row, cfg, now) for row in rows])
     cursor = json.dumps({"scope": fingerprint}, separators=(",", ":"))
     return GamePage(tuple(records), "returned_snapshot", cursor, expires_at)

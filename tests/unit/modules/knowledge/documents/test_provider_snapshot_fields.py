@@ -216,20 +216,38 @@ def test_media_providers_and_media_field_validation() -> None:
     _rejects("tmdb_movies", {"rating": 101.0}, "finite number between 0 and 100")
     _rejects("tmdb_movies", {"external_ids": {"bad_key": "1"}}, "bounded identifier map")
     _rejects("tmdb_movies", {"external_ids": {"tmdb": " "}}, "bounded identifier map")
-    _rejects("tmdb_movies", {"trailer_url": "http://example.com/t"}, "HTTPS link without credentials")
+    _rejects(
+        "tmdb_movies", {"trailer_url": "http://example.com/t"}, "HTTPS link without credentials"
+    )
     _rejects("tmdb_movies", {"country": "USA"}, "bounded string")
     _rejects("tmdb_movies", {"country": "us"}, "ISO 3166-1 alpha-2")
     _rejects("tmdb_movies", {"media_type": "invalid"}, "media_type is unsupported")
     _rejects("tmdb_movies", {"artwork_aspect": "wide"}, "artwork_aspect is unsupported")
     _rejects("tmdb_movies", {"release_status": "unknown"}, "release_status is unsupported")
     # Existing non-media providers preserve 64-char language limit (e.g. "English").
-    assert _meta("gdelt_economy", {"language": "English", "sourcecountry": "US"}).source_fields["language"] == "English"
-    assert _meta("tmdb_movies", {"artwork_aspect": "landscape"}).source_fields["artwork_aspect"] == "landscape"
+    assert (
+        _meta("gdelt_economy", {"language": "English", "sourcecountry": "US"}).source_fields[
+            "language"
+        ]
+        == "English"
+    )
+    assert (
+        _meta("tmdb_movies", {"artwork_aspect": "landscape"}).source_fields["artwork_aspect"]
+        == "landscape"
+    )
 
 
 def test_media_release_dates_accept_partial_dates_and_reject_invalid_calendar_values() -> None:
     for value in ("2026", "2026-02", "2024-02-29", "2026-01-01T12:30:00Z"):
-        assert _meta("anilist_anime", {"release_date": value}).source_fields["release_date"] == value
-    for value in ("2026-99-99", "2026-02-29", "2026-13", "2026-01-01T25:00:00Z", "2026-01-01T12:00:00"):
+        assert (
+            _meta("anilist_anime", {"release_date": value}).source_fields["release_date"] == value
+        )
+    for value in (
+        "2026-99-99",
+        "2026-02-29",
+        "2026-13",
+        "2026-01-01T25:00:00Z",
+        "2026-01-01T12:00:00",
+    ):
         with pytest.raises(ValueError):
             _meta("anilist_anime", {"release_date": value})

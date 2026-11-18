@@ -87,7 +87,9 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "google_books": frozenset({"google_books_query", "google_books_subject"}),
     "omdb_lookup": frozenset({"omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search"}),
     "anilist_anime": frozenset({"media_ids"}),
-    "openlibrary_books": frozenset({"openlibrary_mode", "openlibrary_subject", "openlibrary_query"}),
+    "openlibrary_books": frozenset(
+        {"openlibrary_mode", "openlibrary_subject", "openlibrary_query"}
+    ),
     "gutendex_books": frozenset({"gutendex_topic", "gutendex_search"}),
     "anilist_manga": frozenset({"media_ids"}),
     "ann_news": frozenset({"ann_mode", "ann_media_type", "ann_category", "ann_edition"}),

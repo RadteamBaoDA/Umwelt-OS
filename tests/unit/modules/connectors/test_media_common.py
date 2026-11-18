@@ -52,9 +52,10 @@ def test_rate_limit_delay_from_headers() -> None:
     delay = mc.rate_limit_delay_from_headers({"Retry-After": future})
     assert delay is not None and 20.0 <= delay <= 35.0
     assert mc.rate_limit_delay_from_headers({"X-RateLimit-Remaining": "0"}) == 60.0
-    assert mc.rate_limit_delay_from_headers(
-        {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "45"}
-    ) == 45.0
+    assert (
+        mc.rate_limit_delay_from_headers({"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "45"})
+        == 45.0
+    )
     assert mc.rate_limit_delay_from_headers({"X-RateLimit-Remaining": "5"}) is None
 
 
@@ -170,14 +171,28 @@ def test_normalize_rating_country_language_genres_and_content_rating() -> None:
         "sci_fi",
         "fantasy",
     ]
-    assert mc.normalize_genres(["391b0423-d847-456f-aff0-8b0cfc03066b"], provider="mangadex_releases") == [
-        "action"
-    ]
+    assert mc.normalize_genres(
+        ["391b0423-d847-456f-aff0-8b0cfc03066b"], provider="mangadex_releases"
+    ) == ["action"]
     # Capped at 12 items.
-    many = mc.normalize_genres([
-        "action", "adventure", "sci_fi", "fantasy", "romance", "thriller", "horror",
-        "comedy", "drama", "mystery", "documentary", "animation", "history", "music",
-    ])
+    many = mc.normalize_genres(
+        [
+            "action",
+            "adventure",
+            "sci_fi",
+            "fantasy",
+            "romance",
+            "thriller",
+            "horror",
+            "comedy",
+            "drama",
+            "mystery",
+            "documentary",
+            "animation",
+            "history",
+            "music",
+        ]
+    )
     assert len(many) == 12
 
     assert mc.normalize_content_rating("TV-14") == "pg_13"
@@ -189,11 +204,21 @@ def test_normalize_rating_country_language_genres_and_content_rating() -> None:
 def test_build_media_identity_and_external_ids() -> None:
     """Identity builder hashes >480-char IDs and external_ids enforces allowlist and bounds."""
     assert mc.build_media_identity("anilist_anime", 21) == "anilist_anime:21"
-    assert mc.build_media_identity("youtube", "dQw4w9WgXcQ", scope="UC123") == "youtube:UC123:dQw4w9WgXcQ"
+    assert (
+        mc.build_media_identity("youtube", "dQw4w9WgXcQ", scope="UC123")
+        == "youtube:UC123:dQw4w9WgXcQ"
+    )
     long_id = mc.build_media_identity("podcast_rss", "x" * 500)
     assert long_id.startswith("sha256:") and len(long_id) == 71
 
     ext = mc.build_external_ids(
-        {"tmdb": 123, "imdb": " tt123 ", "unknown_key": "1", "mal": None, "trakt": True, "kitsu": "x" * 65}
+        {
+            "tmdb": 123,
+            "imdb": " tt123 ",
+            "unknown_key": "1",
+            "mal": None,
+            "trakt": True,
+            "kitsu": "x" * 65,
+        }
     )
     assert ext == {"tmdb": "123", "imdb": "tt123"}

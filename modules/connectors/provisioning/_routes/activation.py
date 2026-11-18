@@ -736,15 +736,21 @@ def _native_credential_secret(
     """
     if isinstance(payload, PodcastIndexCredentialRequest):
         credential_secret = json.dumps(
-            {"apiKey": payload.apiKey.get_secret_value(), "apiSecret": payload.apiSecret.get_secret_value()},
+            {
+                "apiKey": payload.apiKey.get_secret_value(),
+                "apiSecret": payload.apiSecret.get_secret_value(),
+            },
             separators=(",", ":"),
         )
     else:
         credential_secret = payload.secret.get_secret_value()
     if provider == "youtube_api" and (
-        not credential_secret.isascii() or not all(char.isalnum() or char in "_-" for char in credential_secret)
+        not credential_secret.isascii()
+        or not all(char.isalnum() or char in "_-" for char in credential_secret)
     ):
-        raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider")
+        raise HTTPException(
+            status_code=422, detail="The API key is not acceptable for this provider"
+        )
     if keyed:
         from modules.connectors.providers.keyed import validate_key
         from modules.connectors.providers.macro import ProviderPayloadError
@@ -1145,6 +1151,50 @@ async def resolve_backend_transition(
     return await _drive_transition(session, request, scope, source_id, access_fence)
 
 
+def _native_rest_header(source: Any, desired: dict[str, Any]) -> tuple[str | None, str]:
+    """Resolve the fixed credential header for a REST-authenticated source.
+
+    Returns ``(keyed_header, header_name)``: ``keyed_header`` is the keyed-preset placement (``header``,
+    ``query:<param>`` or ``path:<token>``) or ``None``; ``header_name`` is the header the secret is bound to
+    (keyed, native placement, local ``Authorization``, workspace-app ``Authorization``, else the configured
+    custom header). Raises HTTP 422 when the source uses none of these header authentications.
+    """
+    keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")
+    workspace_app_header = (
+        "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
+    )
+    native_header = collection.NATIVE_REST_PLACEMENTS.get(source.provider or "")
+    local_header = (
+        "Authorization"
+        if source.provider in collection.HEADER_AUTH_PROVIDERS
+        and desired.get("auth_method") == "http_header"
+        and desired.get("auth_header_name") == "Authorization"
+        else None
+    )
+    if (
+        keyed_header is None
+        and local_header is None
+        and workspace_app_header is None
+        and native_header is None
+        and (
+            source.provider is not None
+            or desired.get("auth_method") != "http_header"
+            or not desired.get("auth_header_name")
+        )
+    ):
+        raise HTTPException(
+            status_code=422, detail="This source does not use REST header authentication"
+        )
+    header_name = (
+        keyed_header
+        or native_header
+        or local_header
+        or workspace_app_header
+        or str(desired["auth_header_name"])
+    )
+    return keyed_header, header_name
+
+
 @router.put("/{source_id}/credentials/native-rest", response_model=ActivationRead)
 async def reenter_native_rest_credential(
     source_id: UUID,
@@ -1173,40 +1223,11 @@ async def reenter_native_rest_credential(
     row = await provisioning.activation_status(
         session, source_id, multi_workspace_enabled=gate, scope=scope
     )
-    desired = dict(row.desired_configuration) if row is not None else {}
-    keyed_header = collection.KEYED_PROVIDERS.get(
-        source.provider or ""
-    )  # keyed preset: fixed placement (header | query:<param> | path:<token>)
-    workspace_app_header = (
-        "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
-    )
-    native_header = collection.NATIVE_REST_PLACEMENTS.get(source.provider or "")
-    local_header = (
-        "Authorization"
-        if source.provider in collection.HEADER_AUTH_PROVIDERS
-        and desired.get("auth_method") == "http_header"
-        and desired.get("auth_header_name") == "Authorization"
-        else None
-    )
-    if (
-        source.status != "active"
-        or source.type != "api"
-        or row is None
-        or (
-            keyed_header is None
-            and local_header is None
-            and workspace_app_header is None
-            and native_header is None
-            and (
-                source.provider is not None
-                or desired.get("auth_method") != "http_header"
-                or not desired.get("auth_header_name")
-            )
-        )
-    ):
+    if source.status != "active" or source.type != "api" or row is None:
         raise HTTPException(
             status_code=422, detail="This source does not use REST header authentication"
         )
+    keyed_header, header_name = _native_rest_header(source, dict(row.desired_configuration))
     if row.desired_revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
     is_pair = isinstance(payload, PodcastIndexCredentialRequest)
@@ -1214,9 +1235,6 @@ async def reenter_native_rest_credential(
         raise HTTPException(status_code=422, detail="Credential fields do not match this provider")
     credential_secret = _native_credential_secret(
         payload, source.provider, keyed=keyed_header is not None
-    )
-    header_name = (
-        keyed_header or native_header or local_header or workspace_app_header or str(desired["auth_header_name"])
     )
     operation_id = uuid7()
     try:

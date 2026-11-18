@@ -88,9 +88,7 @@ async def test_youtube_native_accepts_records_with_validator_cursor_atomically(m
     run = _run("youtube", AsyncMock())
     run.attempt.source = source
     validators = {
-        "https://www.youtube.com/feeds/videos.xml?channel_id=" + "UC" + "a" * 22: {
-            "etag": '"v2"'
-        }
+        "https://www.youtube.com/feeds/videos.xml?channel_id=" + "UC" + "a" * 22: {"etag": '"v2"'}
     }
     records = (object(),)
     page = SimpleNamespace(

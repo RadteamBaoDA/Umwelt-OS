@@ -90,7 +90,10 @@ def test_dedup_uses_full_series_key_from_any_readable_source() -> None:
     assert "IS NOT DISTINCT FROM" not in sql
     assert "observations_1.unit = observations.unit" in sql
     for col in ("symbol", "region", "currency"):
-        assert f"coalesce(observations_1.{col}, chr(31)) = coalesce(observations.{col}, chr(31))" in sql
+        assert (
+            f"coalesce(observations_1.{col}, chr(31)) = coalesce(observations.{col}, chr(31))"
+            in sql
+        )
     for col in ("latitude", "longitude"):
         assert f"coalesce(observations_1.{col}, 'NaN'::float8) = coalesce(observations.{col}" in sql
 

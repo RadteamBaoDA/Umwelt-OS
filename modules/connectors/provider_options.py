@@ -30,6 +30,15 @@ from urllib.parse import quote, urlencode
 
 from pydantic import Field, StrictInt, StringConstraints
 
+from modules.connectors.provider_options_filters import (
+    filter_media_records as filter_media_records,
+)
+from modules.connectors.provider_options_filters import (
+    filter_records as filter_records,
+)
+from modules.connectors.provider_options_filters import (
+    in_region as in_region,
+)
 from modules.connectors.provider_options_media import (
     TMDB_DISCOVER_OPTIONS as TMDB_DISCOVER_OPTIONS,
 )
@@ -84,7 +93,7 @@ from modules.connectors.provider_options_media import (
 
 if TYPE_CHECKING:
     # Annotation-only: a runtime import would close an import cycle between public contracts.
-    from modules.ingestion.public import IngestionRecord
+    pass
 
 HnList = Literal["top", "new", "best", "ask", "show"]
 GdeltTimespan = Literal["1h", "6h", "24h", "3d", "7d"]
@@ -296,8 +305,12 @@ MediaFormat = Literal[
     "remaster",
 ]
 AnimeSeason = Literal["winter", "spring", "summer", "fall"]
-MalAnimeRanking = Literal["all", "airing", "upcoming", "tv", "ova", "movie", "special", "bypopularity", "favorite"]
-MalMangaRanking = Literal["manga", "novels", "oneshots", "doujin", "manhwa", "manhua", "bypopularity", "favorite"]
+MalAnimeRanking = Literal[
+    "all", "airing", "upcoming", "tv", "ova", "movie", "special", "bypopularity", "favorite"
+]
+MalMangaRanking = Literal[
+    "manga", "novels", "oneshots", "doujin", "manhwa", "manhua", "bypopularity", "favorite"
+]
 MAL_RANKING_DEFAULTS = {"mal_anime": "all", "mal_manga": "manga"}
 OpenLibraryMode = Literal["subject", "search", "recent"]
 MediaStatus = Literal["finished", "releasing", "not_yet_released", "cancelled", "hiatus"]
@@ -519,40 +532,224 @@ MAX_COINS = 5
 ISO_COUNTRY_PATTERN = r"^[A-Z]{2}$"
 
 # Provider-specific option names (the common selection filters are allowed separately by INCREMENTAL_PROVIDERS).
-_MAL_FILTER_FIELDS = ("media_genres", "media_formats", "release_year", "content_ratings", "min_rating", "exclude_adult")
+_MAL_FILTER_FIELDS = (
+    "media_genres",
+    "media_formats",
+    "release_year",
+    "content_ratings",
+    "min_rating",
+    "exclude_adult",
+)
 OPTION_FIELDS: dict[str, tuple[str, ...]] = {
-
-    "mal_anime": ("mal_mode", "mal_ranking_type", "mal_season_year", "mal_season", "anime_season", *_MAL_FILTER_FIELDS),
+    "mal_anime": (
+        "mal_mode",
+        "mal_ranking_type",
+        "mal_season_year",
+        "mal_season",
+        "anime_season",
+        *_MAL_FILTER_FIELDS,
+    ),
     "mal_manga": ("mal_ranking_type", "media_countries", *_MAL_FILTER_FIELDS),
-    "google_books": ("google_books_query", "google_books_subject", "google_books_print_type", "google_books_filter", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
+    "google_books": (
+        "google_books_query",
+        "google_books_subject",
+        "google_books_print_type",
+        "google_books_filter",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "release_year",
+        "min_rating",
+    ),
     "hardcover_books": ("media_genres", "release_year", "min_rating"),
-    "tmdb_movies": ("tmdb_mode", "tmdb_language", "tmdb_certification_country", "tmdb_certification", "media_country", "media_countries", "media_genres", "media_languages", "release_year", "min_rating", "exclude_adult"),
-    "tmdb_tv": ("tmdb_mode", "tmdb_language", "media_country", "media_countries", "media_genres", "media_languages", "release_year", "min_rating", "exclude_adult"),
-    "trakt_media": ("trakt_mode", "trakt_query", "trakt_calendar_days", "trakt_certifications", "media_countries", "media_genres", "media_languages", "release_year", "min_rating"),
-    "omdb_lookup": ("omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search", "omdb_type", "release_year", "media_country", "media_countries", "media_genres", "media_languages", "min_rating"),
-    "tvmaze_schedule": ("tvmaze_mode", "tvmaze_show_ids", "tvmaze_global", "media_country", "media_countries", "media_genres", "media_languages", "media_formats", "release_year", "min_rating"),
+    "tmdb_movies": (
+        "tmdb_mode",
+        "tmdb_language",
+        "tmdb_certification_country",
+        "tmdb_certification",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "tmdb_tv": (
+        "tmdb_mode",
+        "tmdb_language",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "trakt_media": (
+        "trakt_mode",
+        "trakt_query",
+        "trakt_calendar_days",
+        "trakt_certifications",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+        "min_rating",
+    ),
+    "omdb_lookup": (
+        "omdb_mode",
+        "omdb_imdb_id",
+        "omdb_title",
+        "omdb_search",
+        "omdb_type",
+        "release_year",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "min_rating",
+    ),
+    "tvmaze_schedule": (
+        "tvmaze_mode",
+        "tvmaze_show_ids",
+        "tvmaze_global",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "release_year",
+        "min_rating",
+    ),
     "livechart_episodes": ("media_genres", "release_year"),
-    "openlibrary_books": ("openlibrary_mode", "openlibrary_subject", "openlibrary_query", "ebooks_only", "media_languages"),
-    "gutendex_books": ("media_languages", "gutendex_topic", "gutendex_search", "gutendex_copyright", "gutendex_mime_type", "gutendex_author_year_start", "gutendex_author_year_end", "media_genres"),
-    "anilist_anime": ("anilist_mode", "media_country", "media_countries", "media_genres", "media_tags", "media_formats", "release_year", "anime_season", "media_statuses", "min_rating", "exclude_adult"),
-    "anilist_manga": ("anilist_mode", "country_of_origin", "media_country", "media_countries", "media_genres", "media_tags", "media_formats", "release_year", "media_statuses", "min_rating", "exclude_adult"),
-    "ann_news": ("ann_mode", "ann_media_type", "ann_category", "ann_edition", "media_country", "media_countries", "media_genres", "media_languages", "release_year"),
-    "mangaupdates_releases": ("mangaupdates_types", "licensed_only", "release_year", "media_genres", "exclude_genre", "series_ids"),
-    "mangadex_releases": ("manga_ids", "original_languages", "available_translated_languages", "mangadex_content_ratings", "mangadex_statuses", "publication_demographic", "release_year", "updated_at_since", "media_genres", "excluded_tags"),
-    "apple_books_rss": ("country", "kind", "chart", "media_country", "media_genres", "media_languages"),
+    "openlibrary_books": (
+        "openlibrary_mode",
+        "openlibrary_subject",
+        "openlibrary_query",
+        "ebooks_only",
+        "media_languages",
+    ),
+    "gutendex_books": (
+        "media_languages",
+        "gutendex_topic",
+        "gutendex_search",
+        "gutendex_copyright",
+        "gutendex_mime_type",
+        "gutendex_author_year_start",
+        "gutendex_author_year_end",
+        "media_genres",
+    ),
+    "anilist_anime": (
+        "anilist_mode",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_tags",
+        "media_formats",
+        "release_year",
+        "anime_season",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "anilist_manga": (
+        "anilist_mode",
+        "country_of_origin",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_tags",
+        "media_formats",
+        "release_year",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    ),
+    "ann_news": (
+        "ann_mode",
+        "ann_media_type",
+        "ann_category",
+        "ann_edition",
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "release_year",
+    ),
+    "mangaupdates_releases": (
+        "mangaupdates_types",
+        "licensed_only",
+        "release_year",
+        "media_genres",
+        "exclude_genre",
+        "series_ids",
+    ),
+    "mangadex_releases": (
+        "manga_ids",
+        "original_languages",
+        "available_translated_languages",
+        "mangadex_content_ratings",
+        "mangadex_statuses",
+        "publication_demographic",
+        "release_year",
+        "updated_at_since",
+        "media_genres",
+        "excluded_tags",
+    ),
+    "apple_books_rss": (
+        "country",
+        "kind",
+        "chart",
+        "media_country",
+        "media_genres",
+        "media_languages",
+    ),
     "youtube_api": ("media_countries", "media_languages", "release_year", "content_ratings"),
     "podcast_index": (
-        "podcast_index_query", "podcast_index_languages", "podcast_index_categories",
-        "podcast_index_excluded_categories", "podcast_index_since", "podcast_index_value",
-        "media_genres", "content_ratings",
+        "podcast_index_query",
+        "podcast_index_languages",
+        "podcast_index_categories",
+        "podcast_index_excluded_categories",
+        "podcast_index_since",
+        "podcast_index_value",
+        "media_genres",
+        "content_ratings",
     ),
     "listenbrainz_releases": (
-        "listenbrainz_username", "listenbrainz_days", "listenbrainz_sort", "listenbrainz_tags",
-        "listenbrainz_status", "media_countries", "media_country", "media_languages", "media_genres",
-        "media_formats", "release_year",
+        "listenbrainz_username",
+        "listenbrainz_days",
+        "listenbrainz_sort",
+        "listenbrainz_tags",
+        "listenbrainz_status",
+        "media_countries",
+        "media_country",
+        "media_languages",
+        "media_genres",
+        "media_formats",
+        "release_year",
     ),
-    "steam_releases": ("steam_mode", "steam_country", "steam_language", "steam_appids", "media_genres", "release_year", "min_rating", "content_ratings"),
-    "igdb_games": ("igdb_game_types", "igdb_region", "igdb_platforms", "media_genres", "media_formats", "release_year", "min_rating", "content_ratings"),
+    "steam_releases": (
+        "steam_mode",
+        "steam_country",
+        "steam_language",
+        "steam_appids",
+        "media_genres",
+        "release_year",
+        "min_rating",
+        "content_ratings",
+    ),
+    "igdb_games": (
+        "igdb_game_types",
+        "igdb_region",
+        "igdb_platforms",
+        "media_genres",
+        "media_formats",
+        "release_year",
+        "min_rating",
+        "content_ratings",
+    ),
     "podcast_rss": ("itunes_podcast_id", "media_country", "media_genres", "media_languages"),
     "wikidata_movies": (
         "lookback_days",
@@ -728,7 +925,9 @@ def _validate_tvmaze_options(cfg: Mapping[str, Any]) -> None:
         show ids or with global channels; or show ids supplied for a schedule mode.
     """
     mode = cfg.get("tvmaze_mode")
-    if cfg.get("tvmaze_global") and (mode != "schedule_web" or cfg.get("media_country") is not None):
+    if cfg.get("tvmaze_global") and (
+        mode != "schedule_web" or cfg.get("media_country") is not None
+    ):
         raise ValueError("Global channels require web schedule without a country")
     if mode == "followed_shows" and not cfg.get("tvmaze_show_ids"):
         raise ValueError("Followed shows require at least one TVMaze show id")
@@ -824,7 +1023,6 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
                 raise ValueError(f"{currency} is not offered by this provider")
         if (cfg.get("fx_base") or ("EUR" if provider == "ecb" else "USD")) in quotes:
             raise ValueError("A quote currency cannot equal the base")
-
 
 
 def _count(provider: str, cfg: Mapping[str, Any]) -> int:
@@ -1208,7 +1406,16 @@ def native_fingerprint(provider: str, cfg: Mapping[str, Any]) -> str | None:
         params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
         if provider == "steam_releases":
             params["steam_mode"] = cfg.get("steam_mode") or "featured"
-    elif provider in {"tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga", "google_books", "podcast_index"}:
+    elif provider in {
+        "tmdb_movies",
+        "tmdb_tv",
+        "trakt_media",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "google_books",
+        "podcast_index",
+    }:
         params = {key: cfg.get(key) for key in OPTION_FIELDS[provider]}
         if provider in {"mal_anime", "mal_manga"}:
             params.update(_mal_fingerprint_defaults(provider, cfg))
@@ -1227,222 +1434,3 @@ def default_window(provider: str, cfg: Mapping[str, Any]) -> timedelta:
     if provider == "gdelt_economy":
         return _GDELT_WINDOWS[cfg.get("gdelt_timespan") or "24h"]
     return timedelta(days=7) if provider == "gdacs_events" else timedelta(days=1)
-
-
-def _coordinates(record: IngestionRecord) -> tuple[float, float] | None:
-    """Return ``(lat, lon)`` from the typed measurement, else from the mapped summary text, else ``None``."""
-    world = (record.metadata.get("provider_record") or {}).get("world_data") or {}
-    if isinstance(world.get("latitude"), (int, float)) and isinstance(
-        world.get("longitude"), (int, float)
-    ):
-        return float(world["latitude"]), float(world["longitude"])
-    for pattern in _COORDS:
-        if match := pattern.search(record.content):
-            return float(match.group(1)), float(match.group(2))
-    return None
-
-
-def in_region(record: IngestionRecord, region: str) -> bool:
-    """Whether the record lies inside ``region``'s box. Records without coordinates are kept (ruling).
-
-    Dropping them would hide events whose location the provider omitted; the owner narrowed by area, not by
-    "must have a location", so an unlocated record is shown rather than silently lost.
-    """
-    box = REGION_BOXES[region]
-    where = _coordinates(record)
-    if box is None or where is None:
-        return True
-    lat, lon = where
-    return box[0] <= lat <= box[1] and box[2] <= lon <= box[3]
-
-
-def _severity_band(score: float | None) -> str | None:
-    """CVSS v3 qualitative band for a base score (``None`` when unscored)."""
-    if score is None or score <= 0:
-        return None
-    return "LOW" if score < 4 else "MEDIUM" if score < 7 else "HIGH" if score < 9 else "CRITICAL"
-
-
-def _match_media_dimension(
-    value: object, expected: object, *, keep_missing: bool, multi: bool = False
-) -> bool:
-    """Match one scalar or set-membership media metadata dimension against ``expected``."""
-    if expected is None:
-        return True
-    if value is None:
-        return keep_missing
-    if multi:
-        return isinstance(expected, (list, tuple, set, frozenset)) and value in set(expected)
-    return value == expected
-
-
-def _match_media_genres(
-    raw_genres: object, wanted: Sequence[str] | None, *, keep_missing: bool
-) -> bool:
-    """Return True when ``raw_genres`` intersects ``wanted`` (or when missing if ``keep_missing``)."""
-    if not wanted:
-        return True
-    if not isinstance(raw_genres, (list, tuple, set)) or not raw_genres:
-        return keep_missing
-    return bool(set(raw_genres) & set(wanted))
-
-
-def _match_media_numeric_and_season(
-    sf: Mapping[str, Any], cfg: Mapping[str, Any], *, keep_missing: bool
-) -> bool:
-    """Check ``release_year``, ``anime_season``, and ``min_rating`` on one ``source_fields`` mapping."""
-    release_year = cfg.get("release_year")
-    if release_year is not None:
-        actual_year = sf.get("release_year")
-        if actual_year is None:
-            if not keep_missing:
-                return False
-        elif type(actual_year) is not int or actual_year != release_year:
-            return False
-    anime_season = cfg.get("anime_season")
-    if anime_season is not None:
-        raw_season = sf.get("release_season")
-        if not isinstance(raw_season, str) or not raw_season.strip():
-            if not keep_missing:
-                return False
-        elif raw_season.strip().lower().split()[0] != str(anime_season).lower():
-            return False
-    min_rating = cfg.get("min_rating")
-    if min_rating is not None:
-        rating = sf.get("rating")
-        if rating is None:
-            return keep_missing
-        if (
-            isinstance(rating, bool)
-            or not isinstance(rating, (int, float))
-            or not math.isfinite(float(rating))
-            or float(rating) < float(min_rating)
-        ):
-            return False
-    return True
-
-
-def _record_matches_media_filters(
-    record: IngestionRecord, cfg: Mapping[str, Any], *, keep_missing: bool
-) -> bool:
-    """Evaluate all configured media filter options against ``record``'s ``source_fields``."""
-    provider_record = record.metadata.get("provider_record")
-    raw_sf = provider_record.get("source_fields") if isinstance(provider_record, Mapping) else None
-    sf: Mapping[str, Any] = raw_sf if isinstance(raw_sf, Mapping) else {}
-    if not _match_media_dimension(
-        sf.get("country"), cfg.get("media_country"), keep_missing=keep_missing
-    ):
-        return False
-    if not _match_media_dimension(
-        sf.get("country"), cfg.get("media_countries"), keep_missing=keep_missing, multi=True
-    ):
-        return False
-    if not _match_media_genres(
-        sf.get("genres"), cfg.get("media_genres"), keep_missing=keep_missing
-    ):
-        return False
-    if not _match_media_dimension(
-        sf.get("language"), cfg.get("media_languages"), keep_missing=keep_missing, multi=True
-    ):
-        return False
-    if not _match_media_dimension(
-        sf.get("format"), cfg.get("media_formats"), keep_missing=keep_missing, multi=True
-    ):
-        return False
-    if not _match_media_dimension(
-        sf.get("content_rating"), cfg.get("content_ratings"), keep_missing=keep_missing, multi=True
-    ):
-        return False
-    if cfg.get("exclude_adult") is True and sf.get("content_rating") in {"mature", "explicit"}:
-        return False
-    return _match_media_numeric_and_season(sf, cfg, keep_missing=keep_missing)
-
-
-def filter_media_records(
-    cfg: Mapping[str, Any],
-    records: Sequence[IngestionRecord],
-    *,
-    keep_missing: bool = False,
-) -> list[IngestionRecord]:
-    """Filter media ``IngestionRecord`` items post-fetch using configured ``MEDIA_OPTION_NAMES``.
-
-    Reads ``record.metadata["provider_record"]["source_fields"]`` without mutating records.
-    When ``keep_missing`` is False (default), records missing a filtered dimension are excluded;
-    sparse RSS adapters may opt into ``keep_missing=True`` so unannotated items are preserved.
-    """
-    if not any(cfg.get(k) is not None for k in MEDIA_OPTION_NAMES):
-        return list(records)
-    return [
-        record
-        for record in records
-        if _record_matches_media_filters(record, cfg, keep_missing=keep_missing)
-    ]
-
-
-def filter_records(
-    provider: str, cfg: Mapping[str, Any], records: Sequence[IngestionRecord]
-) -> list[IngestionRecord]:
-    """Apply the client-side per-type filters (region, KEV flag, NVD bands, FX quote subset, Kp, advisory, and media options).
-
-    Runs on mapped records before incremental selection. With no relevant option the input is returned as is.
-    """
-    out = list(records)
-    region = cfg.get("region")
-    if region and provider in OPTION_FIELDS and "region" in OPTION_FIELDS[provider]:
-        out = [r for r in out if in_region(r, region)]
-    if provider == "cisa_kev" and cfg.get("kev_ransomware_only"):
-        out = [
-            r
-            for r in out
-            if (
-                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get(
-                    "provider_fields"
-                )
-                or {}
-            ).get("knownRansomwareCampaignUse")
-            == "Known"
-        ]
-    if provider in ("ecb", "open_er_api") and cfg.get("fx_quotes"):
-        wanted_quotes = set(cfg["fx_quotes"])
-        out = [
-            r
-            for r in out
-            if (
-                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get(
-                    "provider_fields"
-                )
-                or {}
-            ).get("quote")
-            in wanted_quotes
-        ]
-    if provider == "noaa_kp" and cfg.get("kp_min"):
-        out = [
-            r
-            for r in out
-            if (
-                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get("value")
-                or 0
-            )
-            >= cfg["kp_min"]
-        ]
-    if provider == "us_travel_advisories" and cfg.get("advisory_min_level"):
-        # A title without "Level N" (e.g. "Worldwide Caution") cannot be ranked, so it is kept rather than hidden.
-        out = [
-            r
-            for r in out
-            if (m := _LEVEL.search(str(r.metadata.get("title", "")))) is None
-            or int(m.group(1)) >= cfg["advisory_min_level"]
-        ]
-    if provider == "nvd" and cfg.get("nvd_severity"):
-        wanted = set(cfg["nvd_severity"])
-        out = [
-            r
-            for r in out
-            if _severity_band(
-                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get("value")
-            )
-            in wanted
-        ]
-    if any(cfg.get(k) is not None for k in MEDIA_OPTION_NAMES):
-        out = filter_media_records(cfg, out)
-    return out

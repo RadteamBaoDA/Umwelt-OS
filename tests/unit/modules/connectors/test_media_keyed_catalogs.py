@@ -288,7 +288,9 @@ def test_unexpected_oversized_page_fails_before_any_record_is_accepted(provider,
 
 
 @pytest.mark.parametrize(("provider", "ranking"), [("mal_anime", "all"), ("mal_manga", "manga")])
-def test_mal_explicit_and_implicit_ranking_defaults_share_fingerprint_and_catalog(provider, ranking):
+def test_mal_explicit_and_implicit_ranking_defaults_share_fingerprint_and_catalog(
+    provider, ranking
+):
     cfg = {"mal_ranking_type": ranking}
     assert native_fingerprint(provider, {}) == native_fingerprint(provider, cfg)
     entry = get_catalog_entry(provider)

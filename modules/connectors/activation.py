@@ -512,9 +512,9 @@ async def _native_credential_error(
 
     desired = row.desired_configuration or {}
     provider = source.provider or ""
-    fixed_placement = (
-        collection.KEYED_PROVIDERS.get(provider) or collection.NATIVE_REST_PLACEMENTS.get(provider)
-    )
+    fixed_placement = collection.KEYED_PROVIDERS.get(
+        provider
+    ) or collection.NATIVE_REST_PLACEMENTS.get(provider)
     if fixed_placement or desired.get("auth_method") == "http_header":
         credential = await session.get(ConnectorRestCredential, source.id, with_for_update=True)
         if (

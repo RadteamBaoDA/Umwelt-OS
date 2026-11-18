@@ -33,7 +33,7 @@
   "modules/connectors/provisioning/_routes/activation.py::_stage_bundle_credentials": 135,
   "modules/connectors/provisioning/_routes/activation.py::_stage_telegram_activation": 129,
   "modules/connectors/provisioning/_routes/activation.py::activate_source": 164,
-  "modules/connectors/provisioning/_routes/activation.py::reenter_native_rest_credential": 134,
+  "modules/connectors/provisioning/_routes/activation.py::reenter_native_rest_credential": 102,
   "modules/connectors/provisioning/_routes/activation.py::remove_provider_credential": 151,
   "modules/connectors/provisioning/_workflow_drive.py::drive_workflow_operation": 132,
   "modules/connectors/provisioning/_workflow_steps.py::claim_workflow_step": 132,

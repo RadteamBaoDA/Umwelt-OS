@@ -70,24 +70,37 @@ def validate_podcast_index_options(cfg: Mapping[str, Any]) -> None:
     from modules.connectors.provider_options import clean_query
 
     query = cfg.get("podcast_index_query")
-    recent = ("podcast_index_languages", "podcast_index_categories", "podcast_index_excluded_categories", "podcast_index_since")
+    recent = (
+        "podcast_index_languages",
+        "podcast_index_categories",
+        "podcast_index_excluded_categories",
+        "podcast_index_since",
+    )
     if query is not None:
         if clean_query(query) != query or any(cfg.get(key) is not None for key in recent):
             raise ValueError("Podcast Index term search cannot use recent feed options")
     elif cfg.get("podcast_index_value") is not None or cfg.get("content_ratings"):
-        raise ValueError("Podcast Index value type and explicit rating filters require a search term")
+        raise ValueError(
+            "Podcast Index value type and explicit rating filters require a search term"
+        )
     languages = cfg.get("podcast_index_languages") or ()
-    if len(set(languages)) != len(languages) or any(not re.fullmatch(r"[a-z]{2}|unknown", lang) for lang in languages):
+    if len(set(languages)) != len(languages) or any(
+        not re.fullmatch(r"[a-z]{2}|unknown", lang) for lang in languages
+    ):
         raise ValueError("Podcast Index languages must be distinct two-letter codes or unknown")
     for key in ("podcast_index_categories", "podcast_index_excluded_categories"):
-        if (value := cfg.get(key)) is not None and not re.fullmatch(r"[A-Za-z0-9 &'-]+(?:,[A-Za-z0-9 &'-]+)*", value):
+        if (value := cfg.get(key)) is not None and not re.fullmatch(
+            r"[A-Za-z0-9 &'-]+(?:,[A-Za-z0-9 &'-]+)*", value
+        ):
             raise ValueError("Podcast Index categories must be comma-separated names or IDs")
 
 
 def validate_listenbrainz_options(cfg: Mapping[str, Any]) -> None:
     """Bound ListenBrainz scope and prevent Lucene syntax from adding unrequested search clauses."""
     tags = cfg.get("listenbrainz_tags") or ()
-    if len(set(tags)) != len(tags) or any(not re.fullmatch(r"[A-Za-z0-9 _-]{1,64}", tag) for tag in tags):
+    if len(set(tags)) != len(tags) or any(
+        not re.fullmatch(r"[A-Za-z0-9 _-]{1,64}", tag) for tag in tags
+    ):
         raise ValueError("ListenBrainz tags must be distinct plain text values")
 
 
@@ -130,10 +143,19 @@ def validate_mal_target(provider: str, cfg: Mapping[str, Any]) -> None:
     year, season = cfg.get("mal_season_year"), cfg.get("mal_season")
     rankings = get_args(MalAnimeRanking if provider == "mal_anime" else MalMangaRanking)
     if mode in (None, "ranking"):
-        if year is not None or season is not None or (ranking is not None and ranking not in rankings):
+        if (
+            year is not None
+            or season is not None
+            or (ranking is not None and ranking not in rankings)
+        ):
             raise ValueError("MAL ranking target is invalid")
     elif mode == "season" and provider == "mal_anime":
-        if type(year) is not int or not 1917 <= year <= 2100 or season not in get_args(AnimeSeason) or ranking is not None:
+        if (
+            type(year) is not int
+            or not 1917 <= year <= 2100
+            or season not in get_args(AnimeSeason)
+            or ranking is not None
+        ):
             raise ValueError("MAL anime season requires a season and year without a ranking type")
     else:
         raise ValueError("MAL season collection is only available for anime")
@@ -148,7 +170,10 @@ def validate_google_books_target(cfg: Mapping[str, Any]) -> None:
         raise ValueError("Google Books requires a query or subject")
     for value, limit in ((query, 160), (subject, 100)):
         if value is not None and (
-            not isinstance(value, str) or not value.strip() or len(value) > limit or _CONTROL.search(value)
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > limit
+            or _CONTROL.search(value)
         ):
             raise ValueError("Google Books query or subject is invalid")
     if isinstance(subject, str) and ('"' in subject or "\\" in subject):
@@ -165,7 +190,16 @@ def _validate_keyed_media_provider_options(provider: str, cfg: Mapping[str, Any]
         validate_tmdb_options(provider, cfg)
     elif provider == "trakt_media":
         mode = cfg.get("trakt_mode") or "movies_trending"
-        if mode not in {"movies_trending", "movies_anticipated", "shows_trending", "shows_anticipated", "movies_calendar", "shows_calendar", "movies_search", "shows_search"}:
+        if mode not in {
+            "movies_trending",
+            "movies_anticipated",
+            "shows_trending",
+            "shows_anticipated",
+            "movies_calendar",
+            "shows_calendar",
+            "movies_search",
+            "shows_search",
+        }:
             raise ValueError("Trakt mode is unsupported")
         if mode.endswith("_search") and not str(cfg.get("trakt_query") or "").strip():
             raise ValueError("Trakt search requires a query")
@@ -190,15 +224,26 @@ def _validate_keyed_media_provider_options(provider: str, cfg: Mapping[str, Any]
 
 
 TMDB_DISCOVER_OPTIONS = (
-    "media_country", "media_countries", "media_genres", "media_languages",
-    "release_year", "min_rating", "exclude_adult", "tmdb_certification", "tmdb_certification_country",
+    "media_country",
+    "media_countries",
+    "media_genres",
+    "media_languages",
+    "release_year",
+    "min_rating",
+    "exclude_adult",
+    "tmdb_certification",
+    "tmdb_certification_country",
 )
 
 
 def validate_tmdb_options(provider: str, cfg: Mapping[str, Any]) -> None:
     """Reject modes and filters unavailable from the selected TMDB response shape."""
     mode = cfg.get("tmdb_mode")
-    allowed = {"now_playing", "upcoming", "changes"} if provider == "tmdb_movies" else {"airing_today", "on_the_air"}
+    allowed = (
+        {"now_playing", "upcoming", "changes"}
+        if provider == "tmdb_movies"
+        else {"airing_today", "on_the_air"}
+    )
     if mode is not None and mode not in allowed:
         raise ValueError("TMDB mode is unsupported")
     _validate_tmdb_certification(provider, mode, cfg)
@@ -212,7 +257,13 @@ def validate_omdb_search_filters(cfg: Mapping[str, Any]) -> None:
     """Reject detail-only filters for the abbreviated OMDb search response."""
     if cfg.get("omdb_mode") == "search" and any(
         cfg.get(name) is not None
-        for name in ("media_country", "media_countries", "media_genres", "media_languages", "min_rating")
+        for name in (
+            "media_country",
+            "media_countries",
+            "media_genres",
+            "media_languages",
+            "min_rating",
+        )
     ):
         raise ValueError("OMDb search does not return country, genre, language or rating details")
 

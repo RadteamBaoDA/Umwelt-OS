@@ -142,7 +142,9 @@ def _prepare_request_body(
     body = request_body if request_body is not None else json_body
     if request_body is not None:
         content_type = request_content_type or ""
-        existing = next((value for name, value in headers.items() if name.lower() == "content-type"), None)
+        existing = next(
+            (value for name, value in headers.items() if name.lower() == "content-type"), None
+        )
         if existing and existing.casefold() != content_type.casefold():
             raise ValueError("request_content_type_conflict")
         if existing is None:
@@ -187,6 +189,21 @@ async def _resolve_hop(current: str, resolve: Resolver) -> tuple[SplitResult, li
     if not addresses or any(not is_public_address(ip_address(address)) for address in addresses):
         raise UnsafeDestination("non_public_destination")
     return parts, addresses
+
+
+def _redirect_target(current: str, scheme: str, location: str | None, *, followable: bool) -> str:
+    """Return the absolute redirect target for one hop, or raise ``UnsafeDestination("redirect_blocked")``.
+
+    ``followable`` is False when redirects are disabled, the request carried a body (POST bodies are never
+    replayed; only GET redirects are followed) or the hop budget is spent. A missing ``Location`` and an
+    https->http downgrade are also refused. The caller re-resolves and re-pins the returned URL.
+    """
+    if not followable or not location:
+        raise UnsafeDestination("redirect_blocked")
+    target = urljoin(current, location)
+    if scheme == "https" and urlsplit(target).scheme != "https":
+        raise UnsafeDestination("redirect_blocked")
+    return target
 
 
 async def fetch_bounded(
@@ -266,14 +283,12 @@ async def fetch_bounded(
                 if status == 304:
                     return Fetched(None)
                 if 300 <= status < 400:
-                    location = response.headers.get("location")
-                    # POST bodies are never replayed; only GET redirects are followed.
-                    if not allow_redirects or post_body is not None or not location or hop >= MAX_REDIRECTS:
-                        raise UnsafeDestination("redirect_blocked")
-                    target = urljoin(current, location)
-                    if parts.scheme == "https" and urlsplit(target).scheme != "https":
-                        raise UnsafeDestination("redirect_blocked")
-                    current = target
+                    current = _redirect_target(
+                        current,
+                        parts.scheme,
+                        response.headers.get("location"),
+                        followable=allow_redirects and post_body is None and hop < MAX_REDIRECTS,
+                    )
                     continue
                 if status >= 400:
                     await _raise_http_error(response, max_bytes, on_forbidden, on_bad_request)

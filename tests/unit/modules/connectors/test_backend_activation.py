@@ -686,7 +686,10 @@ def test_backend_choice_preserves_existing_and_defaults_fresh_supported_to_nativ
     ],
 )
 async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate(
-    provider, desired_configuration, header, secret,
+    provider,
+    desired_configuration,
+    header,
+    secret,
 ):
     from modules.connectors.provisioning import routes
     from modules.connectors.provisioning._routes.common import PodcastIndexCredentialRequest
@@ -695,7 +698,9 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
         desired_configuration=desired_configuration,
         credential_revision=4,
     )
-    source = SimpleNamespace(id=SOURCE_ID, status="active", type="api", provider=provider, generation=1)
+    source = SimpleNamespace(
+        id=SOURCE_ID, status="active", type="api", provider=provider, generation=1
+    )
     stored = []
     session = SimpleNamespace(
         rollback=AsyncMock(), add=stored.append, get=AsyncMock(return_value=None)
@@ -736,21 +741,18 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
     assert credential.header_name == header
     assert secret not in credential.encrypted_secret
     assert "top-secret-key" not in credential.encrypted_secret
-    assert (
-        decrypt_rest_secret(
-            KEY,
-            credential.encrypted_secret,
-            source_id=SOURCE_ID,
-            operation_id=credential.operation_id,
-            source_generation=1,
-            configuration_revision=3,
-            header_name=header,
-        )
-        == (
-            '{"apiKey":"top-secret-key","apiSecret":"top-secret-value"}'
-            if provider in {"podcast_index", "igdb_games"}
-            else secret
-        )
+    assert decrypt_rest_secret(
+        KEY,
+        credential.encrypted_secret,
+        source_id=SOURCE_ID,
+        operation_id=credential.operation_id,
+        source_generation=1,
+        configuration_revision=3,
+        header_name=header,
+    ) == (
+        '{"apiKey":"top-secret-key","apiSecret":"top-secret-value"}'
+        if provider in {"podcast_index", "igdb_games"}
+        else secret
     )
 
 
@@ -794,7 +796,11 @@ async def test_remove_provider_credential_deletes_local_ciphertext_for_native_sl
         credential_revision=7,
     )
     source = SimpleNamespace(
-        id=SOURCE_ID, status="paused", type="api", provider=provider, generation=1,
+        id=SOURCE_ID,
+        status="paused",
+        type="api",
+        provider=provider,
+        generation=1,
         configuration={},
     )
     from modules.connectors.models import ConnectorRestCredential
@@ -822,7 +828,9 @@ async def test_remove_provider_credential_deletes_local_ciphertext_for_native_sl
             "save_connector_configuration",
             AsyncMock(return_value=(updated_source, activation)),
         ),
-        patch.object(routes.provisioning, "create_delete_intent_in_uow", AsyncMock(return_value=None)),
+        patch.object(
+            routes.provisioning, "create_delete_intent_in_uow", AsyncMock(return_value=None)
+        ),
         patch.object(routes.provisioning, "get_managed_credential", AsyncMock(return_value=None)),
         patch_routes("commit_with_replay", AsyncMock()),
         patch_routes("make_source_change", lambda *args, **kwargs: None),
@@ -832,7 +840,11 @@ async def test_remove_provider_credential_deletes_local_ciphertext_for_native_sl
             SOURCE_ID,
             3,
             session,
-            SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=True)))),
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=True))
+                )
+            ),
             scope,
         )
 

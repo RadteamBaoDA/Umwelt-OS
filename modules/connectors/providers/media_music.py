@@ -173,7 +173,9 @@ def build_musicbrainz_search_url(group_id: str, config: Mapping[str, Any]) -> st
     if status := config.get("listenbrainz_status"):
         clauses.append(f"status:{status}")
     query = " AND ".join(clauses)
-    params = urlencode({"query": query, "fmt": "json", "limit": 1, "inc": "artist-credits+releases+tags"})
+    params = urlencode(
+        {"query": query, "fmt": "json", "limit": 1, "inc": "artist-credits+releases+tags"}
+    )
     return f"{MUSICBRAINZ_BASE}/release-group?{params}"
 
 
@@ -194,7 +196,9 @@ def _cursor_state(cursor: str | None, fingerprint: str) -> dict[str, str]:
     return {
         group_id: digest
         for group_id, digest in rows.items()
-        if _MBID.fullmatch(group_id) and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)
+        if _MBID.fullmatch(group_id)
+        and isinstance(digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", digest)
     }
 
 
@@ -234,11 +238,15 @@ def _release_group(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
 def _artist_name(group: Mapping[str, Any], candidate: Mapping[str, Any]) -> str:
     """Normalize the MusicBrainz artist-credit shape with the fresh-release name as fallback."""
     credit = group.get("artist-credit")
-    names = [
-        _text(item.get("name") or _object(item.get("artist")).get("name"), 200)
-        for item in credit
-        if isinstance(item, dict)
-    ] if isinstance(credit, list) else []
+    names = (
+        [
+            _text(item.get("name") or _object(item.get("artist")).get("name"), 200)
+            for item in credit
+            if isinstance(item, dict)
+        ]
+        if isinstance(credit, list)
+        else []
+    )
     return "; ".join(name for name in names if name)[:240] or _text(
         candidate.get("artist_credit_name"), 240
     )
@@ -264,9 +272,7 @@ def _tags(group: Mapping[str, Any]) -> tuple[str, ...]:
         reverse=True,
     )
     values = tuple(
-        text
-        for row in ranked[:32]
-        if (text := " ".join(_text(row["name"], 64).casefold().split()))
+        text for row in ranked[:32] if (text := " ".join(_text(row["name"], 64).casefold().split()))
     )
     return tuple(dict.fromkeys(values))
 
@@ -285,7 +291,9 @@ def _map_record(
         return None
     release_id = _text(candidate.get("release_mbid"), 36).lower()
     release = _group_release(group, release_id)
-    partial_date = group.get("first-release-date") or release.get("date") or candidate.get("release_date")
+    partial_date = (
+        group.get("first-release-date") or release.get("date") or candidate.get("release_date")
+    )
     date, year, observed_at = normalize_partial_date(partial_date)
     if date is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         observed_at = None
@@ -390,7 +398,9 @@ async def collect_listenbrainz_releases(
             continue
         processed_groups.add(group_id)
         # Both older discoveries and changed rows must remain eligible irrespective of the sort.
-        row_digest = sha256(json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        row_digest = sha256(
+            json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         if previously_enriched.get(group_id) == row_digest:
             enriched_in_snapshot[group_id] = row_digest
             continue

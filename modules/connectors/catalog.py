@@ -667,52 +667,73 @@ _NEWS = {
 }
 SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
     "tmdb_movies": {
-        "title": "Example movie", "url": "https://www.themoviedb.org/movie/42",
-        "media_type": "movie", "attribution": "Metadata by TMDB",
+        "title": "Example movie",
+        "url": "https://www.themoviedb.org/movie/42",
+        "media_type": "movie",
+        "attribution": "Metadata by TMDB",
     },
     "tmdb_tv": {
-        "title": "Example series", "url": "https://www.themoviedb.org/tv/42",
-        "media_type": "tv", "attribution": "Metadata by TMDB",
+        "title": "Example series",
+        "url": "https://www.themoviedb.org/tv/42",
+        "media_type": "tv",
+        "attribution": "Metadata by TMDB",
     },
     "trakt_media": {
-        "title": "Example film", "url": "https://trakt.tv/movies/example-film",
-        "media_type": "movie", "attribution": "Data via Trakt",
+        "title": "Example film",
+        "url": "https://trakt.tv/movies/example-film",
+        "media_type": "movie",
+        "attribution": "Data via Trakt",
     },
     "omdb_lookup": {
-        "title": "Example movie", "url": "https://www.imdb.com/title/tt1234567/",
-        "media_type": "movie", "attribution": "Data via OMDb API",
+        "title": "Example movie",
+        "url": "https://www.imdb.com/title/tt1234567/",
+        "media_type": "movie",
+        "attribution": "Data via OMDb API",
     },
     "mal_anime": {
-        "title": "Example anime", "url": "https://myanimelist.net/anime/1",
-        "media_type": "anime", "attribution": "Data via MyAnimeList",
+        "title": "Example anime",
+        "url": "https://myanimelist.net/anime/1",
+        "media_type": "anime",
+        "attribution": "Data via MyAnimeList",
     },
     "mal_manga": {
-        "title": "Example manga", "url": "https://myanimelist.net/manga/1",
-        "media_type": "manga", "attribution": "Data via MyAnimeList",
+        "title": "Example manga",
+        "url": "https://myanimelist.net/manga/1",
+        "media_type": "manga",
+        "attribution": "Data via MyAnimeList",
     },
     "youtube_api": {
-        "title": "Example YouTube upload", "media_type": "youtube",
+        "title": "Example YouTube upload",
+        "media_type": "youtube",
         "attribution": "Data via YouTube Data API",
     },
     "podcast_index": {
-        "title": "Example podcast feed", "media_type": "podcast",
+        "title": "Example podcast feed",
+        "media_type": "podcast",
         "attribution": "Data via Podcast Index",
     },
     "listenbrainz_releases": {
-        "title": "Example music release", "media_type": "music",
+        "title": "Example music release",
+        "media_type": "music",
         "attribution": "Data via ListenBrainz / MusicBrainz (CC0 1.0)",
     },
     "steam_releases": {
-        "title": "Example Steam game", "url": "https://store.steampowered.com/app/10/",
-        "media_type": "game", "attribution": "Data via Steam",
+        "title": "Example Steam game",
+        "url": "https://store.steampowered.com/app/10/",
+        "media_type": "game",
+        "attribution": "Data via Steam",
     },
     "google_books": {
-        "title": "Example book", "url": "https://books.google.com/books?id=example",
-        "media_type": "book", "attribution": "Data via Google Books",
+        "title": "Example book",
+        "url": "https://books.google.com/books?id=example",
+        "media_type": "book",
+        "attribution": "Data via Google Books",
     },
     "hardcover_books": {
-        "title": "Example book", "url": "https://hardcover.app/books/example",
-        "media_type": "book", "attribution": "Data via Hardcover",
+        "title": "Example book",
+        "url": "https://hardcover.app/books/example",
+        "media_type": "book",
+        "attribution": "Data via Hardcover",
     },
     "anilist_anime": {
         "title": "Example anime",
@@ -1013,8 +1034,10 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
             "default_interval_minutes": spec.default_interval_minutes,
             "realtime_tier": spec.realtime_tier,
             "key_fields": (
-                ("api_key", "api_secret") if spec.id in {"podcast_index", "igdb_games"}
-                else ("api_key",) if spec.key_required
+                ("api_key", "api_secret")
+                if spec.id in {"podcast_index", "igdb_games"}
+                else ("api_key",)
+                if spec.key_required
                 else ()
             ),
             "endpoint_probe": spec.endpoint_probe,
@@ -1060,7 +1083,11 @@ def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
             label=spec.label,
             auth_methods=("api_key",) if spec.key_required else ("none",),
             scope_fields=scope,
-            configuration_fields=(*scope, *OPTION_FIELDS.get(spec.id, ()), "schedule_interval_minutes"),
+            configuration_fields=(
+                *scope,
+                *OPTION_FIELDS.get(spec.id, ()),
+                "schedule_interval_minutes",
+            ),
             collection_modes=("scheduled", "manual") if ready else (),
             supports_history=False,
             supports_edit=False,

@@ -363,10 +363,21 @@ def test_fixed_providers_have_static_example_config_and_sample():
 
 
 @pytest.mark.parametrize(
-    "provider", [
-        "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga",
-        "hardcover_books", "google_books", "youtube_api", "podcast_index",
-        "listenbrainz_releases", "steam_releases", "igdb_games",
+    "provider",
+    [
+        "tmdb_movies",
+        "tmdb_tv",
+        "trakt_media",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "hardcover_books",
+        "google_books",
+        "youtube_api",
+        "podcast_index",
+        "listenbrainz_releases",
+        "steam_releases",
+        "igdb_games",
     ],
 )
 def test_all_phase_four_providers_expose_media_shape(provider):

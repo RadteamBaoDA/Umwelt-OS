@@ -85,7 +85,9 @@ def test_musicbrainz_lucene_query_maps_supported_filters_and_three_letter_langua
     assert 'tag:"indie rock"' in query and "status:official" in query
 
 
-@pytest.mark.parametrize(("raw", "expected"), [("eng", "en"), ("jpn", "ja"), ("fre", "fr"), ("vie", "vi")])
+@pytest.mark.parametrize(
+    ("raw", "expected"), [("eng", "en"), ("jpn", "ja"), ("fre", "fr"), ("vie", "vi")]
+)
 def test_musicbrainz_language_uses_iso_639_2_b_to_canonical_iso_639_1(raw, expected):
     assert normalize_musicbrainz_language(raw) == expected
 
@@ -126,23 +128,43 @@ async def test_musicbrainz_requests_are_spaced_and_cover_redirect_is_published_s
     async def fetch(url: str, **kwargs) -> Fetched:
         calls.append((url, kwargs.get("headers", {})))
         if "listenbrainz.org" in url:
-            return Fetched(json.dumps({"payload": {"releases": [{
-                "release_mbid": "26a9db3c-1242-48c7-bc6c-0c2fb66ad49b",
-                "release_group_mbid": group_id,
-                "release_name": "New Album",
-                "artist_credit_name": "Example Artist",
-                "release_date": "2025-03",
-            }]}}).encode())
+            return Fetched(
+                json.dumps(
+                    {
+                        "payload": {
+                            "releases": [
+                                {
+                                    "release_mbid": "26a9db3c-1242-48c7-bc6c-0c2fb66ad49b",
+                                    "release_group_mbid": group_id,
+                                    "release_name": "New Album",
+                                    "artist_credit_name": "Example Artist",
+                                    "release_date": "2025-03",
+                                }
+                            ]
+                        }
+                    }
+                ).encode()
+            )
         if "musicbrainz.org" in url:
-            return Fetched(json.dumps({"release-groups": [{
-                "id": group_id,
-                "title": "New Album",
-                "first-release-date": "2025-03",
-                "primary-type": "Album",
-                "tags": [{"name": "music", "count": 4}],
-                "artist-credit": [{"name": "Example Artist"}],
-                "releases": [{"country": "US", "text-representation": {"language": "eng"}}],
-            }]}).encode())
+            return Fetched(
+                json.dumps(
+                    {
+                        "release-groups": [
+                            {
+                                "id": group_id,
+                                "title": "New Album",
+                                "first-release-date": "2025-03",
+                                "primary-type": "Album",
+                                "tags": [{"name": "music", "count": 4}],
+                                "artist-credit": [{"name": "Example Artist"}],
+                                "releases": [
+                                    {"country": "US", "text-representation": {"language": "eng"}}
+                                ],
+                            }
+                        ]
+                    }
+                ).encode()
+            )
         assert url == f"https://coverartarchive.org/release-group/{group_id}/front-500.jpg"
         assert kwargs.get("allow_redirects") is True
         return Fetched(b"cover", final_url="https://archive.org/download/cover/front-500.jpg")
@@ -169,13 +191,23 @@ async def test_failed_musicbrainz_enrichment_returns_no_partial_page():
 
     async def fetch(url: str, **kwargs) -> Fetched:
         if "listenbrainz.org" in url:
-            return Fetched(json.dumps({"payload": {"releases": [{
-                "release_mbid": "26a9db3c-1242-48c7-bc6c-0c2fb66ad49b",
-                "release_group_mbid": group_id,
-                "release_name": "New Album",
-                "artist_credit_name": "Example Artist",
-                "release_date": "2025",
-            }]}}).encode())
+            return Fetched(
+                json.dumps(
+                    {
+                        "payload": {
+                            "releases": [
+                                {
+                                    "release_mbid": "26a9db3c-1242-48c7-bc6c-0c2fb66ad49b",
+                                    "release_group_mbid": group_id,
+                                    "release_name": "New Album",
+                                    "artist_credit_name": "Example Artist",
+                                    "release_date": "2025",
+                                }
+                            ]
+                        }
+                    }
+                ).encode()
+            )
         raise ProviderHttpError(503)
 
     with pytest.raises(ProviderHttpError):
@@ -201,10 +233,22 @@ async def test_older_release_and_empty_enrichment_are_retried_by_id(monkeypatch)
 
     async def fetch(url: str, **kwargs) -> Fetched:
         if "listenbrainz.org" in url:
-            return Fetched(json.dumps({"payload": {"releases": [
-                {"release_group_mbid": group_id, "release_name": "Album", "release_date": date}
-                for group_id, date in candidates
-            ]}}).encode())
+            return Fetched(
+                json.dumps(
+                    {
+                        "payload": {
+                            "releases": [
+                                {
+                                    "release_group_mbid": group_id,
+                                    "release_name": "Album",
+                                    "release_date": date,
+                                }
+                                for group_id, date in candidates
+                            ]
+                        }
+                    }
+                ).encode()
+            )
         if "musicbrainz.org" in url:
             group_id = next(group_id for group_id, _ in candidates if group_id in url)
             fetched_ids.append(group_id)
@@ -213,7 +257,9 @@ async def test_older_release_and_empty_enrichment_are_retried_by_id(monkeypatch)
         raise ProviderHttpError(404)
 
     now = datetime(2025, 3, 11, tzinfo=UTC)
-    first = await collect_listenbrainz_releases({}, cursor=None, collected_at=now, fetch_bytes=fetch)
+    first = await collect_listenbrainz_releases(
+        {}, cursor=None, collected_at=now, fetch_bytes=fetch
+    )
     assert fetched_ids == [newest, missed]
     candidates.append((older, "2025-03-06"))
     no_match.clear()
@@ -236,22 +282,42 @@ async def test_updated_discovery_for_the_same_group_is_enriched_again(monkeypatc
 
     async def fetch(url, **kwargs):
         if "listenbrainz.org" in url:
-            return Fetched(json.dumps({"payload": {"releases": [{
-                "release_group_mbid": group, "release_name": "Album", "release_date": date,
-            }]}}).encode())
+            return Fetched(
+                json.dumps(
+                    {
+                        "payload": {
+                            "releases": [
+                                {
+                                    "release_group_mbid": group,
+                                    "release_name": "Album",
+                                    "release_date": date,
+                                }
+                            ]
+                        }
+                    }
+                ).encode()
+            )
         if "musicbrainz.org" in url:
             enrichment.append(date)
-            return Fetched(json.dumps({"release-groups": [{"id": group, "title": "Album"}]}).encode())
+            return Fetched(
+                json.dumps({"release-groups": [{"id": group, "title": "Album"}]}).encode()
+            )
         raise ProviderHttpError(404)
 
     now = datetime(2025, 3, 12, tzinfo=UTC)
-    initial = await collect_listenbrainz_releases({}, cursor=None, collected_at=now, fetch_bytes=fetch)
+    initial = await collect_listenbrainz_releases(
+        {}, cursor=None, collected_at=now, fetch_bytes=fetch
+    )
     date = "2025-03-09"
-    updated = await collect_listenbrainz_releases({}, cursor=initial.cursor_after, collected_at=now, fetch_bytes=fetch)
+    updated = await collect_listenbrainz_releases(
+        {}, cursor=initial.cursor_after, collected_at=now, fetch_bytes=fetch
+    )
     assert enrichment == ["2025-03-11", "2025-03-09"]
-    record, = updated.records
+    (record,) = updated.records
     assert record.metadata["provider_record"]["source_fields"]["release_date"] == date
-    repeat = await collect_listenbrainz_releases({}, cursor=updated.cursor_after, collected_at=now, fetch_bytes=fetch)
+    repeat = await collect_listenbrainz_releases(
+        {}, cursor=updated.cursor_after, collected_at=now, fetch_bytes=fetch
+    )
     assert not repeat.records
     assert enrichment == ["2025-03-11", "2025-03-09"]
 
@@ -266,7 +332,11 @@ async def test_oversized_fresh_release_page_keeps_newest_rows_and_reports_trunca
     ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(total)]
     # Row i has date 2025-01-(i+1), so the newest rows are the highest indexes.
     rows = [
-        {"release_group_mbid": group, "release_name": "Album", "release_date": f"2025-01-{index + 1:02d}"}
+        {
+            "release_group_mbid": group,
+            "release_name": "Album",
+            "release_date": f"2025-01-{index + 1:02d}",
+        }
         for index, group in enumerate(ids)
     ]
     fetched: list[str] = []
@@ -277,7 +347,9 @@ async def test_oversized_fresh_release_page_keeps_newest_rows_and_reports_trunca
         if "musicbrainz.org" in url:
             group = next(group for group in ids if group in url)
             fetched.append(group)
-            return Fetched(json.dumps({"release-groups": [{"id": group, "title": "Album"}]}).encode())
+            return Fetched(
+                json.dumps({"release-groups": [{"id": group, "title": "Album"}]}).encode()
+            )
         raise ProviderHttpError(404)
 
     page = await collect_listenbrainz_releases(

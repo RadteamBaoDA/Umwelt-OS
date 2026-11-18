@@ -117,7 +117,9 @@ NATIVE_REST_PLACEMENTS = {
     "podcast_index": "Authorization",
     "igdb_games": "Authorization",
 }
-REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x", "youtube_api", "podcast_index", "igdb_games"})
+REVISIONED_REST_PROVIDERS = frozenset(
+    {"notion", "slack", "mastodon", "x", "youtube_api", "podcast_index", "igdb_games"}
+)
 REFUSED_HERE: frozenset[str] = (
     frozenset()
 )  # providers that must never run here (GitHub/Telegram are native now)
@@ -265,7 +267,11 @@ class SendGate:
         The ListenBrainz quota belongs to MusicBrainz. Discovery and artwork requests
         still consume a durable logical sequence and recheck authority on redirect hops.
         """
-        if self._quota_provider == "listenbrainz_releases" and urlsplit(url).hostname != "musicbrainz.org":
+        if (
+            self._quota_provider == "listenbrainz_releases"
+            and urlsplit(url).hostname != "musicbrainz.org"
+        ):
+
             async def record_without_quota() -> None:
                 """Authorize and commit the logical send without spending a MusicBrainz unit."""
                 await self(apply_quota=False)
@@ -394,7 +400,9 @@ class SendGate:
                     credential=fingerprint,
                     apply_quota=apply_quota,
                 )
-                await session.commit()  # The sequence is durable even when this host spends no quota.
+                await (
+                    session.commit()
+                )  # The sequence is durable even when this host spends no quota.
             except BaseException:
                 await session.rollback()
                 raise
@@ -1085,7 +1093,23 @@ SOCIAL_WALK_PROVIDERS = frozenset(
     {"bluesky", "reddit", "mastodon", "x"}
 )  # catch-up walk (providers/social_walk.py)
 DEDUP_ONLY_PROVIDERS = frozenset(
-    {"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs", "tvmaze_schedule", "livechart_episodes", "anilist_anime", "anilist_manga", "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga", "google_books"}
+    {
+        "hn_top",
+        "google_news",
+        "vietnamworks_jobs",
+        "itviec_jobs",
+        "tvmaze_schedule",
+        "livechart_episodes",
+        "anilist_anime",
+        "anilist_manga",
+        "tmdb_movies",
+        "tmdb_tv",
+        "trakt_media",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "google_books",
+    }
 )  # late-surfacing feeds and media snapshots: a cursor floor would drop or strand valid items
 
 

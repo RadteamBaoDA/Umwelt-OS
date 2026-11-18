@@ -443,7 +443,12 @@ async def _native_keyed_media(call: NativeCall) -> None:
             api_key, api_secret = pair["apiKey"], pair["apiSecret"]
         except (KeyError, TypeError, ValueError):
             raise CredentialMissing from None
-        if not isinstance(api_key, str) or not isinstance(api_secret, str) or not api_key or not api_secret:
+        if (
+            not isinstance(api_key, str)
+            or not isinstance(api_secret, str)
+            or not api_key
+            or not api_secret
+        ):
             raise CredentialMissing
     run.gate.bind_credential(
         quota.credential_fingerprint(
@@ -453,13 +458,20 @@ async def _native_keyed_media(call: NativeCall) -> None:
     )
     fetch, cursor = run.gate.fetch_bytes, call.lease.cursor_before
     if is_podcast:
-        page = await collect_podcast_index(config, api_key, api_secret, call.collected_at, fetch, cursor)
+        page = await collect_podcast_index(
+            config, api_key, api_secret, call.collected_at, fetch, cursor
+        )
     else:
         page = await collect_youtube_api(config, api_key, call.collected_at, fetch, cursor)
     # Ingestion verifies the captured credential revision under lock before committing cursor and data.
     await _accept_native(
-        run, call.lease, page.records, page.coverage, call.collected_at,
-        cursor_after=page.cursor_after, provider_credential_revision=run.attempt.credential_revision,
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
+        cursor_after=page.cursor_after,
+        provider_credential_revision=run.attempt.credential_revision,
     )
 
 
@@ -482,7 +494,11 @@ async def _native_listenbrainz(call: NativeCall) -> None:
         fetch_bytes=run.gate.fetch_bytes,
     )
     await _accept_native(
-        run, call.lease, page.records, page.coverage, call.collected_at,
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
         cursor_after=page.cursor_after,
     )
 
@@ -523,12 +539,19 @@ async def _native_steam_igdb(call: NativeCall) -> None:
             )
         )
         credential_revision = attempt.credential_revision
-        page = await collect_igdb(config, client_id, client_secret, call.collected_at, run.gate.fetch_bytes)
+        page = await collect_igdb(
+            config, client_id, client_secret, call.collected_at, run.gate.fetch_bytes
+        )
         if page.token_expires_at is None or datetime.now(UTC) >= page.token_expires_at:
             raise rest.CollectionIncomplete
     await _accept_native(
-        run, call.lease, page.records, page.coverage, call.collected_at,
-        cursor_after=page.cursor_after, provider_credential_revision=credential_revision,
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
+        cursor_after=page.cursor_after,
+        provider_credential_revision=credential_revision,
     )
 
 

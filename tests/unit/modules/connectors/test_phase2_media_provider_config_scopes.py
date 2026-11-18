@@ -119,4 +119,6 @@ def test_ann_builtin_accepts_atom_scope_options() -> None:
 def test_scoped_media_providers_require_their_identity_fields(
     provider: str, required: set[str]
 ) -> None:
-    assert required <= PROVIDER_SCOPE_FIELDS[provider] - OPTIONAL_SCOPE_FIELDS.get(provider, frozenset())
+    assert required <= PROVIDER_SCOPE_FIELDS[provider] - OPTIONAL_SCOPE_FIELDS.get(
+        provider, frozenset()
+    )

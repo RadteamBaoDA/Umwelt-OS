@@ -661,7 +661,9 @@ async def _load_filtered_news_projections(
     return projections
 
 
-def _validate_language_and_channels(language: str | None, channel_ids: tuple[str, ...] | None) -> None:
+def _validate_language_and_channels(
+    language: str | None, channel_ids: tuple[str, ...] | None
+) -> None:
     """Reject a non-allowlisted ``language`` or a channel scope that is oversized, duplicated or non-numeric.
 
     Raises:

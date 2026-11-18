@@ -7,10 +7,17 @@ caps are recorded as ``limit_units=None`` (never unlimited).
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from typing import Literal
 
+from modules.connectors.provider_eligibility import DEPLOYMENT_USES as DEPLOYMENT_USES
+from modules.connectors.provider_eligibility import OperatorReview as OperatorReview
+from modules.connectors.provider_eligibility import TermsDecision as TermsDecision
+from modules.connectors.provider_eligibility import (
+    deployment_use_matches as deployment_use_matches,
+)
+from modules.connectors.provider_eligibility import evaluate_terms as evaluate_terms
 from modules.connectors.provider_options import option_fields
 from modules.connectors.provider_specs_media import MEDIA_KEYED_SPECS
 from modules.connectors.provider_specs_tables import (
@@ -40,16 +47,13 @@ from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 QUOTA_POLICY_REVISION = 1
 
 DeploymentUse = Literal["personal", "noncommercial", "commercial", "unknown"]
-DEPLOYMENT_USES: tuple[str, ...] = ("personal", "noncommercial", "commercial", "unknown")
 Eligibility = Literal["open", "personal", "noncommercial", "review"]
-_USE_RANK = {"personal": 0, "noncommercial": 1, "commercial": 2}
 
 TERMS_INELIGIBLE = "provider_terms_ineligible"
 
 # Self-imposed pilot cap for section-catalog RSS presets: one GET per selected section per sync, so six sections
 # at the 15-minute floor would still fit; every send is debited against it. Not an upstream limit.
 SECTION_DAILY_CAP = 96 * MAX_SECTIONS
-
 
 
 DEFAULT_MIN_INTERVAL_MINUTES = 15
@@ -1289,7 +1293,13 @@ def _finalize_spec(spec: FreeProviderSpec) -> FreeProviderSpec:
         Frozen FreeProviderSpec with tier and retention defaults populated.
     """
     is_realtime = spec.id in _REALTIME_TIER_IDS
-    retention_days = 30 if spec.id == "youtube_api" else 14 if is_realtime else (365 if spec.id in _LONG_RETENTION_IDS else 60)
+    retention_days = (
+        30
+        if spec.id == "youtube_api"
+        else 14
+        if is_realtime
+        else (365 if spec.id in _LONG_RETENTION_IDS else 60)
+    )
     return replace(
         spec,
         checked_on=EXPANSION_CHECKED_ON if spec.id in _EXPANSION_IDS else spec.checked_on,
@@ -1381,65 +1391,6 @@ def get_quota_policies(provider_id: str | None) -> tuple[QuotaWindowPolicy, ...]
     return _NON_FREE_QUOTA_POLICIES.get(provider_id, ())
 
 
-def deployment_use_matches(eligibility: str, deployment_use: str) -> bool:
-    """Whether a catalog eligibility class admits the declared deployment use.
-
-    open admits any declared use (attribution duties remain); personal admits only personal;
-    noncommercial admits personal or noncommercial; review (and anything unrecognised) is always
-    False here because it needs a separate persisted operator review.
-    """
-    if eligibility == "open":
-        return True
-    if eligibility == "personal":
-        return deployment_use == "personal"
-    if eligibility == "noncommercial":
-        return deployment_use in {"personal", "noncommercial"}
-    return False
-
-
-@dataclass(frozen=True)
-class OperatorReview:
-    """Operator-recorded review evidence; never derived from an owner tick."""
-
-    state: Literal["pending", "approved", "rejected"]
-    allowed_use: str | None = None
-    evidence_ref: str | None = None
-    reviewed_terms_version: str | None = None
-
-
-@dataclass(frozen=True)
-class TermsDecision:
-    """Eligibility outcome; ``code`` is a stable machine reason."""
-
-    allowed: bool
-    code: Literal["ok", "terms_not_acknowledged", "use_incompatible", "operator_review_required"]
-
-
-def evaluate_terms(
-    spec: FreeProviderSpec,
-    *,
-    declared_use: str | None,
-    acknowledged_terms_version: str | None,
-    review: OperatorReview | None = None,
-) -> TermsDecision:
-    """Deny by default. The single check shared by catalog readiness and source activation."""
-    if not acknowledged_terms_version or declared_use not in DEPLOYMENT_USES:
-        return TermsDecision(False, "terms_not_acknowledged")
-    if spec.eligibility != "review":
-        ok = deployment_use_matches(spec.eligibility, declared_use)
-        return TermsDecision(ok, "ok" if ok else "use_incompatible")
-    if (
-        review is None
-        or review.state != "approved"
-        or not review.evidence_ref
-        or review.reviewed_terms_version != acknowledged_terms_version
-        or review.allowed_use not in _USE_RANK
-    ):
-        return TermsDecision(False, "operator_review_required")
-    ok = declared_use in _USE_RANK and _USE_RANK[declared_use] <= _USE_RANK[review.allowed_use]
-    return TermsDecision(ok, "ok" if ok else "use_incompatible")
-
-
 # Presets the owner can switch on with one toggle: fixed endpoint (no owner scope), no API key, and an
 # adapter exists. Derived (not listed) so a new fixed-scope spec is exposed automatically. backends has no
 # connector imports, so this module-level import is cycle-safe.
@@ -1467,7 +1418,16 @@ INCREMENTAL_PROVIDERS: frozenset[str] = frozenset(
     if spec.id in BUILTIN_PROVIDERS
     and spec.data_kind in ("news", "event")
     and spec.id not in MEASUREMENT_PROVIDER_IDS
-) | {"google_news", "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime", "mal_manga", "google_books"}
+) | {
+    "google_news",
+    "tmdb_movies",
+    "tmdb_tv",
+    "trakt_media",
+    "omdb_lookup",
+    "mal_anime",
+    "mal_manga",
+    "google_books",
+}
 
 # Optional per-sync selection options accepted only by INCREMENTAL_PROVIDERS (see modules.connectors.selection).
 COLLECTION_FILTER_FIELDS = frozenset(

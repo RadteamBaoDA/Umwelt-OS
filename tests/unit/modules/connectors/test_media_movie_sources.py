@@ -60,24 +60,45 @@ def test_wikidata_maps_deduplicated_genres_country_language_and_ids() -> None:
     assert fields["country"] == "US" and fields["language"] == "en"
     assert fields["external_ids"] == {"wikidata": "Q123", "imdb": "tt12345", "tmdb": "987"}
     assert fields["release_status"] == "upcoming"
-    assert map_wikidata_movies(
-        {"results": {"bindings": [row("Drama")]}}, collected_at=NOW, config={"release_year": 2025}
-    ) == []
+    assert (
+        map_wikidata_movies(
+            {"results": {"bindings": [row("Drama")]}},
+            collected_at=NOW,
+            config={"release_year": 2025},
+        )
+        == []
+    )
 
 
 def test_itunes_url_and_mapping_keep_fixed_movie_endpoint_and_normalize_fields() -> None:
     url = itunes_movies_url({"search_terms": "Dune & Part Two", "country": "GB"})
     query = parse_qs(urlsplit(url).query)
     assert urlsplit(url).hostname == "itunes.apple.com"
-    assert query == {"term": ["Dune & Part Two"], "country": ["gb"], "media": ["movie"],
-                    "entity": ["movie"], "lang": ["en_us"], "limit": ["200"]}
+    assert query == {
+        "term": ["Dune & Part Two"],
+        "country": ["gb"],
+        "media": ["movie"],
+        "entity": ["movie"],
+        "lang": ["en_us"],
+        "limit": ["200"],
+    }
     records = map_itunes_movies(
-        {"resultCount": 1, "results": [{
-            "trackId": 31, "trackName": "Dune", "trackViewUrl": "https://itunes.apple.com/movie/id31",
-            "releaseDate": "2026-12-01T00:00:00Z", "artistName": "Denis Villeneuve",
-            "primaryGenreName": "Sci-Fi", "averageUserRating": 4.5,
-            "artworkUrl100": "https://is1-ssl.mzstatic.com/image.jpg", "longDescription": "A film.",
-        }]},
+        {
+            "resultCount": 1,
+            "results": [
+                {
+                    "trackId": 31,
+                    "trackName": "Dune",
+                    "trackViewUrl": "https://itunes.apple.com/movie/id31",
+                    "releaseDate": "2026-12-01T00:00:00Z",
+                    "artistName": "Denis Villeneuve",
+                    "primaryGenreName": "Sci-Fi",
+                    "averageUserRating": 4.5,
+                    "artworkUrl100": "https://is1-ssl.mzstatic.com/image.jpg",
+                    "longDescription": "A film.",
+                }
+            ],
+        },
         collected_at=NOW,
         config={"country": "GB"},
     )
@@ -99,7 +120,9 @@ def test_letterboxd_limits_items_and_normalizes_ratings_and_year_filter() -> Non
         "</item>"
         for i in range(55)
     )
-    body = f'<rss xmlns:letterboxd="https://letterboxd.com"><channel>{items}</channel></rss>'.encode()
+    body = (
+        f'<rss xmlns:letterboxd="https://letterboxd.com"><channel>{items}</channel></rss>'.encode()
+    )
     records = map_letterboxd_rss(body, collected_at=NOW, config={})
     assert len(records) == 50
     fields = records[0].metadata["provider_record"]["source_fields"]

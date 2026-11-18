@@ -150,7 +150,12 @@ def test_media_and_youtube_connector_config_defaults_and_bounds():
         with pytest.raises(ValidationError):
             ConnectorConfig(**bad)
 
-    for bad_builtin in ({"min_rating": float("inf")}, {"min_rating": True}, {"release_year": 1700}, {"media_genres": ("bad",)}):
+    for bad_builtin in (
+        {"min_rating": float("inf")},
+        {"min_rating": True},
+        {"release_year": 1700},
+        {"media_genres": ("bad",)},
+    ):
         with pytest.raises(ValidationError):
             BuiltinEnableRequest(**bad_builtin)
 
@@ -163,7 +168,31 @@ def test_generic_sources_reject_media_and_youtube_options():
         ("api", {"url": "https://example.com/items.json", "items_path": "items"}),
     ):
         for option, value in (
-            *((k, True if k == "exclude_adult" else 2026 if k == "release_year" else 80.0 if k == "min_rating" else "fall" if k == "anime_season" else "US" if k == "media_country" else ["action"] if k == "media_genres" else ["ja"] if k == "media_languages" else ["tv"] if k == "media_formats" else ["safe"] if k == "content_ratings" else ["JP"]) for k in sorted(MEDIA_OPTION_NAMES)),
+            *(
+                (
+                    k,
+                    True
+                    if k == "exclude_adult"
+                    else 2026
+                    if k == "release_year"
+                    else 80.0
+                    if k == "min_rating"
+                    else "fall"
+                    if k == "anime_season"
+                    else "US"
+                    if k == "media_country"
+                    else ["action"]
+                    if k == "media_genres"
+                    else ["ja"]
+                    if k == "media_languages"
+                    else ["tv"]
+                    if k == "media_formats"
+                    else ["safe"]
+                    if k == "content_ratings"
+                    else ["JP"],
+                )
+                for k in sorted(MEDIA_OPTION_NAMES)
+            ),
             ("youtube_handles", ["@chan"]),
             ("youtube_playlist_ids", ["PL123"]),
             ("youtube_filter", "shorts"),
