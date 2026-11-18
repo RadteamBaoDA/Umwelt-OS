@@ -261,7 +261,13 @@ def _fact_candidates(widgets: Sequence[DailyWidget]) -> tuple[list[dict[str, Any
                 ids.append(str(item["source_id"]))
             if widget.module == "news" and not ids:
                 continue
-            detail = item.get("status") or item.get("progress") or item.get("type") or ""
+            detail = (
+                item.get("detail")
+                or item.get("status")
+                or item.get("progress")
+                or item.get("type")
+                or ""
+            )
             candidates.append(
                 {
                     "kind": widget.id,

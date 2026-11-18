@@ -8,6 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_
 
 DayRelation = Literal["past", "today", "future"]
 WidgetStatus = Literal["ok", "empty", "not_applicable", "unavailable"]
+BriefSection = Literal["stories", "markets", "weather", "hazards", "agenda", "source_health"]
+ALL_BRIEF_SECTIONS: tuple[BriefSection, ...] = (
+    "stories",
+    "markets",
+    "weather",
+    "hazards",
+    "agenda",
+    "source_health",
+)
 
 
 def validate_timezone(value: str) -> str:

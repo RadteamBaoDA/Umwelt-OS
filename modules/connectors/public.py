@@ -69,6 +69,7 @@ from modules.connectors.backends import (
 from modules.connectors.backends import (
     is_native_provider as _is_native_provider,
 )
+from modules.connectors.catalog import get_catalog_entry as get_catalog_entry
 from modules.connectors.data_shapes import (
     DataShape as DataShape,
 )

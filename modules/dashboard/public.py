@@ -318,13 +318,17 @@ from modules.dashboard.briefs import (  # deliberate late import
 )
 from modules.dashboard.context import build_daily_context  # deliberate late import
 from modules.dashboard.daily_schemas import (  # deliberate late import
+    ALL_BRIEF_SECTIONS,
     BriefRead,
+    BriefSection,
     DailyContext,
 )
 from modules.settings import public as settings_public  # noqa: F401
 from modules.sources import public as sources  # noqa: F401
 
 __all__ = [
+    "ALL_BRIEF_SECTIONS",
+    "BriefSection",
     "BriefEmpty",
     "BriefEvidenceRevoked",
     "BriefRead",
