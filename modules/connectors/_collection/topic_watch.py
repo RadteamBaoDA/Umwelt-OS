@@ -548,18 +548,13 @@ def _review_messages(watch: _Watch, cand: _Candidate, page: _Page) -> list[dict[
 
 
 def _record(cand: _Candidate, page: _Page, summary: str) -> dict[str, Any]:
-    """Build the ingestion record; URL, title and site come from the search hit and the fetch only."""
-    from modules.knowledge.documents.public import ProviderRecordMetadata
+    """Build the ingestion record; URL, title and site come from the search hit and the fetch only.
 
+    Carries no ``provider_record`` envelope: the generic batch path reserves that key for trusted
+    native normalization and rejects the whole batch when an adapter supplies it.
+    """
     site = urlsplit(page.url).hostname or ""
     title = _clean_summary(cand.title)[:240] or site
-    envelope = ProviderRecordMetadata(
-        provider="topic_watch",
-        identity=page.url,
-        timestamp_basis="collection",
-        coverage="returned_snapshot",
-        content_truncated=False,
-    )
     return {
         "provider_id": page.url,
         "content": f"{title}\n\n{summary}",
@@ -571,7 +566,6 @@ def _record(cand: _Candidate, page: _Page, summary: str) -> dict[str, Any]:
             "summary": summary,
             "content_scope": "feed_summary",
             "full_text_available": False,
-            "provider_record": envelope.model_dump(mode="json"),
         },
     }
 
