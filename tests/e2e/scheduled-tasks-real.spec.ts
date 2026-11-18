@@ -183,7 +183,9 @@ test('follow-up question in the task thread is answered by the real model', asyn
 test('dashboard day context serves the live brief; the brief gadget links to the thread when present', async ({ page }) => {
   test.setTimeout(2 * 60_000);
   // The day context is what the Daily brief gadget renders; it must return the task's live brief.
-  const day = await (await page.request.get('/api/v1/context/daily')).json() as { brief: { content: string; status: string } | null };
+  const { timezone } = await (await page.request.get('/api/v1/briefs/schedule')).json() as { timezone: string };
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+  const day = await (await page.request.get(`/api/v1/context/daily?date=${date}&timezone=${encodeURIComponent(timezone)}`)).json() as { brief: { content: string; status: string } | null };
   expect(day.brief?.status, 'brief is live on the dashboard').toBe('current');
   expect(day.brief?.content ?? '').toMatch(/\[\d+\]/);
   await page.goto('/dashboard');
