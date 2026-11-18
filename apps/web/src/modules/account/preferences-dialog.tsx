@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { applyAccent, previewAccent, readAccent, type AccentId } from '@/core/accent';
 import { AccentPicker } from './accent-picker';
+import { SkinPicker } from './skin-picker';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -256,6 +257,7 @@ function PreferencesForm({ vm, draft }: { vm: PreferencesDialogVm; draft: OwnerP
             {t('displayNameHelp')}
           </p>
         </div>
+        <SkinPicker />
         <AccentPicker value={accentDraft} onChange={setAccentDraft} />
         <div className="field">
           <Label htmlFor="preference-locale">{t('language')}</Label>

@@ -31,7 +31,7 @@ import type { SourceAiOptions } from './api';
 import { useBuiltinTest, type TestState } from './use-builtin-test';
 import { BareButton } from '@/components/bare-button';
 
-const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech'];
+const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'media'];
 const CATEGORY_KEY = {
   news: 'builtinCategory.news',
   economy: 'builtinCategory.economy',
@@ -39,6 +39,7 @@ const CATEGORY_KEY = {
   space: 'builtinCategory.space',
   security: 'builtinCategory.security',
   tech: 'builtinCategory.tech',
+  media: 'builtinCategory.media',
 } as const;
 const USES = [
   ['personal', 'terms.usePersonal'],

@@ -1,0 +1,19 @@
+/*
+ * Terminal skin for the knowledge documents list: flat section and ruled record rows.
+ * Imported by document-list.tsx. Scoped under html[data-skin='terminal']; default skin unchanged.
+ */
+
+html[data-skin='terminal'] section:has(> .section-heading) {
+  background: transparent;
+  border-color: var(--line);
+  padding: 16px 24px 24px;
+}
+
+html[data-skin='terminal'] .record-row {
+  border-bottom: 1px solid var(--rule);
+  padding: 7px 8px;
+}
+
+html[data-skin='terminal'] .record-row:hover {
+  background: var(--active);
+}

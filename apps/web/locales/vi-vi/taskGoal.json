@@ -68,6 +68,8 @@
   "no.tasks": "Không có công việc phù hợp.",
   "no.tasksYet": "Chưa có công việc nào.",
   "no.dueDate": "Không có hạn",
+  "task.dueOverdue": "quá hạn {days} ngày",
+  "task.dueToday": "hôm nay",
   "no.goals": "Không có mục tiêu phù hợp.",
   "no.goalsYet": "Chưa có mục tiêu nào.",
   "no.deadline": "Không có hạn",

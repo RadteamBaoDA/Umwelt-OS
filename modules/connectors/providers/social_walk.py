@@ -105,3 +105,18 @@ def step(
         done = max((t for t in (high, top) if t is not None), default=None)
         return kept, Walk(done)
     return kept, Walk(high, next_page, top)
+
+
+POST_TITLE_MAX = 120
+
+
+def post_title(text: str) -> str:
+    """Return the first non-blank line of a post, trimmed, for use as the record title.
+
+    Lines longer than ``POST_TITLE_MAX`` are cut to ``POST_TITLE_MAX`` characters with a trailing
+    ellipsis. Returns ``""`` when the post has no non-blank line so the caller's fallback applies.
+    """
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    if len(first) <= POST_TITLE_MAX:
+        return first
+    return first[: POST_TITLE_MAX - 1].rstrip() + "…"

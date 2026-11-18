@@ -1,5 +1,6 @@
 // Pure helpers, constants and types of the connector editor (no React state): catalog predicates, default configuration,
 // error mapping and the wizard contract types. Extracted unchanged from connector-editor.tsx.
+import { OPTION_LABEL_KEY } from './builtin-option-keys';
 import { ApiError } from '@/core/api';
 import { ConnectorCatalogEntry, ConnectorConfig, intervalBelowMinimum } from './api';
 
@@ -35,7 +36,10 @@ export const REQUIRED_SCOPE: Partial<Record<string, readonly (keyof ConnectorCon
   openweathermap: ['owm_latitude', 'owm_longitude'],
   openaq: ['openaq_location_id'],
   nasa_firms: ['firms_country'],
-  youtube: ['youtube_channel_id'],
+  apple_books_rss: ['country', 'kind', 'chart'],
+  hardcover_books: ['hardcover_mode'],
+  itunes_movies: ['search_terms', 'country'],
+  letterboxd_rss: ['letterboxd_username'],
   arxiv: ['arxiv_category'],
   huggingface: ['huggingface_author'],
   bluesky: ['bluesky_actor'],
@@ -91,7 +95,7 @@ export function providerCredentialRequired(entry: ConnectorCatalogEntry | undefi
   return usesProviderCredential(entry) && (usesApiKey(entry) || requiresHeaderCredential(entry));
 }
 
-export const PROVIDER_GROUP_ORDER = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'other'] as const;
+export const PROVIDER_GROUP_ORDER = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'media', 'other'] as const;
 export type ProviderGroup = (typeof PROVIDER_GROUP_ORDER)[number];
 export const PROVIDER_GROUP_KEY = {
   news: 'builtinCategory.news',
@@ -100,6 +104,7 @@ export const PROVIDER_GROUP_KEY = {
   space: 'builtinCategory.space',
   security: 'builtinCategory.security',
   tech: 'builtinCategory.tech',
+  media: 'builtinCategory.media',
   other: 'provider.groupOther',
 } as const;
 
@@ -115,6 +120,21 @@ export function isProvider(value: string): value is Provider {
 
 /** Literal `sources` catalog key of each provider's display name that the provider picker translates; others use the catalog label. */
 const PROVIDER_KEY = {
+  anilist_anime: 'provider.anilistAnime',
+  anilist_manga: 'provider.anilistManga',
+  livechart_episodes: 'provider.livechartEpisodes',
+  ann_news: 'provider.annNews',
+  mangaupdates_releases: 'provider.mangaupdatesReleases',
+  mangadex_releases: 'provider.mangadexReleases',
+  openlibrary_books: 'provider.openlibraryBooks',
+  gutendex_books: 'provider.gutendexBooks',
+  apple_books_rss: 'provider.appleBooksRss',
+  wikidata_movies: 'provider.wikidataMovies',
+  itunes_movies: 'provider.itunesMovies',
+  letterboxd_rss: 'provider.letterboxdRss',
+  podcast_rss: 'provider.podcastRss',
+  tvmaze_schedule: 'provider.tvmazeSchedule',
+
   rss: 'provider.rss',
   web: 'provider.web',
   rest: 'provider.rest',
@@ -203,13 +223,19 @@ export const NATIVE_SCOPE_DEFAULTS: Partial<Record<string, Partial<ConnectorConf
   },
 };
 
-/** Builds the editable default configuration for the selected provider. */
+const PRESET_DRAFT_OVERRIDES: Readonly<Record<string, Partial<ConnectorConfig>>> = {
+  // SEC fair-access rules require the owner's real contact address.
+  sec_edgar: { sec_contact_email: '' },
+  // The owner chooses a collection target instead of inheriting the documentation example.
+  google_books: { google_books_subject: undefined },
+  hardcover_books: { hardcover_mode: undefined },
+};
+
+/** Builds the editable default configuration while clearing values that the owner must supply. */
 export function defaultConfiguration(provider: Provider, entry?: ConnectorCatalogEntry): ConnectorConfig {
-  // Preset providers use catalog configuration (including the example scope) so every required field starts filled
-  // and newly registered adapters need no parallel frontend list.
-  // SEC fair-access rules require the owner's real contact address, so the placeholder email is never preselected.
-  if (provider === 'sec_edgar' && entry?.example_config) return { ...(entry.example_config as ConnectorConfig), sec_contact_email: '' };
-  if (isPreset(entry) && entry?.example_config) return entry.example_config as ConnectorConfig;
+  if (entry?.example_config && (isPreset(entry) || provider === 'sec_edgar')) {
+    return { ...(entry.example_config as ConnectorConfig), ...PRESET_DRAFT_OVERRIDES[provider] };
+  }
   if (isNativeEntry(entry))
     return {
       timeout_seconds: 30,
@@ -304,6 +330,11 @@ export function scopeIssues(cause: unknown): ScopeIssue[] {
 
 /** Form label message key for each configuration field, so a server issue names the field the owner sees. */
 export const FIELD_LABEL_KEYS = {
+  ...OPTION_LABEL_KEY,
+  youtube_channels: 'youtube.channels',
+  youtube_handles: 'youtube.handles',
+  youtube_playlist_ids: 'youtube.playlists',
+  youtube_filter: 'youtube.filter',
   news_query: 'news.query',
   news_site: 'news.site',
   news_locale: 'news.locale',

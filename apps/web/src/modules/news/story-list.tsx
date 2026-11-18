@@ -8,10 +8,12 @@ import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { FeedImage } from '@/components/feed-image';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
+import { FootBarSlot, TitleBarSlot } from '@/components/gadget-title-slot';
 import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
 import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Button } from '@/components/ui/button';
 import { useLocalPref } from '@/core/use-local-pref';
+import { useSkin } from '@/core/use-skin';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
@@ -21,7 +23,7 @@ import { TranslationNote } from '@/modules/translations';
 import { useContentTranslation } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
-import { formatRelativeTime } from '@/modules/dashboard/public-api';
+import { formatRelativeTime, useReportGadgetFreshness } from '@/modules/dashboard/public-api';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -130,6 +132,66 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
   );
 }
 
+/** Stories observed within this many minutes carry the NEW level in the terminal log rows; older ones read INFO. */
+const NEW_STORY_MINUTES = 15;
+
+/**
+ * Terminal-skin log row of an embedded story: `HH:MM  LEVEL  title  #publisher` (developer-theme `.log li`).
+ * The title button opens the story detail exactly like the default row; the tag links to the publisher's article when
+ * the evidence URL is a safe http(s) URL (licence text stays in the link title). LEVEL is NEW for stories observed in
+ * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal.
+ *
+ * @param props.vm Story list view model (selection callback, translation and display preferences).
+ * @param props.story Story shown by this row.
+ */
+function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const { onSelectStory, shown, display, t } = vm;
+  // Lazy initial state keeps the clock read out of render purity; the level is a snapshot taken when the row mounts.
+  const [now] = useState(() => Date.now());
+  const clock = new Intl.DateTimeFormat(normalizeFormattingLocale(display.locale), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: display.timezone,
+  });
+  const observed = Date.parse(story.observed_at);
+  const isNew = now - observed < NEW_STORY_MINUTES * 60_000;
+  const { tag, href, license } = storyLogTag(story);
+  return (
+    <li className="story-log-row" data-testid="news-log-row">
+      <time dateTime={story.observed_at} title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
+        {Number.isNaN(observed) ? '' : clock.format(new Date(observed))}
+      </time>
+      <span className={isNew ? 'story-log-level story-log-new' : 'story-log-level story-log-info'}>
+        {isNew ? t('log.new') : t('log.info')}
+      </span>
+      <button type="button" className="story-log-title" onClick={(event) => onSelectStory(story.id, event.currentTarget)}>
+        {shown(story)?.title ?? story.title}
+      </button>
+      {tag && href ? (
+        <a className="story-log-tag" href={href} target="_blank" rel="noopener noreferrer" title={license}>
+          {tag}
+        </a>
+      ) : tag ? (
+        <span className="story-log-tag">{tag}</span>
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * Short lower-case publisher tag of a story for the terminal log row, with its safe article URL and licence text.
+ * Uses the first evidence item that names a publisher, else the first evidence item's source name; empty tag when none.
+ */
+function storyLogTag(story: Story): { tag: string; href: string | undefined; license: string | undefined } {
+  const item = story.evidence?.find((e) => e.publisher) ?? story.evidence?.[0];
+  return {
+    tag: (item?.publisher ?? item?.source_name ?? '').toLowerCase().replace(/\s+/g, ''),
+    href: safeHttpUrl(item?.url),
+    license: item?.license_label ?? undefined,
+  };
+}
+
 /** Count/time/relevance meta line and partial-data reasons under a story row. */
 function StoryRowMeta({ vm, story }: { vm: StoryListVm; story: Story }) {
   const { t, display, incompleteLabel, relevanceVaries, relativeTime } = vm;
@@ -185,18 +247,33 @@ function Attribution({ story }: { story: Story }) {
 
 type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 
-/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. */
+/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow terminal panes the embedded List | Cards toggle and refresh move from the title bar into this row (CSS picks the copy), so no control is lost. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
+  const terminal = useSkin() === 'terminal';
   const { embedded, actionsHost, translation, incompleteNotice, showOriginal, setShowOriginal, refreshButton, pageActions } = vm;
   return embedded ? (
     // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
-    <div className="flex h-6 shrink-0 items-center justify-between gap-2">
-      <div className="min-w-0 truncate">{incompleteNotice}</div>
-      <div className="flex items-center gap-1">
-        {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
-        <FeedViewToggle view={vm.view} setView={vm.setView} />
-        {refreshButton}
+    <div className="story-meta-row flex h-6 shrink-0 items-center justify-between gap-2">
+      <div className="min-w-0 truncate">
+        <FootBarSlot>{incompleteNotice}</FootBarSlot>
       </div>
+      <TitleBarSlot>
+        <div className="flex items-center gap-1">
+          {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+          <div className="feed-view-slot flex items-center gap-1">
+            <FeedViewToggle view={vm.view} setView={vm.setView} />
+            {refreshButton}
+          </div>
+        </div>
+      </TitleBarSlot>
+      {/* Narrow terminal panes: the title-bar toggle and refresh are hidden by CSS (so the meta and `[ collect now ]` fit) and this body-row
+          copy, shown only when narrow, keeps both reachable. */}
+      {terminal && (
+        <div className="feed-view-narrow ml-auto gap-1">
+          <FeedViewToggle view={vm.view} setView={vm.setView} />
+          {refreshButton}
+        </div>
+      )}
     </div>
   ) : actionsHost ? (
     createPortal(pageActions, actionsHost)
@@ -352,6 +429,14 @@ function StoryLead({ vm, story }: { vm: StoryListVm; story: Story }) {
 function StoryListBody({ vm }: { vm: StoryListVm }) {
   const { leadStory, more, view, embedded } = vm;
   const rows = more.visible;
+  if (vm.log)
+    return (
+      <ol className="story-log shrink-0">
+        {rows.map((story) => (
+          <StoryLogRow key={story.id} vm={vm} story={story} />
+        ))}
+      </ol>
+    );
   return leadStory ? (
     // Wide gadgets put the lead left and the list right; narrow ones stack them.
     <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -460,6 +545,8 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   // Only the stories currently loaded are requested for translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
+  // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
+  useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
   const shown = (story: Story) => (showOriginal ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
@@ -483,9 +570,11 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
       ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
       : null;
   // Cards mode drops the lead hero: every story is a card. Embedded lists collapse to the lead + 4 rows or 6 cards.
-  const heroStory = p.view === 'cards' ? null : leadStory;
+  // Terminal skin renders the list view as a log (no lead hero), eight rows before "show more".
+  const log = useSkin() === 'terminal' && embedded && p.view === 'list';
+  const heroStory = p.view === 'cards' || log ? null : leadStory;
   const listStories = heroStory ? stories.filter((story) => story.id !== heroStory.id) : stories;
-  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : 4, `${p.sourceTab}|${p.view}`);
+  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : log ? 8 : 4, `${p.sourceTab}|${p.view}`);
 
   return {
     ...p,
@@ -496,6 +585,7 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     scores,
     relevanceVaries,
     leadStory: heroStory,
+    log,
     listStories,
     more,
     showOriginal,

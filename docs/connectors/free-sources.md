@@ -1,6 +1,6 @@
 # Free data sources
 
-Catalog facts for the 50 free-provider presets, taken from `modules/connectors/provider_specs.py` (original 21 checked on 2026-10-07, the built-in expansion on 2026-10-21; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists. 
+Catalog facts for the free-provider presets, taken from `modules/connectors/provider_specs.py` (original 21 checked on 2026-10-07, the built-in expansion on 2026-10-21; policy revision 1). `Code` shows whether a collection adapter is registered in the shared executor: `registered` means present in code only, `existing adapter` is the earlier Alpha Vantage collector, and `not registered` means no adapter exists.
 Endpoint availability, implemented code, legal eligibility and live acceptance are separate facts: a row here is **not** a license grant and **no** provider is runtime-verified. Evidence and quotes live in `docs/free-data-provider-policy.md`.
 
 ## Rules
@@ -12,13 +12,27 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 - Quota is a durable PostgreSQL ledger (`connector_quota_windows`, `connector_provider_sends`, `connector_quota_debits`) shared by scheduled and manual collection and by both backends. One physical send debits every applicable window atomically before transmission; exhaustion defers with no provider I/O. Unknown official caps are recorded as counted windows with no enforced limit (never treated as unlimited). Local pilot ceilings are configurable internal choices, not provider promises.
 
 - **Built-in toggle (single-user instance).** Fixed-scope, keyless presets with an adapter are listed under **Settings → Data sources → Built-in sources** and are enabled with one switch. The first enable creates the source lazily (no seed migration) and, in one idempotent sequence, records the owner's terms acknowledgement and declared use, then activates it; later toggles only pause or resume the same source. For `review` providers the owner is also the instance operator, so the same enable records operator review evidence (`evidence_ref = builtin-toggle:<provider>:<terms_url>@<terms_version>`) and clears the collection block. Only the bootstrap operator may enable a `review` preset; anyone else gets `403 operator_required`. A declared use the class does not admit still returns `409 provider_terms_ineligible`. Scoped and keyed presets are never built-in: they stay in the manual flow with an in-app guide.
-- **Category** groups the catalog and the built-in list: `news`, `economy`, `hazards`, `space`, `security`, `tech`.
+- **Category** groups the catalog and the built-in list: `news`, `economy`, `hazards`, `space`, `security`, `tech`, `media`.
 - **Keyed presets** store the owner key in `connector_rest_credentials`; `header_name` records where it travels: a header name, `query:<param>` or `path:<token>`. The request is built server-side, redacted from `repr`, and a missing key fails closed before the lease and the send.
 
 ## Catalog
 
 | ID | Host | Kind | Interval (min) | Eligibility | Key | Execution | Code | Terms | Category |
 |---|---|---|---|---|---|---|---|---|---|
+| `livechart_episodes` | www.livechart.me | event | 30 | review | none | supported | registered | [terms](https://www.livechart.me/terms) | media |
+| `tvmaze_schedule` | api.tvmaze.com | event | 60 | review | none | supported | registered | [terms](https://www.tvmaze.com/api#licensing) | media |
+| `anilist_anime` | graphql.anilist.co | event | 30 | noncommercial | 60 requests/minute | supported | registered | [terms](https://anilist.co/terms) | media |
+| `anilist_manga` | graphql.anilist.co | event | 60 | noncommercial | 60 requests/minute | supported | registered | [terms](https://anilist.co/terms) | media |
+| `gutendex_books` | gutendex.com | event | 1440 | review | 60 requests/minute | supported | registered | [terms](https://gutendex.com/) | media |
+| `openlibrary_books` | openlibrary.org, covers.openlibrary.org | event | 360 | open | 2 requests/second, 150/minute | supported | registered | [terms](https://openlibrary.org/developers/api) | media |
+| `ann_news` | www.animenewsnetwork.com, cdn.animenewsnetwork.com | event | 60 | review | 1 request/second, 60/minute | supported | registered | [terms](https://www.animenewsnetwork.com/encyclopedia/api) | media |
+| `mangaupdates_releases` | api.mangaupdates.com | event | 60 | review | 1 request/second, 60/minute | supported | registered | [terms](https://api.mangaupdates.com/) | media |
+| `mangadex_releases` | api.mangadex.org, uploads.mangadex.org | event | 60 | noncommercial | 5 requests/second, 300/minute | supported | registered | [terms](https://mangadex.org/compliance) | media |
+| `apple_books_rss` | rss.marketingtools.apple.com | event | 360 | review | 20 requests/minute | supported | registered | [terms](https://www.apple.com/legal/internet-services/itunes/) | media |
+| `podcast_rss` | owner-configured HTTPS RSS host, itunes.apple.com | event | 60 | review | 2 requests/minute | supported | registered | [terms](https://podcastindex.org/terms) | media |
+| `wikidata_movies` | query.wikidata.org | event | 360 | open | 1 request/minute | supported | registered | [terms](https://www.wikidata.org/wiki/Wikidata:Licensing) | media |
+| `itunes_movies` | itunes.apple.com | event | 360 | review | 20 requests/minute | supported | registered | [terms](https://www.apple.com/legal/internet-services/itunes/) | media |
+| `letterboxd_rss` | letterboxd.com | event | 360 | review | 1 request/minute | supported | registered | [terms](https://letterboxd.com/legal/terms-of-use/) | media |
 | `bbc_world` | feeds.bbci.co.uk | news | 30 | review | none | supported | registered | [terms](https://www.bbc.co.uk/usingthebbc/terms/) | news |
 | `vnexpress_business` | vnexpress.net | news | 30 | noncommercial | none | supported | registered | [terms](https://vnexpress.net/rss) | news |
 | `tuoitre_news` | tuoitre.vn | news | 30 | noncommercial | none | supported | registered | [terms](https://tuoitre.vn/rss.htm) | news |
@@ -75,8 +89,33 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `openweathermap` | api.openweathermap.org | measurement | 60 | open | required | supported | registered (requires API key) | [terms](https://openweathermap.org/api) | hazards |
 | `openaq` | api.openaq.org | measurement | 60 | open | required | supported | registered (requires API key) | [terms](https://docs.openaq.org/about/about) | hazards |
 | `nasa_firms` | firms.modaps.eosdis.nasa.gov | event | 180 | open | required | supported | registered (requires API key) | [terms](https://www.earthdata.nasa.gov/engage/open-data-services-software-policies) | hazards |
+| `tmdb_movies` | api.themoviedb.org | event | 360 | personal | required | supported | registered (requires API key) | [terms](https://www.themoviedb.org/terms-of-use) | media |
+| `tmdb_tv` | api.themoviedb.org | event | 360 | personal | required | supported | registered (requires API key) | [terms](https://www.themoviedb.org/terms-of-use) | media |
+| `trakt_media` | api.trakt.tv | event | 360 | personal | required | supported | registered (requires API key) | [terms](https://trakt.tv/terms) | media |
+| `omdb_lookup` | www.omdbapi.com | event | 1440 | personal | required | supported | registered (requires API key) | [terms](https://www.omdbapi.com/legal.htm) | media |
+| `mal_anime` | api.myanimelist.net | event | 360 | personal | required | supported | registered (requires API key) | [terms](https://myanimelist.net/static/apiagreement.html) | media |
+| `mal_manga` | api.myanimelist.net | event | 360 | personal | required | supported | registered (requires API key) | [terms](https://myanimelist.net/static/apiagreement.html) | media |
+| `google_books` | www.googleapis.com | event | 1440 | personal | required | supported | registered (requires API key) | [terms](https://developers.google.com/books/terms) | media |
+| `hardcover_books` | api.hardcover.app | event | 360 | personal | required | supported | registered (requires bearer token) | [terms](https://hardcover.app/terms) | media |
+| `youtube_api` | www.googleapis.com | event | 30 | review | required | supported | registered (requires API key) | [terms](https://developers.google.com/youtube/terms/api-services-terms-of-service) | media |
+| `podcast_index` | api.podcastindex.org | event | 60 | review | required | supported | registered (requires API key and secret) | [terms](https://podcastindex.org/terms) | media |
+| `listenbrainz_releases` | api.listenbrainz.org, musicbrainz.org, coverartarchive.org, archive.org | event | 360 | review | optional | supported | registered | [terms](https://listenbrainz.org/terms/) | media |
+| `steam_releases` | store.steampowered.com | event | 360 | review | optional | supported | registered | [terms](https://store.steampowered.com/subscriber_agreement/) | media |
+| `igdb_games` | id.twitch.tv, api.igdb.com | event | 360 | noncommercial | 4 requests/second | supported | registered (requires API key and secret) | [terms](https://www.igdb.com/api) | media |
 
 ## Attribution
+
+- `tmdb_movies` / `tmdb_tv`: Display the TMDB logo linked to themoviedb.org, `Metadata by TMDB`, and the exact notice: “This product uses the TMDB API but is not endorsed or certified by TMDB.” Records retain `Metadata by TMDB` provenance.
+- `trakt_media`: Attribute Trakt and link the corresponding Trakt title; record identity is the Trakt ID and external IDs remain provider supplied.
+- `mal_anime` and `mal_manga` use the owner's MyAnimeList client ID. Both default to excluding adult entries. Anime defaults to the all-anime ranking and also supports a named season and year. Manga defaults to the manga ranking.
+- `google_books` uses the owner's Google Books API key. Supply a query or subject and optionally a publication type or ebook filter. A single two-letter language can be sent upstream. Other supported media filters match the returned volume metadata.
+- `hardcover_books` uses the owner's Hardcover API token. Choose the catalog or upcoming releases. Release year and minimum rating are sent upstream, and genre is matched against normalized cached tags. Records retain Hardcover attribution and available ISBNs. Live schema acceptance is pending.
+- `youtube_api` uses the owner's project key in `X-Goog-Api-Key`. Channel and handle lookups resolve their uploads, with up to two 25-item playlist pages and one video-details batch per page. Every send costs one quota unit, including conditional requests. The default project budget resets at Pacific midnight. Country filtering is available for channel or handle sources. The collector retains the Atom channel/video identity and attaches YouTube attribution.
+- `podcast_index` uses the owner's write-only API key and secret with timestamped SHA-1 request signing. Recent feeds support `lang`, `cat`, `notcat` and `since`. Term search supports an optional `val` value-block type and filters the returned explicit rating. A capped recent response preserves its previous watermark. Results retain Podcast Index feed IDs and source attribution.
+- `listenbrainz_releases` discovers fresh releases without credentials, then enriches each release group through MusicBrainz with a one-request-per-second process pacer and descriptive `User-Agent`. It applies supported MusicBrainz country, language, primary type, year, tag and status filters; ListenBrainz itself receives only its documented window, sort and username parameters. Cover Art Archive redirects are followed through the shared public-destination gate, and only Cover Art Archive or Internet Archive image URLs are retained.
+- `steam_releases` reads the featured storefront or at most eight selected app news feeds. Every app detail request contains exactly one app ID; the adapter preserves fuzzy release text and null `final_price` for coming-soon games. Requests use the selected ISO2 storefront and supported Steam language.
+- `igdb_games` exchanges Twitch client credentials in a gated form POST, then makes a paced, bounded Apicalypse POST with `game_type` and `release_dates.release_region`. The token remains in run memory and must stay valid through receipt acceptance. Genre and theme filters remain distinct upstream fields. IGDB use is restricted to non-commercial deployments.
+- `omdb_lookup`: Attribute the OMDb API; ratings are normalized from IMDb's 0–10 scale to the canonical 0–100 `rating` field.
 
 - `bbc_world`: Display BBC as publisher with a link to the original article; feed-only title, summary and link.
 - `vnexpress_business`: Identify VnExpress clearly and link the original article; feed-only scope.
@@ -184,6 +223,16 @@ Endpoint availability, implemented code, legal eligibility and live acceptance a
 | `coingecko` | `pilot_calls_utc_second` | credential | second | http_calls | 1 | 1 | pilot_local |
 | `coingecko` | `official_calls_per_minute` | credential | minute | http_calls | 100 | 1 | official_documented |
 | `coingecko` | `official_call_credits_per_month` | credential | month | call_credits | 10000 | 1 | official_documented |
+| `tmdb_movies` | `official_unknown_calls_utc_day` | credential | day | http_calls | counted, no cap | 1 | official_unknown |
+| `tmdb_tv` | `official_unknown_calls_utc_day` | credential | day | http_calls | counted, no cap | 1 | official_unknown |
+| `trakt_media` | `official_unknown_calls_utc_day` | credential | day | http_calls | counted, no cap | 1 | official_unknown |
+| `omdb_lookup` | `official_calls_per_day` | credential | day | http_calls | 1000 | 1 | official_documented |
+| `mal_anime` | `pilot_calls_utc_second` | provider | second | http_calls | 1 | 1 | pilot_local |
+| `mal_manga` | `pilot_calls_utc_second` | provider | second | http_calls | 1 | 1 | pilot_local |
+| `google_books` | `pilot_calls_utc_day` | credential | day | http_calls | 1000 | 1 | pilot_local |
+| `hardcover_books` | `pilot_calls_utc_second` | credential | second | http_calls | 10 | 1 | pilot_local |
+| `hardcover_books` | `official_calls_per_minute` | credential | minute | http_calls | 60 | 1 | official_documented |
+| `hardcover_books` | `official_calls_per_day` | credential | day | http_calls | 5000 | 1 | official_documented |
 | `alpha_vantage` | `pilot_calls_utc_day` | credential | day | http_calls | 12 | 1 | pilot_local |
 | `alpha_vantage` | `pilot_calls_utc_minute` | credential | minute | http_calls | 1 | 1 | pilot_local |
 | `alpha_vantage` | `official_calls_per_day` | credential | day | http_calls | 25 | 1 | official_documented |

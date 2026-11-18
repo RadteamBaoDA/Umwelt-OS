@@ -17,6 +17,7 @@ from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
 from modules.connectors.providers import rest, social_walk
+from modules.connectors.providers.social_walk import post_title
 from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 
@@ -86,8 +87,13 @@ def _record(
     timestamp_basis: Literal[
         "provider_modified", "provider_published", "collection"
     ] = "provider_published",
+    title: str | None = None,
 ) -> IngestionRecord:
-    """Create a bounded social post with typed provenance matching its durable identity/version."""
+    """Create a bounded social post with typed provenance matching its durable identity/version.
+
+    ``title`` is stored as the record title only when given and non-blank; otherwise the record
+    keeps the provider-id fallback that ingestion applies to missing titles.
+    """
     if (
         not identity
         or len(identity) > 512
@@ -110,7 +116,10 @@ def _record(
         content=content[:MAX_TEXT],
         observed_at=observed_at.astimezone(UTC),
         collected_at=collected_at.astimezone(UTC),
-        metadata={"provider_record": envelope.model_dump(mode="json", exclude_none=True)},
+        metadata={
+            **({"title": title[:200]} if title else {}),
+            "provider_record": envelope.model_dump(mode="json", exclude_none=True),
+        },
     )
 
 
@@ -263,6 +272,9 @@ def _timestamp(value: object) -> datetime:
 def _mastodon_status_record(status: object, collected_at: datetime) -> IngestionRecord | None:
     """Map one public Mastodon status to a record; non-public or non-object entries yield ``None``.
 
+    The title is the first non-blank line of the plain status text (``post_title``); a status with
+    no such line leaves the title unset so ingestion falls back to the provider id.
+
     Raises:
         ValueError: ``mastodon_response_invalid`` / ``social_link_invalid`` / timestamp errors.
     """
@@ -291,6 +303,7 @@ def _mastodon_status_record(status: object, collected_at: datetime) -> Ingestion
         identity=identifier,
         version=status.get("edited_at") if isinstance(status.get("edited_at"), str) else identifier,
         content=text,
+        title=post_title(text),
         observed_at=created,
         collected_at=collected_at,
         source_fields={
@@ -444,6 +457,9 @@ def _x_tweet_record(
 ) -> IngestionRecord:
     """Validate one X tweet object and map it to a record with bounded provenance fields.
 
+    The title is the first non-blank line of the tweet text (``post_title``); a tweet with no such
+    line leaves the title unset so ingestion falls back to the provider id.
+
     Raises:
         ValueError: ``x_response_invalid`` or a timestamp error.
     """
@@ -470,6 +486,7 @@ def _x_tweet_record(
         identity=identifier,
         version=identifier,
         content=tweet["text"],
+        title=post_title(tweet["text"]),
         observed_at=created,
         collected_at=collected_at,
         source_fields=source_fields,

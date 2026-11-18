@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import gadgetRenderers from '@/test/fixtures/gadget-renderers.json';
+import gadgetTemplates from '@/test/fixtures/gadget-templates.json';
+import { RENDERER_MIN_SIZES, RENDERER_DEFAULT_SIZES } from './grid-geometry';
 import type { GadgetDefinition, ProviderMetrics } from './api';
-import { buildDefinitionPayload, draftPatchForTemplate, initialDraft, planSourceChange, type GadgetDraft } from './gadget-editor-model';
+import {
+  buildDefinitionPayload,
+  draftPatchForTemplate,
+  initialDraft,
+  isMediaDraftValid,
+  fieldsFor,
+  planSourceChange,
+  type GadgetDraft,
+} from './gadget-editor-model';
 
 /** Builds a catalog entry with sensible defaults. */
 const entry = (over: Partial<ProviderMetrics> = {}): ProviderMetrics => ({
@@ -142,5 +153,123 @@ describe('buildDefinitionPayload', () => {
     const { scope } = buildDefinitionPayload({ draft, entry: entry(), chartMulti: false, template: undefined });
     expect(scope.metrics).toEqual(['close']);
     expect(scope.symbols).toEqual(['BTC', 'ETH']);
+  });
+});
+
+describe('media editor contracts', () => {
+  it('keeps media geometry aligned with renderer and template snapshots', () => {
+    for (const [renderer, template] of [
+      ['media_feed', 'media_shelf'],
+      ['media_calendar', 'release_calendar'],
+    ]) {
+      const descriptor = gadgetRenderers.find((row) => row.id === renderer)!;
+      expect(RENDERER_MIN_SIZES[renderer]).toEqual({ minW: descriptor.minimum_width, minH: descriptor.minimum_height });
+      expect(gadgetTemplates.find((row) => row.id === template)?.renderer).toBe(renderer);
+    }
+    expect(RENDERER_DEFAULT_SIZES.media_feed).toEqual({ defaultW: 8, defaultH: 6 });
+    expect(RENDERER_DEFAULT_SIZES.media_calendar).toEqual({ defaultW: 6, defaultH: 6 });
+  });
+  it('exposes media defaults only for media renderers and the window for calendars', () => {
+    expect([...fieldsFor('media_feed')]).toEqual(expect.arrayContaining(['keywords', 'limit', 'rules', 'mediaScope', 'mediaFilters']));
+    expect(fieldsFor('media_calendar').has('releaseWindow')).toBe(true);
+    expect(fieldsFor('media_feed').has('releaseWindow')).toBe(false);
+    expect(fieldsFor('news_feed').has('mediaScope')).toBe(false);
+  });
+
+  it('round-trips selectors and all filter defaults while permitting clears', () => {
+    const definition: GadgetDefinition = {
+      id: 'media',
+      name: 'Shelf',
+      renderer: 'media_calendar',
+      source_ids: ['s1'],
+      revision: 1,
+      scope: {
+        media_types: ['anime'],
+        countries: ['JP'],
+        genres: ['sci_fi'],
+        languages: ['ja'],
+        formats: ['tv'],
+        content_ratings: ['safe'],
+        release_year: 2026,
+        release_season: 'fall',
+        min_rating: 80,
+        release_window_days: 14,
+      },
+      filters: {
+        media_type: 'anime',
+        media_types: ['anime'],
+        release_status: 'upcoming',
+        group_by: 'date',
+        countries: ['JP'],
+        genres: ['action'],
+        languages: ['ja'],
+        formats: ['tv'],
+        content_ratings: ['safe'],
+        min_rating: 60,
+        release_year: 2026,
+        release_season: 'fall',
+        limit: 25,
+      },
+      highlight_rules: [],
+      config_version: 1,
+      runtime_state: 'available',
+    };
+    const draft = initialDraft(definition);
+    expect(draft.minRating).toBe('60');
+    expect(draft.mediaScope.genres).toEqual(['action']);
+    const context = { draft, entry: undefined, chartMulti: false, template: undefined };
+    expect(buildDefinitionPayload(context)).toEqual({
+      scope: definition.scope,
+      filters: { ...definition.filters, keywords: undefined, exclude_keywords: undefined },
+    });
+    const cleared = buildDefinitionPayload({
+      ...context,
+      draft: { ...draft, mediaScope: { ...draft.mediaScope, countries: [] }, releaseYear: '', minRating: '', releaseWindow: '' },
+    });
+    expect(cleared.scope).toMatchObject({ countries: [], release_year: null, min_rating: null, release_window_days: null });
+    expect(cleared.filters).toMatchObject({ ...definition.filters, countries: [], release_year: null, min_rating: null });
+  });
+
+  it.each([
+    ['releaseYear', '1799'],
+    ['releaseYear', '2101'],
+    ['releaseYear', '2026.5'],
+    ['minRating', '-1'],
+    ['minRating', '101'],
+    ['minRating', 'Infinity'],
+    ['releaseWindow', '0'],
+    ['releaseWindow', '91'],
+    ['releaseWindow', '1.5'],
+  ])('rejects invalid %s value %s', (key, value) => {
+    expect(isMediaDraftValid({ ...initialDraft(null), renderer: 'media_calendar', [key]: value })).toBe(false);
+  });
+
+  it.each([
+    ['media_types', 13],
+    ['countries', 24],
+    ['genres', 16],
+    ['languages', 16],
+    ['formats', 16],
+    ['content_ratings', 8],
+  ] as const)('enforces the %s selector boundary in scope and filters', (field, limit) => {
+    const draft = { ...initialDraft(null), renderer: 'media_feed' };
+    const atLimit = Array.from({ length: limit }, (_, index) => String(index));
+    expect(isMediaDraftValid({ ...draft, mediaScope: { [field]: atLimit } })).toBe(true);
+    expect(isMediaDraftValid({ ...draft, mediaScope: { [field]: [...atLimit, 'overflow'] } })).toBe(false);
+    expect(isMediaDraftValid({ ...draft, mediaFilters: { [field]: [...atLimit, 'overflow'] } })).toBe(false);
+  });
+
+  it('accepts optional values and bounds, and resets media state when changing templates', () => {
+    expect(isMediaDraftValid({ ...initialDraft(null), renderer: 'media_calendar' })).toBe(true);
+    expect(
+      isMediaDraftValid({ ...initialDraft(null), renderer: 'media_calendar', releaseYear: '1800', minRating: '0', releaseWindow: '90' }),
+    ).toBe(true);
+    expect(draftPatchForTemplate(undefined, 'news_feed', 'News')).toMatchObject({
+      mediaScope: { countries: [], genres: [] },
+      mediaFilters: {},
+      releaseYear: '',
+      minRating: '',
+      releaseWindow: '',
+    });
   });
 });

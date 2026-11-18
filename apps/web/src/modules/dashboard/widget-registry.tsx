@@ -45,6 +45,10 @@ function adaptGadget(Lazy: LazyGadget, forwardEditMode = false, forwardUnread = 
  * can register each chunk for server rendering.
  */
 const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> = {
+  media_feed: adaptGadget(dynamic(() => import('./gadgets/media-feed').then((m) => m.MediaFeedGadget), { loading: GadgetChunkSkeleton })),
+  media_calendar: adaptGadget(
+    dynamic(() => import('./gadgets/media-calendar').then((m) => m.MediaCalendarGadget), { loading: GadgetChunkSkeleton }),
+  ),
   daily_brief: adaptGadget(dynamic(() => import('./gadgets/brief-gadget').then((m) => m.BriefGadget), { loading: GadgetChunkSkeleton })),
   tasks: adaptGadget(dynamic(() => import('./gadgets/tasks-gadget').then((m) => m.TasksGadget), { loading: GadgetChunkSkeleton })),
   goals: adaptGadget(dynamic(() => import('./gadgets/goals-gadget').then((m) => m.GoalsGadget), { loading: GadgetChunkSkeleton })),
@@ -101,6 +105,9 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
  * in each source renderer. They are local reading policy, not persisted/server minimum dimensions.
  */
 export const GADGET_READING_BODY_FLOORS: Record<string, number> = {
+  // Media toolbar, source tabs, notices and a readable card/list loading surface.
+  media_feed: 280,
+  media_calendar: 280,
   // The common floor matches the legacy `.skeleton { min-height: 180px }` surface in app/globals.css; DailyBrief adds its date row and two-action row.
   daily_brief: 240,
   tasks: 180,

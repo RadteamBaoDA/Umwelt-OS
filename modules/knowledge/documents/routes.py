@@ -1,7 +1,7 @@
 """HTTP routes for documents, uploads, raw files, projections and cleanup operations."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -257,6 +257,20 @@ async def list_dashboard_projections(
     language: Annotated[str | None, Query(pattern=r"^[a-z]{2}$")] = None,
     since: datetime | None = None,
     include_dismissed: bool = False,
+    countries: Annotated[list[str] | None, Query(max_length=24)] = None,
+    genres: Annotated[list[str] | None, Query(max_length=16)] = None,
+    languages: Annotated[list[str] | None, Query(max_length=16)] = None,
+    media_types: Annotated[list[str] | None, Query(max_length=13)] = None,
+    formats: Annotated[list[str] | None, Query(max_length=16)] = None,
+    content_ratings: Annotated[list[str] | None, Query(max_length=8)] = None,
+    release_statuses: Annotated[list[str] | None, Query(max_length=8)] = None,
+    release_year: Annotated[int | None, Query(ge=1800, le=2100)] = None,
+    release_year_from: Annotated[int | None, Query(ge=1800, le=2100)] = None,
+    release_year_to: Annotated[int | None, Query(ge=1800, le=2100)] = None,
+    release_season: Annotated[str | None, Query(min_length=1, max_length=32)] = None,
+    min_rating: Annotated[float | None, Query(ge=0.0, le=100.0)] = None,
+    release_window_days: Annotated[int | None, Query(ge=1, le=90)] = None,
+    sort: Annotated[Literal["created_at_desc", "release_date_asc"], Query()] = "created_at_desc",
 ) -> GadgetDocumentProjectionList:
     """Return current source-scoped records through the Documents owner projection."""
     _require_document_route_owner(workspace)
@@ -281,6 +295,20 @@ async def list_dashboard_projections(
             since=since,
             include_dismissed=include_dismissed,
             image_signer=image_signer,
+            countries=tuple(countries) if countries is not None else None,
+            genres=tuple(genres) if genres is not None else None,
+            languages=tuple(languages) if languages is not None else None,
+            media_types=tuple(media_types) if media_types is not None else None,
+            formats=tuple(formats) if formats is not None else None,
+            content_ratings=tuple(content_ratings) if content_ratings is not None else None,
+            release_statuses=tuple(release_statuses) if release_statuses is not None else None,
+            release_year=release_year,
+            release_year_from=release_year_from,
+            release_year_to=release_year_to,
+            release_season=release_season,
+            min_rating=min_rating,
+            release_window_days=release_window_days,
+            sort=sort,
             scope=workspace,
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )

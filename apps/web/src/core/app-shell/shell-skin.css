@@ -1,0 +1,181 @@
+/*
+ * Shell chrome for the statusline, the top-bar prompt, rail and settings nav.
+ * Base rules apply to both skins and use semantic tokens only. Terminal-only rules are scoped under
+ * html[data-skin='terminal'] so the default skin renders exactly as before. Imported by statusline.tsx.
+ */
+@layer components {
+  /* 24px footer; flex:none keeps it from shrinking when the body scrolls. Sits above the fixed mobile bottom nav
+     because .shell reserves that padding below the flex column. */
+  .statusline {
+    flex: none;
+    display: flex;
+    align-items: center;
+    height: 24px;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 24px;
+    white-space: nowrap;
+    color: var(--muted);
+    background: var(--raised);
+    border-top: 1px solid var(--line);
+  }
+  .statusline > span {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0 12px;
+  }
+  .statusline-info {
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-left: 1px solid var(--line);
+    text-transform: lowercase;
+  }
+  .statusline-info:empty {
+    display: none;
+  }
+  .statusline-transport {
+    gap: 4px;
+  }
+  .statusline-dot {
+    width: 6px;
+    height: 6px;
+    margin-right: 4px;
+    border-radius: 999px;
+    background: var(--muted);
+    flex: none;
+  }
+  .statusline-dot-success {
+    background: var(--positive);
+  }
+  .statusline-dot-warning {
+    background: var(--status-warning);
+  }
+  .statusline-dot-danger {
+    background: var(--danger);
+  }
+  /* Right-hand group. The wrapper takes the auto margin (pushing model, locale and clock to the end of the bar) and
+     no padding of its own; the segments inside keep the 12px rhythm of the left-hand segments. */
+  .statusline > .statusline-end {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    min-width: 0;
+    padding: 0;
+  }
+  .statusline-end > span {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0 12px;
+  }
+  .statusline-clock {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  /* Mode chip, the topbar prompt and the source-health and model segments are terminal ornaments. */
+  .statusline .statusline-mode,
+  .statusline .statusline-sources,
+  .statusline .statusline-model,
+  .shell-crumb {
+    display: none;
+  }
+  /* Narrow screens drop the route, locale and the top-bar prompt. The terminal shell-crumb rule below sets
+     display:block with higher specificity, so it is repeated here to win at this width. The terminal model segment
+     (display:flex, specificity 0,2,1) is repeated for the same reason. */
+  @media (max-width: 720px) {
+    .statusline .hide-sm,
+    .topbar .hide-sm,
+    .shell-crumb.hide-sm,
+    html[data-skin='terminal'] .shell-crumb.hide-sm,
+    .statusline .statusline-model.hide-sm,
+    html[data-skin='terminal'] .statusline .statusline-model.hide-sm {
+      display: none;
+    }
+  }
+}
+
+@layer components {
+  /* Source health dots: terminal skin only, next to the transport segment. */
+  html[data-skin='terminal'] .statusline .statusline-sources {
+    display: flex;
+  }
+  html[data-skin='terminal'] .statusline .statusline-model {
+    display: flex;
+    color: var(--muted);
+  }
+}
+
+@layer components {
+  html[data-skin='terminal'] .statusline-mode {
+    display: flex;
+    padding: 0 12px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-weight: 700;
+  }
+  html[data-skin='terminal'] .shell-crumb {
+    display: block;
+    margin-right: auto;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  /* Rail active item gets an inset accent bar instead of a filled background. */
+  html[data-skin='terminal'] .workspace-nav-link[aria-current='page'] {
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  /* Settings nav: `// ` before each group label, `> ` before the current item. */
+  html[data-skin='terminal'] .settings-nav [id^='settings-group-']::before {
+    content: '// ' / '';
+  }
+  html[data-skin='terminal'] .settings-nav a[aria-current='page']::before {
+    content: '>\00a0' / '';
+    color: var(--accent);
+  }
+}
+
+/* Unlayered: these beat the Tailwind utilities on the same elements and the @layer components rules above. */
+html[data-skin='terminal'] .shell-crumb b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+html[data-skin='terminal'] .shell-crumb-path {
+  color: var(--info, var(--accent));
+}
+
+/* Status line route segment reads as primary text, not muted chrome. */
+html[data-skin='terminal'] .statusline-route {
+  color: var(--text);
+}
+
+/* Settings nav: compact mono rows, 16px/12px frame, 11px group labels. */
+html[data-skin='terminal'] .settings-nav {
+  padding: 16px 12px;
+}
+
+html[data-skin='terminal'] .settings-nav a {
+  min-height: 0;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+html[data-skin='terminal'] .settings-nav a[aria-current='page'] {
+  font-weight: 600;
+}
+
+html[data-skin='terminal'] .settings-nav [id^='settings-group-'] {
+  font-size: 11px;
+  padding: 12px 10px 4px;
+}
+
+/* Settings body: wider frame on desktop; the mobile compact padding (720px and below) is left in place. */
+@media (min-width: 721px) {
+  html[data-skin='terminal'] .settings-body {
+    padding: 24px 32px 40px;
+  }
+}

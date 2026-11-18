@@ -35,6 +35,10 @@ _PURE_FIXTURES = {
     "iss_position": "iss_position.json",
     "disease_sh": "disease_sh.json",
     "vn_stock": "vn_stock_prices.json",
+    "cisa_kev": "cisa_kev.json",
+    "nvd": "nvd_cves.json",
+    "nasa_eonet": "nasa_eonet_open.json",
+    "ioda": "ioda_events.json",
 }
 
 
@@ -161,9 +165,12 @@ def test_region_and_series_flags_match_adapter_output() -> None:
         rows = [wd(r) for r in records if wd(r)["metric"] is not None]
         regions = [row["region"] for row in rows]
         distinct = {region for region in regions if region}
-        if not entry.charts_as_series:
-            # Point events: rows carry their own place/country (a place-less event has none) and no symbol,
-            # so there is no shared series key.
+        if not entry.charts_as_series and entry.symbol_keyed:
+            # Identifier-keyed point events (CVE feeds): the symbol is the event's own id, never a shared series.
+            assert all(row["symbol"] for row in rows), provider
+        elif not entry.charts_as_series:
+            # Place-keyed point events: rows carry their own place/country (a place-less event has none) and
+            # no symbol, so there is no shared series key.
             assert distinct, (provider, regions)
             assert all(not row["symbol"] for row in rows), provider
         if entry.region_keyed:

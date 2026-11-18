@@ -4,7 +4,7 @@ import { useIsFetching } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { Loader2Icon } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 
 /** Poll interval and number of consecutive "nothing loading" polls required before the overlay closes; lets lazy chunks and effect-started queries begin first. */
 const POLL_MS = 100;
@@ -114,7 +114,7 @@ export function RouteSpinner() {
       aria-busy="true"
       data-route-loader=""
     >
-      <Loader2Icon className="size-8 animate-spin text-primary" aria-hidden="true" />
+      <Spinner className="size-8 text-4xl leading-none text-primary" />
       <span className="sr-only">{t('loadingWorkspace')}</span>
     </div>
   );

@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ApiError } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
+import { ShellCrumb, Statusline } from '@/core/app-shell/statusline';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { ShellNav } from '@/core/app-shell/shell-nav';
 import { activeNavigationId, computeShellRedirects, visibleMainNavigationFor } from '@/core/app-shell/shell-redirects';
@@ -229,7 +230,10 @@ function SessionUnavailable({
   );
 }
 
-/** Top bar: brand mark (phones), connection status and the action cluster (search, notifications, workspace, user menu). */
+/**
+ * Top bar: the decorative terminal prompt (`ShellCrumb`, terminal skin only and hidden below 720px), brand mark
+ * (phones), connection status and the action cluster (search, notifications, workspace, user menu).
+ */
 function ShellTopbar({
   apiStatus,
   health,
@@ -255,6 +259,7 @@ function ShellTopbar({
   const realtime = useRealtime();
   return (
     <header className="topbar">
+      <ShellCrumb />
       <Link href="/dashboard" className="brand-name sm:hidden" aria-label="Umwelt-OS">
         <UmweltMark />
       </Link>
@@ -575,6 +580,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             >
               {children}
             </ShellMain>
+            <Statusline apiStatus={apiStatusOf(online, apiHealth)} preferences={preferences.data} />
           </div>
         </div>
         <ShellDialogs

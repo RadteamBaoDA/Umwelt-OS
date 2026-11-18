@@ -6,6 +6,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useChatController } from '@/core/app-shell/chat-controller';
+import { useWorkspace } from '@/core/workspace-context';
 import { NewsFeed } from './news-feed';
 import { Sparkline } from './sparkline';
 import { bucketByDay } from './relative-time';
@@ -47,6 +48,11 @@ export interface FeedGadgetProps {
   onUnreadCountChange?: (count: number) => void;
 }
 
+/** Feed stream inputs plus the resolved workspace role used for owner-only actions. */
+interface FeedStreamProps extends FeedGadgetProps {
+  isOwner: boolean;
+}
+
 /**
  * Standard Feed Stream gadget template.
  * Displays real-time or polled items from news feeds, RSS channels, Telegram messages,
@@ -58,9 +64,10 @@ export interface FeedGadgetProps {
  */
 export function FeedGadget(props: FeedGadgetProps) {
   const t = useTranslations('dashboard');
+  const { isOwner } = useWorkspace();
   const [tab, setTab] = useState<'items' | 'stories'>('items');
   // Story clusters come from the news module; Telegram records have no story clusters.
-  if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} />;
+  if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} isOwner={isOwner} />;
   return (
     <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
       <TabsList aria-label={t('feed.tabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
@@ -78,7 +85,7 @@ export function FeedGadget(props: FeedGadgetProps) {
         </TabsTrigger>
       </TabsList>
       <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
-        <FeedStream {...props} />
+        <FeedStream {...props} isOwner={isOwner} />
       </TabsContent>
       <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden">
         <NewsFeed instance={props.instance} />
@@ -351,13 +358,12 @@ function useFeedSignals(feedItems: FeedStreamItem[], onUnreadCountChange: FeedGa
   return { unreadCount, volume };
 }
 
-/** Renders the scrollable feed item stream with selection and Ask AI affordances. */
-function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetProps) {
+/** Renders the scrollable feed item stream with owner-aware Ask AI affordances and existing Telegram controls. */
+function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: FeedStreamProps) {
   const { openDrawer } = useChatController();
   const definition = instance.definition;
-  const isTelegram = definition.renderer === 'telegram_feed';
   const sourceIds = [...new Set(definition.source_ids)].slice(0, 32);
-  const channelIds = isTelegram ? (definition.scope.channel_ids ?? []).slice(0, 32) : [];
+  const channelIds = definition.renderer === 'telegram_feed' ? (definition.scope.channel_ids ?? []).slice(0, 32) : [];
   const filters = useFeedFilters();
   // Layout choice is per gadget instance and survives reloads (unlike the transient filters).
   const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.feedView.${instance.id}`, 'list', FEED_VIEWS);
@@ -388,7 +394,8 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
   const rowContext: FeedRowContext = {
     view,
-    isTelegram,
+    isTelegram: definition.renderer === 'telegram_feed',
+    isOwner,
     selectMode,
     selected: selectedTelegram,
     setSelected: setSelectedTelegram,

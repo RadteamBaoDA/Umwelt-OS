@@ -44,5 +44,6 @@
   "watchlist.empty": "Watchlist empty",
   "watchlist.emptyDetail": "Add a rule to start watching for matches.",
   "streamCount": "{count, plural, one {# record} other {# records}}",
-  "openFullBrief": "Open full brief"
+  "openFullBrief": "Open full brief",
+  "foot.summary": "Tasks due {tasks} · Active goals {goals}"
 }

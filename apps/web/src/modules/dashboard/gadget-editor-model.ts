@@ -58,7 +58,30 @@ export const MAP_LAYER_KEY = {
 } as const satisfies Record<(typeof MAP_LAYERS)[number], string>;
 
 /** Editor field groups a renderer may expose. */
-export type FieldKey = 'keywords' | 'limit' | 'symbols' | 'metrics' | 'lookback' | 'map' | 'cii' | 'channels' | 'rules';
+export type FieldKey =
+  | 'mediaScope'
+  | 'mediaFilters'
+  | 'releaseWindow'
+  | 'keywords'
+  | 'limit'
+  | 'symbols'
+  | 'metrics'
+  | 'lookback'
+  | 'map'
+  | 'cii'
+  | 'channels'
+  | 'rules';
+/** Media renderers share bounded selectors and list controls. */
+export const MEDIA_RENDERERS = ['media_feed', 'media_calendar'] as const;
+/** Per-selector API bounds shared by media controls and save validation. */
+export const MEDIA_SELECTOR_LIMITS = {
+  media_types: 13,
+  countries: 24,
+  genres: 16,
+  languages: 16,
+  formats: 16,
+  content_ratings: 8,
+} as const;
 const LIST_RENDERERS = ['news_feed', 'text_panel', 'table_panel', 'job_list', 'video_panel', 'telegram_feed', 'highlights', 'watch_rules'];
 
 /** Weather overlay choices of the live map. */
@@ -91,7 +114,8 @@ export function liveMapWeatherKey(layer: string) {
  */
 export function fieldsFor(renderer: string): ReadonlySet<FieldKey> {
   const out = new Set<FieldKey>();
-  if (LIST_RENDERERS.includes(renderer)) (['keywords', 'limit', 'rules'] as const).forEach((key) => out.add(key));
+  if (LIST_RENDERERS.includes(renderer) || MEDIA_RENDERERS.some((item) => item === renderer))
+    (['keywords', 'limit', 'rules'] as const).forEach((key) => out.add(key));
   if (['finance_chart', 'provider_observation', 'weather'].includes(renderer)) {
     out.add('metrics');
     out.add('lookback');
@@ -100,6 +124,11 @@ export function fieldsFor(renderer: string): ReadonlySet<FieldKey> {
   if (renderer === 'map') out.add('map');
   if (renderer === 'intelligence_panel') out.add('cii');
   if (renderer === 'telegram_feed') out.add('channels');
+  if (MEDIA_RENDERERS.some((item) => item === renderer)) {
+    out.add('mediaScope');
+    out.add('mediaFilters');
+  }
+  if (renderer === 'media_calendar') out.add('releaseWindow');
   return out;
 }
 
@@ -179,6 +208,12 @@ export function splitList(value: string, upper = false): string[] {
 export interface GadgetDraft {
   /** Selected template renderer; null shows the template chooser. */
   choice: string | null;
+  /** Persisted media selectors and filter defaults, kept separate to preserve their API precedence. */
+  mediaScope: GadgetScope;
+  mediaFilters: GadgetFilters;
+  releaseYear: string;
+  minRating: string;
+  releaseWindow: string;
   renderer: string;
   name: string;
   sourceIds: string[];
@@ -266,6 +301,41 @@ function liveMapFieldsOf(
   };
 }
 
+/** Seeds media controls without changing saved filter defaults or unrelated scope fields. */
+function mediaDraftFields(definition?: Pick<GadgetDefinition, 'scope' | 'filters'> | null) {
+  const { scope = {}, filters = {} } = definition ?? {};
+  const mediaScope: GadgetScope = { release_season: filters.release_season ?? scope.release_season ?? null };
+  for (const field of ['media_types', 'countries', 'genres', 'languages', 'formats', 'content_ratings'] as const) {
+    Object.assign(mediaScope, { [field]: filters[field]?.length ? filters[field] : (scope[field] ?? []) });
+  }
+  return {
+    mediaScope,
+    mediaFilters: filters,
+    releaseYear: String(filters.release_year ?? scope.release_year ?? ''),
+    minRating: String(filters.min_rating ?? scope.min_rating ?? ''),
+    releaseWindow: String(scope.release_window_days ?? ''),
+  };
+}
+
+/** Checks media selector counts and optional numeric API bounds; empty numeric controls persist as null. */
+export function isMediaDraftValid(draft: GadgetDraft): boolean {
+  if (!MEDIA_RENDERERS.some((item) => item === draft.renderer)) return true;
+  const year = Number(draft.releaseYear);
+  const rating = Number(draft.minRating);
+  const window = Number(draft.releaseWindow);
+  const countsValid = (Object.keys(MEDIA_SELECTOR_LIMITS) as (keyof typeof MEDIA_SELECTOR_LIMITS)[]).every(
+    (field) =>
+      (draft.mediaScope[field]?.length ?? 0) <= MEDIA_SELECTOR_LIMITS[field] &&
+      (draft.mediaFilters[field]?.length ?? 0) <= MEDIA_SELECTOR_LIMITS[field],
+  );
+  return (
+    countsValid &&
+    (draft.releaseYear.trim() === '' || (Number.isInteger(year) && year >= 1800 && year <= 2100)) &&
+    (draft.minRating.trim() === '' || (Number.isFinite(rating) && rating >= 0 && rating <= 100)) &&
+    (draft.releaseWindow.trim() === '' || (Number.isInteger(window) && window >= 1 && window <= 90))
+  );
+}
+
 /**
  * Builds the starting draft for a saved definition, or the blank draft of a new gadget.
  * A saved definition with no lookback keeps it unset (empty field) so a rename never invents one.
@@ -278,6 +348,7 @@ export function initialDraft(definition: GadgetDefinition | null): GadgetDraft {
     name: definition?.name ?? '',
     sourceIds: definition?.source_ids ?? [],
     ...filterFieldsOf(definition?.filters),
+    ...mediaDraftFields(definition),
     ...scopeFieldsOf(definition?.scope),
     lookback: definition ? String(definition.scope?.lookback_days ?? '') : String(fallbackLookback(renderer)),
     lookbackTouched: false,
@@ -310,6 +381,7 @@ export function draftPatchForTemplate(picked: GadgetTemplate | undefined, render
     weatherLayer: 'none',
     sourceIds: [],
     ...templateListFields(picked),
+    ...mediaDraftFields(picked),
     region: '',
     lookback: String(picked?.scope.lookback_days ?? fallbackLookback(renderer)),
     lookbackTouched: false,
@@ -538,10 +610,41 @@ function mapScope(draft: GadgetDraft, capped: number | undefined): GadgetScope {
   return { regions: splitList(draft.regions), map_layer_ids: draft.layers, lookback_days: capped, ...live };
 }
 
+/**
+ * Saves effective editor defaults while preserving untouched storage. Non-empty filter lists and non-null filter
+ * scalars override scope. Editing a shared control writes scope and clears its filter override, including clears.
+ */
+function mediaPayloadDefaults(ctx: SavePayloadContext): { scope: GadgetScope; filters: GadgetFilters } {
+  const { draft } = ctx;
+  const original = mediaDraftFields(draft.base ?? ctx.template);
+  const scope: GadgetScope = {};
+  const filters = { ...draft.mediaFilters };
+  for (const field of ['media_types', 'countries', 'genres', 'languages', 'formats', 'content_ratings', 'release_season'] as const) {
+    if (JSON.stringify(draft.mediaScope[field]) !== JSON.stringify(original.mediaScope[field])) {
+      Object.assign(scope, { [field]: draft.mediaScope[field] });
+      Object.assign(filters, { [field]: field === 'release_season' ? null : [] });
+    }
+  }
+  for (const [key, field] of [
+    ['releaseYear', 'release_year'],
+    ['minRating', 'min_rating'],
+    ['releaseWindow', 'release_window_days'],
+  ] as const) {
+    if (draft[key] !== original[key]) {
+      Object.assign(scope, { [field]: draft[key].trim() === '' ? null : Number(draft[key]) });
+      if (field !== 'release_window_days') Object.assign(filters, { [field]: null });
+    }
+  }
+  return { scope, filters };
+}
+
 /** Renderer-specific part of the scope (merged over the base/template scope). */
 function rendererScope(ctx: SavePayloadContext, days: number | undefined, capped: number | undefined): GadgetScope {
   const { draft, entry } = ctx;
   switch (draft.renderer) {
+    case 'media_feed':
+    case 'media_calendar':
+      return mediaPayloadDefaults(ctx).scope;
     case 'finance_chart':
       return chartScope(ctx, days);
     // A Metric gadget on a symbol-keyed provider keeps its picked symbols; clearing them must persist, so always send the list.
@@ -574,6 +677,7 @@ export function buildDefinitionPayload(ctx: SavePayloadContext): { filters: Gadg
   const keywords = splitList(draft.keywords);
   const exclude = splitList(draft.exclude);
   const filters: GadgetFilters = {
+    ...(MEDIA_RENDERERS.some((item) => item === draft.renderer) ? mediaPayloadDefaults(ctx).filters : {}),
     limit: Number(draft.limit),
     keywords: keywords.length > 0 ? [...new Set(keywords)] : undefined,
     exclude_keywords: exclude.length > 0 ? [...new Set(exclude)] : undefined,

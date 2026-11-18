@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 
 import type { Dashboard, DashboardPlacement } from './api';
@@ -29,7 +29,7 @@ vi.mock('@/modules/sources', () => ({
 }));
 vi.mock('@/modules/news', () => ({ TopicSettings: () => null }));
 vi.mock('@/modules/settings', () => ({ HighlightRuleEditor: () => null }));
-vi.mock('./today-header', () => ({ TodayHeader: () => null }));
+vi.mock('./today-header', () => ({ TodayHeader: () => <p>today-greeting</p> }));
 vi.mock('./freshness-strip', () => ({ FreshnessStrip: () => null }));
 vi.mock('./first-run-setup', () => ({ FirstRunSetup: () => <p>first-run</p> }));
 vi.mock('./preset-picker', () => ({ PresetPicker: () => null }));
@@ -88,6 +88,7 @@ vi.mock('./layout-editor', () => ({
   ),
 }));
 
+import { DashboardHeader } from './dashboard-header';
 import { DashboardPage } from './dashboard-page';
 
 /** Builds a gadget instance of an unregistered-minimum renderer (4x3 minimum). */
@@ -227,5 +228,97 @@ describe('DashboardPage layout session', () => {
     await user.click(screen.getByRole('button', { name: getCatalog('en-us', 'dashboard').toggleEdit }));
     await user.click(screen.getByText('cancel'));
     expect(screen.queryByTestId('editor')).toBeNull();
+  });
+});
+
+describe('DashboardPage header greeting', () => {
+  it('renders the today greeting once, under the title, on the overview', async () => {
+    renderPage();
+    await screen.findByTestId('grid');
+    expect(screen.getAllByText('today-greeting')).toHaveLength(1);
+    const title = screen.getByRole('heading', { level: 1 });
+    expect(title.parentElement).toContainElement(screen.getByText('today-greeting'));
+  });
+});
+
+describe('DashboardHeader summary placement', () => {
+  const summary = 'Updated 5 minutes ago';
+  /** Renders the header with a summary and no actions (admin viewer hides the edit and manage buttons). */
+  const renderHeader = () =>
+    render(
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+        <DashboardHeader
+          dashboards={[]}
+          activeDashboard={null}
+          selectedDashboardId={null}
+          layoutOperationPending={false}
+          isAdminViewer
+          isOwner={false}
+          isEditMode={false}
+          canEditLayout={false}
+          summary={summary}
+          onSwitch={() => undefined}
+          onCreate={() => undefined}
+          onRename={() => undefined}
+          onDelete={() => undefined}
+          onOpenPresets={() => undefined}
+          onToggleEdit={() => undefined}
+          onAddGadget={() => undefined}
+          onOpenManagement={() => undefined}
+        />
+      </NextIntlClientProvider>,
+    );
+
+  afterEach(() => {
+    document.getElementById('statusline-info')?.remove();
+  });
+
+  it('offers the header Add gadget shortcut only to editors outside edit mode and fires its handler', () => {
+    const onAddGadget = vi.fn();
+    const header = (over: Record<string, unknown>) => (
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+        <DashboardHeader
+          dashboards={[]}
+          activeDashboard={null}
+          selectedDashboardId={null}
+          layoutOperationPending={false}
+          isAdminViewer={false}
+          isOwner={false}
+          isEditMode={false}
+          canEditLayout
+          summary={null}
+          onSwitch={() => undefined}
+          onCreate={() => undefined}
+          onRename={() => undefined}
+          onDelete={() => undefined}
+          onOpenPresets={() => undefined}
+          onToggleEdit={() => undefined}
+          onAddGadget={onAddGadget}
+          onOpenManagement={() => undefined}
+          {...over}
+        />
+      </NextIntlClientProvider>
+    );
+    const { rerender } = render(header({}));
+    screen.getByRole('button', { name: 'Add gadget' }).click();
+    expect(onAddGadget).toHaveBeenCalledTimes(1);
+    rerender(header({ isEditMode: true }));
+    expect(screen.queryByRole('button', { name: 'Add gadget' })).toBeNull();
+    rerender(header({ canEditLayout: false }));
+    expect(screen.queryByRole('button', { name: 'Add gadget' })).toBeNull();
+  });
+
+  it('falls back to an inline paragraph when the statusline slot is missing', () => {
+    renderHeader();
+    expect(screen.getByText(summary).tagName).toBe('P');
+  });
+
+  it('portals the summary into the statusline slot when it exists', async () => {
+    const slot = document.createElement('span');
+    slot.id = 'statusline-info';
+    document.body.append(slot);
+    renderHeader();
+    await waitFor(() => expect(slot).toHaveTextContent(summary));
+    expect(screen.queryByText(summary, { selector: 'p' })).toBeNull();
   });
 });

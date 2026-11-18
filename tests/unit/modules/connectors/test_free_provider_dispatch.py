@@ -239,6 +239,7 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         PROVIDER_SOURCE_TYPES,
         native_dispatch_supported,
     )
+    from modules.connectors.service.scope import OPTIONAL_SCOPE_FIELDS
     from modules.sources.schemas import SourceCreate
 
     source_type = PROVIDER_SOURCE_TYPES[provider]
@@ -269,10 +270,74 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "openaq": {"openaq_location_id": 8118},
         "nasa_firms": {"firms_country": "VNM"},
         "coingecko": {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}]},
+
+        "anilist_anime": {"media_ids": [1]},
+        "anilist_manga": {"media_ids": [1]},
+        "ann_news": {
+            "ann_mode": "encyclopedia", "ann_media_type": "anime", "ann_category": "review",
+            "ann_edition": "us", "media_country": "US", "media_countries": ["US"],
+            "media_genres": ["action"], "media_languages": ["en"], "media_formats": ["tv"],
+            "release_year": 2026, "min_rating": 80.0,
+        },
+        "apple_books_rss": {
+            "country": "US", "kind": "books", "chart": "top-free", "media_country": "US",
+            "media_genres": ["drama"], "media_languages": ["en"],
+        },
+        "gutendex_books": {
+            "media_languages": ["en"], "gutendex_topic": "fiction", "gutendex_search": "novel",
+            "gutendex_copyright": True, "gutendex_mime_type": "text/plain",
+            "gutendex_author_year_start": 1800, "gutendex_author_year_end": 1900,
+            "media_genres": ["non_fiction"],
+        },
+        "itunes_movies": {
+            "search_terms": "science fiction", "country": "US", "media_country": "US",
+            "media_genres": ["sci_fi"], "media_languages": ["en"], "release_year": 2026,
+            "min_rating": 80.0,
+        },
+        "letterboxd_rss": {
+            "letterboxd_username": "example", "media_country": "US", "media_countries": ["US"],
+            "media_genres": ["drama"], "media_languages": ["en"], "release_year": 2026,
+            "min_rating": 80.0,
+        },
+        "mangadex_releases": {
+            "manga_ids": ["5e7d5a22-3d67-49c5-89d3-9cd9a49a91de"], "original_languages": ["ja"],
+            "available_translated_languages": ["en"], "mangadex_content_ratings": ["safe"],
+            "mangadex_statuses": ["ongoing"], "publication_demographic": ["shounen"],
+            "release_year": 2026, "updated_at_since": "2026-11-16T12:00:00Z",
+            "media_genres": ["action"], "excluded_tags": ["5e7d5a22-3d67-49c5-89d3-9cd9a49a91de"],
+        },
+        "mangaupdates_releases": {
+            "mangaupdates_types": ["Manga"], "licensed_only": False, "release_year": 2026,
+            "media_genres": ["action"], "exclude_genre": ["horror"], "series_ids": [41],
+        },
+        "openlibrary_books": {
+            "openlibrary_mode": "subject", "openlibrary_subject": "fiction", "ebooks_only": False,
+        },
+        "podcast_rss": {
+            "feed_url": "https://example.org/feed.xml", "itunes_podcast_id": None,
+            "media_country": "US", "media_genres": ["non_fiction"], "media_languages": ["en"],
+        },
+        "wikidata_movies": {
+            "lookback_days": 365, "genre_qids": ["Q11424"], "language": "en",
+            "media_country": "US", "media_countries": ["US"], "media_genres": ["drama"],
+            "media_languages": ["en"], "release_year": 2026,
+        },
+        "mal_anime": {"mal_mode": "season", "mal_season_year": 2026, "mal_season": "fall"},
+        "mal_manga": {"mal_ranking_type": "manhwa"},
+        "google_books": {"google_books_subject": "History"},
+        "hardcover_books": {"hardcover_mode": "upcoming"},
+        "youtube_api": {"youtube_handles": ["@example"]},
+        "igdb_games": {"igdb_region": "world"},
+        "omdb_lookup": {
+            "omdb_mode": "title",
+            "omdb_imdb_id": "tt1234567",
+            "omdb_title": "Example movie",
+            "omdb_search": "Example movie",
+        },
     }.get(provider, {})
-    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[
-        provider
-    ] == frozenset(scope)
+    assert native_dispatch_supported(source_type, provider)
+    required = PROVIDER_SCOPE_FIELDS[provider] - frozenset(OPTIONAL_SCOPE_FIELDS.get(provider, ()))
+    assert provider in PROVIDER_SCOPE_FIELDS and required <= frozenset(scope) <= PROVIDER_SCOPE_FIELDS[provider]
     source = SimpleNamespace(
         id=uuid4(),
         status="active",
@@ -285,7 +350,9 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
     source.configuration = {
         "history_mode": "returned_snapshot",
         **scope,
-        "feed_url": "https://x.example/f",
+        "unexpected_owner_field": "not-a-provider-scope",
     }
+    if "feed_url" in PROVIDER_SCOPE_FIELDS[provider]:
+        return  # the owner's feed URL is this provider's own scope (podcast_rss)
     with pytest.raises(ValueError):
         registry.validate(source)  # owner-supplied scope is refused for fixed endpoints

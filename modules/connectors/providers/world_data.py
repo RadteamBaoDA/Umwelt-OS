@@ -345,6 +345,17 @@ def _market_records(
     return records
 
 
+def _weather_region(config: ConnectorConfig) -> str | None:
+    """Return the configured forecast point as a ``lat,lon`` label (two decimals), or None without coordinates.
+
+    The connector config has no place-name field, so the coordinates are the only human-readable
+    location label available to chat and the observation region filter.
+    """
+    if config.weather_latitude is None or config.weather_longitude is None:
+        return None
+    return f"{config.weather_latitude:.2f},{config.weather_longitude:.2f}"
+
+
 def _weather_records(
     source: ConnectorSource,
     config: ConnectorConfig,
@@ -358,6 +369,7 @@ def _weather_records(
     Use returned units, configured location/timezone and bounded row evidence.
     Typed identity/version match the record and no measurement time is claimed
     as a provider modification time. Missing numbers retain an explicit reason.
+    The measurement region is the configured point as ``lat,lon`` (two decimals).
     """
     from modules.knowledge.documents.public import ProviderRecordMetadata, WorldDataMeasurement
 
@@ -378,6 +390,7 @@ def _weather_records(
     ):
         raise ValueError("open_meteo_time_scope_invalid")
     zone = ZoneInfo(config.weather_timezone or "")
+    region = _weather_region(config)
     records: list[IngestionRecord] = []
     for metric in config.weather_metrics or ():
         values = hourly.get(metric)
@@ -405,7 +418,7 @@ def _weather_records(
                 currency=None,
                 timezone=returned_timezone,
                 symbol=None,
-                region=None,
+                region=region,
                 latitude=config.weather_latitude,
                 longitude=config.weather_longitude,
                 published_at=None,

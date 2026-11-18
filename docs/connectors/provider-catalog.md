@@ -27,6 +27,46 @@ below have not been accepted against live services in this implementation pass.
 - **Security:** `cisa_kev`, `ioda`, `nvd`. CVE identifiers, provider timestamps and provenance are
   preserved by the registered mappers.
 - **Space:** `launch_library`, `satnogs_observations`, `noaa_kp`, `iss_position`.
+- **Media:** `anilist_anime` and `anilist_manga` collect up to ten keyless, 50-item AniList GraphQL pages per
+  sync. Accepted pages and the next-page cursor commit together; updated mode uses a rolling 24-hour
+  `updatedAt_greater` overlap and stable ID order, while trending uses its upstream ranking. Anime airing mode
+  emits stable episode records whose next airing is within 14 days. `media_ids` is an optional scope target;
+  genres, tags, formats, country, season/year, status and rating are pushed upstream and post-filtered.
+  Adult results require explicit opt-in. Both share a conservative 60-request/minute durable cap and
+  2.1-second in-process pacing. Live network and provider quota behavior remain unverified. `livechart_episodes`
+  collects the official episode RSS with conditional requests and bounded
+  anime metadata. `tvmaze_schedule` collects the current day's country or web schedule, with TVMaze
+  attribution and source filters. Followed-show collection is not implemented. `openlibrary_books` collects
+  subject, search, or recent-change work metadata from the official API, with a 100-item/4 MiB response
+  bound, a 360-minute poll floor, CC0 attribution, and paginated recent-change cursors. Recent mode is
+  capped at ten change rows plus ten work lookups per run, locally paced at three requests per second,
+  and protected by a durable provider quota of two calls per second.
+  `gutendex_books` collects public-domain ebook metadata from the official Gutendex API, requesting up to
+  32 results per page and one page per sync. Language, topic, search, copyright, MIME type and author-year
+  ranges are pushed upstream; normalized genres and media fields are post-filtered. The bounded same-host
+  `next` URL is committed with accepted records, and the next request is rebuilt from the persisted scope.
+  Local pacing is 1.1 seconds with durable one-per-second and 60-per-minute pilot caps. ANN news and encyclopedia,
+  MangaUpdates releases, and MangaDex chapter releases use bounded official responses and preserve source attribution.
+  Apple Books charts and Podcast RSS provide books and episode records; podcast inputs accept exactly one HTTPS feed
+  or iTunes catalog ID. Wikidata and iTunes movie searches plus Letterboxd public RSS add keyless movie snapshots.
+  These additions use the shared send gate, provider quotas, bounded parsing and atomic checkpoint/validator receipts.
+  Terms-gated providers remain unavailable until required operator review; live acceptance remains open.
+  Optional-key `tmdb_movies`, `tmdb_tv`, `trakt_media`, `omdb_lookup`, `mal_anime`, `mal_manga` and `google_books` each use one gated GET per run.
+  YouTube Data API and Podcast Index use the gated native collection path. YouTube accepts the same target families
+  and format filters as the Atom connector. Each successful sweep commits the upload validators and video records
+  together with a ceiling of 40 one-unit requests. Podcast Index recent feeds use a publication watermark and
+  language/category filters. Search by term supports value-block filtering on its own endpoint. Both require
+  owner credentials and an operator terms review.
+  MyAnimeList uses a client ID for each ranking or seasonal snapshot. Google Books uses an API key for each volumes search.
+  `hardcover_books` sends a native GraphQL POST with the owner's bearer token. Each run reads up to two bounded
+  pages, and the accepted receipt commits records, query fingerprint and ID cursor together. Live GraphQL schema
+  verification remains pending.
+  TMDB uses a query `api_key`, Trakt uses `trakt-api-key` plus `trakt-api-version: 2`, and OMDb uses a query
+  `apikey`; request objects and HTTP client logs redact query credentials. TMDB Movie/TV genre IDs are mapped
+  separately, normalized ratings use the canonical 0–100 scale, and required TMDB attribution is retained.
+  Trakt accepts trending, anticipated, calendar and search modes. OMDb country, genre, language and minimum
+  rating filters run after fetch because OMDb has no matching query parameters. These keyed snapshots are
+  deduplicated without a time cursor; option fingerprints and accepted records commit in the same receipt.
 - **Technology and research:** `reddit`, `bluesky`, `openalex`, `hn_top`, `lobsters`, `github_trending`, `wwr_jobs`, `vietnamworks_jobs`, `itviec_jobs`,
   `wikipedia_mostread`, `wikipedia_top_views`, `disease_sh`.
 - **Other and account connectors:** generic `rss`, `web`, `rest`, and `mcp`; GitHub App and public
@@ -87,6 +127,33 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 
 | ID | Availability | Eligibility | Execution | Code registered | Runtime verified | Default interval (min) | Terms checked |
 |---|---|---|---|---|---|---|---|
+| `livechart_episodes` | `implemented` | review | supported | yes | no | 30 | 2026-10-07 |
+| `tvmaze_schedule` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `anilist_anime` | `implemented` | noncommercial | supported | yes | no | 30 | 2026-10-07 |
+| `anilist_manga` | `implemented` | noncommercial | supported | yes | no | 60 | 2026-10-07 |
+| `openlibrary_books` | `implemented` | open | supported | yes | no | 360 | 2026-10-07 |
+| `gutendex_books` | `implemented` | review | supported | yes | no | 1440 | 2026-10-07 |
+| `ann_news` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `mangaupdates_releases` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `mangadex_releases` | `implemented` | noncommercial | supported | yes | no | 60 | 2026-11-17 |
+| `apple_books_rss` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `podcast_rss` | `implemented` | review | supported | yes | no | 60 | 2026-11-17 |
+| `wikidata_movies` | `implemented` | open | supported | yes | no | 360 | 2026-11-17 |
+| `itunes_movies` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `letterboxd_rss` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `tmdb_movies` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `tmdb_tv` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `trakt_media` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `omdb_lookup` | `implemented` | personal | supported | yes | no | 1440 | 2026-11-18 |
+| `mal_anime` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `mal_manga` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `youtube_api` | `implemented` | review | supported | yes | no | 30 | 2026-11-18 |
+| `podcast_index` | `implemented` | review | supported | yes | no | 60 | 2026-11-18 |
+| `listenbrainz_releases` | `implemented` | review | supported | yes | no | 360 | 2026-11-18 |
+| `steam_releases` | `implemented` | review | supported | yes | no | 360 | 2026-11-18 |
+| `igdb_games` | `implemented` | noncommercial | supported | yes | no | 360 | 2026-11-18 |
+| `google_books` | `implemented` | personal | supported | yes | no | 1440 | 2026-11-18 |
+| `hardcover_books` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
 | `rss` | `available` | unknown | - | yes | no | - | - |
 | `web` | `available` | unknown | - | yes | no | - | - |
 | `rest` | `available` | unknown | - | yes | no | - | - |
@@ -164,3 +231,16 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `openweathermap` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `openaq` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `nasa_firms` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
+
+
+## Media source configuration
+
+The source editor exposes the keyless media providers' identifying fields and supported optional filters.
+Open Library requires a subject or query for its selected mode, podcasts require one HTTPS feed URL or iTunes ID,
+and YouTube accepts one target family with up to eight channel IDs, handles, or playlist IDs. Existing single-channel
+YouTube configurations stay editable. YouTube format choices are all videos, long-form videos, or Shorts.
+
+Media filters use the same canonical values as the Dashboard media editor. Leaving a filter empty uses the provider
+default. Configure sends explicit null when a saved option is cleared, while the built-in wizard omits empty options.
+The optional Media starter pack uses the existing LiveChart and TVMaze built-in contracts. These UI controls have
+unit-test coverage. Live collection and authenticated browser acceptance remain separate verification gates.

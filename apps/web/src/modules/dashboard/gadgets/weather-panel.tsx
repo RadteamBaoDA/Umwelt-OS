@@ -5,12 +5,17 @@ import { useTranslations } from 'next-intl';
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { useSkin } from '@/core/use-skin';
+import { Button } from '@/components/ui/button';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
+import { listAllSources, sourceKeys } from '@/modules/sources';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
 import { formatMetricLabel } from './metric-label';
+import { staleInfo } from './chart-range';
 import { useSourceInfo } from './use-effective-lookback';
 import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
@@ -393,29 +398,168 @@ function useWeatherReadings(instance: GadgetInstance) {
 }
 
 /**
+ * Terminal-skin weather body (demo `.pane.weather`): big current temperature, one muted summary line (low, high,
+ * rain, wind), then the next-24h temperature line with `now … +24h` ticks. Presentation of the same model the
+ * default panel uses; the Open-Meteo attribution link stays as a small muted footer.
+ *
+ * @param props Derived model, the shared number format and the display timezone/locale for the mid tick.
+ * @returns Compact terminal weather section.
+ */
+function WeatherTerminal({
+  model,
+  now,
+  locale,
+}: {
+  model: WeatherModel;
+  now: number;
+  locale: ReturnType<typeof useDisplayPreferences>['locale'];
+}) {
+  const t = useTranslations('dashboard');
+  const { heroTemp, heroWind, heroPrecip, today, unit, next24h, zone } = model;
+  const parts = [
+    today && t('weather.termLowHigh', { min: Math.round(today.min), max: Math.round(today.max) }),
+    heroPrecip && t('weather.termRain', { value: Math.round(heroPrecip.value) }),
+    heroWind && t('weather.termWind', { value: Math.round(heroWind.value * 10) / 10, unit: heroWind.unit }),
+  ].filter(Boolean);
+  const mid = getDateTimeFormat(normalizeFormattingLocale(locale), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: zone,
+  }).format(new Date(now + DAY_MS / 2));
+  return (
+    <section className="weather-term flex h-full min-h-0 flex-col gap-1 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
+      <p className="weather-term-figure m-0" data-testid="weather-hero">
+        {heroTemp ? Math.round(heroTemp.value * 10) / 10 : '—'}
+        <small>{unit}</small>
+      </p>
+      {parts.length > 0 && (
+        <p className="weather-term-line m-0" data-testid="weather-minmax">
+          {parts.join(' · ')}
+        </p>
+      )}
+      {next24h.length >= 2 && (
+        <div role="img" aria-label={t('weather.next24h')} data-testid="weather-sparkline">
+          <Sparkline data={next24h} height={64} forecastFrom={now} line />
+          <div className="weather-term-ticks" aria-hidden="true">
+            <span>{t('weather.termNow')}</span>
+            <span>{mid}</span>
+            <span>+24h</span>
+          </div>
+        </div>
+      )}
+      <a className="weather-term-attr mt-auto" href="https://open-meteo.com/" target="_blank" rel="noreferrer">
+        {t('openMeteoAttribution')}
+      </a>
+    </section>
+  );
+}
+
+/**
+ * Muted "last good data 2h ago · next retry 13:20:00" line for a failing weather read. Facts come from the bound source
+ * row in the shared `sourceKeys.listAll` cache (the one the dashboard already loads; no extra request when it is warm).
+ *
+ * @param props Bound source id; `failingOnly` hides the line unless the source's latest error is newer than its latest
+ *   success (used on the empty branch, where a read succeeded but the collector is failing).
+ * @returns The line, or null when the source row carries neither a last success nor a next due time.
+ */
+function WeatherStaleLine({ sourceId, failingOnly = false }: { sourceId: string; failingOnly?: boolean }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const sources = useQuery({ queryKey: sourceKeys.listAll, queryFn: listAllSources, enabled: Boolean(sourceId) });
+  // Wall-clock facts are judged as of the source list fetch so render stays pure.
+  const source = sources.data?.items.find((item) => item.id === sourceId);
+  const info = staleInfo(source, sources.dataUpdatedAt);
+  if (!info) return null;
+  // Same "failing" rule as the frame badge and statusline: an error newer than the last success.
+  if (
+    failingOnly &&
+    !(source?.last_error_at && (!source.last_success_at || Date.parse(source.last_error_at) > Date.parse(source.last_success_at)))
+  )
+    return null;
+  const next =
+    info.nextDueMs === null
+      ? null
+      : getDateTimeFormat(normalizeFormattingLocale(display.locale), {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+          timeZone: display.timezone,
+        }).format(new Date(info.nextDueMs));
+  const text = [info.ago && t('weather.lastGood', { ago: info.ago }), next && t('weather.nextRetry', { next })].filter(Boolean).join(' · ');
+  return (
+    <p className="m-0 text-xs text-muted-foreground" data-testid="weather-stale-line">
+      {text}
+    </p>
+  );
+}
+
+/**
+ * Last successful temperature, kept by react-query across a failed refetch, as `16.2°C · stale`.
+ *
+ * @param props Cached readings and the epoch ms they were fetched (the "now" for picking the nearest reading).
+ * @returns The muted reading, or null when there is no temperature reading.
+ */
+function WeatherStaleReading({ items, now }: { items: WorldObservation[]; now: number }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const { heroTemp } = buildWeatherModel(items, now, display.timezone);
+  if (!heroTemp) return null;
+  const value = getNumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(heroTemp.value);
+  return (
+    <p className="weather-stale-reading m-0 px-3 text-2xl text-muted-foreground tabular-nums" data-testid="weather-stale-reading">
+      {t('weather.staleReading', { value, unit: heroTemp.unit })}
+    </p>
+  );
+}
+
+/**
  * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
  * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
  * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
  * medium = + timeline, large = + day rows. Open-Meteo attribution is the body link only.
  *
  * @param props Gadget instance whose first source and metric scope select the Open-Meteo readings.
+ * On a failed read the error notice also lists the bound source's last good data age and next retry, and the last
+ * cached temperature as `16.2°C · stale` when react-query still holds it.
+ *
  * @returns Weather panel, or a setup/loading/error/empty notice.
  */
 function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
+  const terminal = useSkin() === 'terminal';
   const { sourceId, query, items } = useWeatherReadings(instance);
   const formatLocale = normalizeFormattingLocale(display.locale);
   const number = getNumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 
   if (!sourceId) return <GadgetNotice kind="setup" message={t('weather.sourceRequired')} />;
   if (query.isPending) return <GadgetSkeleton variant="list" label={t('observation.loading')} />;
-  if (query.isError) return <GadgetNotice kind="error" message={t('observation.loadFailed')} />;
-  if (!items.length) return <GadgetNotice kind="empty" message={t('observation.empty')} />;
+  if (query.isError)
+    return (
+      <>
+        {/* Terminal skin: `[ retry ]` in the pane title bar (demo weather error pane); refetches the same query. */}
+        <TitleBarSlot>
+          <span className="gadget-failed" aria-hidden="true">
+            {t('gadget.metaFailed')}
+          </span>
+          <Button type="button" size="sm" onClick={() => void query.refetch()}>
+            {t('retry')}
+          </Button>
+        </TitleBarSlot>
+        <GadgetNotice kind="error" message={t('observation.loadFailed')} detail={<WeatherStaleLine sourceId={sourceId} />} />
+        {/* react-query keeps the last good data on a failed refetch: show that reading, muted, instead of nothing. */}
+        {items.length > 0 && <WeatherStaleReading items={items} now={query.dataUpdatedAt} />}
+      </>
+    );
+  if (!items.length)
+    return <GadgetNotice kind="empty" message={t('observation.empty')} detail={<WeatherStaleLine sourceId={sourceId} failingOnly />} />;
 
   // Fetch time of the data, not wall-clock in render: keeps render pure; falls back to the newest reading when unset.
   const now = query.dataUpdatedAt || Math.max(...items.map((item) => Date.parse(item.observed_at)).filter(Number.isFinite), 0);
   const model = buildWeatherModel(items, now, display.timezone);
+  if (terminal) return <WeatherTerminal model={model} now={now} locale={display.locale} />;
   const { today, unit, next24h, chartRows, dayRows, zone } = model;
   const weekday = getDateTimeFormat(formatLocale, { weekday: 'short', timeZone: zone });
   /** X-axis tick label: short weekday in the reading's timezone. */

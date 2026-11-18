@@ -191,14 +191,14 @@ function MapEvidence({
       {features.length > 0 && (
         <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('map.evidenceList', { count: features.length })}</h3>
       )}
-      <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('map.evidenceListLabel')}>
+      <ul className="map-evidence-list min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('map.evidenceListLabel')}>
         {features.map((feature) => (
           <li key={feature.feature_id}>
             <BareButton
               type="button"
               onClick={() => onPick(feature.feature_id)}
               aria-pressed={feature.feature_id === selectedFeatureId}
-              className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30"
+              className="map-evidence-row flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30"
             >
               <span className="min-w-0 truncate">
                 {formatMetricLabel(feature.metric, t)} · {feature.region ?? formatProviderName(feature.provider)}
@@ -418,7 +418,7 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
   return (
     <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
       {/* The gadget frame already shows the title; keep only the range line (the engine label is configuration noise). */}
-      <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('map.range', { days })}</p>
+      <p className="map-range m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('map.range', { days })}</p>
       <MapNotices
         showPlot={showPlot}
         mapEmpty={mapEmpty}

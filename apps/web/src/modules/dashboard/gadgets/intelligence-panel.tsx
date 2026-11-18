@@ -31,19 +31,19 @@ function CorrelationGroupItem({ group }: { group: CorrelationBucket }) {
       ? group.observation_ids
       : group.document_ids;
   return (
-    <li className="py-2 text-xs">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">{group.region}</span>
+    <li className="corr-item py-2 text-xs">
+      <div className="corr-top flex items-center justify-between gap-2">
+        <span className="corr-region font-medium">{group.region}</span>
         <time dateTime={group.window_start} className="text-muted-foreground">
           {formatDateTime(group.window_start, display.locale, display.timezone)}
         </time>
       </div>
-      <p className="mt-1 text-muted-foreground">
+      <p className="corr-signals mt-1 text-muted-foreground">
         {t('correlation.signals', { count: group.signal_count, domains: group.domains_present.join(', ') })}
       </p>
       {/* Raw ids are noise by default; keep them one click away. */}
       {ids.length === 0 ? (
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="corr-evidence mt-1 text-xs text-muted-foreground">
           {t('correlation.evidence')} {t('correlation.noEvidenceIds')}
         </p>
       ) : (
@@ -92,10 +92,15 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
-      <p className="m-0 text-xs text-muted-foreground">{t('intelligence.range', { days })}</p>
+      <p className="corr-range m-0 text-xs text-muted-foreground">{t('intelligence.range', { days })}</p>
       <section aria-labelledby={`correlation-${instance.id}`} className="flex flex-1 flex-col gap-2">
-        <h3 id={`correlation-${instance.id}`} className="text-xs font-semibold">
+        <h3 id={`correlation-${instance.id}`} className="corr-title text-xs font-semibold">
           {t('correlation.title')}
+          {/* Terminal skin: `happened around the same time · Southeast Asia` (demo caption). */}
+          <span className="corr-regions" aria-hidden="true">
+            {' · '}
+            {regions.join(', ')}
+          </span>
         </h3>
         {regions.length === 0 && (
           <GadgetNotice
@@ -109,14 +114,14 @@ export function IntelligencePanel({ instance }: { instance: GadgetInstance }) {
         {correlation.isError && <GadgetNotice kind="error" message={t('intelligence.loadFailed')} className="px-0 py-1 text-xs" />}
         {correlation.data && (
           <>
-            <p className="text-xs text-muted-foreground">{t('correlation.interpretation')}</p>
+            <p className="corr-note text-xs text-muted-foreground">{t('correlation.interpretation')}</p>
             {correlation.data.missing_domains.length > 0 && (
               <p role="status" className="text-xs text-muted-foreground">
                 {t('correlation.missingDomains', { domains: correlation.data.missing_domains.join(', ') })}
               </p>
             )}
             {/* Coverage and uncertainty are method detail: one click away, groups lead. */}
-            <details className="text-xs text-muted-foreground">
+            <details className="corr-details text-xs text-muted-foreground">
               <summary className="cursor-pointer">{t('correlation.details')}</summary>
               <ul aria-label={t('correlation.coverageLabel')} className="mt-1 space-y-1">
                 {Object.entries(correlation.data.coverage).map(([domain, coverage]) => (

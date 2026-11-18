@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLocalPref } from '@/core/use-local-pref';
+import { useSkin } from '@/core/use-skin';
 import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LiveMapOverview } from './gadgets/live-map-gadget';
@@ -12,6 +13,33 @@ import { DashboardPanel } from './dashboard-panel';
 const MAP_COLLAPSED_KEY = 'umwelt.dashboard.mapCollapsed';
 const MAP_PANEL_ID = 'dashboard-overview-map';
 const COLLAPSE_VALUES = ['0', '1'] as const;
+
+/**
+ * Collapse/expand control of the Overview map; disclosure semantics (aria-expanded) with a stable label per state.
+ * `iconOnly` (terminal skin, expanded) shows just the icon inside the map title bar; the label stays as the accessible name.
+ */
+function MapToggle({ collapsed, iconOnly, onToggle }: { collapsed: boolean; iconOnly: boolean; onToggle: () => void }) {
+  const t = useTranslations('dashboard');
+  return (
+    <Button
+      type="button"
+      variant={iconOnly ? 'ghost' : 'outline'}
+      size={iconOnly ? 'icon' : 'sm'}
+      className={iconOnly ? undefined : 'h-8 gap-1 bg-card px-2 text-xs'}
+      aria-label={iconOnly ? t('collapseMap') : undefined}
+      aria-expanded={!collapsed}
+      aria-controls={collapsed ? undefined : MAP_PANEL_ID}
+      onClick={onToggle}
+    >
+      {collapsed ? (
+        <PanelLeftOpen className="h-3.5 w-3.5" aria-hidden="true" />
+      ) : (
+        <PanelLeftClose className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
+      {!iconOnly && (collapsed ? t('expandMap') : t('collapseMap'))}
+    </Button>
+  );
+}
 
 /** Fixed desktop map beside an independently scrolling Overview gadget panel; compact screens switch views. */
 export function DashboardOverview({
@@ -37,25 +65,10 @@ export function DashboardOverview({
   // Desktop-only: the compact Map | Gadgets tab switch already lets small screens hide the map.
   const [collapsedFlag, setCollapsedFlag] = useLocalPref<'0' | '1'>(MAP_COLLAPSED_KEY, '0', COLLAPSE_VALUES);
   const collapsed = collapsedFlag === '1';
+  const terminal = useSkin() === 'terminal';
   const [compactView, setCompactView] = useState<'map' | 'gadgets'>('map');
-  /** Collapse/expand control; disclosure semantics (aria-expanded) with a stable label per state. */
   const toggle = (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className="h-8 gap-1 bg-card px-2 text-xs"
-      aria-expanded={!collapsed}
-      aria-controls={collapsed ? undefined : MAP_PANEL_ID}
-      onClick={() => setCollapsedFlag(collapsed ? '0' : '1')}
-    >
-      {collapsed ? (
-        <PanelLeftOpen className="h-3.5 w-3.5" aria-hidden="true" />
-      ) : (
-        <PanelLeftClose className="h-3.5 w-3.5" aria-hidden="true" />
-      )}
-      {collapsed ? t('expandMap') : t('collapseMap')}
-    </Button>
+    <MapToggle collapsed={collapsed} iconOnly={terminal && !collapsed} onToggle={() => setCollapsedFlag(collapsed ? '0' : '1')} />
   );
   const map = (
     <div id={MAP_PANEL_ID} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
@@ -99,6 +112,7 @@ export function DashboardOverview({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {collapsed && !editMode && <div className="mb-2 flex justify-end">{toggle}</div>}
       <div
+        data-overview-split=""
         className={`flex min-h-0 min-w-0 flex-1 gap-4 ${collapsed ? '' : 'min-[1100px]:grid min-[1100px]:grid-cols-[minmax(0,45fr)_minmax(0,55fr)]'}`}
       >
         {!editMode && !collapsed && map}

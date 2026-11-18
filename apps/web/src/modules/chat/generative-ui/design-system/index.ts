@@ -628,17 +628,32 @@ SVG diagrams and charts:
 `.trim();
 
 /**
+ * Custom property overrides (`--name` to a CSS value) that replace the sandbox's built-in palette, for example the
+ * terminal skin's colours and mono font read from the host document. Values are written into a `<style>` element, so
+ * producers must validate them first (see `sandbox/terminal-palette.ts`).
+ */
+export type SandboxPalette = Readonly<Record<string, string>>;
+
+/**
  * Builds the complete sandbox stylesheet for a specific active theme (`light` or `dark`),
  * pinning `:root` to the active theme's tokens so the sandboxed iframe matches the host's
  * explicit theme preference even when the OS `prefers-color-scheme` differs.
  *
+ * When `palette` has entries they form the last block of the sheet, so they override the theme tokens, the `html.dark`
+ * block and the `prefers-color-scheme` block. The `:root:root` selector (0,2,0) ties with the
+ * `:root:not([data-theme="light"])` dark rule and comes later in the sheet, so the palette wins by source order.
+ *
  * @param theme - Active Umwelt-OS theme (`'light'` or `'dark'`). Defaults to `'light'`.
+ * @param palette - Optional custom property overrides; when empty or omitted the output is the theme sheet unchanged.
  * @returns Complete CSS stylesheet string ready for `<style>` injection.
  */
-export function buildSandboxStylesheet(theme: SandboxTheme = 'light'): string {
+export function buildSandboxStylesheet(theme: SandboxTheme = 'light', palette: SandboxPalette = {}): string {
   const activeTokens = theme === 'dark' ? UMWELT_DARK_TOKENS : UMWELT_LIGHT_TOKENS;
   const activeRootCss = `:root {\n  color-scheme: ${theme};\n${formatTokenBlock(activeTokens)}\n  ${SHARED_ALIAS_DECLARATIONS}\n}`;
-  return `${activeRootCss}\n\n${THEME_CSS}\n\n${SVG_CLASSES_CSS}\n\n${FORM_STYLES_WITH_STAGGER_CSS}`;
+  const paletteEntries = Object.entries(palette);
+  const paletteCss =
+    paletteEntries.length > 0 ? `\n\n:root:root {\n${paletteEntries.map(([name, value]) => `  ${name}: ${value};`).join('\n')}\n}` : '';
+  return `${activeRootCss}\n\n${THEME_CSS}\n\n${SVG_CLASSES_CSS}\n\n${FORM_STYLES_WITH_STAGGER_CSS}${paletteCss}`;
 }
 
 /**

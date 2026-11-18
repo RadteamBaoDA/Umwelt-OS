@@ -34,6 +34,8 @@ from modules.chat import web_search as web
 from modules.chat._public.scheduled_task_threads import latest_task_brief
 from modules.chat._worker.base import (
     _CHAT_ROLE,
+    MAX_DATA_QUERY_ROUNDS,
+    MAX_SKILL_CALLS_PER_ROUND,
     WEB_SEARCH_NO_RESULTS_PROMPT,
     WEB_SEARCH_UNAVAILABLE_PROMPT,
     ResponseNoLongerActive,
@@ -500,6 +502,8 @@ class _ModelSetup:
     # Image-search hits listed to the model as img1..imgN (empty unless remote media is permitted this turn).
     web_images: tuple[web.WebImage, ...] = ()
     task_draft_on: bool = False  # offer draft_scheduled_task (plain chat only)
+    # Owner IANA timezone (None when unset); reused by the db-query tool to read date-only filters.
+    owner_timezone: str | None = None
 
     def base_messages(self, with_ui_prompt: bool) -> list[dict[str, Any]]:
         """Initial chat messages; the Generative UI prompt is included only while tools are offered."""
@@ -702,15 +706,59 @@ def _compose_system_text(
     return system_text + _web_prompt_suffix(turn.web_run, len(answer_context.evidence), images)
 
 
+_FOLLOWUP_DATA_NOTE = (
+    " For follow-up questions about collected data, query again: numbers in earlier answers may be outdated "
+    "or incomplete."
+)
+
+
+_MAX_METRIC_HINT_PROVIDERS = 15
+_MAX_METRIC_HINT_CHARS = 600
+
+
+def _metric_catalog_hint(providers: Sequence[str]) -> str:
+    """Prompt sentence listing catalog metric ids for in-scope measurement providers (pure, bounded).
+
+    At most 15 providers and about 600 characters; providers with an open-ended metric set are marked
+    ``open`` (the listed ids are only common ones). Non-measurement providers are skipped; empty when none.
+    """
+    from modules.connectors import public as connectors
+
+    parts: list[str] = []
+    for provider in providers:
+        entry = connectors.provider_metrics(provider)
+        if entry is None:
+            continue
+        ids = ",".join(m.id for m in entry.metrics)
+        parts.append(f"{provider}: {ids}{' (open)' if entry.metrics_open else ''}")
+        if len(parts) >= _MAX_METRIC_HINT_PROVIDERS:
+            break
+    if not parts:
+        return ""
+    return (" Metric ids per measurement provider: " + "; ".join(parts) + ".")[
+        :_MAX_METRIC_HINT_CHARS
+    ]
+
+
 def _provider_hint(providers: Sequence[str]) -> str:
-    """Prompt sentence naming exact provider ids, the text_query limits and the 2-round budget (pure)."""
+    """Prompt sentence naming exact provider ids, the text_query limits and the query-round budget (pure).
+
+    The round and per-round call counts come from ``MAX_DATA_QUERY_ROUNDS`` and ``MAX_SKILL_CALLS_PER_ROUND``
+    so the prompt cannot drift from the enforced limits. Appends the metric catalog hint
+    (:func:`_metric_catalog_hint`). Empty when no provider is in scope.
+    """
     if not providers:
         return ""
     return (
         f" Active providers: {', '.join(providers)}. Filter with providers=[...] using these exact ids; "
         "text_query matches headline/body text only, not provider or topic names. "
-        "You have at most 2 tool rounds and at most 2 tool calls per round (extra calls get no data): "
-        "query every needed provider in your first call."
+        f"You have at most {MAX_DATA_QUERY_ROUNDS} rounds that query collected data and at most "
+        f"{MAX_SKILL_CALLS_PER_ROUND} tool calls per round (extra calls get no data): "
+        "query every needed provider in your first call. When the question names something these feeds may "
+        "hold (a CVE id, ticker, place, title or person), query before answering, even if you already know "
+        "an answer. Put each row's citation marker in the same sentence as every figure taken from it. "
+        "In sql mode select document_version_id with every row, or rows come back without a citation."
+        + _metric_catalog_hint(providers)
     )
 
 
@@ -738,7 +786,8 @@ def _gadget_note(
     """Prompt note about the Dashboard gadget scope or the enabled database query tool (pure).
 
     ``providers`` are the in-scope provider ids appended to the tool note so round 1 can use exact ids.
-    ``sql_on`` False drops the ``mode='sql'`` advice (the reader DSN is not configured).
+    ``sql_on`` False drops the ``mode='sql'`` advice (the reader DSN is not configured). Both tool-note
+    variants end with the follow-up rule: earlier answers about collected data may be stale, so re-query.
     """
     gadget_meta = (
         req_params.get("_gadget_scope")
@@ -750,7 +799,9 @@ def _gadget_note(
             f"\n\nThe user opened this chat from Dashboard gadget {str(gadget_meta.get('title') or '')[:200]!r} "
             f"(renderer={str(gadget_meta.get('renderer') or '')[:64]!r}, scope={_bounded_scope_json(gadget_meta.get('scope'))}). "
             f"Call `{TOOL_QUERY_COLLECTED_DATA}` when you need current or historical observations/records "
-            f"from the gadget's bound data sources." + _provider_hint(providers)
+            f"from the gadget's bound data sources."
+            + _provider_hint(providers)
+            + _FOLLOWUP_DATA_NOTE
         )
     if db_query_on:
         return (
@@ -763,6 +814,7 @@ def _gadget_note(
             )
             + "(a null url does not make a row uncitable)."
             + _provider_hint(providers)
+            + _FOLLOWUP_DATA_NOTE
         )
     return ""
 
@@ -907,6 +959,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         prior_messages=turn.prior_messages,
         web_images=web_images,
         task_draft_on=task_draft_on,
+        owner_timezone=owner_timezone,
     )
 
 

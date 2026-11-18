@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useMemo } from 'react';
 import type { Dashboard, DashboardPlacement, GadgetInstance } from './api';
+import { useSkin } from '@/core/use-skin';
 import { DashboardGrid } from './dashboard-grid';
 import { DashboardEmptyState } from './dashboard-panels';
 import { FirstRunSetup } from './first-run-setup';
@@ -10,6 +11,9 @@ import { LayoutEditor } from './layout-editor';
 import type { useGadgetMembership } from './use-gadget-membership';
 import type { useLayoutSave } from './use-layout-save';
 import type { LayoutSession } from './use-layout-session';
+
+/** Terminal Overview: a panel at least this wide (the 2/3 column at 1440px) keeps the desktop geometry instead of the tablet flow. */
+const TERMINAL_TABLET_MAX_WIDTH = 840;
 
 /** Operations produced by the layout hooks that the editor bar and grid consume. */
 export interface CanvasOperations {
@@ -103,6 +107,7 @@ interface CanvasProps {
 export function DashboardCanvas(props: CanvasProps) {
   const { ops, activeDashboard, visibleInstances, showFirstRun, isAdminViewer } = props;
   const { session, save } = ops;
+  const terminal = useSkin() === 'terminal';
   const visibleIds = useMemo(() => new Set(visibleInstances.map((instance) => instance.id)), [visibleInstances]);
   const panelPlacements = useMemo(
     () => session.draftPlacements.filter((placement) => visibleIds.has(placement.instance_id)),
@@ -148,6 +153,7 @@ export function DashboardCanvas(props: CanvasProps) {
       visibleInstanceIds={visibleInstances.map((instance) => instance.id)}
       isMobileView={session.currentBreakpoint === 'mobile'}
       isTabletView={true}
+      tabletMaxWidth={terminal ? TERMINAL_TABLET_MAX_WIDTH : undefined}
       onReadableProjectionChange={setPanelProjection}
       onGridMetricsChange={session.setGridMetrics}
       columns={session.layoutColumns}

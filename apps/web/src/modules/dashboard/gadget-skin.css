@@ -1,0 +1,846 @@
+/*
+ * Gadget frame skin: header and title ornaments for the terminal skin, and the data-refresh reveal.
+ * Presentation only. The reveal runs while use-gadget-reveal.ts holds data-reveal on .dashboard-gadget-body;
+ * the renderer root (its single child inside the host) and that root's children are what animate.
+ * Colours come from semantic tokens only.
+ */
+
+/* Terminal: raised header and a "── title ──" pane title. Default skin keeps the card header. */
+html[data-skin='terminal'] .gadget-header {
+  background: var(--raised);
+  min-height: 34px;
+  padding: 4px 8px 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Header icon buttons sit at 26px on fine pointers; coarse pointers keep the 44px touch target. */
+@media (pointer: fine) {
+  html[data-skin='terminal'] .gadget-header [data-slot='button'][data-size='icon'] {
+    width: 26px;
+    height: 26px;
+    min-width: 26px;
+    min-height: 26px;
+  }
+}
+
+html[data-skin='terminal'] .gadget-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.55;
+  color: var(--strong);
+}
+
+html[data-skin='terminal'] .gadget-title::before {
+  content: '── ' / '';
+  color: var(--control);
+}
+
+html[data-skin='terminal'] .gadget-title::after {
+  content: ' ──' / '';
+  color: var(--control);
+}
+
+@keyframes gadget-reveal-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes gadget-reveal-type {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+/*
+ * Default skin: fade. Longhands are used so the terminal override below changes only name, duration and
+ * timing, and keeps the stagger delay that --reveal-i supplies.
+ */
+.dashboard-gadget-body[data-reveal] > div:last-child > * > * {
+  animation-name: gadget-reveal-fade;
+  animation-duration: 260ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+  animation-delay: calc(var(--reveal-i, 0) * 45ms);
+}
+
+/* Terminal: each child types in character steps. */
+html[data-skin='terminal'] .dashboard-gadget-body[data-reveal] > div:last-child > * > * {
+  animation-name: gadget-reveal-type;
+  animation-duration: 360ms;
+  animation-timing-function: steps(24, end);
+}
+
+/* Stagger: children reveal top to bottom, 45ms apart, for the first 14. */
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(1) {
+  --reveal-i: 0;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(2) {
+  --reveal-i: 1;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(3) {
+  --reveal-i: 2;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(4) {
+  --reveal-i: 3;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(5) {
+  --reveal-i: 4;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(6) {
+  --reveal-i: 5;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(7) {
+  --reveal-i: 6;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(8) {
+  --reveal-i: 7;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(9) {
+  --reveal-i: 8;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(10) {
+  --reveal-i: 9;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(11) {
+  --reveal-i: 10;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(12) {
+  --reveal-i: 11;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(13) {
+  --reveal-i: 12;
+}
+.dashboard-gadget-body[data-reveal] > div:last-child > * > *:nth-child(14) {
+  --reveal-i: 13;
+}
+
+/* Reduced motion: no reveal, whichever skin is active. */
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-gadget-body[data-reveal] > div:last-child > * > * {
+    animation: none !important;
+  }
+}
+
+/* Rolling figures (rolling-number.tsx): the terminal skin flashes the background green or red in the direction of
+   change while the digits settle (about 500 ms). The attribute is removed when the roll ends, and the default skin
+   never sets it. Reduced motion removes the flash. */
+html[data-skin='terminal'] [data-roll='up'] {
+  animation: roll-pulse-up 500ms ease-out;
+}
+html[data-skin='terminal'] [data-roll='down'] {
+  animation: roll-pulse-down 500ms ease-out;
+}
+@keyframes roll-pulse-up {
+  from {
+    background-color: color-mix(in srgb, var(--positive) 28%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@keyframes roll-pulse-down {
+  from {
+    background-color: color-mix(in srgb, var(--negative) 28%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-skin='terminal'] [data-roll] {
+    animation: none;
+  }
+}
+
+/* Terminal title bar: "● ── title ── meta" (demo .pane-title). The status dot reflects bound-source health
+   (data-tone: ok, warn, danger) and the meta is the muted provenance text. Both are decorative duplicates of
+   information that stays available as text, so they are hidden in the default skin. */
+.gadget-dot,
+.gadget-meta {
+  display: none;
+}
+html[data-skin='terminal'] .gadget-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  background: var(--positive);
+}
+html[data-skin='terminal'] .gadget-dot[data-tone='warn'] {
+  background: var(--warning);
+}
+html[data-skin='terminal'] .gadget-dot[data-tone='danger'] {
+  background: var(--danger);
+}
+html[data-skin='terminal'] .gadget-meta {
+  display: inline;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* The meta never ellipsizes mid-word: when it does not fit beside the title it wraps to a second line that the
+   one-line clip hides (the full text stays in the provenance footer, which is visually hidden but readable). */
+html[data-skin='terminal'] .gadget-head-main {
+  flex-wrap: wrap;
+  max-height: 26px;
+  overflow: hidden;
+}
+/* The provenance footer moves into the title-bar meta; it stays in the accessibility tree (visually hidden). */
+html[data-skin='terminal'] [data-testid='gadget-provenance'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Title keeps its width; the muted meta is the part that truncates. */
+html[data-skin='terminal'] .gadget-header .gadget-head-id {
+  flex-shrink: 0; /* a title wider than its pane ellipsizes (truncate) instead of overflowing the card */
+}
+
+/* Icon toggles inside gadgets (List | Cards): the pressed segment is a subtle tint with accent ink, not a filled
+   accent box (developer-theme .dash-seg). */
+html[data-skin='terminal'] .dashboard-gadget-body [data-slot='button'][data-size='icon'][aria-pressed='true'] {
+  background: var(--active);
+  color: var(--accent);
+}
+
+/* News story log (story-list.tsx, embedded list view): demo `.log li` rows of time, level, text and #tag. */
+html[data-skin='terminal'] .story-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+html[data-skin='terminal'] .story-log-row {
+  display: grid;
+  grid-template-columns: 9ch 6ch minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 4px 6px;
+}
+html[data-skin='terminal'] .story-log-row:hover {
+  background: var(--active);
+}
+html[data-skin='terminal'] .story-log-row > time {
+  color: var(--muted);
+}
+html[data-skin='terminal'] .story-log-info {
+  color: var(--info);
+}
+html[data-skin='terminal'] .story-log-new {
+  color: var(--positive);
+}
+html[data-skin='terminal'] .story-log-title {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+html[data-skin='terminal'] .story-log-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+html[data-skin='terminal'] .story-log-tag {
+  font-size: 11px;
+  color: var(--info);
+  text-decoration: none;
+}
+html[data-skin='terminal'] .story-log-tag::before {
+  content: '#' / '';
+}
+@media (pointer: coarse) {
+  html[data-skin='terminal'] .story-log-title,
+  html[data-skin='terminal'] .story-log-tag {
+    min-height: 44px;
+  }
+}
+
+/* Highlights/watchlist summary: big alerting count plus a muted tail (demo `.metric small`). */
+html[data-skin='terminal'] .watch-figure {
+  font-size: 34px;
+  line-height: 1.1;
+}
+html[data-skin='terminal'] .watch-figure-tail {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* Highlights rule rows: plain `HIT  text` log rows (demo `.log li` with a 6ch level column), no severity-edge cards. */
+html[data-skin='terminal'] .watch-hit-row {
+  display: grid;
+  grid-template-columns: 6ch minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 0;
+}
+html[data-skin='terminal'] .watch-hit-level {
+  color: var(--danger);
+}
+html[data-skin='terminal'] .watch-hit-row[data-status='matched'] .watch-hit-level {
+  color: var(--warning);
+}
+html[data-skin='terminal'] .watch-hit-row[data-status='monitoring'] :is(.watch-hit-level, .watch-hit-text) {
+  color: var(--muted);
+}
+/* The rule filter reads as a `> filter` prompt (demo `.dash-filter`): no search icon, a caret in its place. */
+html[data-skin='terminal'] .watch-filter > svg {
+  display: none;
+}
+html[data-skin='terminal'] .watch-filter::before {
+  content: '>' / '';
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+
+/* Watchlist table (provider observation list): `SYMBOL  LAST  CHG` header and rows (demo `table.data`). */
+html[data-skin='terminal'] .obs-term-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+html[data-skin='terminal'] .obs-term-head {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  text-transform: uppercase;
+}
+html[data-skin='terminal'] .obs-term-list > li {
+  border-color: var(--rule);
+}
+html[data-skin='terminal'] .obs-term-list > li:hover {
+  background: var(--active);
+}
+html[data-skin='terminal'] .obs-term-name {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--strong, var(--text));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .obs-term-last,
+html[data-skin='terminal'] .obs-term-chg {
+  text-align: right;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .obs-term-chg {
+  min-width: 9ch;
+}
+html[data-skin='terminal'] .obs-term-chg[data-tone='positive'] {
+  color: var(--positive);
+}
+html[data-skin='terminal'] .obs-term-chg[data-tone='negative'] {
+  color: var(--negative);
+}
+
+/* Single-series chart gadget: 24px figure with a small change tail, then the history line (demo `.pane.chart`). */
+html[data-skin='terminal'] .obs-term-figure {
+  margin: 0 0 6px;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--strong, var(--text));
+  font-variant-numeric: tabular-nums;
+}
+html[data-skin='terminal'] .obs-term-figure > small {
+  margin-left: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .obs-term-figure > small[data-tone='positive'] {
+  color: var(--positive);
+}
+html[data-skin='terminal'] .obs-term-figure > small[data-tone='negative'] {
+  color: var(--negative);
+}
+
+/* Weather gadget (weather-panel.tsx WeatherTerminal): big figure with a muted unit, one muted summary line, then the
+   next-24h line with `now … +24h` ticks (demo `.pane.weather`). */
+html[data-skin='terminal'] .weather-term-figure {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--strong, var(--text));
+  font-variant-numeric: tabular-nums;
+}
+html[data-skin='terminal'] .weather-term-figure > small {
+  margin-left: 2px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .weather-term-line {
+  font-size: 12px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .weather-term-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .weather-term-attr {
+  font-size: 10px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+/* Hover-revealed header actions (Ask, Expand) overlay the right edge of the title bar instead of reserving width,
+   so titles and meta get the full row; edit mode keeps its always-visible actions in the flow. */
+@media (pointer: fine) {
+  html[data-skin='terminal'] .gadget-header {
+    position: relative;
+  }
+  html[data-skin='terminal'] .gadget-head-actions:not([data-edit]) {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    z-index: 1;
+    transform: translateY(-50%);
+  }
+}
+
+/* The highlight severity badge duplicates the HIT rows (and their rule levels) in the terminal title bar; its text stays in the DOM. */
+html[data-skin='terminal'] .gadget-header .gadget-severity {
+  display: none;
+}
+
+/* Title-bar slot (components/gadget-title-slot.tsx): gadget toolbars (view toggle, refresh, unread only, select) sit at
+   the right of the pane title, before the hover actions. The title/meta (flex-1, min-w-0) give way first; the slot
+   only ever clips its own overflow. With a populated slot the hover actions stay in flow so they never cover it. */
+html[data-skin='terminal'] .gadget-head-slot {
+  display: flex;
+  min-width: 0;
+  flex-shrink: 1;
+  align-items: center;
+  overflow: hidden;
+}
+html[data-skin='terminal'] .gadget-head-slot:empty {
+  display: none;
+}
+html[data-skin='terminal'] .gadget-head-slot .gadget-toolbar {
+  gap: 4px;
+}
+html[data-skin='terminal'] .gadget-head-slot [data-slot='button']:not([data-size='icon']) {
+  height: 24px;
+  padding-inline: 6px;
+  font-size: 12px;
+}
+@media (pointer: fine) {
+  html[data-skin='terminal'] .gadget-header:has(.gadget-head-slot > *) .gadget-head-actions:not([data-edit]) {
+    position: static;
+    transform: none;
+  }
+}
+
+/* The embedded story gadget's slim meta row is empty once its toolbar and note moved into the title bar and foot. */
+html[data-skin='terminal'] .story-meta-row {
+  display: none;
+}
+html[data-skin='terminal'] .story-meta-row:has(> :not(:empty, .feed-view-narrow)) {
+  display: flex;
+}
+
+/* Pane foot (gadget-frame TerminalFoot): note left, "updated ..." right (demo `.pane-foot`). */
+html[data-skin='terminal'] .gadget-foot {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .gadget-foot-time {
+  text-transform: lowercase; /* design: "updated 2 min ago" */
+}
+html[data-skin='terminal'] .gadget-foot-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Source chips (feed-source-tabs.tsx): one `[x] name` / `[ ] name` chip per source instead of underlined tabs
+   (developer-theme `.chips`). The active chip is accent ink; the strip never draws the tab underline. */
+html[data-skin='terminal'] .feed-source-tabs {
+  gap: 14px;
+  padding: 2px 0 8px;
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'] {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  text-transform: lowercase;
+  border: 0;
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger']::before {
+  content: '[ ] ' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'][data-state='active'] {
+  font-weight: 400;
+  color: var(--accent);
+}
+html[data-skin='terminal'] .feed-source-tabs [data-slot='tabs-trigger'][data-state='active']::before {
+  content: '[x] ' / '';
+  color: var(--accent);
+}
+
+/* Chart range chips (range-chips.tsx): `[x] 7D` chips like the source chips (developer-theme `.chips`). */
+html[data-skin='terminal'] .range-chips {
+  gap: 14px;
+  margin: 6px 0;
+}
+html[data-skin='terminal'] .range-chip {
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+html[data-skin='terminal'] .range-chip::before {
+  content: '[ ] ' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .range-chip[aria-pressed='true'] {
+  color: var(--accent);
+}
+html[data-skin='terminal'] .range-chip[aria-pressed='true']::before {
+  content: '[x] ' / '';
+  color: var(--accent);
+}
+html[data-skin='terminal'] .range-chip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Telegram message log (feed-parts.tsx TerminalMessageRow, demo `.dash-msg`): `● channel  clock` over the message. */
+html[data-skin='terminal'] .msg-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+html[data-skin='terminal'] .msg-row {
+  display: grid;
+  grid-template-columns: 1.5ch minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: baseline;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--rule);
+}
+html[data-skin='terminal'] .msg-row:last-child {
+  border-bottom: 0;
+}
+html[data-skin='terminal'] .msg-dot {
+  color: var(--positive);
+}
+html[data-skin='terminal'] .msg-row[data-read='true'] .msg-dot {
+  color: var(--muted);
+}
+html[data-skin='terminal'] .msg-from {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  color: var(--strong, var(--text));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .msg-row[data-read='true'] .msg-from {
+  font-weight: 400;
+}
+html[data-skin='terminal'] .msg-time {
+  font-size: 12px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .msg-body {
+  grid-column: 2 / -1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .msg-body:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* Record table (table-panel.tsx): TITLE / SOURCE / PUBLISHED columns with an uppercase muted header (demo `table.data`). */
+html[data-skin='terminal'] .tbl-list {
+  --tbl-cols: minmax(0, 1fr) 12ch 14ch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+html[data-skin='terminal'] .tbl-head,
+html[data-skin='terminal'] .tbl-row {
+  display: grid;
+  grid-template-columns: var(--tbl-cols);
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+html[data-skin='terminal'] .tbl-head {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+html[data-skin='terminal'] .tbl-head > span:last-child,
+html[data-skin='terminal'] .tbl-date {
+  text-align: right;
+}
+html[data-skin='terminal'] .tbl-row {
+  border-color: var(--rule);
+}
+html[data-skin='terminal'] .tbl-row:hover {
+  background: var(--active);
+}
+html[data-skin='terminal'] .tbl-row > div:first-child {
+  min-width: 0;
+  flex-basis: auto;
+}
+html[data-skin='terminal'] .tbl-row > div:first-child p:first-child {
+  font-weight: 600;
+  color: var(--strong, var(--text));
+}
+html[data-skin='terminal'] .tbl-excerpt {
+  display: none;
+}
+html[data-skin='terminal'] .tbl-src {
+  color: var(--text);
+}
+html[data-skin='terminal'] .tbl-date {
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tasks (task-list.tsx): flat `[ ] title        due` rows (demo `.dash-task`), no card borders. */
+html[data-skin='terminal'] .task-list {
+  gap: 0;
+}
+html[data-skin='terminal'] .task-row {
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+html[data-skin='terminal'] .task-row > [data-slot='button'] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 0;
+}
+html[data-skin='terminal'] .task-row-title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+html[data-skin='terminal'] .task-row-meta {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .task-row-meta[data-due='overdue'] {
+  color: var(--danger);
+}
+html[data-skin='terminal'] .task-row:has([data-state='checked']) .task-row-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Goals (goal-list.tsx): one flat row per goal, ASCII bar under the title (demo `.dash-goal`). */
+html[data-skin='terminal'] .goal-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+html[data-skin='terminal'] .goal-row {
+  padding: 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+}
+html[data-skin='terminal'] .goal-row-head > strong {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+html[data-skin='terminal'] .goal-row-summary {
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Map evidence (map-gadget.tsx): `label · region / time` left, value right; the aria-pressed bracket prefix
+   the gadget buttons get is not a toggle here. */
+html[data-skin='terminal'] .map-evidence-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  height: auto;
+  min-height: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+html[data-skin='terminal'] .map-evidence-row::before {
+  content: none !important;
+}
+html[data-skin='terminal'] .map-evidence-list {
+  border-color: var(--rule);
+}
+
+/* GitHub activity (github-project-gadget.tsx): `TYPE  title  time` log rows (demo `.log li` with an 8ch level). */
+html[data-skin='terminal'] .github-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+html[data-skin='terminal'] .github-event {
+  display: grid;
+  grid-template-columns: 9ch minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 4px 6px;
+  font-size: 13px;
+  border: 0;
+}
+html[data-skin='terminal'] .github-event-head {
+  display: contents;
+}
+html[data-skin='terminal'] .github-event-type {
+  order: 1;
+  padding: 0;
+  font-size: 13px;
+  color: var(--info);
+  background: none;
+}
+html[data-skin='terminal'] .github-event-title {
+  order: 2;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+}
+html[data-skin='terminal'] .github-event-head > time {
+  order: 3;
+  grid-column: 2 / -1;
+  font-size: 11px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .github-event-links {
+  order: 4;
+  grid-column: 2 / -1;
+  font-size: 11px;
+}
+html[data-skin='terminal'] .map-evidence-row time {
+  display: inline;
+  margin-left: 8px;
+}
+
+/* Collect now in the title bar (gadget-frame.tsx SourceHealthBadge): `[ collect now ]` like the demo's feed pane. */
+html[data-skin='terminal'] .gadget-collect {
+  text-transform: lowercase;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .gadget-collect::before {
+  content: '[ ' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .gadget-collect::after {
+  content: ' ]' / '';
+  white-space: pre;
+  color: var(--control);
+}
+html[data-skin='terminal'] .gadget-collect:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+/* Narrow terminal feed panes: the List | Cards toggle leaves the title bar (so the muted meta and `[ collect now ]`
+   fit) and shows as a right-aligned row at the top of the body instead (feed-parts.tsx FeedToolbar). */
+html[data-skin='terminal'] .feed-view-narrow {
+  display: none;
+}
+@container (max-width: 40rem) {
+  html[data-skin='terminal'] .gadget-head-slot .feed-view-slot {
+    display: none;
+  }
+  /* With the toolbar copy gone from the title bar, the hover actions (Ask, Expand) overlay the right edge again (as in
+     panes without a toolbar) so the meta and `[ collect now ]` keep the width; they still appear on hover and focus. */
+  /* The emptied toolbar slot, its flex gap and the roomy header gap/button padding would cost the meta ~16px. */
+  html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) {
+    gap: 4px;
+  }
+  html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) .gadget-head-slot {
+    display: none;
+  }
+  html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) .gadget-collect {
+    padding-inline: 4px;
+  }
+  @media (pointer: fine) {
+    html[data-skin='terminal'] .gadget-header:has(.feed-view-slot) .gadget-head-actions:not([data-edit]) {
+      position: absolute;
+      transform: translateY(-50%);
+    }
+  }
+  html[data-skin='terminal'] .story-meta-row:has(> .feed-view-narrow) {
+    display: flex;
+  }
+  html[data-skin='terminal'] .feed-view-narrow {
+    display: flex;
+    justify-content: flex-end;
+    padding: 2px 8px 0;
+  }
+}

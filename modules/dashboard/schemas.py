@@ -1,5 +1,6 @@
 """Strict, bounded request and configuration schemas for saved dashboards."""
 
+import math
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -12,9 +13,17 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 
+from modules.connectors.public import (
+    AnimeSeason,
+    ContentRating,
+    MediaFormat,
+    MediaGenre,
+    MediaLanguage,
+)
 from modules.sources.public import GadgetSourceSelection
 
 MAX_DASHBOARDS_PER_OWNER = 50
@@ -31,6 +40,38 @@ MAX_LOOKBACK_DAYS = 3660
 
 Revision = Annotated[StrictInt, Field(ge=1, le=9_007_199_254_740_991)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+IsoCountryCode = Annotated[str, Field(pattern=r"^[A-Z]{2}$")]
+MediaType = Literal[
+    "movie",
+    "anime",
+    "manga",
+    "manhwa",
+    "manhua",
+    "light_novel",
+    "book",
+    "audiobook",
+    "youtube",
+    "tv",
+    "podcast",
+    "music",
+    "game",
+]
+MediaReleaseStatus = Literal["upcoming", "airing", "released", "completed", "hiatus"]
+GadgetReleaseStatusFilter = Literal["all", "upcoming", "airing", "released", "completed", "hiatus"]
+GadgetGroupBy = Literal["none", "date", "media_type", "source"]
+
+
+def _validate_finite_min_rating(value: object) -> object:
+    """Reject booleans and non-finite floats before Pydantic coerces ``min_rating`` bounds.
+
+    Python treats ``bool`` as an ``int`` subclass and Pydantic ``float`` can parse ``nan``/``inf``;
+    rejecting both keeps ``min_rating`` strictly within finite ``[0.0, 100.0]`` or ``None``.
+    """
+    if isinstance(value, bool):
+        raise ValueError("min_rating must not be a boolean")
+    if isinstance(value, (int, float)) and not math.isfinite(float(value)):
+        raise ValueError("min_rating must be a finite number")
+    return value
 
 
 class StrictConfiguration(BaseModel):
@@ -95,6 +136,22 @@ class GadgetScope(StrictConfiguration):
         default_factory=list, max_length=32
     )
     lookback_days: StrictInt | None = Field(default=None, ge=1, le=MAX_LOOKBACK_DAYS)
+    media_types: list[MediaType] = Field(default_factory=list, max_length=13)
+    countries: list[IsoCountryCode] = Field(default_factory=list, max_length=24)
+    genres: list[MediaGenre] = Field(default_factory=list, max_length=16)
+    languages: list[MediaLanguage] = Field(default_factory=list, max_length=16)
+    formats: list[MediaFormat] = Field(default_factory=list, max_length=16)
+    content_ratings: list[ContentRating] = Field(default_factory=list, max_length=8)
+    release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
+    release_season: AnimeSeason | None = None
+    min_rating: float | None = Field(default=None, ge=0.0, le=100.0, allow_inf_nan=False)
+    release_window_days: StrictInt | None = Field(default=None, ge=1, le=90)
+
+    @field_validator("min_rating", mode="before")
+    @classmethod
+    def validate_min_rating(cls, value: object) -> object:
+        """Ensure ``min_rating`` is not a boolean or non-finite float before range validation."""
+        return _validate_finite_min_rating(value)
 
     @model_validator(mode="after")
     def ensure_unique_selectors(self) -> "GadgetScope":
@@ -106,10 +163,12 @@ class GadgetScope(StrictConfiguration):
 
 
 class GadgetFilters(StrictConfiguration):
-    """Persist bounded text filters and map display preferences, never executable queries.
+    """Persist bounded text, map display, and media filters, never executable queries.
 
     ``map_engine`` and ``show_precise_locations`` are renderer preferences only;
     map data authorization and source/date/region bounds are validated separately.
+    All scalar media filters default to ``None`` and list filters default to ``[]`` so
+    non-media list gadgets ignore them until explicitly configured.
     """
 
     keywords: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
@@ -123,6 +182,40 @@ class GadgetFilters(StrictConfiguration):
     map_mode: Literal["live", "selected_sources"] | None = None
     map_weather_layer: Literal["temperature", "precipitation", "wind", "clouds"] | None = None
     show_precise_locations: StrictBool = False
+    media_type: MediaType | None = None
+    media_types: list[MediaType] = Field(default_factory=list, max_length=13)
+    release_status: GadgetReleaseStatusFilter | None = None
+    group_by: GadgetGroupBy | None = None
+    countries: list[IsoCountryCode] = Field(default_factory=list, max_length=24)
+    genres: list[MediaGenre] = Field(default_factory=list, max_length=16)
+    languages: list[MediaLanguage] = Field(default_factory=list, max_length=16)
+    formats: list[MediaFormat] = Field(default_factory=list, max_length=16)
+    content_ratings: list[ContentRating] = Field(default_factory=list, max_length=8)
+    release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
+    release_season: AnimeSeason | None = None
+    min_rating: float | None = Field(default=None, ge=0.0, le=100.0, allow_inf_nan=False)
+
+    @field_validator("min_rating", mode="before")
+    @classmethod
+    def validate_min_rating(cls, value: object) -> object:
+        """Ensure ``min_rating`` is not a boolean or non-finite float before range validation."""
+        return _validate_finite_min_rating(value)
+
+    @model_validator(mode="after")
+    def ensure_unique_filters(self) -> "GadgetFilters":
+        """Reject duplicate entries in multi-select media filters for canonical persistence."""
+        for name in (
+            "media_types",
+            "countries",
+            "genres",
+            "languages",
+            "formats",
+            "content_ratings",
+        ):
+            values = getattr(self, name)
+            if len(values) != len(set(values)):
+                raise ValueError(f"{name} must contain distinct values")
+        return self
 
 
 MAX_COOLDOWN_MINUTES = 7 * 24 * 60

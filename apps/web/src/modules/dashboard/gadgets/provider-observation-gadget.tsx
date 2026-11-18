@@ -1,6 +1,7 @@
 'use client';
 
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQueries, useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
@@ -16,6 +17,28 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatMetricLabel } from './metric-label';
 import { metricBetterDirection } from './metric-direction';
 import { SeriesRow } from './series-row';
+import { RangeChips } from './range-chips';
+import {
+  axisDateFormatter,
+  axisValueFormatter,
+  MAX_LOOKBACK_DAYS,
+  nearestRange,
+  rangeLookbackDays,
+  type ChartRangeId,
+} from './chart-range';
+import { Sparkline, type SparklineProps } from './sparkline';
+import {
+  currencyPrefix,
+  formatTerminalChange,
+  formatTerminalCompact,
+  formatTerminalPercent,
+  formatTerminalValue,
+  TerminalObservationCells,
+  TerminalObservationFigure,
+  TerminalSparkRow,
+  terminalObservationLayout,
+} from './observation-terminal';
+import { useSkin } from '@/core/use-skin';
 import { getDateTimeFormat } from '@/modules/shared';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
@@ -127,8 +150,9 @@ function boundedIndexSuffix(item: WorldObservation): string | null {
  * Loads one observation window per bound source and merges them (latest value + history per series).
  * Reports provider attribution and the newest collection time as the frame footer.
  *
- * @returns Source ids, aggregate query status, merged latest rows, per-series history, per-source info and the
- * connector configuration query (its polling interval drives the stale flag).
+ * @returns Source ids, aggregate query status, merged latest rows, per-series history, per-source info, the
+ * connector configuration query (its polling interval drives the stale flag) and the session-local chart `range`
+ * (pressed chip + setter; a chip changes the lookback of the same observations query, the delta definition is unchanged).
  */
 function useProviderObservations(instance: GadgetInstance) {
   const t = useTranslations('dashboard');
@@ -144,7 +168,10 @@ function useProviderObservations(instance: GadgetInstance) {
     catalog,
     sources,
   } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, METRIC_FALLBACK_LOOKBACK_DAYS, true);
-  const lookbackDays = Math.min(rawLookback, 3660);
+  // Range chip choice is session-local UI state (never saved to the layout); unset it follows the effective lookback.
+  const [pickedRange, setPickedRange] = useState<ChartRangeId | null>(null);
+  const range = pickedRange ?? nearestRange(Math.min(rawLookback, MAX_LOOKBACK_DAYS));
+  const lookbackDays = pickedRange ? rangeLookbackDays(pickedRange) : Math.min(rawLookback, MAX_LOOKBACK_DAYS);
   const queries = useQueries({
     queries: sourceIds.map((id) => {
       const entry = sources[id]?.provider ? catalog.data?.[sources[id].provider as string] : undefined;
@@ -162,6 +189,8 @@ function useProviderObservations(instance: GadgetInstance) {
         },
         enabled: lookbackReady,
         staleTime: 60_000,
+        // Switching range keeps the previous window on screen instead of flashing the loading skeleton.
+        placeholderData: keepPreviousData,
       };
     }),
   });
@@ -184,7 +213,21 @@ function useProviderObservations(instance: GadgetInstance) {
     items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null),
     providerNames ? t('providerObs.attribution', { provider: providerNames }) : null,
   );
-  return { sourceIds, sourceId, query, items, history, sources, sourceQuery };
+  return { sourceIds, sourceId, query, items, history, sources, sourceQuery, range: { value: range, onChange: setPickedRange } };
+}
+
+/** Pressed range chip plus its setter, shared by the single-series layouts. */
+type RangeControl = { value: ChartRangeId; onChange: (id: ChartRangeId) => void };
+
+/** Axes for the single-series chart: compact y ticks and first/last date labels computed from the plotted points. */
+function chartAxes(points: ChartDataPoint[] | undefined, locale: string, timeZone: string): SparklineProps['axes'] {
+  if (!points || points.length < 2) return undefined;
+  const values = points.map((p) => p.value);
+  const times = points.map((p) => Date.parse(String(p.timestamp)));
+  return {
+    y: axisValueFormatter(Math.min(...values), Math.max(...values), locale),
+    x: axisDateFormatter(Math.max(...times) - Math.min(...times), locale, timeZone),
+  };
 }
 
 /** Reference date / annual period lines and the provider attribution links (hidden in small containers). */
@@ -251,24 +294,32 @@ function useObservationFormatters(sources: ReturnType<typeof useEffectiveLookbac
   return { t, display, timesTitle, labelOf, unitOf };
 }
 
-/** One reading as a KPI (single series), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
-function ObservationRows({
+/**
+ * Terminal skin of the observation gadget: one reading is the chart figure (`71,340 ▲ +3.12%` over the history line),
+
+ * two or three are sparkline rows (`name ~line~ 71.3K +3.1%`, small metric panes), more are a `SYMBOL  LAST  CHG` table
+ * with full-precision values (never the KPI strip or sparkline column).
+ * Keeps the `observation-row` test ids and the observed/published/collected tooltips of the default layout.
+ * The single-series figure also shows the range chips and decorative chart axes.
+ */
+function TerminalObservationRows({
   instance,
   items,
   history,
-  sources,
-  sourceIds,
+  fmt,
+  range,
 }: {
   instance: GadgetInstance;
   items: WorldObservation[];
   history: ReturnType<typeof historyPerSeries>;
-  sources: ReturnType<typeof useEffectiveLookback>['sources'];
-  sourceIds: string[];
+  range: RangeControl;
+  fmt: Pick<ReturnType<typeof useObservationFormatters>, 't' | 'display' | 'timesTitle' | 'labelOf'>;
 }) {
-  const { t, display, timesTitle, labelOf, unitOf } = useObservationFormatters(sources, sourceIds);
-  const single = items.length === 1 ? items[0] : null;
-  const kpiStrip = items.length >= 2 && items.length <= 8; // wide gadgets show these as one KPI row
-  if (single) {
+  const { t, display, timesTitle, labelOf } = fmt;
+  const changeOf = (item: WorldObservation) =>
+    formatTerminalChange(deltaVsPrevious(history.get(seriesKey(item))), metricBetterDirection(item.metric));
+  if (items.length === 1) {
+    const single = items[0];
     return (
       <div
         title={timesTitle(single)}
@@ -276,19 +327,130 @@ function ObservationRows({
         role="group"
         aria-label={single.value === null ? t('weather.missingValue') : `${single.value} ${single.currency ?? single.unit}`}
       >
-        <GadgetKpi
+        <TerminalObservationFigure
           label={labelOf(single)}
-          value={single.value}
-          currency={single.currency ?? undefined}
-          unit={unitOf(single)}
-          format={(v) => formatObservationValue(single, v, display.locale)}
-          deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))}
-          better={metricBetterDirection(single.metric)}
-          series={history.get(seriesKey(single))}
+          figure={currencyPrefix(single.currency, display.locale) + formatTerminalValue(single.value, display.locale, true)}
+          change={changeOf(single)}
+          chips={<RangeChips value={range.value} onChange={range.onChange} />}
+          spark={
+            <Sparkline
+              data={history.get(seriesKey(single)) ?? []}
+              height={130}
+              axes={chartAxes(history.get(seriesKey(single)), display.locale, display.timezone)}
+            />
+          }
         />
       </div>
     );
   }
+  if (terminalObservationLayout(items.length) === 'sparkrows') {
+    // Small multi-series pane: one sparkline row per series (demo `metric`); the watchlist table is for longer lists.
+    return (
+      <ul className="obs-term-list" aria-label={instance.title || t('providerObs.title')}>
+        {items.map((item) => (
+          <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
+            <TerminalSparkRow
+              label={labelOf(item).toLowerCase()}
+              spark={<Sparkline data={history.get(seriesKey(item)) ?? []} width={60} height={20} line />}
+              last={formatTerminalCompact(item.value, item.unit, display.locale)}
+              change={formatTerminalPercent(deltaVsPrevious(history.get(seriesKey(item))), metricBetterDirection(item.metric))}
+            />
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <>
+      {/* Decorative column header; every row's text already reads label, value, change. */}
+      <div className="obs-term-row obs-term-head" aria-hidden="true">
+        <span>{t('providerObs.colSymbol')}</span>
+        <span className="obs-term-last">{t('providerObs.colLast')}</span>
+        <span className="obs-term-chg">{t('providerObs.colChange')}</span>
+      </div>
+      <ul className="obs-term-list divide-y divide-border" aria-label={instance.title || t('providerObs.title')}>
+        {items.map((item) => (
+          <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
+            <TerminalObservationCells
+              label={labelOf(item)}
+              last={formatTerminalValue(item.value, display.locale)}
+              change={changeOf(item)}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+/** Default-skin single reading: KPI with delta, range chips and the axes-bearing history chart. */
+function SingleKpi({
+  item: single,
+  history,
+  fmt,
+  range,
+}: {
+  item: WorldObservation;
+  history: ReturnType<typeof historyPerSeries>;
+  fmt: Pick<ReturnType<typeof useObservationFormatters>, 't' | 'display' | 'timesTitle' | 'labelOf' | 'unitOf'>;
+  range: RangeControl;
+}) {
+  const { t, display, timesTitle, labelOf, unitOf } = fmt;
+  return (
+    <div
+      title={timesTitle(single)}
+      data-testid="observation-row"
+      role="group"
+      aria-label={single.value === null ? t('weather.missingValue') : `${single.value} ${single.currency ?? single.unit}`}
+    >
+      <GadgetKpi
+        label={labelOf(single)}
+        value={single.value}
+        currency={single.currency ?? undefined}
+        unit={unitOf(single)}
+        format={(v) => formatObservationValue(single, v, display.locale)}
+        deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))}
+        better={metricBetterDirection(single.metric)}
+        series={history.get(seriesKey(single))}
+        sparkHeight={110}
+        axes={chartAxes(history.get(seriesKey(single)), display.locale, display.timezone)}
+        chips={<RangeChips value={range.value} onChange={range.onChange} />}
+      />
+    </div>
+  );
+}
+
+/** One reading as a KPI (single series, with range chips and chart axes), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
+function ObservationRows({
+  instance,
+  items,
+  history,
+  sources,
+  sourceIds,
+  range,
+}: {
+  instance: GadgetInstance;
+  items: WorldObservation[];
+  history: ReturnType<typeof historyPerSeries>;
+  range: RangeControl;
+  sources: ReturnType<typeof useEffectiveLookback>['sources'];
+  sourceIds: string[];
+}) {
+  const { t, display, timesTitle, labelOf, unitOf } = useObservationFormatters(sources, sourceIds);
+  const single = items.length === 1 ? items[0] : null;
+  const terminal = useSkin() === 'terminal';
+  if (terminal)
+    return (
+      <TerminalObservationRows
+        instance={instance}
+        items={items}
+        history={history}
+        range={range}
+        fmt={{ t, display, timesTitle, labelOf }}
+      />
+    );
+  const kpiStrip = items.length >= 2 && items.length <= 8; // wide gadgets show these as one KPI row
+  if (single) return <SingleKpi item={single} history={history} fmt={{ t, display, timesTitle, labelOf, unitOf }} range={range} />;
   const list = (
     <ul
       className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`}
@@ -352,7 +514,7 @@ function ObservationRows({
  */
 export function ProviderObservationGadget({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
-  const { sourceIds, sourceId, query, items, history, sources, sourceQuery } = useProviderObservations(instance);
+  const { sourceIds, sourceId, query, items, history, sources, sourceQuery, range } = useProviderObservations(instance);
 
   if (!sourceId)
     return (
@@ -383,7 +545,7 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
           {t('providerObs.stale')}
         </p>
       )}
-      <ObservationRows instance={instance} items={items} history={history} sources={sources} sourceIds={sourceIds} />
+      <ObservationRows instance={instance} items={items} history={history} sources={sources} sourceIds={sourceIds} range={range} />
       {/* Reference date / annual period and the attribution link: hidden in small containers (figure + delta + spark only). */}
       <ObservationNotes items={items} />
     </section>

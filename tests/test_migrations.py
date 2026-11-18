@@ -231,6 +231,26 @@ def test_chat_sql_query_fence_migration_has_no_reader_grants_and_restores_views(
     )
 
 
+def test_chat_sql_scope_fence_migration_joins_scope_and_restores_0018_views() -> None:
+    """0024 adds the unprivileged per-source scope table, fences both views by discriminator, and downgrade restores 0018."""
+    up = _alembic("upgrade", "0023_obs_source_observed_idx:0024_chat_sql_scope_fence", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "CREATE TABLE chat_sql.query_fence_scope" in up.stdout
+    assert "PRIMARY KEY (backend_pid, source_id)" in up.stdout
+    assert "REVOKE ALL ON chat_sql.query_fence_scope FROM PUBLIC" in up.stdout
+    assert "REVOKE ALL ON chat_sql.query_fence_scope FROM umwelt_chat_sql_login" in up.stdout
+    assert "JOIN chat_sql.query_fence_scope fs ON fs.backend_pid = f.backend_pid" in up.stdout
+    assert "o.is_current AND o.provider_scope_discriminator IS NOT DISTINCT FROM" in up.stdout
+    assert "normalized_version_provenance p" in up.stdout and "current_setting" not in up.stdout
+    down = _alembic("downgrade", "0024_chat_sql_scope_fence:0023_obs_source_observed_idx", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP TABLE IF EXISTS chat_sql.query_fence_scope" in down.stdout
+    assert (
+        "query_fence_scope fs" not in down.stdout
+        and "f.backend_pid = pg_backend_pid()" in down.stdout
+    )
+
+
 def test_chat_sql_reader_no_public_writes_migration_revokes_and_restores() -> None:
     """0019 revokes PUBLIC TEMPORARY and large-object/notify/advisory EXECUTE; downgrade grants them back to PUBLIC."""
     up = _alembic(

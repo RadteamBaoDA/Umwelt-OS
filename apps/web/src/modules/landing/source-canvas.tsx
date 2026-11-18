@@ -109,7 +109,7 @@ function observeHost(
   const visibility = new IntersectionObserver(([entry]) => on.visible(Boolean(entry?.isIntersecting)));
   visibility.observe(host);
   const themeChanges = new MutationObserver(on.theme);
-  themeChanges.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-accent'] });
+  themeChanges.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-accent', 'data-skin'] });
   canvas.addEventListener('webglcontextlost', on.lost);
   return () => {
     resize.disconnect();

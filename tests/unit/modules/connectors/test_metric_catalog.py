@@ -127,3 +127,22 @@ def test_quarter_hour_providers_match_their_default_poll_interval() -> None:
     for provider in ("binance", "coingecko", "coinpaprika", "iss_position"):
         assert get_provider_spec(provider).default_interval_minutes == 15, provider
         assert metric_catalog()[provider].cadence_days == pytest.approx(15 / 1440), provider
+
+
+def test_security_and_hazard_event_entries_match_adapter_emission() -> None:
+    """KEV, NVD, EONET and IODA rows are points: their metric ids and units match the mappers."""
+    kev = provider_metrics("cisa_kev")
+    assert [(m.id, m.unit) for m in kev.metrics] == [("known_exploited_vulnerability", "listing")]
+    assert kev.symbol_keyed and not kev.charts_as_series and kev.cadence_days is None
+
+    nvd = provider_metrics("nvd")
+    assert [(m.id, m.unit) for m in nvd.metrics] == [("cve_base_score", "cvss")]
+    assert nvd.symbol_keyed and not nvd.charts_as_series
+
+    eonet = provider_metrics("nasa_eonet")
+    assert [(m.id, m.unit) for m in eonet.metrics] == [("natural_event", None)]
+    assert not eonet.symbol_keyed and not eonet.charts_as_series
+
+    ioda = provider_metrics("ioda")
+    assert [(m.id, m.unit) for m in ioda.metrics] == [("internet_outage_event", "ioda_score")]
+    assert not ioda.symbol_keyed and not ioda.charts_as_series

@@ -249,6 +249,8 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
 
     The Gmail history ID is retained as a version, while ``internalDate`` remains the published
     timestamp basis. Provider fields are allowlisted before the record can reach durable ingestion.
+    The title is the subject trimmed to 200 characters, or ``"(no subject)"`` when the subject
+    is blank.
     """
     if not isinstance(message, dict):
         raise GoogleProviderError("gmail_message_invalid")
@@ -301,6 +303,7 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
         collected_at=collected_at.astimezone(UTC),
         version=history_id,
         metadata={
+            "title": subject.strip()[:200] or "(no subject)",
             "thread_id": thread_id,
             "history_id": history_id,
             "label_ids": [value for value in message.get("labelIds", []) if isinstance(value, str)][
@@ -662,6 +665,7 @@ def _calendar_event_record(
 
     The event start remains the observed event time; the provider ``updated`` timestamp, when
     present, supplies the modification basis and version used by ingestion provenance checks.
+    The record title is the event summary (``"(no title)"`` when blank).
     """
     if not isinstance(event, dict):
         raise GoogleProviderError("calendar_event_invalid")
@@ -707,6 +711,7 @@ def _calendar_event_record(
         collected_at=collected_at.astimezone(UTC),
         version=_text(updated, 255) if isinstance(updated, str) else None,
         metadata={
+            "title": title.strip()[:200] or "(no title)",
             "calendar_id": calendar_id,
             "event_id": event_id,
             "status": status,
@@ -939,6 +944,8 @@ def _drive_file_record(
 
     Only parser-supported text is passed here; the source envelope retains bounded Drive metadata
     and labels the timestamp as provider-modified only when Drive supplied ``modifiedTime``.
+    The title is the file name trimmed to 200 characters; a missing or blank name yields an empty
+    title.
     """
     if not isinstance(file, dict) or not isinstance(file.get("id"), str) or not file["id"]:
         raise GoogleProviderError("drive_file_invalid")
@@ -968,6 +975,7 @@ def _drive_file_record(
         collected_at=collected_at.astimezone(UTC),
         version=modified_version[:255],
         metadata={
+            "title": name.strip()[:200],
             "name": name,
             "mime_type": mime_type,
             "modified_time": modified,

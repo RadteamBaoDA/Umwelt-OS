@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -34,9 +35,19 @@ from modules.connectors.backends import (
 from modules.connectors.provider_options import (
     ISO_COUNTRY_PATTERN,
     MAX_COINS,
+    MAX_CONTENT_RATINGS,
     MAX_JOB_KEYWORDS,
+    MAX_MEDIA_COUNTRIES,
+    MAX_MEDIA_FORMATS,
+    MAX_MEDIA_GENRES,
+    MAX_MEDIA_LANGUAGES,
     MAX_VN_SYMBOLS,
+    AniListMangaCountry,
+    AniListMediaId,
+    AniListMode,
+    AnimeSeason,
     CoinId,
+    ContentRating,
     CryptoPair,
     EonetCategory,
     EonetStatus,
@@ -51,6 +62,13 @@ from modules.connectors.provider_options import (
     JobCity,
     JobKeyword,
     JobLevel,
+    MalAnimeRanking,
+    MalMangaRanking,
+    MediaFormat,
+    MediaGenre,
+    MediaLanguage,
+    MediaStatus,
+    MediaTag,
     NvdSeverity,
     NwsArea,
     NwsSeverity,
@@ -62,6 +80,7 @@ from modules.connectors.provider_options import (
     VnSymbol,
     WbIndicator,
     WikiLanguage,
+    YoutubeFilter,
     clean_query,
 )
 from modules.connectors.sections import MAX_SECTIONS
@@ -69,6 +88,10 @@ from modules.ingestion.public import IngestionRecord, TelegramRawDelivery
 from modules.sources.public import SourceFence
 
 DEFAULT_TIMEZONE = "Asia/Ho_Chi_Minh"
+
+WikidataQid = Annotated[str, StringConstraints(pattern=r"^Q[1-9][0-9]{0,11}$")]
+TwoLetterLanguage = Annotated[str, StringConstraints(pattern=r"^[A-Za-z]{2}$")]
+PositiveSeriesId = Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
 
 
 DEFAULT_OVERLAP = timedelta(days=1)
@@ -217,7 +240,8 @@ class ConnectorConfig(BaseModel):
     """Validate bounded source scopes, per-provider mappings, timezone, and schedule settings.
 
     Social, Google, FHIR, Home Assistant, Notion, and Slack selections are checked against the
-    provider-specific field bounds before they can be persisted or activated.
+    provider-specific field bounds before they can be persisted or activated. YouTube channel IDs,
+    handle lists, and playlist lists have format and uniqueness checks before server-side resolution.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -236,6 +260,7 @@ class ConnectorConfig(BaseModel):
     timezone: str = DEFAULT_TIMEZONE
     schedule_interval_minutes: Literal[15, 30, 60, 360, 1440] | None = None
     youtube_channel_id: str | None = Field(default=None, pattern=r"^UC[A-Za-z0-9_-]{22}$")
+    youtube_channels: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
     arxiv_category: str | None = Field(
         default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9.-]{0,63}$"
     )
@@ -372,6 +397,173 @@ class ConnectorConfig(BaseModel):
     topic_watch_token_budget: StrictInt | None = Field(default=None, ge=1, le=200_000)
     topic_watch_model_role: Literal["background", "chat", "brief"] | None = None
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
+    # Multi-dimensional media filter options & YouTube scope upgrades (all default to None).
+    media_country: IsoCountry | None = None
+    media_countries: tuple[IsoCountry, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_COUNTRIES
+    )
+    media_genres: tuple[MediaGenre, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_GENRES
+    )
+    media_languages: tuple[MediaLanguage, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_LANGUAGES
+    )
+    media_formats: tuple[MediaFormat, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_MEDIA_FORMATS
+    )
+    release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
+    anime_season: AnimeSeason | None = None
+    media_ids: tuple[AniListMediaId, ...] | None = Field(default=None, min_length=1, max_length=50)
+    anilist_mode: AniListMode | None = None
+    openlibrary_mode: Literal["subject", "search", "recent"] | None = None
+    openlibrary_subject: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 _-]+$"
+    )
+    openlibrary_query: str | None = Field(default=None, min_length=1, max_length=200)
+    gutendex_topic: str | None = Field(default=None, min_length=1, max_length=120)
+    gutendex_search: str | None = Field(default=None, min_length=1, max_length=200)
+    gutendex_copyright: StrictBool | None = None
+    gutendex_mime_type: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[A-Za-z0-9.+_-]+/[A-Za-z0-9.+_-]+$"
+    )
+    gutendex_author_year_start: StrictInt | None = Field(default=None, ge=0, le=2100)
+    gutendex_author_year_end: StrictInt | None = Field(default=None, ge=0, le=2100)
+    ebooks_only: StrictBool | None = None
+    country_of_origin: AniListMangaCountry | None = None
+    media_tags: tuple[MediaTag, ...] | None = Field(default=None, min_length=1, max_length=16)
+    media_statuses: tuple[MediaStatus, ...] | None = Field(default=None, min_length=1, max_length=5)
+    content_ratings: tuple[ContentRating, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_CONTENT_RATINGS
+    )
+    min_rating: float | None = Field(
+        default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True
+    )
+    exclude_adult: StrictBool | None = None
+    tmdb_mode: Literal["now_playing", "upcoming", "changes", "airing_today", "on_the_air"] | None = None
+    tmdb_language: str | None = Field(default=None, min_length=2, max_length=16, pattern=r"^[a-z]{2}(?:-[a-z0-9]{2,8})?$", strict=True)
+    tmdb_certification_country: IsoCountry | None = None
+    tmdb_certification: str | None = Field(default=None, min_length=1, max_length=12, pattern=r"^[A-Za-z0-9+-]+$", strict=True)
+    trakt_mode: Literal["movies_trending", "movies_anticipated", "shows_trending", "shows_anticipated", "movies_calendar", "shows_calendar", "movies_search", "shows_search"] | None = None
+    trakt_query: str | None = Field(default=None, min_length=1, max_length=100, strict=True)
+    trakt_calendar_days: StrictInt | None = Field(default=None, ge=1, le=31)
+    trakt_certifications: tuple[Literal["G", "PG", "PG-13", "R", "NC-17"], ...] | None = Field(default=None, min_length=1, max_length=5)
+    omdb_mode: Literal["imdb_id", "title", "search"] | None = None
+    omdb_imdb_id: str | None = Field(default=None, min_length=9, max_length=14, pattern=r"^tt\d{7,12}$", strict=True)
+    omdb_title: str | None = Field(default=None, min_length=1, max_length=120, strict=True)
+    omdb_search: str | None = Field(default=None, min_length=1, max_length=120, strict=True)
+    omdb_type: Literal["movie", "series", "episode"] | None = None
+    mal_mode: Literal["ranking", "season"] | None = None
+    mal_ranking_type: MalAnimeRanking | MalMangaRanking | None = None
+    mal_season_year: StrictInt | None = Field(default=None, ge=1917, le=2100)
+    mal_season: AnimeSeason | None = None
+    google_books_query: str | None = Field(default=None, min_length=1, max_length=160, strict=True)
+    google_books_subject: str | None = Field(default=None, min_length=1, max_length=100, strict=True)
+    google_books_print_type: Literal["all", "books", "magazines"] | None = None
+    google_books_filter: Literal["ebooks", "free-ebooks", "paid-ebooks"] | None = None
+    hardcover_mode: Literal["catalog", "upcoming"] | None = None
+    tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
+    tvmaze_global: StrictBool | None = None
+    ann_mode: Literal["news", "encyclopedia"] | None = None
+    ann_media_type: Literal["anime", "manga"] | None = None
+    ann_category: (
+        Literal["news", "review", "feature", "interview", "press-release", "all"] | None
+    ) = None
+    ann_edition: Literal["us", "w"] | None = None
+    mangaupdates_types: (
+        tuple[Literal["Manga", "Manhwa", "Manhua", "Novel", "Doujinshi"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=5)
+    licensed_only: StrictBool | None = None
+    exclude_genre: tuple[MediaGenre, ...] | None = Field(default=None, min_length=1, max_length=16)
+    series_ids: tuple[PositiveSeriesId, ...] | None = Field(
+        default=None, min_length=1, max_length=100
+    )
+    manga_ids: tuple[UUID, ...] | None = Field(default=None, min_length=1, max_length=100)
+    original_languages: tuple[Literal["ja", "ko", "zh", "zh-hk"], ...] | None = Field(
+        default=None, min_length=1, max_length=4
+    )
+    available_translated_languages: (
+        tuple[Literal["en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=9)
+    mangadex_content_ratings: (
+        tuple[Literal["safe", "suggestive", "erotica", "pornographic"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=4)
+    mangadex_statuses: tuple[Literal["ongoing", "completed", "hiatus", "cancelled"], ...] | None = (
+        Field(default=None, min_length=1, max_length=4)
+    )
+    publication_demographic: (
+        tuple[Literal["shounen", "shoujo", "josei", "seinen", "none"], ...] | None
+    ) = Field(default=None, min_length=1, max_length=5)
+    updated_at_since: AwareDatetime | None = None
+    excluded_tags: tuple[UUID, ...] | None = Field(default=None, min_length=1, max_length=100)
+    country: IsoCountry | None = None
+    kind: Literal["books", "audio-books"] | None = None
+    chart: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9-]+$")
+    podcast_index_query: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_languages: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=12)
+    podcast_index_categories: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_excluded_categories: str | None = Field(default=None, min_length=1, max_length=160)
+    podcast_index_since: StrictInt | None = Field(default=None, ge=1, le=4_102_444_800)
+    podcast_index_value: Literal["any", "lightning", "hive", "webmonetization"] | None = None
+    listenbrainz_username: str | None = Field(default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    listenbrainz_days: StrictInt | None = Field(default=None, ge=1, le=90)
+    listenbrainz_sort: Literal["release_date", "release_group_date"] | None = None
+    listenbrainz_tags: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    listenbrainz_status: Literal["official", "promotion", "bootleg"] | None = None
+    steam_mode: Literal["featured", "news"] | None = None
+    steam_country: IsoCountry | None = None
+    steam_language: Literal["english", "vietnamese", "japanese", "schinese", "koreana", "french", "german", "spanish"] | None = None
+    steam_appids: tuple[Annotated[StrictInt, Field(gt=0)], ...] | None = Field(default=None, min_length=1, max_length=8)
+    igdb_game_types: tuple[Literal["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"], ...] | None = Field(default=None, min_length=1, max_length=8)
+    igdb_region: Literal["europe", "north_america", "australia", "new_zealand", "japan", "china", "asia", "world"] | None = None
+    igdb_platforms: tuple[Annotated[StrictInt, Field(gt=0)], ...] | None = Field(default=None, min_length=1, max_length=16)
+    itunes_podcast_id: StrictInt | None = Field(default=None, ge=1, le=9_999_999_999_999_999)
+    lookback_days: StrictInt | None = Field(default=None, ge=1, le=3650)
+    genre_qids: tuple[WikidataQid, ...] | None = Field(default=None, min_length=1, max_length=12)
+    language: TwoLetterLanguage | None = None
+    search_terms: str | None = Field(default=None, min_length=1, max_length=100)
+    letterboxd_username: str | None = Field(
+        default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$"
+    )
+    youtube_handles: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    youtube_playlist_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    youtube_filter: YoutubeFilter | None = None
+
+    @field_validator("youtube_channels")
+    @classmethod
+    def valid_youtube_channels(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Require unique canonical channel IDs so each configured target has one stable feed identity."""
+        if value is None:
+            return None
+        if any(not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel) for channel in value):
+            raise ValueError("youtube_channels must contain canonical channel IDs")
+        if len(set(value)) != len(value):
+            raise ValueError("youtube_channels must be unique")
+        return value
+
+    @field_validator("youtube_handles")
+    @classmethod
+    def valid_youtube_handles(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Normalize handles and reject duplicate or malformed public channel names."""
+        if value is None:
+            return None
+        handles = tuple(handle.strip().removeprefix("@").lower() for handle in value)
+        if any(not re.fullmatch(r"[a-z0-9._-]{3,30}", handle) for handle in handles):
+            raise ValueError("youtube_handles contains an invalid handle")
+        if len(set(handles)) != len(handles):
+            raise ValueError("youtube_handles must be unique")
+        return handles
+
+    @field_validator("youtube_playlist_ids")
+    @classmethod
+    def valid_youtube_playlists(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Accept bounded playlist identifiers only; arbitrary URLs never reach the request builder."""
+        if value is None:
+            return None
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]{10,64}", playlist) for playlist in value):
+            raise ValueError("youtube_playlist_ids contains an invalid playlist ID")
+        if len(set(value)) != len(value):
+            raise ValueError("youtube_playlist_ids must be unique")
+        return value
 
     @field_validator("gdelt_query", "nvd_keyword", mode="before")
     @classmethod

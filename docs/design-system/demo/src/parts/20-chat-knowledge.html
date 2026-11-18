@@ -1,0 +1,463 @@
+<style>
+/* ---------- chat layout ---------- */
+.ck-chat { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 100px); }
+.ck-chat.with-rail { grid-template-columns: 280px 1fr 300px; }
+.ck-hist { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+.ck-hist-top { padding: 12px; display: grid; grid-template-columns: 1fr 34px; gap: 8px; border-bottom: 1px solid var(--line); }
+.ck-hist-top .btn.primary { justify-content: center; }
+.ck-hist-list { list-style: none; margin: 0; padding: 8px; font-size: 13px; overflow: auto; }
+.ck-hist-list .grp { font-size: 11px; color: var(--muted); padding: 10px 8px 4px; }
+html[data-skin='terminal'] .ck-hist-list .grp::before { content: '// '; }
+.ck-hist-list a { display: block; padding: 6px 8px; color: var(--muted); text-decoration: none; border-radius: var(--radius); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ck-hist-list a:hover { background: var(--active); color: var(--text); }
+.ck-hist-list a[aria-current='true'] { background: var(--active); color: var(--strong); }
+html[data-skin='terminal'] .ck-hist-list a[aria-current='true']::before { content: '> '; color: var(--accent); }
+.ck-conv { display: flex; flex-direction: column; min-width: 0; }
+.ck-conv-head { display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 20px; border-bottom: 1px solid var(--line); }
+.ck-thread { flex: 1; padding: 24px 20px; display: flex; flex-direction: column; gap: 18px; max-width: 860px; width: 100%; margin: 0 auto; }
+.ck-compose-wrap { padding: 12px 20px 20px; max-width: 860px; width: 100%; margin: 0 auto; }
+.ck-compose-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.ck-tool { font-size: 12px; color: var(--muted); }
+.ck-tool b { color: var(--info); font-weight: 500; }
+html[data-skin='terminal'] .ck-tool::before { content: '→ '; color: var(--accent); }
+.ck-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; max-width: 620px; width: 100%; margin: 0 auto; padding: 24px 20px; }
+.ck-banner { color: var(--accent); font-size: 11px; line-height: 1.15; background: none; border: 0; padding: 0; }
+html[data-skin='default'] .ck-banner { display: none; }
+.ck-rail { border-left: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ck-src { padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 12px; }
+.ck-src .n { color: var(--info); font-weight: 700; }
+.ck-src p { color: var(--muted); margin-top: 4px; }
+.ck-meta { font-size: 11px; color: var(--muted); }
+mark { background: var(--pill-warning-bg); color: var(--warning); padding: 0 2px; }
+/* ---------- palette ---------- */
+.ck-pal-in { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.ck-pal-in .p { color: var(--accent); font-weight: 700; }
+.ck-pal-in input { flex: 1; font: inherit; background: none; border: 0; color: var(--strong); outline: none; }
+.ck-pal-g { font-size: 11px; color: var(--muted); padding: 10px 16px 4px; }
+html[data-skin='terminal'] .ck-pal-g::before { content: '// '; }
+.ck-pal-row { display: flex; align-items: center; gap: 10px; padding: 7px 16px; font-size: 13px; cursor: pointer; }
+.ck-pal-row:hover, .ck-pal-row[aria-selected='true'] { background: var(--active); }
+.ck-pal-row[aria-selected='true'] { box-shadow: inset 2px 0 0 var(--accent); color: var(--strong); }
+.ck-pal-row .kbd { margin-left: auto; }
+/* ---------- knowledge / explore ---------- */
+.ck-ls { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.ck-ls li { display: grid; grid-template-columns: 11ch 7ch 17ch 1fr; gap: 14px; padding: 7px 8px; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.ck-ls li:hover { background: var(--active); }
+.ck-ls .perm { color: var(--muted); }
+.ck-ls a { color: var(--strong); text-decoration: none; font-weight: 500; }
+.ck-ls a:hover { color: var(--accent); }
+.ck-kv { display: grid; grid-template-columns: 14ch 1fr; gap: 4px 16px; font-size: 13px; }
+.ck-kv dt { color: var(--muted); }
+.ck-kv dd { margin: 0; word-break: break-all; }
+.ck-two { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
+.ck-tl { font-size: 13px; margin: 0; padding: 0; list-style: none; }
+.ck-tl li { display: grid; grid-template-columns: 4ch 12ch 1fr; gap: 8px; }
+.ck-tl .g { color: var(--accent); white-space: pre; }
+.ck-tl .d { color: var(--warning); }
+.ck-tl .day .g { color: var(--muted); }
+.ck-tl .day .d { color: var(--strong); font-weight: 700; }
+.ck-steps { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.ck-steps .on { color: var(--accent); font-weight: 700; }
+.ck-steps .done { color: var(--text); }
+.ck-story { padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.ck-story a { color: var(--strong); text-decoration: none; font-weight: 600; }
+.ck-story a:hover { color: var(--accent); }
+@media (max-width: 900px) {
+  .ck-chat, .ck-chat.with-rail { grid-template-columns: 1fr; }
+  .ck-hist, .ck-rail { display: none; }
+  .ck-two { grid-template-columns: 1fr; }
+  .ck-ls li { grid-template-columns: 1fr; gap: 2px; }
+  .ck-ls .perm, .ck-ls .sz { display: none; }
+}
+</style>
+
+<!-- ========================= CHAT: EMPTY ========================= -->
+<section class="view" id="chat" data-group="Chat" data-title="Chat — empty" data-path="chat" data-rail="chat">
+  <div class="page ck-chat">
+    <aside class="ck-hist">
+      <div class="ck-hist-top">
+        <button class="btn primary">+ new chat</button>
+        <button class="icon-btn" aria-label="Collapse history"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M9 3v18"/></svg></button>
+        <div class="prompt-wrap"><input class="input" placeholder="search conversations…" aria-label="Search conversations"></div>
+        <button class="icon-btn" aria-label="Archived chats"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4"/><path d="M5 8v12h14V8M10 12h4"/></svg></button>
+      </div>
+      <p class="empty">no conversations yet</p>
+    </aside>
+    <div class="ck-conv">
+      <div class="ck-conv-head"><h1>Ask &amp; Chat</h1></div>
+      <div class="ck-empty">
+<pre class="ck-banner" aria-hidden="true"> _   _ __  ____      _____ _   _____
+| | | |  \/  \ \    / / __| | |_   _|
+| |_| | |\/| |\ \/\/ /| _|| |__ | |
+ \___/|_|  |_| \_/\_/ |___|____||_|   v2.4</pre>
+        <h2>What would you like to know?</h2>
+        <p class="muted">Ask about your synced documents, events and the topics you track. Answers show their sources.</p>
+        <p class="small muted">type a question · <kbd>/</kbd> for commands · <kbd>@</kbd> to cite a source · <kbd>↑</kbd> edit last</p>
+        <div class="alert warn">
+          <div class="grow"><p class="alert-k"><b>Set up a model provider first</b></p><p class="small muted">Chat needs a model. Add one in Settings to start.</p></div>
+          <a class="btn primary sm" href="#settings-models">open settings</a>
+        </div>
+        <p class="small muted">tools for this message</p>
+        <div class="row"><button class="btn sm">search the web</button><button class="btn sm">attach a file</button></div>
+      </div>
+      <div class="ck-compose-wrap">
+        <div class="composer">
+          <textarea aria-label="Message" placeholder="Ask a question about your knowledge or documents…"></textarea>
+          <div class="ck-compose-bar"><button class="btn ghost sm" aria-label="Add">+</button><span class="right small muted">assistant ▾</span><button class="btn primary sm" disabled>send ⏎</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= CHAT: GROUNDED ========================= -->
+<section class="view" id="chat-grounded" data-group="Chat" data-title="Chat — grounded answer + sources rail" data-path="chat/mekong-water-levels" data-rail="chat" data-mode="INSERT">
+  <div class="page ck-chat with-rail">
+    <aside class="ck-hist">
+      <div class="ck-hist-top">
+        <button class="btn primary">+ new chat</button>
+        <button class="icon-btn" aria-label="Collapse history"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M9 3v18"/></svg></button>
+        <div class="prompt-wrap"><input class="input" placeholder="search conversations…" aria-label="Search conversations"></div>
+        <button class="icon-btn" aria-label="Archived chats"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4"/><path d="M5 8v12h14V8M10 12h4"/></svg></button>
+      </div>
+      <ul class="ck-hist-list">
+        <li class="grp">today</li>
+        <li><a href="#chat-grounded" aria-current="true">Mekong water levels this week</a></li>
+        <li><a href="#chat-stopped">BTC weekly summary</a></li>
+        <li><a href="#">Wildfire perimeter, Q4 status</a></li>
+        <li class="grp">yesterday</li>
+        <li><a href="#">EU grid interconnect deal — who pays</a></li>
+        <li><a href="#">Compare gold vs USD/VND 30d</a></li>
+        <li><a href="#">Summarise arxiv: retrieval eval papers</a></li>
+        <li class="grp">previous 7 days</li>
+        <li><a href="#">Draft brief for Monday standup</a></li>
+        <li><a href="#">Which sources failed last night?</a></li>
+        <li><a href="#">Semiconductor export trend VN</a></li>
+      </ul>
+    </aside>
+    <div class="ck-conv">
+      <div class="ck-conv-head">
+        <h2>Mekong water levels this week</h2>
+        <span class="badge ok">grounded · 4 sources</span>
+        <button class="icon-btn ghost right" aria-label="More">⋯</button>
+      </div>
+      <div class="ck-thread">
+        <p class="msg-q">Why did Mekong levels rise this week?</p>
+        <div class="col" style="gap:2px">
+          <p class="ck-tool"><b>search_documents</b>("mekong level tan chau") · 12 hits · 340ms</p>
+          <p class="ck-tool"><b>query_records</b>(source="mrc_gauges", days=7) · 168 rows · 92ms</p>
+        </div>
+        <div class="msg-a">
+          <p>Water at Tân Châu rose about <b>0.4 m</b> between 11 and 15 Nov after a planned release from upstream dams on 14 Nov <a class="cite" href="#">[1]</a>. Rainfall in the lower basin was 18% below the seasonal average, so the release is the main driver rather than rain <a class="cite" href="#">[2]</a>.</p>
+          <table class="data" style="margin-top:12px">
+            <thead><tr><th>station</th><th class="n">11 Nov (m)</th><th class="n">15 Nov (m)</th><th class="n">Δ</th></tr></thead>
+            <tbody>
+              <tr><td class="name">Tân Châu</td><td class="n">2.71</td><td class="n">3.12</td><td class="n up">+0.41</td></tr>
+              <tr><td class="name">Châu Đốc</td><td class="n">2.48</td><td class="n">2.83</td><td class="n up">+0.35</td></tr>
+              <tr><td class="name">Kratie</td><td class="n">14.90</td><td class="n">15.06</td><td class="n up">+0.16</td></tr>
+            </tbody>
+          </table>
+          <p>Query used against your sources:</p>
+<pre><span class="tok-k">SELECT</span> station, level_m, observed_at
+<span class="tok-k">FROM</span> mrc_gauges
+<span class="tok-k">WHERE</span> station <span class="tok-k">IN</span> (<span class="tok-s">'tan_chau'</span>, <span class="tok-s">'chau_doc'</span>, <span class="tok-s">'kratie'</span>)
+  <span class="tok-k">AND</span> observed_at &gt; <span class="tok-f">now</span>() - <span class="tok-s">'7 days'</span>;  <span class="tok-c">-- 168 rows</span></pre>
+          <p class="ck-meta">4 sources · 2.1 s · 1,284 tokens · <a href="#">copy</a> · <a href="#">regenerate</a></p>
+        </div>
+        <p class="msg-q">Is it expected to keep rising?</p>
+        <p class="ck-tool"><b>search_documents</b>("mrc forecast november") · 3 hits · 210ms</p>
+        <div class="msg-a"><p>The river commission forecast shows Tân Châu peaking near 3.25 m on 19 Nov, then falling about 5 cm a day as releases taper <a class="cite" href="#">[3]</a><span class="cursor" aria-hidden="true"></span></p></div>
+      </div>
+      <div class="ck-compose-wrap">
+        <div class="composer">
+          <textarea aria-label="Message" placeholder="Ask a follow-up…"></textarea>
+          <div class="ck-compose-bar"><button class="btn ghost sm" aria-label="Add">+</button><span class="tag">web</span><span class="right small muted">assistant ▾</span><button class="btn danger sm">stop ^C</button></div>
+        </div>
+      </div>
+    </div>
+    <aside class="ck-rail" aria-label="Sources">
+      <h3 class="t-dash">sources (4)</h3>
+      <div class="ck-src"><span class="n">[1]</span> mrcmekong.org <span class="ck-meta">· 15 Nov 2026</span><p>Weekly flood situation report: Lancang release of 2,800 m³/s scheduled 14–17 Nov.</p></div>
+      <div class="ck-src"><span class="n">[2]</span> reliefweb.int <span class="ck-meta">· 13 Nov 2026</span><p>Lower Mekong rainfall bulletin: cumulative rain 18% below seasonal mean.</p></div>
+      <div class="ck-src"><span class="n">[3]</span> mrcmekong.org <span class="ck-meta">· 16 Nov 2026</span><p>5-day forecast: Tân Châu crest 3.25 m on 19 Nov, receding thereafter.</p></div>
+      <div class="ck-src"><span class="n">[4]</span> mrc_gauges <span class="ck-meta">· record set · 168 rows</span><p>Hourly gauge readings, 3 stations, last 7 days.</p></div>
+      <a class="small" href="#knowledge-document">open in documents →</a>
+    </aside>
+  </div>
+</section>
+
+<!-- ========================= CHAT: STOPPED / ERROR ========================= -->
+<section class="view" id="chat-stopped" data-group="Chat" data-title="Chat — stopped / error" data-path="chat/btc-weekly-summary" data-rail="chat">
+  <div class="page ck-chat">
+    <aside class="ck-hist">
+      <div class="ck-hist-top">
+        <button class="btn primary">+ new chat</button>
+        <button class="icon-btn" aria-label="Collapse history"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M9 3v18"/></svg></button>
+      </div>
+      <ul class="ck-hist-list">
+        <li class="grp">today</li>
+        <li><a href="#chat-grounded">Mekong water levels this week</a></li>
+        <li><a href="#chat-stopped" aria-current="true">BTC weekly summary</a></li>
+      </ul>
+    </aside>
+    <div class="ck-conv">
+      <div class="ck-conv-head"><h2>BTC weekly summary</h2><button class="icon-btn ghost right" aria-label="More">⋯</button></div>
+      <div class="ck-thread">
+        <p class="msg-q">Summarise BTC this week with the main drivers.</p>
+        <p class="ck-tool"><b>query_records</b>(source="coingecko", symbol="BTC", days=7) · 2,016 rows · 140ms</p>
+        <div class="msg-a">
+          <p>BTC closed the week at 97,412 USD, up 4.8%. The move came mostly on Thursday after spot ETF inflows of 1.1 B USD <a class="cite" href="#">[1]</a>. Volatility stayed below the 30-day average and</p>
+          <p class="small warn" style="margin-top:8px">^C stopped by user · partial answer kept</p>
+          <div class="row" style="margin-top:8px"><button class="btn sm">continue</button><button class="btn sm">regenerate</button></div>
+        </div>
+        <p class="msg-q">Add the ETH comparison.</p>
+        <div class="alert err">
+          <div class="grow">
+            <p class="alert-k"><b>Provider error: anthropic returned 529 overloaded</b></p>
+            <p class="small muted">request id req_01JD8M4Q · retried 2× with backoff · nothing was saved from this turn</p>
+          </div>
+          <button class="btn sm">retry</button>
+          <a class="btn ghost sm" href="#settings-models">switch model</a>
+        </div>
+      </div>
+      <div class="ck-compose-wrap">
+        <div class="composer"><textarea aria-label="Message" placeholder="Ask a question about your knowledge or documents…"></textarea>
+          <div class="ck-compose-bar"><button class="btn ghost sm" aria-label="Add">+</button><span class="right small muted">assistant ▾</span><button class="btn primary sm">send ⏎</button></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= QUICK CHAT (SHEET) ========================= -->
+<section class="view" id="quick-chat" data-group="Chat" data-title="Quick chat (sheet)" data-base="dashboard" data-path="dashboard · quick-chat" data-rail="dashboard" data-mode="INSERT">
+  <div class="scrim"></div>
+  <div class="sheet" role="dialog" aria-label="Quick chat">
+    <div class="sheet-head"><h2>Quick chat</h2><button class="btn sm">+ new chat</button><a class="icon-btn ghost right" href="#dashboard" aria-label="Close">✕</a></div>
+    <div class="ck-thread" style="overflow:auto">
+      <p class="small muted">try asking</p>
+      <div class="row"><button class="btn sm">today's news</button><button class="btn sm">watchlist this week</button><button class="btn sm">latest BTC move</button></div>
+      <p class="msg-q">latest BTC move</p>
+      <p class="ck-tool"><b>query_records</b>(source="coingecko", symbol="BTC", hours=24) · 288 rows · 61ms</p>
+      <div class="msg-a"><p>BTC is at <b>97,412.30 USD</b>, <span class="up">+1.24%</span> in 24 h. The high was 97,880 at 09:40; the move followed ETF inflow data released at 08:30 <a class="cite" href="#">[1]</a>.</p>
+        <p class="ck-meta">1 source · coingecko · updated 11 min ago · <a href="#chat-grounded">open in chat →</a></p></div>
+    </div>
+    <div class="ck-compose-wrap" style="border-top:1px solid var(--line)">
+      <div class="composer"><textarea aria-label="Message" placeholder="Ask a question about your knowledge or documents…"></textarea>
+        <div class="ck-compose-bar"><span class="right small muted">assistant ▾</span><button class="btn primary sm">send ⏎</button></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= COMMAND PALETTE ========================= -->
+<section class="view" id="palette" data-group="Chat" data-title="Command palette (Ctrl K)" data-base="dashboard" data-path="dashboard · palette" data-rail="dashboard" data-mode="COMMAND">
+  <div class="scrim"></div>
+  <div class="dialog" role="dialog" aria-label="Command palette" style="padding:0">
+    <div class="ck-pal-in"><span class="p">:</span><input value="sour" aria-label="Command"><span class="cursor" aria-hidden="true"></span><span class="kbd">esc</span></div>
+    <div class="ck-pal-g">navigate</div>
+    <div class="ck-pal-row" aria-selected="true">go to data sources <span class="small muted">settings/sources</span><span class="kbd">g s</span></div>
+    <div class="ck-pal-row">go to dashboard <span class="small muted">world</span><span class="kbd">g d</span></div>
+    <div class="ck-pal-row">go to chat <span class="kbd">g c</span></div>
+    <div class="ck-pal-g">actions</div>
+    <div class="ck-pal-row">add datasource… <span class="kbd">a s</span></div>
+    <div class="ck-pal-row">collect now: all active sources <span class="kbd">c a</span></div>
+    <div class="ck-pal-row">toggle skin terminal / default <span class="kbd">t t</span></div>
+    <div class="ck-pal-g">sources</div>
+    <div class="ck-pal-row"><span class="dot"></span>capture google_news <span class="small muted">every 30 min</span></div>
+    <div class="ck-pal-row"><span class="dot err"></span>alpha_vantage <span class="small err">failed 2 h ago</span></div>
+    <div class="ck-pal-g">recent</div>
+    <div class="ck-pal-row">chat: Mekong water levels this week</div>
+    <div class="ck-pal-row">document: China's October crude oil imports rise…</div>
+    <div class="pane-foot"><span>↑↓ move</span><span>⏎ run</span><span>tab complete</span><span class="right">9 matches</span></div>
+  </div>
+</section>
+
+<!-- ========================= DOCUMENTS ========================= -->
+<section class="view" id="knowledge-documents" data-group="Knowledge" data-title="Documents" data-path="knowledge/documents" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head">
+      <div><h1>Documents</h1><p class="meta">Your private library of documents and notes. 1,284 items · 212 MB</p></div>
+      <div class="actions"><button class="btn">upload file</button><button class="btn primary">new document</button></div>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <div class="prompt-wrap grow" style="max-width:420px"><input class="input" placeholder="filter by title, source or tag" aria-label="Filter documents"></div>
+      <label class="check"><input type="checkbox"> show data records</label>
+      <span class="right small muted">sort: updated ▾</span>
+    </div>
+    <p class="small muted" style="padding:0 8px 6px">total 1284</p>
+    <ul class="ck-ls">
+      <li><span class="perm">-rw- web</span><span class="sz num">14 K</span><span class="muted num">Nov 12 22:36</span><a href="#knowledge-document">Saudi-led coalition says it shot down Houthi missiles aimed at Riyadh — Reuters</a></li>
+      <li><span class="perm">-rw- web</span><span class="sz num">9 K</span><span class="muted num">Nov 12 22:36</span><a href="#knowledge-document">COMMENTARY: Gold's short-term volatility contrasts with long-term bullishness — Reuters</a></li>
+      <li><span class="perm">-rw- web</span><span class="sz num">11 K</span><span class="muted num">Nov 12 22:36</span><a href="#knowledge-document">Cruise ship that stranded passengers in Cambodia kept in Singapore under court order — Reuters</a></li>
+      <li><span class="perm">-rw- web</span><span class="sz num">8 K</span><span class="muted num">Nov 12 22:36</span><a href="#knowledge-document">China's October crude oil imports rise to highest level since March — Reuters</a></li>
+      <li><span class="perm">-rw- web</span><span class="sz num">10 K</span><span class="muted num">Nov 12 22:36</span><a href="#knowledge-document">Canada has not made a decision about lifting Arctic drilling ban, Carney says — Reuters</a></li>
+      <li><span class="perm">-rw- pdf</span><span class="sz num">2.4 M</span><span class="muted num">Nov 11 09:12</span><a href="#knowledge-document">MRC weekly flood situation report, week 46</a></li>
+      <li><span class="perm">-rw- md</span><span class="sz num">3 K</span><span class="muted num">Nov 10 18:05</span><a href="#knowledge-document">Note: questions for Monday standup</a></li>
+      <li><span class="perm">-rw- web</span><span class="sz num">12 K</span><span class="muted num">Nov 10 07:44</span><a href="#knowledge-document">Brazil's central bank signals high bar for rate hikes despite inflation risks — Reuters</a></li>
+      <li><span class="perm">-rw- web</span><span class="sz num">9 K</span><span class="muted num">Nov 10 07:44</span><a href="#knowledge-document">Poland's Orlen ends long-term QatarEnergy LNG contract over delivery failure — Reuters</a></li>
+      <li><span class="perm">-r-- csv</span><span class="sz num">640 K</span><span class="muted num">Nov 09 23:00</span><a href="#knowledge-document">coingecko_btc_daily_2026.csv</a></li>
+    </ul>
+    <div class="row" style="margin-top:12px"><span class="small muted">1–10 of 1,284</span><button class="btn sm right">prev</button><button class="btn sm">next</button></div>
+  </div>
+</section>
+
+<!-- ========================= DOCUMENT DETAIL ========================= -->
+<section class="view" id="knowledge-document" data-group="Knowledge" data-title="Document detail" data-path="knowledge/documents/01JD7Q" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head">
+      <div><a class="small" href="#knowledge-documents">← documents</a><h1 style="margin-top:6px">China's October crude oil imports rise to highest level since March</h1><p class="meta">Reuters · 12 Nov 2026 · 812 words</p></div>
+      <div class="actions"><a class="btn" href="#chat-grounded">ask about this</a><button class="btn danger">delete</button></div>
+    </div>
+    <div class="ck-two">
+      <article class="msg-a stack-16">
+        <p>China's crude oil imports rose in October to the highest daily rate since March, customs data showed on Wednesday, as refiners restocked ahead of new import quotas and took advantage of softer prices.</p>
+        <p>Arrivals totalled 48.7 million tonnes last month, equal to about 11.5 million barrels per day, up 6.4% from September. Independent refiners in Shandong accounted for most of the increase, according to shipping analysts.</p>
+        <p>Imports for the first ten months were 1.8% lower than a year earlier, reflecting weaker fuel demand as electric vehicles take a larger share of new car sales.</p>
+        <div><p class="small muted" style="margin-bottom:6px">entities</p><div class="row"><span class="tag">China</span><span class="tag">crude-oil</span><span class="tag">Shandong</span><span class="tag">customs</span><span class="tag">refining</span></div></div>
+      </article>
+      <aside class="stack-16">
+        <div class="pane"><div class="pane-title"><b>provenance</b></div><div class="pane-body">
+          <dl class="ck-kv">
+            <dt>source</dt><dd>capture google_news</dd>
+            <dt>origin</dt><dd><a href="#">reuters.com/markets/commodities/…</a></dd>
+            <dt>fetched</dt><dd class="num">2026-11-12 22:36:04 +07</dd>
+            <dt>sha256</dt><dd class="num muted">9f2c…41ab</dd>
+            <dt>licence</dt><dd>headline + excerpt only</dd>
+            <dt>indexed</dt><dd><span class="badge ok">yes · 6 chunks</span></dd>
+          </dl></div></div>
+        <div class="pane"><div class="pane-title"><b>related</b></div><div class="pane-body">
+          <ul class="log"><li style="grid-template-columns:1fr"><a href="#">Gold's short-term volatility contrasts with long-term bullishness</a></li><li style="grid-template-columns:1fr"><a href="#">US companies shunning Russian diesel as tanker idles off East Coast</a></li><li style="grid-template-columns:1fr"><a href="#">Poland's Orlen ends long-term QatarEnergy LNG contract</a></li></ul>
+        </div></div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= ENTITIES ========================= -->
+<section class="view" id="knowledge-entities" data-group="Knowledge" data-title="Entities" data-path="knowledge/entities" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head"><div><h1>Entities</h1><p class="meta">People, places, organisations and topics found in your sources. 3,418 entities</p></div><div class="actions"><button class="btn">merge duplicates</button></div></div>
+    <div class="row" style="margin-bottom:12px">
+      <div class="chips"><button class="chip" data-single aria-pressed="true">all</button><button class="chip" data-single>person</button><button class="chip" data-single>place</button><button class="chip" data-single>organisation</button><button class="chip" data-single>topic</button></div>
+      <div class="prompt-wrap right" style="width:280px"><input class="input" placeholder="find entity" aria-label="Find entity"></div>
+    </div>
+    <table class="data">
+      <thead><tr><th>name</th><th>type</th><th class="n">mentions</th><th class="n">sources</th><th>last seen</th><th>trend 7d</th></tr></thead>
+      <tbody>
+        <tr><td class="name">China</td><td>place</td><td class="n">1,204</td><td class="n">9</td><td class="num muted">Nov 12 22:36</td><td class="up">▁▂▃▅▆▇</td></tr>
+        <tr><td class="name">Federal Reserve</td><td>organisation</td><td class="n">412</td><td class="n">6</td><td class="num muted">Nov 12 21:10</td><td class="muted">▅▅▄▅▄▅</td></tr>
+        <tr><td class="name">Mekong River Commission</td><td>organisation</td><td class="n">188</td><td class="n">3</td><td class="num muted">Nov 16 08:00</td><td class="up">▁▁▂▄▇█</td></tr>
+        <tr><td class="name">Bitcoin</td><td>topic</td><td class="n">964</td><td class="n">4</td><td class="num muted">Nov 17 13:00</td><td class="up">▃▄▄▅▆▇</td></tr>
+        <tr><td class="name">Mark Carney</td><td>person</td><td class="n">57</td><td class="n">2</td><td class="num muted">Nov 12 22:36</td><td class="down">▆▄▃▂▂▁</td></tr>
+        <tr><td class="name">Shandong</td><td>place</td><td class="n">33</td><td class="n">2</td><td class="num muted">Nov 12 22:36</td><td class="muted">▁▁▁▃▁▂</td></tr>
+        <tr><td class="name">QatarEnergy</td><td>organisation</td><td class="n">29</td><td class="n">2</td><td class="num muted">Nov 10 07:44</td><td class="muted">▂▁▃▁▁▁</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ========================= MEMORY ========================= -->
+<section class="view" id="knowledge-memory" data-group="Knowledge" data-title="Memory" data-path="knowledge/memory" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head"><div><h1>Memory</h1><p class="meta">Facts the assistant keeps between chats. Only you can see them; forget any at any time.</p></div>
+      <div class="actions"><span class="row small">learn from chats <span class="switch on" role="switch" aria-checked="true" aria-label="Learn from chats"></span></span></div></div>
+    <ul class="log" style="font-size:13px">
+      <li style="grid-template-columns:12ch 1fr auto"><span class="t">Nov 16</span><span>Owner tracks Mekong levels at Tân Châu and Châu Đốc. <span class="small muted">from chat · Mekong water levels</span></span><button class="btn sm danger">forget</button></li>
+      <li style="grid-template-columns:12ch 1fr auto"><span class="t">Nov 14</span><span>Prefers prices in USD with VND conversion at the daily rate. <span class="small muted">from chat · Compare gold vs USD/VND</span></span><button class="btn sm danger">forget</button></li>
+      <li style="grid-template-columns:12ch 1fr auto"><span class="t">Nov 10</span><span>Monday standup brief: 5 bullets, markets first, then world. <span class="small muted">added by owner</span></span><button class="btn sm danger">forget</button></li>
+      <li style="grid-template-columns:12ch 1fr auto"><span class="t">Nov 03</span><span>Timezone is Asia/Ho_Chi_Minh; answers use 24-hour time. <span class="small muted">from settings</span></span><button class="btn sm danger">forget</button></li>
+    </ul>
+    <div class="row" style="margin-top:16px"><div class="prompt-wrap grow"><input class="input" placeholder="remember something new…" aria-label="New memory"></div><button class="btn primary">remember</button></div>
+  </div>
+</section>
+
+<!-- ========================= NEWS ========================= -->
+<section class="view" id="news" data-group="Explore" data-title="News" data-path="news" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head"><div><h1>News</h1><p class="meta">218 stories in 41 clusters · last 24 h · 6 sources</p></div><div class="actions"><button class="btn">refresh</button></div></div>
+    <div class="chips" style="margin-bottom:16px"><button class="chip" data-single aria-pressed="true">all</button><button class="chip" data-single>world</button><button class="chip" data-single>economy</button><button class="chip" data-single>energy</button><button class="chip" data-single>technology</button><button class="chip" data-single>vietnam</button><button class="chip" data-single>disasters</button></div>
+    <div class="ck-two">
+      <div>
+        <h2 class="t-h">energy <span class="muted small">· 4 clusters</span></h2>
+        <div class="ck-story"><a href="#knowledge-document">China's October crude oil imports rise to highest level since March</a><p class="small muted">Reuters · 22:36 · <span class="info">+5 similar</span> from Bloomberg, FT, Caixin</p></div>
+        <div class="ck-story"><a href="#">Poland's Orlen ends long-term QatarEnergy LNG contract over delivery failure</a><p class="small muted">Reuters · 07:44 · <span class="info">+2 similar</span></p></div>
+        <div class="ck-story"><a href="#">US companies shunning Russian diesel as tanker idles off East Coast</a><p class="small muted">Reuters · 06:12</p></div>
+        <h2 class="t-h" style="margin-top:20px">vietnam <span class="muted small">· 3 clusters</span></h2>
+        <div class="ck-story"><a href="#">Chủ tịch Quốc hội Trần Thanh Mẫn hội đàm với Chủ tịch Hội đồng Liên bang Nga</a><p class="small muted">Báo Thanh Niên · 12:10 · <span class="info">+3 similar</span></p></div>
+        <div class="ck-story"><a href="#">Mekong river levels rise 0.4 m after upstream release</a><p class="small muted">VnExpress · 10:41 · <span class="info">+1 similar</span></p></div>
+      </div>
+      <aside class="pane"><div class="pane-title"><b>top clusters</b></div><div class="pane-body">
+        <pre class="bar-ascii" style="border:0;padding:0;background:none">energy      ████████████ 31
+world       ██████████   26
+economy     ████████     21
+technology  ██████       15
+vietnam     █████        12
+disasters   ███           8</pre></div></aside>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= SEARCH ========================= -->
+<section class="view" id="search" data-group="Explore" data-title="Search" data-path="search" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head"><h1>Search</h1></div>
+    <div class="prompt-wrap" style="margin-bottom:12px"><input class="input" style="font-size:16px;padding:12px 12px 12px 28px" value="crude oil imports china" aria-label="Search query"></div>
+    <div class="tabs" role="tablist"><button role="tab" aria-selected="true">all <span class="count">47</span></button><button role="tab">documents <span class="count">31</span></button><button role="tab">events <span class="count">9</span></button><button role="tab">entities <span class="count">7</span></button></div>
+    <div class="ck-two" style="grid-template-columns:1fr 240px">
+      <div>
+        <p class="small muted" style="margin-bottom:8px">47 results · 38 ms · hybrid (bm25 + vector)</p>
+        <div class="ck-story"><a href="#knowledge-document">China's October <mark>crude oil imports</mark> rise to highest level since March</a><p class="small muted">document · Reuters · Nov 12 · score 0.92</p><p class="small" style="margin-top:4px">…<mark>China</mark>'s <mark>crude oil imports</mark> rose in October to the highest daily rate since March, customs data showed…</p></div>
+        <div class="ck-story"><a href="#">Shandong teapots lift run rates as quotas arrive</a><p class="small muted">document · Argus · Nov 11 · score 0.81</p><p class="small" style="margin-top:4px">…independent refiners drove most of the rise in <mark>crude imports</mark>…</p></div>
+        <div class="ck-story"><a href="#">Customs release: <mark>China</mark> trade data, October</a><p class="small muted">event · customs.gov.cn · Nov 12 08:00</p></div>
+        <div class="ck-story"><a href="#knowledge-entities"><mark>China</mark></a><p class="small muted">entity · place · 1,204 mentions</p></div>
+      </div>
+      <aside class="stack-16">
+        <div><p class="label">type</p><label class="check"><input type="checkbox" checked> document (31)</label><label class="check"><input type="checkbox" checked> event (9)</label><label class="check"><input type="checkbox" checked> entity (7)</label></div>
+        <div><p class="label">source</p><label class="check"><input type="checkbox" checked> google_news (24)</label><label class="check"><input type="checkbox" checked> uploads (5)</label><label class="check"><input type="checkbox"> customs (2)</label></div>
+        <div class="field"><label for="ck-range">date</label><select id="ck-range" class="input"><option>last 7 days</option><option>last 30 days</option></select></div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= TIMELINE ========================= -->
+<section class="view" id="timeline" data-group="Explore" data-title="Timeline" data-path="timeline" data-rail="dashboard">
+  <div class="page" style="padding:0 24px 24px">
+    <div class="page-head"><div><h1>Timeline</h1><p class="meta">Events across your sources, newest first</p></div><div class="actions"><div class="chips"><button class="chip" aria-pressed="true">events</button><button class="chip" aria-pressed="true">documents</button><button class="chip">jobs</button></div></div></div>
+    <ul class="ck-tl">
+      <li class="day"><span class="g">*</span><span class="d">Mon 17 Nov</span><span></span></li>
+      <li><span class="g">│ ●</span><span class="d num">13:00</span><span>BTC/USD crosses 97,000 <span class="small muted">coingecko</span></span></li>
+      <li><span class="g">│ ●</span><span class="d num">10:41</span><span>Mekong at Tân Châu reaches 3.12 m <span class="small muted">mrc_gauges</span></span></li>
+      <li><span class="g">│ ├─</span><span class="d num">10:41</span><span class="muted">3 related documents linked</span></li>
+      <li><span class="g">│ ●</span><span class="d num">08:00</span><span class="err">alpha_vantage fetch timed out (20 s) <span class="small muted">job #4812</span></span></li>
+      <li class="day"><span class="g">*</span><span class="d">Sun 16 Nov</span><span></span></li>
+      <li><span class="g">│ ●</span><span class="d num">21:14</span><span class="warn">M5.1 earthquake, 84 km SW of Padang <span class="small muted">emsc</span></span></li>
+      <li><span class="g">│ ●</span><span class="d num">18:02</span><span>Wildfire perimeter contained at 62% <span class="small muted">nasa_firms</span></span></li>
+      <li><span class="g">│ ●</span><span class="d num">08:00</span><span>MRC 5-day forecast published <span class="small muted">mrcmekong.org</span></span></li>
+      <li class="day"><span class="g">*</span><span class="d">Sat 15 Nov</span><span></span></li>
+      <li><span class="g">│ ●</span><span class="d num">14:20</span><span>Upstream release 2,800 m³/s begins <span class="small muted">mrcmekong.org</span></span></li>
+      <li><span class="g">┴</span><span class="d"></span><span class="small muted"><a href="#">load older…</a></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ========================= SOURCE WIZARD ========================= -->
+<section class="view" id="source-wizard" data-group="Explore" data-title="Add datasource wizard" data-base="settings-sources" data-path="settings/sources · add" data-rail="settings">
+  <div class="scrim"></div>
+  <div class="dialog" role="dialog" aria-label="Add datasource">
+    <div class="dialog-head">
+      <h2>Add datasource · Open-Meteo forecast</h2>
+      <p class="ck-steps" style="margin-top:8px"><span class="done">1 pick source</span><span>→</span><span class="done">2 configure</span><span>→</span><span class="on">3 test</span><span>→</span><span>4 schedule</span></p>
+    </div>
+    <div class="dialog-body stack-16">
+      <dl class="ck-kv"><dt>location</dt><dd>Ho Chi Minh City (10.82, 106.63)</dd><dt>variables</dt><dd>temperature_2m, precipitation, wind_speed_10m</dd><dt>egress</dt><dd>api.open-meteo.com · no key</dd></dl>
+<pre><span class="tok-c">$ umwelt source test open_meteo</span>
+<span class="ok">GET</span> https://api.open-meteo.com/v1/forecast?latitude=10.82&amp;… <span class="ok">200 OK</span> 412ms
+parse  hourly[168] → 24 records (dedupe 144)
+schema ok · units °C, mm, km/h
+sample {"time":"2026-11-17T13:00","temperature_2m":31.4,"precipitation":0.0}
+<span class="ok">✓ test passed</span> · 24 records ready</pre>
+      <div class="alert ok"><p class="alert-k grow">Test passed. Next, choose how often to collect.</p></div>
+    </div>
+    <div class="dialog-foot"><a class="btn ghost" href="#settings-sources">cancel</a><button class="btn">back</button><button class="btn primary">next: schedule</button></div>
+  </div>
+</section>

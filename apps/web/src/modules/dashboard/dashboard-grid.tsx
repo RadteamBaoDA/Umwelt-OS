@@ -23,6 +23,8 @@ export interface DashboardGridProps {
   isMobileView?: boolean;
   /** Shows the read-only two-column tablet flow of the desktop layout while viewing. */
   isTabletView?: boolean;
+  /** Grid width in px from which the tablet flow gives way to the stored desktop geometry (unset = never). */
+  tabletMaxWidth?: number;
   /** Reports the current local readable projection for explicit owner adoption. */
   onReadableProjectionChange?: (placements: DashboardPlacement[] | null) => void;
   /** Reports root width-derived unit metrics for new mobile instance default heights. */
@@ -272,6 +274,7 @@ export function DashboardGrid(props: DashboardGridProps) {
     columnCount,
     isMobileView,
     isTabletView,
+    tabletMaxWidth: props.tabletMaxWidth,
     isEditMode,
     breakpoint,
     placements,

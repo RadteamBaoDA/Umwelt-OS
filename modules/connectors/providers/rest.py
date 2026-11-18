@@ -16,8 +16,8 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from ipaddress import ip_address
 from socket import getaddrinfo
-from typing import Any
-from urllib.parse import urljoin, urlsplit
+from typing import Any, NoReturn
+from urllib.parse import SplitResult, urljoin, urlsplit
 
 import httpx
 
@@ -126,6 +126,32 @@ MAX_REDIRECTS = 3
 _CROSS_ORIGIN_HEADERS = frozenset({"accept", "accept-encoding", "accept-language", "user-agent"})
 
 
+def _prepare_request_body(
+    headers: dict[str, str],
+    json_body: bytes | None,
+    request_body: bytes | None,
+    request_content_type: str | None,
+) -> tuple[str, bytes | None]:
+    """Select GET or POST and validate the content type for fixed protocol bodies."""
+    if json_body is not None and request_body is not None:
+        raise ValueError("request_body_conflict")
+    if request_content_type is not None and request_body is None:
+        raise ValueError("request_content_type_without_body")
+    if request_body is not None and not request_content_type:
+        raise ValueError("request_content_type_required")
+    body = request_body if request_body is not None else json_body
+    if request_body is not None:
+        content_type = request_content_type or ""
+        existing = next((value for name, value in headers.items() if name.lower() == "content-type"), None)
+        if existing and existing.casefold() != content_type.casefold():
+            raise ValueError("request_content_type_conflict")
+        if existing is None:
+            headers["Content-Type"] = content_type
+    elif json_body is not None:
+        headers.setdefault("Content-Type", "application/json")
+    return ("POST" if body is not None else "GET"), body
+
+
 async def _authorize_hop(budget: asyncio.Timeout, before_send: BeforeSend, *, first: bool) -> None:
     """Fence one network hop: the first runs ``before_send`` (debit), later hops only ``recheck`` if offered.
 
@@ -142,6 +168,27 @@ async def _authorize_hop(budget: asyncio.Timeout, before_send: BeforeSend, *, fi
         await recheck()
 
 
+async def _resolve_hop(current: str, resolve: Resolver) -> tuple[SplitResult, list[str]]:
+    """Validate one hop URL and resolve it to public addresses.
+
+    Raises ``UnsafeDestination`` for a non-http(s) scheme, missing host, embedded credentials,
+    or any resolved address that is not public. Every hop is re-resolved and re-checked.
+    """
+    parts = urlsplit(current)
+    if (
+        parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+    ):
+        raise UnsafeDestination("url_not_allowed")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    addresses = await resolve(parts.hostname, port)
+    if not addresses or any(not is_public_address(ip_address(address)) for address in addresses):
+        raise UnsafeDestination("non_public_destination")
+    return parts, addresses
+
+
 async def fetch_bounded(
     url: str,
     *,
@@ -152,25 +199,34 @@ async def fetch_bounded(
     max_bytes: int = MAX_PAGE_BYTES,
     timeout: float = REQUEST_TIMEOUT_SECONDS,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
     json_body: bytes | None = None,
+    request_body: bytes | None = None,
+    request_content_type: str | None = None,
+    allow_redirects: bool = True,
+    on_forbidden: Callable[[bytes], None] | None = None,
+    on_bad_request: Callable[[bytes], None] | None = None,
 ) -> Fetched:
-    """GET (or, with ``json_body``, POST that JSON to) one URL through the pinned public destination with byte, status and time bounds.
+    """GET or bounded POST through the pinned public destination with byte, status and time bounds.
 
     ``before_send`` runs exactly once, after resolution and immediately before the request is
     handed to the transport; it is where the caller revalidates fences and debits quota, and
     raising from it aborts the send. The time it takes is credited back to the HTTP deadline. Redirect hops
     share that one authorization and debit; when ``before_send`` has a ``recheck`` (a SendGate) it is awaited
     before each later hop to revalidate authority without debiting. ``json_body`` is a fixed, already-serialised search query for read-only
-    POST search APIs (VietnamWorks); it never carries credentials or owner content. 429 raises ``ProviderRateLimited`` with the full
+    POST search APIs (VietnamWorks); it never carries credentials or owner content. ``request_body`` supports fixed
+    non-JSON protocol bodies only when paired with their explicit ``request_content_type``; it is never retried or
+    redirected. 429 raises ``ProviderRateLimited`` with the full
     Retry-After; up to 3 GET redirects are followed (each hop re-resolved, re-checked and pinned, https->http refused,
-    only non-secret headers kept cross-origin, one overall deadline and byte cap); other 3xx raise ``UnsafeDestination``; 304 returns no body.
+    only non-secret headers kept cross-origin, one overall deadline and byte cap). Authenticated fixed-endpoint
+    callers can disable all redirects with ``allow_redirects=False``; other 3xx raise ``UnsafeDestination``; 304 returns no body.
+    Optional ``on_bad_request`` and ``on_forbidden`` classifiers receive bounded 400 and 403 bodies,
+    respectively, and may raise typed, redacted provider errors.
     """
     # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
     # User-Agent) always win, compared case-insensitively.
     merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
     if not any(name.lower() == "user-agent" for name in merged):
         merged["User-Agent"] = DEFAULT_USER_AGENT
-    if json_body is not None:
-        merged.setdefault("Content-Type", "application/json")
+    method, post_body = _prepare_request_body(merged, json_body, request_body, request_content_type)
     current = url
     first_origin = _origin(url)
     sent = False
@@ -186,21 +242,7 @@ async def fetch_bounded(
         ) as client,
     ):
         for hop in range(MAX_REDIRECTS + 1):
-            parts = urlsplit(current)
-            if (
-                parts.scheme not in {"http", "https"}
-                or not parts.hostname
-                or parts.username
-                or parts.password
-            ):
-                raise UnsafeDestination("url_not_allowed")
-            port = parts.port or (443 if parts.scheme == "https" else 80)
-            # Every hop is re-resolved and re-checked, then pinned to a validated address.
-            addresses = await resolve(parts.hostname, port)
-            if not addresses or any(
-                not is_public_address(ip_address(address)) for address in addresses
-            ):
-                raise UnsafeDestination("non_public_destination")
+            parts, addresses = await _resolve_hop(current, resolve)
             hop_headers = merged
             if _origin(current) != first_origin:
                 # Allowlist: never forward unknown (possibly secret-bearing) headers to a different origin.
@@ -213,11 +255,11 @@ async def fetch_bounded(
             await _authorize_hop(budget, before_send, first=not sent)
             sent = True
             async with client.stream(
-                "GET" if json_body is None else "POST",
+                method,
                 pinned,
                 headers=request_headers,
                 extensions=extensions,
-                content=json_body,
+                content=post_body,
             ) as response:
                 status = response.status_code
                 if status == 429:
@@ -227,7 +269,7 @@ async def fetch_bounded(
                 if 300 <= status < 400:
                     location = response.headers.get("location")
                     # POST bodies are never replayed; only GET redirects are followed.
-                    if json_body is not None or not location or hop >= MAX_REDIRECTS:
+                    if not allow_redirects or post_body is not None or not location or hop >= MAX_REDIRECTS:
                         raise UnsafeDestination("redirect_blocked")
                     target = urljoin(current, location)
                     if parts.scheme == "https" and urlsplit(target).scheme != "https":
@@ -235,7 +277,7 @@ async def fetch_bounded(
                     current = target
                     continue
                 if status >= 400:
-                    raise ProviderHttpError(status)
+                    await _raise_http_error(response, max_bytes, on_forbidden, on_bad_request)
                 advertised = response.headers.get("content-length")
                 if advertised is not None and advertised.isdigit() and int(advertised) > max_bytes:
                     raise CollectionIncomplete
@@ -248,6 +290,24 @@ async def fetch_bounded(
                     current if current != url else None,
                 )
     raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
+
+
+async def _raise_http_error(
+    response: httpx.Response,
+    max_bytes: int,
+    on_forbidden: Callable[[bytes], None] | None,
+    on_bad_request: Callable[[bytes], None] | None,
+) -> NoReturn:
+    """Raise a redacted status error after the matching opt-in classifier reads a bounded body."""
+    classifier = {400: on_bad_request, 403: on_forbidden}.get(response.status_code)
+    if classifier is not None:
+        # The callback may inspect provider details, but the fallback error must never carry them.
+        try:
+            details = await _read_capped(response, min(max_bytes, 16_384))
+        except CollectionIncomplete:
+            details = b""
+        classifier(details)
+    raise ProviderHttpError(response.status_code)
 
 
 _WBITS = {"gzip": 16 + zlib.MAX_WBITS, "x-gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}

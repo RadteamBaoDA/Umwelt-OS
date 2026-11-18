@@ -1,0 +1,78 @@
+/*
+ * Terminal skin for the chat transcript and composer. Imported by chat-transcript.tsx.
+ * Every rule is scoped under html[data-skin='terminal'], so the default skin computes exactly as before.
+ * Ornaments are pseudo-elements only; markup, roles and text are untouched.
+ */
+
+/* User prompt: a `$` prompt line instead of a raised bubble. The bubble is the MessageBody root (first div.bg-raised). */
+html[data-skin='terminal'] [data-role='user'] > div.bg-raised {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+/* Prompt text matches the design's `owner@umwelt:~$ ` line; the alt text after `/` is empty so it is not announced. */
+html[data-skin='terminal'] [data-role='user'] > div.bg-raised::before {
+  content: 'owner@umwelt:~$ ' / '';
+  color: var(--accent);
+}
+
+/* ASCII wordmark above the empty-state copy. Terminal only: the default skin gets no layout box at all. Clipped
+   rather than wrapped so a narrow column never overflows the transcript. */
+.chat-empty-banner {
+  display: none;
+}
+
+html[data-skin='terminal'] .chat-empty-banner {
+  display: block;
+  margin: 0 0 12px;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.15;
+  white-space: pre;
+}
+
+/* Tool steps: `→` arrow per step, matching the design's ck-tool line. Step rows come from ChatStepList. */
+html[data-skin='terminal'] [data-testid='step-list'] li[data-state]::before {
+  content: '→ ' / '';
+  color: var(--accent);
+}
+
+/* Composer: flat box, accent border on focus instead of the default ring. */
+html[data-skin='terminal'] .border-control:has(> [data-slot='textarea']) {
+  border-color: var(--control);
+  background: var(--bg);
+  padding: 10px 12px;
+}
+
+/* Focus is shown by the outer box (accent border). The inner field draws no ring of its own. */
+html[data-skin='terminal'] .border-control:has(> [data-slot='textarea']):focus-within {
+  border-color: var(--accent);
+}
+
+html[data-skin='terminal'] .border-control:has(> [data-slot='textarea']) > [data-slot='textarea'] {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+  background: transparent;
+  padding-inline: 0;
+}
+
+/* Send/attach buttons inherit the bracketed button ornament from globals.css. */
+html[data-skin='terminal'] [data-slot='textarea'] {
+  caret-color: var(--accent);
+}
+
+/* Missing-provider notice reads as a WARN log line in the terminal skin (design: orange rule + WARN tag). */
+html[data-skin='terminal'] .chat-provider-notice {
+  border-left: 2px solid var(--status-warning);
+}
+html[data-skin='terminal'] .chat-provider-notice p:first-child {
+  color: var(--status-warning);
+}
+html[data-skin='terminal'] .chat-provider-notice p:first-child::before {
+  content: 'WARN ' / '';
+  font-weight: 700;
+}

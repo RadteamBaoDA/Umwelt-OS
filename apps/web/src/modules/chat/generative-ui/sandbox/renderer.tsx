@@ -10,56 +10,90 @@
  */
 
 import * as React from 'react';
-import { Loader2Icon } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { usePromptBridge } from '../bridge';
 import { genUiCopy } from '../copy';
-import type { SandboxTheme } from '../design-system';
+import type { SandboxPalette, SandboxTheme } from '../design-system';
 import { ExportOverlay } from './export-overlay';
 import { buildStandaloneHtmlDocument } from './export-utils';
 import { buildFrameDocument, createFrameNonce, frameDocumentProps } from './frame-content';
 import { processPartialHtml } from './process-partial-html';
 import { getStreamingStage, validateSandboxedUiArgs, type GenerativeUIPayload, type SandboxedUiArgs } from './schema';
+import { resolveTerminalPalette } from './terminal-palette';
 import { enforceStrictSandboxAttribute, executeSandboxScripts, syncSandboxTheme, updateSandboxContent } from './websandbox-loader';
 
 /** Frame height used before the first resize report and without `initialHeight`. */
 const DEFAULT_INITIAL_HEIGHT = 320;
 
+/** What the sandbox renders with: its theme plus palette overrides (empty outside the terminal skin). */
+interface SandboxAppearance {
+  theme: SandboxTheme;
+  palette: SandboxPalette;
+}
+
 /**
- * Detects the active Umwelt-OS theme (`'light'` or `'dark'`) from `document.documentElement`
- * when an explicit `theme` prop is not passed.
+ * Reads the appearance of the current document. The theme is dark when the app is dark or the terminal skin is on;
+ * the palette holds the terminal colours and mono font only under `data-skin="terminal"`.
+ *
+ * @returns The detected appearance; server-side (no document) it is light with no palette.
+ */
+function readDocumentAppearance(): SandboxAppearance {
+  const root = typeof document === 'undefined' ? null : document.documentElement;
+  return { theme: documentIsDark() ? 'dark' : 'light', palette: resolveTerminalPalette(root) };
+}
+
+/**
+ * Two appearances are the same when the theme matches and the palette has the same entries; used so a DOM mutation
+ * that changes nothing does not re-render the renderer.
+ *
+ * @param a - First appearance.
+ * @param b - Second appearance.
+ * @returns True when both the theme and every palette entry match.
+ */
+function sameAppearance(a: SandboxAppearance, b: SandboxAppearance): boolean {
+  return a.theme === b.theme && JSON.stringify(a.palette) === JSON.stringify(b.palette);
+}
+
+/**
+ * Resolves the appearance the sandbox renders with, from `document.documentElement` unless overridden. The explicit
+ * `theme` prop wins over the detected theme; the palette still follows the terminal skin in that case. A
+ * MutationObserver watches `class`, `data-theme` and `data-skin` so a skin or theme switch re-renders the sandbox.
  *
  * @param explicitTheme - Optional theme override prop.
- * @returns Active `SandboxTheme` (`'light'` or `'dark'`).
+ * @returns Active appearance (`theme` is `'light'` or `'dark'`, `palette` is the terminal overrides or `{}`).
  */
-function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
-  const [detectedTheme, setDetectedTheme] = React.useState<SandboxTheme>(() => {
-    if (explicitTheme) return explicitTheme;
-    if (typeof document !== 'undefined' && document.documentElement.classList.contains('dark')) {
-      return 'dark';
-    }
-    return 'light';
-  });
+function useResolvedSandboxAppearance(explicitTheme?: SandboxTheme): SandboxAppearance {
+  const [detected, setDetected] = React.useState<SandboxAppearance>(readDocumentAppearance);
 
   React.useEffect(() => {
-    if (explicitTheme) {
-      return;
-    }
     if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') {
       return;
     }
     const updateFromDom = () => {
-      const isDark = document.documentElement.classList.contains('dark') || document.documentElement.getAttribute('data-theme') === 'dark';
-      setDetectedTheme(isDark ? 'dark' : 'light');
+      const next = readDocumentAppearance();
+      setDetected((prev) => (sameAppearance(prev, next) ? prev : next));
     };
     const observer = new MutationObserver(updateFromDom);
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'data-theme'],
+      attributeFilter: ['class', 'data-theme', 'data-skin'],
     });
     return () => observer.disconnect();
-  }, [explicitTheme]);
+  }, []);
 
-  return explicitTheme ?? detectedTheme;
+  return React.useMemo(() => (explicitTheme ? { theme: explicitTheme, palette: detected.palette } : detected), [explicitTheme, detected]);
+}
+
+/**
+ * Reports whether the sandbox should render its dark palette for the current document. Dark when the app theme class
+ * or `data-theme` says dark, and always dark under the terminal skin (its palette is dark regardless of theme).
+ *
+ * @returns True when the document is dark or the terminal skin is applied; false on the server.
+ */
+function documentIsDark(): boolean {
+  if (typeof document === 'undefined') return false;
+  const root = document.documentElement;
+  return root.classList.contains('dark') || root.getAttribute('data-theme') === 'dark' || root.getAttribute('data-skin') === 'terminal';
 }
 
 /**
@@ -177,6 +211,8 @@ interface FrameSyncArgs {
   isStreaming: boolean;
   isCompleted: boolean;
   theme: SandboxTheme;
+  /** Terminal palette overrides pushed with the theme; empty outside the terminal skin. */
+  palette: SandboxPalette;
   /** Receives this frame's validated, clamped content height (delivered by the prompt bridge's single listener). */
   onResize: (height: number) => void;
 }
@@ -199,6 +235,7 @@ function useSandboxFrameSync({
   isStreaming,
   isCompleted,
   theme,
+  palette,
   onResize,
 }: FrameSyncArgs): () => void {
   const bridge = usePromptBridge();
@@ -237,12 +274,12 @@ function useSandboxFrameSync({
     updateSandboxContent(iframe, merged.html ?? '', merged.css);
   }, [hasHtmlContent, merged.html, merged.css, frameEpoch, iframeRef]);
 
-  // Synchronize active Umwelt-OS theme with the sandboxed iframe.
+  // Synchronize active Umwelt-OS theme (and terminal palette, when set) with the sandboxed iframe.
   React.useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe) return;
-    syncSandboxTheme(iframe, theme);
-  }, [theme, hasHtmlContent, frameEpoch, iframeRef]);
+    syncSandboxTheme(iframe, theme, palette);
+  }, [theme, palette, hasHtmlContent, frameEpoch, iframeRef]);
 
   // Streaming (re)start: a partial widget must never run JS, and a later completion must re-run all of it.
   React.useEffect(() => {
@@ -277,10 +314,11 @@ function useSandboxFrameSync({
  *
  * @returns Per-frame nonce (shared with the bridge registry, the fullscreen preview and host->frame posts) and docs.
  */
-function useSandboxDocuments(merged: MergedArgs, isCompleted: boolean, theme: SandboxTheme, title: string) {
+function useSandboxDocuments(merged: MergedArgs, isCompleted: boolean, theme: SandboxTheme, palette: SandboxPalette, title: string) {
   const [frameNonce] = React.useState(createFrameNonce);
+  // The initial palette is baked in so the first paint already has it; later changes arrive via the theme sync.
   const [baseSrcDoc] = React.useState(() =>
-    buildFrameDocument({ nonce: frameNonce, html: '', css: '', theme, executeScripts: false, title }),
+    buildFrameDocument({ nonce: frameNonce, html: '', css: '', theme, palette, executeScripts: false, title }),
   );
   const previewSrcDoc = React.useMemo(
     () =>
@@ -291,12 +329,13 @@ function useSandboxDocuments(merged: MergedArgs, isCompleted: boolean, theme: Sa
             jsFunctions: merged.jsFunctions ?? '',
             jsExpressions: merged.jsExpressions ?? '',
             theme,
+            palette,
             executeScripts: true,
             title,
             nonce: frameNonce,
           })
         : baseSrcDoc,
-    [frameNonce, isCompleted, baseSrcDoc, merged.html, merged.css, merged.jsFunctions, merged.jsExpressions, theme, title],
+    [frameNonce, isCompleted, baseSrcDoc, merged.html, merged.css, merged.jsFunctions, merged.jsExpressions, theme, palette, title],
   );
   return { frameNonce, baseSrcDoc, previewSrcDoc };
 }
@@ -320,7 +359,7 @@ function StreamingPlaceholder({ chip, message }: { chip: boolean; message: strin
       }
       data-testid="sandboxed-ui-placeholder"
     >
-      <Loader2Icon className="size-4 animate-spin text-primary" />
+      <Spinner className="size-4 text-primary" />
       <span>{message}</span>
     </div>
   );
@@ -379,7 +418,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const isStreaming = status === 'streaming';
   const isCompleted = status === 'completed';
 
-  const resolvedTheme = useResolvedSandboxTheme(explicitTheme);
+  const { theme: resolvedTheme, palette } = useResolvedSandboxAppearance(explicitTheme);
   const stage = getStreamingStage(mergedRawArgs, status);
   const sanitizedHtml = React.useMemo(() => processPartialHtml(mergedRawArgs.html ?? ''), [mergedRawArgs.html]);
   const hasHtmlContent = sanitizedHtml.trim().length > 0;
@@ -387,7 +426,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   // A discarded widget keeps its frame while the model rebuilds it; say so instead of showing generic progress.
   const activePlaceholder = resolvePlaceholder(payload, rotatingPlaceholder);
   const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUi.default.widgetTitle;
-  const { frameNonce, baseSrcDoc, previewSrcDoc } = useSandboxDocuments(mergedRawArgs, isCompleted, resolvedTheme, resolvedTitle);
+  const { frameNonce, baseSrcDoc, previewSrcDoc } = useSandboxDocuments(mergedRawArgs, isCompleted, resolvedTheme, palette, resolvedTitle);
   const [reportedHeight, setReportedHeight] = React.useState<number | null>(null);
   const handleFrameLoad = useSandboxFrameSync({
     iframeRef,
@@ -398,6 +437,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
     isStreaming,
     isCompleted,
     theme: resolvedTheme,
+    palette,
     onResize: setReportedHeight,
   });
   const effectiveHeight = reportedHeight ?? mergedRawArgs.initialHeight ?? DEFAULT_INITIAL_HEIGHT;
@@ -415,6 +455,8 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
       },
       resolvedTitle,
       resolvedTheme,
+      undefined,
+      palette,
     );
   }, [
     isCompleted,
@@ -425,6 +467,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
     mergedRawArgs.jsExpressions,
     resolvedTitle,
     resolvedTheme,
+    palette,
   ]);
 
   return (

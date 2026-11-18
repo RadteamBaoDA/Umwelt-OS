@@ -26,6 +26,8 @@ import { BriefText } from './brief-text';
 import { briefCitationHref } from './brief-citation-href';
 import { useSession } from '@/core/session';
 import { getRuleConversationId } from '@/modules/automations';
+import { FootBarSlot } from '@/components/gadget-title-slot';
+import { useReportGadgetFreshness } from './gadget-freshness';
 
 export { BriefText };
 
@@ -135,7 +137,7 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
   const t = useTranslations('daily');
   const brief = data.brief ?? null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="brief-saved-head flex flex-wrap items-center justify-between gap-2">
       <h3 id="saved-brief-heading" className="flex items-center gap-1.5 text-sm font-semibold">
         <Sparkles className="h-4 w-4 text-muted-foreground" aria-hidden />
         {t('savedBrief')}
@@ -179,11 +181,11 @@ export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) 
       )}
       <BriefText key={`${brief.id}:${brief.revision}`} brief={brief} />
       {brief.citations.length > 0 && (
-        <ol className="space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
+        <ol className="brief-refs space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
           {brief.citations.map((citation) => {
             const href = briefCitationHref(citation.kind, citation.id);
             return (
-              <li key={citation.ref}>
+              <li key={citation.ref} id={`brief-ref-${citation.ref}`}>
                 [{citation.ref}]{' '}
                 {href ? (
                   <Link href={href} className="underline">
@@ -222,7 +224,7 @@ function BriefOwnerActions({
   const chat = useChatController();
   const { date, timezone } = useSelectedDay();
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="brief-actions flex flex-wrap gap-2">
       <Button type="button" size="sm" disabled={!canGenerate || generating} onClick={onGenerate}>
         <RefreshCw className="h-3.5 w-3.5" aria-hidden />
         {generating ? t('generating') : brief ? t('regenerate') : t('generate.label')}
@@ -248,7 +250,7 @@ function BriefOwnerActions({
 function CurrentRecords({ data, display }: { data: DailyContextData; display: DisplayPrefs }) {
   const t = useTranslations('daily');
   return (
-    <section aria-labelledby="current-records-heading" className="space-y-2">
+    <section aria-labelledby="current-records-heading" className="brief-records space-y-2">
       <h3 id="current-records-heading" className="text-sm font-semibold">
         {t('currentRecords.label')}
       </h3>
@@ -262,6 +264,19 @@ function CurrentRecords({ data, display }: { data: DailyContextData; display: Di
       </div>
     </section>
   );
+}
+
+/**
+ * Terminal pane foot (demo `.pane-foot`): `Tasks due N · Active goals M` on the left, and the current-record refresh
+ * time reported as the gadget freshness ("updated ..." on the right). Portaled only in the terminal skin.
+ *
+ * @param props.data Selected-day context whose widgets carry the task and goal counts.
+ */
+function BriefFootNote({ data }: { data: DailyContextData }) {
+  const t = useTranslations('daily');
+  useReportGadgetFreshness(data.widgets_updated_at);
+  const count = (id: string) => data.widgets.find((widget) => widget.id === id)?.items.length ?? 0;
+  return <FootBarSlot>{t('foot.summary', { tasks: count('dayTasks'), goals: count('dayGoals') })}</FootBarSlot>;
 }
 
 /** Owner/admin body: loading and error notices, saved brief section and current records. */
@@ -284,6 +299,7 @@ function OwnerBriefBody({
   const brief = context.data?.brief ?? null;
   return (
     <>
+      {context.data && <BriefFootNote data={context.data} />}
       {context.isLoading && (
         <p role="status" className="text-sm text-muted-foreground">
           {t('loading.label')}
@@ -296,7 +312,7 @@ function OwnerBriefBody({
       )}
       {context.data && (
         <>
-          <section aria-labelledby="saved-brief-heading" className="space-y-2 border-b border-border pb-3">
+          <section aria-labelledby="saved-brief-heading" className="brief-saved space-y-2 border-b border-border pb-3">
             <SavedBriefHeader data={context.data} display={display} />
             <SavedBriefBody brief={brief} />
             {errorKey && (
@@ -333,8 +349,8 @@ export function DailyBrief() {
   const { session, context, generate, errorKey } = useDailyBrief(date, timezone, canReadOwnerWorkspace);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5 pb-4">
-      <header className="flex flex-nowrap items-center justify-between gap-2">
+    <div className="brief-root flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5 pb-4">
+      <header className="brief-head flex flex-nowrap items-center justify-between gap-2">
         <DateSelector />
         {canReadOwnerWorkspace && context.data && context.data.relation !== 'today' && (
           <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(RELATION_KEY[context.data.relation])}</span>

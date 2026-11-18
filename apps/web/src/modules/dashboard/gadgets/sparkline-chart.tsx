@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { Area, AreaChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { ChartDataPoint } from '@/core/charts/chart-format';
 
 /** Props for the axis-free Sparkline. */
@@ -18,6 +18,8 @@ export interface SparklineProps {
   tooltip?: boolean;
   /** Use a plain line instead of a filled area. */
   line?: boolean;
+  /** Decorative axes: three y ticks (max, mid, min) and the first and last x labels; formatters are supplied by the caller. */
+  axes?: { y: (value: number) => string; x: (ms: number) => string };
 }
 
 /**
@@ -33,12 +35,13 @@ function toMs(t: string | number): number {
 /**
  * Recharts implementation of the sparkline, loaded lazily by `Sparkline` so Recharts stays out of the initial bundle.
  * Tiny axis-free trend chart in `--chart-1`. The sized, `aria-hidden` wrapper lives in `Sparkline`, so it exists (with the caller's height) before this chunk loads.
+ * With `axes` it also draws three y ticks and first/last x labels (decorative; the chart stays inside an `aria-hidden` wrapper).
  * The forecast tail is a second dashed series that shares the boundary point so the line stays continuous.
  *
  * @param props Data, size and optional forecast boundary / tooltip.
  * @returns The bare chart filling the wrapper width (or `width` px when given), or null with fewer than two points.
  */
-export function SparklineChart({ data, height = 40, width, forecastFrom, tooltip = false, line = false }: SparklineProps) {
+export function SparklineChart({ data, height = 40, width, forecastFrom, tooltip = false, line = false, axes }: SparklineProps) {
   const rows = useMemo(() => {
     const mapped = data.map((p) => ({ ts: toMs(p.timestamp), past: p.value as number | null, future: null as number | null }));
     if (forecastFrom === undefined) return mapped;
@@ -55,11 +58,14 @@ export function SparklineChart({ data, height = 40, width, forecastFrom, tooltip
   if (data.length < 2) return null;
 
   const stroke = 'var(--chart-1)';
-  const margin = { top: 2, right: 2, bottom: 2, left: 2 };
+  const margin = axes ? { top: 10, right: 6, bottom: 2, left: 2 } : { top: 2, right: 2, bottom: 2, left: 2 };
+  const axisNodes = axes
+    ? chartAxes(axes, data, rows[0].ts, rows[rows.length - 1].ts)
+    : [<XAxis key="x" dataKey="ts" hide />, <YAxis key="y" hide domain={['dataMin', 'dataMax']} />];
   const common = (
     <>
-      <XAxis dataKey="ts" hide />
-      <YAxis hide domain={['dataMin', 'dataMax']} />
+      {axes && <CartesianGrid vertical={false} stroke="var(--rule, var(--border))" />}
+      {axisNodes}
       {tooltip && <Tooltip content={<SparkTooltip data={data} />} />}
     </>
   );
@@ -113,6 +119,53 @@ export function SparklineChart({ data, height = 40, width, forecastFrom, tooltip
   ) : (
     chart
   );
+}
+
+/**
+ * Builds the visible axes of a sparkline: three y ticks (max, mid, min) and the first and last x labels, the first
+ * left-aligned and the last right-aligned so neither is clipped. Returned as elements (not a component) because
+ * Recharts reads its axes from the chart's direct children.
+ *
+ * @param axes Tick formatters.
+ * @param data Plotted points (at least two).
+ * @param first Epoch ms of the first point.
+ * @param last Epoch ms of the last point.
+ * @returns The grid-less x and y axis elements.
+ */
+function chartAxes(axes: NonNullable<SparklineProps['axes']>, data: ChartDataPoint[], first: number, last: number) {
+  const values = data.map((p) => p.value);
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const axisText = { fill: 'var(--muted-foreground, var(--muted))', fontSize: 11, fontFamily: 'var(--font-mono, inherit)' };
+  return [
+    <XAxis
+      key="x"
+      dataKey="ts"
+      type="number"
+      scale="time"
+      domain={[first, last]}
+      ticks={[first, last]}
+      tickLine={false}
+      axisLine={false}
+      interval={0}
+      height={18}
+      tick={(props: { x?: number | string; y?: number | string; index?: number; payload?: { value: number } }) => (
+        <text x={Number(props.x)} y={Number(props.y) + 10} textAnchor={props.index === 0 ? 'start' : 'end'} style={axisText}>
+          {axes.x(props.payload?.value ?? 0)}
+        </text>
+      )}
+    />,
+    <YAxis
+      key="y"
+      domain={[lo, hi]}
+      ticks={[hi, (hi + lo) / 2, lo]}
+      tickFormatter={axes.y}
+      tickLine={false}
+      axisLine={false}
+      width={40}
+      tick={axisText}
+    />,
+  ];
 }
 
 /**

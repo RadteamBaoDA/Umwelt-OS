@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PasswordInput } from '@/components/ui/password-input';
+import './settings-skin.css';
 
 /**
  * True when a status node renders no text: a bare `<p>` whose children are empty strings, null or false.

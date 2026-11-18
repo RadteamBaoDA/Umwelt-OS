@@ -225,6 +225,17 @@ async def _decode_json_async(body: bytes) -> Any:
     return await to_thread_joined(_decode_json, body)
 
 
+def _observation_title(code: object, coding: list[dict[str, str]]) -> str:
+    """Return the first coding ``display``, else ``code.text``, trimmed to 200 characters.
+
+    Returns ``""`` when neither is present so the ingestion title fallback (the id) applies.
+    """
+    display = next((item["display"] for item in coding if item.get("display")), None)
+    text = code.get("text") if isinstance(code, dict) else None
+    chosen = display or (text if isinstance(text, str) else "")
+    return chosen.strip()[:200]
+
+
 def _instant(value: object) -> datetime:
     """Parse a provider timestamp as an aware UTC instant without inventing missing values."""
     if not isinstance(value, str) or not value:
@@ -245,7 +256,9 @@ def map_fhir_observation(
 
     Non-Observation resources, other patients, and unsupported value types are skipped. A valid
     quantity retains its exact decimal representation and unit in metadata; no patient data from
-    another reference is admitted.
+    another reference is admitted. The title is the first coding ``display`` (else ``code.text``)
+    trimmed to 200 characters; when neither is present it is empty and ingestion falls back to the
+    id.
     """
     if collected_at.tzinfo is None:
         raise LocalServiceError("collection_time_invalid")
@@ -322,6 +335,7 @@ def map_fhir_observation(
         collected_at=collected_at.astimezone(UTC),
         version=str(version) if isinstance(version, str) else None,
         metadata={
+            "title": _observation_title(resource.get("code"), coding),
             "patient_id": patient_id,
             "observation_id": identifier,
             "value": exact_value,
@@ -448,6 +462,9 @@ def _ha_resume_index(cursor: str | None, scope_hash: str, entity_count: int) -> 
 def _ha_state_record(state: object, entity_id: str, collected: datetime) -> IngestionRecord:
     """Map one Home Assistant ``/api/states`` payload to a record keeping only bounded, selected fields.
 
+    The title is the ``friendly_name`` attribute trimmed to 200 characters, falling back to the
+    entity id when the name is absent or blank.
+
     Raises:
         LocalServiceError: ``home_assistant_response_invalid`` or an observation-time error.
     """
@@ -485,6 +502,9 @@ def _ha_state_record(state: object, entity_id: str, collected: datetime) -> Inge
         collected_at=collected.astimezone(UTC),
         version=str(state.get("last_updated") or state.get("last_changed") or "snapshot"),
         metadata={
+            # Friendly name is the human label; the entity id is the fallback when it is absent.
+            "title": str(source_fields.get("friendly_name") or entity_id).strip()[:200]
+            or entity_id,
             "entity_id": entity_id,
             "state": record_value[:512],
             "observed_at_source": str(raw_time),

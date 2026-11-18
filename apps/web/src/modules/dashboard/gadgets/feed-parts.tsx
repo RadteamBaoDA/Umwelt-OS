@@ -1,6 +1,6 @@
 'use client';
 
-import { Bookmark, ExternalLink, ListFilter, RotateCw } from 'lucide-react';
+import { Bookmark, ExternalLink, ListFilter, RotateCw, SquareCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import React from 'react';
@@ -10,11 +10,13 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FeedImage } from '@/components/feed-image';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
 import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
+import { useSkin } from '@/core/use-skin';
 import { FEED_LANGUAGES, languageLabel, type FeedStreamItem, type SelectedTelegramIdentity } from './feed-model';
 import { formatRelativeTime } from './relative-time';
 
@@ -26,6 +28,8 @@ export interface FeedRowContext {
   /** Layout of the item stream; defaults to the list view. */
   view?: FeedView;
   isTelegram: boolean;
+  /** Workspace owner status; gates the new non-Telegram Ask AI row affordance. */
+  isOwner: boolean;
   selectMode: boolean;
   selected: Record<string, SelectedTelegramIdentity>;
   setSelected: React.Dispatch<React.SetStateAction<Record<string, SelectedTelegramIdentity>>>;
@@ -34,13 +38,13 @@ export interface FeedRowContext {
   onAskAbout: (items: { sourceId: string; documentId: string; documentVersionId: string }[]) => void;
 }
 
-/** Per-item actions (read, save, source, details, Ask AI) revealed on hover/focus so rows stay quiet at rest. */
+/** Per-item controls preserve Telegram Ask AI and gate the new ID-only action on owner status for other feeds. */
 function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const t = useTranslations('dashboard');
   const isRead = !!item.read;
   return (
     <div className="absolute right-0 top-0 flex flex-wrap items-center gap-1 bg-card pl-2 text-xs pointer-coarse:static pointer-coarse:w-full pointer-coarse:bg-transparent pointer-coarse:pl-0 pointer-coarse:opacity-100 text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
-      {ctx.isTelegram && item.documentVersionId && item.sourceId && (
+      {item.documentVersionId && item.sourceId && (ctx.isTelegram || ctx.isOwner) && (
         <Button
           type="button"
           variant="ghost"
@@ -233,6 +237,41 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
   );
 }
 
+/**
+ * Terminal-skin Telegram message row (developer-theme `.dash-msg`): unread dot, channel name and clock on the first
+ * line, the message text on the second. Keeps the read/bookmark actions and selection checkbox of the standard row.
+ *
+ * @param props.item Message to show; `props.ctx` supplies selection and interaction handlers.
+ */
+function TerminalMessageRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const timeTitle = useTimeTitle(ctx.isTelegram);
+  const at = new Date(item.timestamp);
+  const clock = Number.isNaN(at.getTime())
+    ? ''
+    : new Intl.DateTimeFormat(display.locale, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: display.timezone }).format(
+        at,
+      );
+  return (
+    <li className="msg-row group/item relative" data-read={item.read ? 'true' : 'false'}>
+      <FeedCheckbox item={item} ctx={ctx} />
+      <span className="msg-dot" aria-hidden="true">
+        {item.read ? '○' : '●'}
+      </span>
+      {item.read ? null : <span className="sr-only">{t('unread.badge', { count: 1 })}</span>}
+      <span className="msg-from">{item.channelLabel ?? item.author ?? ''}</span>
+      <time className="msg-time" dateTime={item.timestamp} title={timeTitle(item)}>
+        {clock}
+      </time>
+      <Link href={`/knowledge/documents/${item.id}`} className="msg-body">
+        {item.title}
+      </Link>
+      <FeedItemActions item={item} ctx={ctx} />
+    </li>
+  );
+}
+
 /** One non-lead list row. */
 function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const display = useDisplayPreferences();
@@ -292,8 +331,19 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
 
 /** Lead + list (or a responsive card grid): one DOM per item; the container query turns the first item into a lead on wide gadgets. */
 export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRowContext }) {
+  const terminal = useSkin() === 'terminal';
   const [lead, ...rest] = items;
   if (!lead) return null;
+  // Terminal Telegram feeds are plain two-line log rows: no wide-gadget lead headline.
+  if (terminal && ctx.isTelegram && ctx.view !== 'cards') {
+    return (
+      <ul className="msg-log min-w-0">
+        {items.map((item) => (
+          <TerminalMessageRow key={item.id} item={item} ctx={ctx} />
+        ))}
+      </ul>
+    );
+  }
   if (ctx.view === 'cards') {
     return (
       <ul data-testid="feed-cards" className="grid min-h-0 grid-cols-1 gap-3 @[28rem]/gadget:grid-cols-2 @[56rem]/gadget:grid-cols-3">
@@ -339,9 +389,12 @@ export function FeedFilterPopover(props: FeedFilterProps) {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 px-2 text-xs">
+        <Button type="button" variant="ghost" size="sm" className="feed-tool-opt h-8 gap-1 px-2 text-xs">
           <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />
-          {activeFilterCount > 0 ? t('feed.filterActive', { count: activeFilterCount }) : t('feed.filter')}
+          {/* Terminal skin keeps the label for assistive tech only; the icon alone shows in the title bar. */}
+          <span className="feed-tool-label">
+            {activeFilterCount > 0 ? t('feed.filterActive', { count: activeFilterCount }) : t('feed.filter')}
+          </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-72 space-y-2 p-3">
@@ -427,52 +480,67 @@ export interface FeedToolbarProps {
   setView: (view: FeedView) => void;
 }
 
-/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. */
+/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. In the terminal skin it renders in the gadget title bar (`TitleBarSlot`); in narrow panes the List | Cards toggle moves from the title bar to a body row (CSS decides which copy shows), so no control is lost. */
 export function FeedToolbar(props: FeedToolbarProps) {
   const t = useTranslations('dashboard');
+  const terminal = useSkin() === 'terminal';
   const { onlyUnread, selectMode, refreshing } = props;
   return (
-    <div className="flex items-center justify-between gap-2 text-xs">
-      <Button
-        type="button"
-        variant={onlyUnread ? 'default' : 'ghost'}
-        size="sm"
-        className="h-8 px-2 text-xs"
-        aria-pressed={onlyUnread}
-        onClick={props.toggleUnread}
-      >
-        {t('unread.only')} ({props.unreadCount})
-      </Button>
-
-      <div className="flex min-w-0 items-center gap-1">
-        {props.volume}
-        {props.filters}
-        <FeedViewToggle view={props.view} setView={props.setView} />
-        {props.canSelect && (
+    <>
+      {/* Narrow terminal panes: the title-bar copy of the view toggle is hidden by CSS (`.feed-view-slot`) so the meta and
+        `[ collect now ]` keep their room; this body-row copy (shown only when narrow) keeps list/cards reachable. */}
+      {terminal && (
+        <div className="feed-view-narrow">
+          <FeedViewToggle view={props.view} setView={props.setView} />
+        </div>
+      )}
+      <TitleBarSlot>
+        <div className="gadget-toolbar flex items-center justify-between gap-2 text-xs">
           <Button
             type="button"
-            variant={selectMode ? 'default' : 'ghost'}
+            variant={onlyUnread ? 'default' : 'ghost'}
             size="sm"
             className="h-8 px-2 text-xs"
-            aria-pressed={selectMode}
-            onClick={props.toggleSelectMode}
+            aria-pressed={onlyUnread}
+            onClick={props.toggleUnread}
           >
-            {selectMode ? t('feed.selectDone') : t('feed.selectMode')}
+            {t('unread.only')} ({props.unreadCount})
           </Button>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-8"
-          onClick={props.onRefresh}
-          disabled={refreshing}
-          aria-label={t('feed.refresh')}
-        >
-          <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
-        </Button>
-      </div>
-    </div>
+
+          <div className="flex min-w-0 items-center gap-1">
+            {props.volume}
+            {props.filters}
+            <div className="feed-view-slot">
+              <FeedViewToggle view={props.view} setView={props.setView} />
+            </div>
+            {props.canSelect && (
+              <Button
+                type="button"
+                variant={selectMode ? 'default' : 'ghost'}
+                size="sm"
+                className="feed-tool-opt h-8 px-2 text-xs"
+                aria-pressed={selectMode}
+                onClick={props.toggleSelectMode}
+              >
+                <SquareCheck className="feed-tool-icon h-3.5 w-3.5" aria-hidden="true" />
+                <span className="feed-tool-label">{selectMode ? t('feed.selectDone') : t('feed.selectMode')}</span>
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="feed-tool-opt size-8"
+              onClick={props.onRefresh}
+              disabled={refreshing}
+              aria-label={t('feed.refresh')}
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            </Button>
+          </div>
+        </div>
+      </TitleBarSlot>
+    </>
   );
 }
 

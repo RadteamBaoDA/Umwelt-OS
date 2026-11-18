@@ -15,6 +15,7 @@ import { getTask } from '@/modules/tasks';
 import { TaskDetail } from '@/modules/tasks';
 import type { Goal, PlanProposal } from '@/modules/goals';
 import { useSession } from '@/core/session';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 
 /** Optional owner-prepared proposal input; proposal display alone never writes tasks. */
 export type GoalProposalInput = { goalId: string; proposal: PlanProposal };
@@ -70,13 +71,16 @@ function GoalsBody({
   return (
     <>
       {/* The gadget frame already shows the title; only the create action remains. */}
-      <header className="flex items-center justify-end gap-2">
-        {!isAdminViewer && (
-          <Button type="button" size="sm" onClick={() => setCreating(true)}>
-            {t('new.goal')}
-          </Button>
-        )}
-      </header>
+      {/* Terminal skin: the create action sits in the pane title bar. */}
+      <TitleBarSlot>
+        <header className="flex items-center justify-end gap-2">
+          {!isAdminViewer && (
+            <Button type="button" size="sm" onClick={() => setCreating(true)}>
+              {t('new.goal')}
+            </Button>
+          )}
+        </header>
+      </TitleBarSlot>
       <GoalList
         hideTitle
         ids={ids.length ? ids : undefined}

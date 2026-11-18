@@ -178,6 +178,8 @@ _RENDERER_DISPLAY_NAMES = {
     "provider_observation": "Metric",
     "github_project": "Activity",
     "job_list": "Jobs",
+    "media_feed": "Media shelf",
+    "media_calendar": "Release calendar",
 }
 
 

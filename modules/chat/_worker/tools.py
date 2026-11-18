@@ -2,11 +2,14 @@
 
 import asyncio
 import contextlib
+import hashlib
 import json
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from core import metrics
 from modules.chat import media
 from modules.chat._worker.base import (
     MAX_SKILL_CALLS_PER_ROUND,
@@ -14,6 +17,7 @@ from modules.chat._worker.base import (
     MAX_USER_INPUT_REQUESTS_PER_TURN,
     ResponseNoLongerActive,
     _next_event_seq,
+    logger,
 )
 from modules.chat._worker.setup import (
     _ModelSetup,
@@ -288,6 +292,98 @@ def _db_query_outcome(result: str) -> dict[str, int]:
     return {"rows": len(rows), "sources": len(providers)}
 
 
+_DB_QUERY_FILTER_KEYS = (
+    "providers",
+    "metrics",
+    "symbols",
+    "region",
+    "text_query",
+    "date_from",
+    "date_to",
+)
+_DB_QUERY_ROW_KEYS = ("rows", "observations", "documents", "observation_aggregates")
+
+
+def _db_query_summary(args: dict[str, Any], result: str | None) -> dict[str, Any]:
+    """Value-free summary of one ``query_collected_data`` call for its log line and metrics (pure).
+
+    ``outcome`` is ``ok``, ``empty``, ``invalid_arguments``, ``query_timeout``, ``sql_reader_busy`` or
+    ``error`` (``result`` None: the tool raised). Carries the mode, target, aggregation, the *names* of the
+    filters used, the SQL text's sha256[:12] (sql mode), per-key row counts, ``truncated`` and the error code
+    (the part of ``error`` before the first colon). No row value, SQL text or user text is ever included.
+    """
+    mode = args.get("mode") if args.get("mode") in ("structured", "sql") else "structured"
+    summary: dict[str, Any] = {
+        "mode": mode,
+        "target": str(args.get("target", "both"))[:16],
+        "aggregation": str(args.get("aggregation", "none"))[:8],
+        "filters": [k for k in _DB_QUERY_FILTER_KEYS if args.get(k) not in (None, "", [])],
+        "row_counts": {},
+        "truncated": False,
+        "error_code": None,
+    }
+    sql = args.get("sql_query")
+    if mode == "sql" and isinstance(sql, str) and sql:
+        summary["sql_sha256"] = hashlib.sha256(sql.encode("utf-8")).hexdigest()[:12]
+    try:
+        data = json.loads(result) if result is not None else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        summary.update(outcome="error", error_code="exception" if result is None else "unparseable")
+        return summary
+    summary["row_counts"] = {
+        k: len(data[k]) for k in _DB_QUERY_ROW_KEYS if isinstance(data.get(k), list)
+    }
+    summary["truncated"] = data.get("truncated") is True
+    error = data.get("error")
+    if error:
+        code = str(error).split(":", 1)[0].strip()[:40]
+        summary["error_code"] = code
+        known = ("invalid_arguments", "query_timeout", "sql_reader_busy")
+        summary["outcome"] = (
+            code
+            if code in known
+            else ("invalid_arguments" if code.startswith("invalid_") else "error")
+        )
+    elif any(summary["row_counts"].values()):
+        summary["outcome"] = "ok"
+    else:
+        summary["outcome"] = "empty"
+    return summary
+
+
+def _record_db_query(run_id: Any, args: dict[str, Any], result: str | None, started: float) -> None:
+    """Emit the structured log line and Prometheus series for one finished ``query_collected_data`` call.
+
+    Never raises (observability must not change the tool outcome) and never logs values: see
+    ``_db_query_summary``. ``started`` is a ``time.monotonic()`` reading taken before the query.
+    """
+    try:
+        latency = time.monotonic() - started
+        summary = _db_query_summary(args, result)
+        metrics.record_data_query(summary["mode"], summary["outcome"], latency)
+        fields = {**summary, "latency_ms": round(latency * 1000)}
+        logger.info(
+            "query_collected_data run=%s mode=%s target=%s aggregation=%s filters=%s sql=%s "
+            "latency_ms=%d rows=%s truncated=%s outcome=%s error=%s",
+            run_id,
+            fields["mode"],
+            fields["target"],
+            fields["aggregation"],
+            ",".join(fields["filters"]) or "-",
+            fields.get("sql_sha256", "-"),
+            fields["latency_ms"],
+            fields["row_counts"],
+            fields["truncated"],
+            fields["outcome"],
+            fields["error_code"] or "-",
+            extra={"db_query": fields},
+        )
+    except Exception:  # noqa: BLE001 - logging/metrics must never fail the tool call
+        logger.debug("query_collected_data observability failed", exc_info=True)
+
+
 class _QueryCollectedDataHandler:
     """``query_collected_data``: scoped read-only database query bracketed by running/done status events."""
 
@@ -302,14 +398,19 @@ class _QueryCollectedDataHandler:
         return MAX_SKILL_CALLS_PER_ROUND
 
     async def run(self, env: _ToolEnv, call: dict[str, str]) -> str:
-        """Execute the query in its own session; "done" is published even on error (no stale spinner)."""
-        c = env.c
+        """Execute the query in its own session; "done" is published even on error (no stale spinner).
+
+        Malformed (unparseable or non-object) argument JSON returns ``invalid_arguments: malformed JSON``
+        without running any query or publishing a status; an unparseable call must never become a default
+        unfiltered query. The owner timezone comes from the already-resolved turn setup (no per-call lookup).
+        """
         try:
             parsed_db_args = json.loads(call["arguments"] or "{}")
-            if not isinstance(parsed_db_args, dict):
-                parsed_db_args = {}
         except json.JSONDecodeError:
-            parsed_db_args = {}
+            parsed_db_args = None
+        if not isinstance(parsed_db_args, dict):
+            return json.dumps({"error": "invalid_arguments: malformed JSON", "rows": []})
+        c = env.c
         await _publish_status(c, TOOL_QUERY_COLLECTED_DATA, "running")
         web_run = env.turn.web_run
         # Web results hold the numbers right after the prompt's evidence; new DB evidence goes behind them.
@@ -319,6 +420,8 @@ class _QueryCollectedDataHandler:
             else None
         )
         outcome: dict[str, int] = {"error": 1}  # replaced on success; stays if the tool raises
+        started = time.monotonic()
+        raw_result: str | None = None  # stays None if the tool raises (logged as outcome=error)
         try:
             async with c.session_factory() as db_tool_session:
                 result = await execute_db_query_tool(
@@ -332,10 +435,13 @@ class _QueryCollectedDataHandler:
                     evidence_list=cast(AnswerContext, env.turn.answer_context).evidence,
                     redis=c.redis,
                     web_numbering=web_numbering,
+                    timezone=env.setup.owner_timezone,
                 )
+            raw_result = result
             outcome = _db_query_outcome(result)
             return result
         finally:
+            _record_db_query(c.response_id, parsed_db_args, raw_result, started)
             # "done" also on error so the client never keeps a stale spinner; the numeric detail tells
             # the step list whether it found rows, found none or failed. A run that ended meanwhile has
             # nothing left to tell.

@@ -48,6 +48,7 @@ Module persistence models stay private. The following SQL projections are approv
 | Search indexing (`modules/search/indexing/`) | Source: `id,status,local_only`; document: `id,source_id,current_version,extraction_status`; version: `id,document_id,version_number`; chunk: `id,document_version_id,content` | Active, current, extracted and non-local-only eligibility. Hold the source row lock across provider transport and recheck before each send. Remote embeddings also require owner opt-in. |
 | Current chunk backfill (`modules/knowledge/documents/public.py`) | Source: `id,status` | Active source, current document version and ready/succeeded extraction. Writes remain document-owned. |
 | Raw storage cleanup and purge manifests | Document: `source_id,raw_uri` | Orphan detection includes every retained reference, including paused/archived sources and failed extraction. Purge manifests are scoped to the locked source and generation; keep path validation and retry handling. |
+| Chat collected-data queries (`modules/chat/db_query.py`, `_db_scope.py`, `_db_attributes.py`) | Observations: `accepted_at`, `ingestion_observation_id`, `provider_scope_discriminator`, `latitude`, `longitude`, plus existing columns; `NormalizedVersionProvenance.provenance_json` (`provider_record.source_fields`, `provider_record.world_data.provider_fields`) | Workspace scope; allowed active/paused sources only; current-config scope discriminator; `local_only` sources excluded for remote models; read-only, never used for writes. |
 | Host-only bootstrap recovery (`core/auth/recovery.py`) | Registered table metadata: integer identity columns (`owner_id`, `account_id`, `user_id`, `*_user_id`) and direct foreign keys to `owner.id`; existence only, no payloads | Auth locks account 1, requires the exact sanitized disabled tombstone, loads the complete erasure owner registry, and refuses any remaining reference. This projection only checks absence; it never writes another module's tables. Workspace creation uses the public provisioning contract within the same transaction. |
 
 Cross-module mutations use owner commands on the caller's `AsyncSession`; commands preserve source generation fences, row-lock ordering, and transaction boundaries without committing early.
@@ -105,13 +106,13 @@ Ratchet procedure: when a change raises a measured value by 2 or more points, ra
 
 | Metric | Measured | Budget |
 | --- | --- | --- |
-| Largest route first-load JS (`/settings/global`) | 776.7 KB | 800 KB |
-| Chat (`/chat`) | 745.2 KB (was 797.2 before chat lazy-loading) | 785 KB |
+| Largest route first-load JS (`/settings/global`) | 806.6 KB | 825 KB |
+| Chat (`/chat`) | 801.6 KB (745.2 after chat lazy-loading; 793.4 after the data-source work) | 820 KB |
 | Landing page (`/`) | 230.4 KB | 245 KB |
 | Sign-in (`/login`) | 337.8 KB | 350 KB |
-| Total client JS | 2191.0 KB | 2313 KB |
+| Total client JS | 2024.2 KB | 2313 KB |
 
-Measured 2026-11-11. Public routes carry per-route budgets in `routes`; the workspace providers and full message catalog load only under `app/(workspace)`.
+Measured 2026-11-18. The 2026-11-18 raise covers the terminal ("Developer") skin: about 10 KB gzip of terminal-only gadget, statusline and chat presentation on every workspace route. Public routes carry per-route budgets in `routes`; the workspace providers and full message catalog load only under `app/(workspace)`.
 
 `--measure` prints the numbers without failing. To raise a budget, run a local build, measure, and edit `bundle-budget.json` to about measured + 10% in the same PR with the reason (a new dependency or feature); prefer lazy-loading (`next/dynamic`) over raising it. A per-route override can be added as `"routes": {"/(public)/login/page": 600}`.
 

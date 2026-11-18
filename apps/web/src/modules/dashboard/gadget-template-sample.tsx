@@ -8,6 +8,22 @@ import type { ReactElement } from 'react';
  */
 function dataSampleContent(renderer: string): ReactElement | null {
   switch (renderer) {
+    case 'media_feed':
+      return (
+        <>
+          <rect x="5" y="8" width="10" height="21" rx="2" />
+          <rect x="19" y="8" width="10" height="21" rx="2" />
+          <rect x="33" y="8" width="10" height="21" rx="2" />
+          <path d="M5 34h10M19 34h10M33 34h10" />
+        </>
+      );
+    case 'media_calendar':
+      return (
+        <>
+          <rect x="6" y="9" width="36" height="27" rx="2" />
+          <path d="M6 17h36M15 7v5M33 7v5M18 17v19M30 17v19M6 26h36" />
+        </>
+      );
     case 'table_panel':
       return (
         <>

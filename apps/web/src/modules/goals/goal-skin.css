@@ -1,0 +1,20 @@
+/*
+ * Goal progress skin. The terminal skin replaces the graphic bar with an ASCII bar (`[████████░░] 83%`),
+ * matching the approved developer-theme demo (`.dash-goal .bar-ascii`). Presentation only; colours are semantic tokens.
+ */
+
+.goal-ascii-bar {
+  display: none;
+}
+
+html[data-skin='terminal'] .goal-progress {
+  display: none;
+}
+
+html[data-skin='terminal'] .goal-ascii-bar {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  white-space: pre;
+  color: var(--accent);
+}

@@ -14,6 +14,8 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
+import { formatCompactAgo } from './relative-time';
+import { TitleBarSlot } from '@/components/gadget-title-slot';
 
 /** Returns the provider URL only when it is a plain github.com https link. */
 function safeGithubUrl(value: unknown): string | null {
@@ -52,7 +54,7 @@ function GithubCounts({
   const t = useTranslations('github');
   const tDash = useTranslations('dashboard');
   return (
-    <dl className="grid grid-cols-4 gap-3">
+    <dl className="github-counts grid grid-cols-4 gap-3">
       {(
         [
           ['issues', counts.issues, 'github_issue'],
@@ -89,22 +91,46 @@ const EVENT_TYPE_KEY = {
   github_release: 'type.githubRelease',
 } as const;
 
-/** One recent activity event: type chip, time, title, provider link and repository entity link. */
+/**
+ * Terminal-only short code of an event (demo `.log` level column): the 7-char commit sha when the provider metadata
+ * carries one, `PR` for pull requests, otherwise the lowercase kind.
+ *
+ * @param event Timeline event of the GitHub source.
+ * @returns Short code and the tone the skin colours it with.
+ */
+function eventCode(event: TimelineEvent): { code: string; tone: 'info' | 'ok' | 'warn' } {
+  if (event.type === 'github_pull') return { code: 'PR', tone: 'ok' };
+  if (event.type === 'github_issue') return { code: 'issue', tone: 'warn' };
+  if (event.type === 'github_release') return { code: 'release', tone: 'info' };
+  const sha = event.metadata?.sha;
+  return { code: typeof sha === 'string' && sha ? sha.slice(0, 7) : 'commit', tone: 'info' };
+}
+
+/**
+ * One recent activity event: type chip, time, title, provider link and repository entity link. The terminal skin
+ * shows the short code and a compact age (`2h`) instead of the chip and full date (both stay in the DOM for assistive tech).
+ */
 function GithubEventItem({ event }: { event: TimelineEvent }) {
   const t = useTranslations('github');
   const display = useDisplayPreferences();
   const url = safeGithubUrl(event.metadata?.canonical_url);
   const when = event.started_at || event.occurred_date || event.observed_at;
   return (
-    <li className="space-y-0.5 border-b border-border pb-2 last:border-b-0">
-      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <span className="rounded bg-muted px-1.5 py-0.5 text-foreground">
+    <li className="github-event space-y-0.5 border-b border-border pb-2 last:border-b-0">
+      <div className="github-event-head flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span className="github-event-code" data-tone={eventCode(event).tone} aria-hidden="true">
+          {eventCode(event).code}
+        </span>
+        <span className="github-event-type rounded bg-muted px-1.5 py-0.5 text-foreground">
           {event.type in EVENT_TYPE_KEY ? t(EVENT_TYPE_KEY[event.type as keyof typeof EVENT_TYPE_KEY]) : event.type}
         </span>
         <time dateTime={when}>{formatDateTime(when, display.locale, display.timezone)}</time>
+        <span className="github-event-ago" aria-hidden="true">
+          {formatCompactAgo(when)}
+        </span>
       </div>
-      <p className="text-xs font-medium leading-snug">{event.title}</p>
-      <div className="flex flex-wrap gap-2 text-[11px]">
+      <p className="github-event-title text-xs font-medium leading-snug">{event.title}</p>
+      <div className="github-event-links flex flex-wrap gap-2 text-[11px]">
         {url && (
           <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">
             {t('openOnGithub')}
@@ -197,29 +223,32 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
   const items = allEvents.slice(0, limit);
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
-      <div className="flex items-center justify-end gap-1.5">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={t('refresh')}
-          className="size-7"
-          disabled={events.isFetching}
-          onClick={() => {
-            void events.refetch();
-            void summary.refetch();
-          }}
-        >
-          <RotateCw className={events.isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-        </Button>
-        <Link href="/timeline" className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
-          {t('fullTimeline')}
-          <ExternalLink className="h-3 w-3" />
-        </Link>
-      </div>
+      {/* Terminal skin: refresh and the timeline link sit in the pane title bar. */}
+      <TitleBarSlot>
+        <div className="gadget-toolbar flex items-center justify-end gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={t('refresh')}
+            className="size-7"
+            disabled={events.isFetching}
+            onClick={() => {
+              void events.refetch();
+              void summary.refetch();
+            }}
+          >
+            <RotateCw className={events.isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+          </Button>
+          <Link href="/timeline" className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
+            {t('fullTimeline')}
+            <ExternalLink className="h-3 w-3" />
+          </Link>
+        </div>
+      </TitleBarSlot>
       {counts && <GithubCounts counts={counts} events={allEvents} now={now} />}
       {summary.data && !summary.data.live_verified && <p className="text-[11px] text-muted-foreground">{t('liveNotVerified')}</p>}
-      <h3 className="text-xs font-medium text-muted-foreground">{t('recentActivity')}</h3>
+      <h3 className="github-recent text-xs font-medium text-muted-foreground">{t('recentActivity')}</h3>
       {events.isLoading && <GadgetSkeleton variant="list" label={t('summary.loading')} className="px-0" />}
       {events.isError && (
         <div role="alert" className="text-xs text-destructive">
@@ -245,7 +274,7 @@ export function GithubProjectGadget({ instance }: { instance: GadgetInstance }) 
         />
       )}
       {items.length > 0 && (
-        <ol className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+        <ol className="github-events min-h-0 flex-1 space-y-2 overflow-y-auto">
           {items.map((event) => (
             <GithubEventItem key={event.id} event={event} />
           ))}

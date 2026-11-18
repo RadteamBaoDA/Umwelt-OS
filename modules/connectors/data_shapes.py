@@ -22,6 +22,7 @@ DataShape = Literal[
     "weather",
     "series",
     "job",
+    "media",
 ]
 
 # Providers outside the free-provider catalog (no FreeProviderSpec); health/home_assistant adapters
@@ -29,7 +30,22 @@ DataShape = Literal[
 _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
     {
         "telegram": frozenset({"messages"}),
-        "youtube": frozenset({"video"}),
+        **dict.fromkeys(("youtube", "youtube_api"), frozenset({"video", "media"})),
+        "podcast_index": frozenset({"media"}),
+        "listenbrainz_releases": frozenset({"media"}),
+        "tvmaze_schedule": frozenset({"media"}),
+        "livechart_episodes": frozenset({"media"}),
+        "gutendex_books": frozenset({"media"}),
+        "ann_news": frozenset({"media"}),
+        "mangaupdates_releases": frozenset({"media"}),
+        "mangadex_releases": frozenset({"media"}),
+        "apple_books_rss": frozenset({"media"}),
+        "podcast_rss": frozenset({"media"}),
+        "wikidata_movies": frozenset({"media"}),
+        "itunes_movies": frozenset({"media"}),
+        "letterboxd_rss": frozenset({"media"}),
+        "anilist_anime": frozenset({"media"}),
+        "anilist_manga": frozenset({"media"}),
         "github": frozenset({"project_activity"}),
         "topic_watch": frozenset({"news"}),  # kept pages are feed-style summaries
         "open_meteo": frozenset(
@@ -37,7 +53,7 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         ),  # writes the configured latitude/longitude
     }
 )
-# Added on top of FreeProviderSpec.data_kind: adapters that write latitude/longitude and/or a numeric metric.
+# Additional renderer shapes on top of FreeProviderSpec.data_kind.
 _EXTRA: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
     {
         "usgs": frozenset({"located", "measurement"}),  # earthquake_magnitude + coordinates
@@ -52,6 +68,13 @@ _EXTRA: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         "vietnamworks_jobs": frozenset({"job"}),
         "itviec_jobs": frozenset({"job"}),
         "wwr_jobs": frozenset({"job"}),
+        **dict.fromkeys(
+            (
+                "tmdb_movies", "tmdb_tv", "trakt_media", "omdb_lookup", "mal_anime",
+                "mal_manga", "hardcover_books", "google_books", "steam_releases", "igdb_games",
+            ),
+            frozenset({"media"}),
+        ),
     }
 )
 

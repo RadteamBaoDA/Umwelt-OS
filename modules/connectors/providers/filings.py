@@ -64,6 +64,7 @@ def _truncated(metadata: dict[str, Any]) -> dict[str, Any]:
 def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[IngestionRecord]:
     """Map ``filings.recent`` (columnar arrays) for the requested CIK; the payload CIK must match the scope.
 
+    The title is "<company name> <form>" when the payload carries a non-blank ``name``, else the form.
     Malformed rows are skipped (batch marked ``truncated``); no usable row raises ``incomplete``."""
     if not isinstance(payload, dict) or not CIK_RE.fullmatch(cik):
         raise ProviderPayloadError("sec_edgar_response_invalid")
@@ -87,6 +88,7 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
         "truncated" if size > MAX_FILINGS else "returned_snapshot"
     )
     cik_number = str(int(cik))  # Archives paths use the CIK without leading zeros
+    company = payload["name"].strip()[:200] if isinstance(payload.get("name"), str) else ""
     records: dict[str, IngestionRecord] = {}
     skipped = 0
     for accession, form, filed, document, description in list(
@@ -117,6 +119,7 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
             skipped += 1
             continue
         summary = plain_text(description if isinstance(description, str) else None, 500)
+        title = (f"{company} {form}" if company else form)[:200]
         url = (
             ARCHIVES_URL.format(
                 cik=cik_number,
@@ -128,7 +131,7 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
         )
         filed_iso = filed_on.astimezone(UTC).isoformat()
         fields: dict[str, Any] = {
-            "title": form,
+            "title": title,
             "guid": accession,
             "form": form,
             "cik": cik,
@@ -141,7 +144,7 @@ def map_sec_edgar(payload: object, collected_at: datetime, cik: str) -> list[Ing
         records[accession] = _record(
             provider="sec_edgar",
             identity=accession,
-            title=form,
+            title=title,
             summary=summary,
             observed_at=filed_on,
             collected_at=collected_at,

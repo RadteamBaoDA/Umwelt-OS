@@ -40,6 +40,22 @@ from modules.connectors.providers.macro import (
     parse_iso_date,
     provider_instant,
 )
+from modules.connectors.providers.media_keyed_catalogs import (
+    GOOGLE_BOOKS_KEY_PLACEMENT,
+    MAL_CLIENT_ID_HEADER,
+    build_google_books_request,
+    build_mal_request,
+    map_google_books,
+    map_mal,
+)
+from modules.connectors.providers.media_movies_tv import (
+    build_omdb_request,
+    build_tmdb_request,
+    build_trakt_request,
+    map_omdb,
+    map_tmdb,
+    map_trakt,
+)
 from modules.connectors.providers.news import (
     MAX_FEED_ITEMS,
     _record,
@@ -79,6 +95,8 @@ class KeyedProvider:
     build: Callable[[str, Mapping[str, Any]], ProviderRequest]
     mapper: Callable[[Any, datetime, Mapping[str, Any]], list[IngestionRecord]]
     binary: bool = False
+    # Optional second request (same key placement) whose body ``meta_units`` reads; see ``_run_keyed``.
+    meta_build: Callable[[str, Mapping[str, Any]], ProviderRequest] | None = None
 
 
 def validate_key(provider: str, secret: str) -> None:
@@ -207,6 +225,31 @@ def _error_kind(code: object, message: object) -> Literal["credential", "rate_li
 # --------------------------------------------------------------------------- FRED
 
 FRED_URL = "https://api.stlouisfed.org/fred/series/observations?file_type=json&sort_order=desc&limit=5&series_id={sid}"
+# Physical units of common series (FRED's own labels; stable per series). The observations endpoint carries
+# none, so other series keep only the generic column unit. Stored as provider field ``units`` (shown to chat
+# as an attribute), not in the ``unit`` column, so existing series keys and dashboard history stay intact.
+FRED_META_URL = "https://api.stlouisfed.org/fred/series?file_type=json&series_id={sid}"
+FRED_UNITS_MAX_CHARS = 80
+FRED_UNITS = {
+    "DFF": "Percent",
+    "FEDFUNDS": "Percent",
+    "DGS2": "Percent",
+    "DGS10": "Percent",
+    "T10Y2Y": "Percent",
+    "MORTGAGE30US": "Percent",
+    "UNRATE": "Percent",
+    "CPIAUCSL": "Index 1982-1984=100",
+    "CPILFESL": "Index 1982-1984=100",
+    "PCEPI": "Index 2017=100",
+    "INDPRO": "Index 2017=100",
+    "GDP": "Billions of Dollars",
+    "GDPC1": "Billions of Chained 2017 Dollars",
+    "M2SL": "Billions of Dollars",
+    "PAYEMS": "Thousands of Persons",
+    "HOUST": "Thousands of Units",
+    "DEXUSEU": "U.S. Dollars to One Euro",
+    "DCOILWTICO": "Dollars per Barrel",
+}
 
 
 def build_fred(secret: str, cfg: Mapping[str, Any]) -> ProviderRequest:
@@ -215,10 +258,40 @@ def build_fred(secret: str, cfg: Mapping[str, Any]) -> ProviderRequest:
     return place_secret("fred", FRED_URL.format(sid=sid), "query:api_key", secret)
 
 
+def build_fred_meta(secret: str, cfg: Mapping[str, Any]) -> ProviderRequest:
+    """Series metadata request (``fred/series``, carries the physical unit); same key placement as ``build_fred``."""
+    sid = _scope_text(cfg, "fred_series_id", _ID_RE, "fred")
+    return place_secret("fred", FRED_META_URL.format(sid=sid), "query:api_key", secret)
+
+
+def fred_meta_units(payload: object) -> str | None:
+    """Physical unit from a ``fred/series`` body (``seriess[0].units``), or ``None`` if absent or unusable.
+
+    Pure. Accepts only a non-empty printable string of at most ``FRED_UNITS_MAX_CHARS`` characters.
+    """
+    rows = payload.get("seriess") if isinstance(payload, dict) else None
+    units = (
+        rows[0].get("units")
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict)
+        else None
+    )
+    if (
+        isinstance(units, str)
+        and units
+        and len(units) <= FRED_UNITS_MAX_CHARS
+        and units.isprintable()
+    ):
+        return units
+    return None
+
+
 def map_fred(
     payload: object, collected_at: datetime, cfg: Mapping[str, Any]
 ) -> list[IngestionRecord]:
     """Map observations to one measurement per date; ``.`` (FRED's missing marker) rows are skipped.
+
+    The physical unit is recorded as provider field ``units``: ``cfg["_fred_units"]`` (fetched from series
+    metadata by the runner) wins, else the static ``FRED_UNITS`` entry; neither means no field.
 
     An ``error_code`` body is classified (bad key -> credential). No numeric observation raises ``incomplete``.
     """
@@ -243,6 +316,10 @@ def map_fred(
         except (KeyError, ValueError) as exc:
             raise ProviderPayloadError("fred_value_invalid") from exc
         iso, text = day.isoformat(), decimal_text(value)
+        fields: dict[str, str | float | int | None] = {"series_id": sid, "date": iso}
+        units = cfg.get("_fred_units") or FRED_UNITS.get(sid)
+        if units:
+            fields["units"] = units
         records.append(
             build_record(
                 provider="fred",
@@ -257,7 +334,7 @@ def map_fred(
                 unit="series units",
                 symbol=sid,
                 quality="provider_reported",
-                provider_fields={"series_id": sid, "date": iso},
+                provider_fields=fields,
             )
         )
     if not records:
@@ -675,6 +752,29 @@ def coingecko_assets(cfg: Mapping[str, Any]) -> tuple[tuple[str, str, str], ...]
 # --------------------------------------------------------------------------- registry
 
 KEYED: dict[str, KeyedProvider] = {
+    "tmdb_movies": KeyedProvider(
+        "query:api_key",
+        lambda secret, cfg: build_tmdb_request("tmdb_movies", secret, cfg),
+        lambda payload, at, cfg: map_tmdb(payload, at, cfg, "tmdb_movies"),
+    ),
+    "tmdb_tv": KeyedProvider(
+        "query:api_key",
+        lambda secret, cfg: build_tmdb_request("tmdb_tv", secret, cfg),
+        lambda payload, at, cfg: map_tmdb(payload, at, cfg, "tmdb_tv"),
+    ),
+    "trakt_media": KeyedProvider("trakt-api-key", build_trakt_request, map_trakt),
+    "omdb_lookup": KeyedProvider("query:apikey", build_omdb_request, map_omdb),
+    "mal_anime": KeyedProvider(
+        MAL_CLIENT_ID_HEADER,
+        lambda secret, cfg: build_mal_request("mal_anime", secret, cfg),
+        lambda payload, at, cfg: map_mal("mal_anime", payload, at, cfg),
+    ),
+    "mal_manga": KeyedProvider(
+        MAL_CLIENT_ID_HEADER,
+        lambda secret, cfg: build_mal_request("mal_manga", secret, cfg),
+        lambda payload, at, cfg: map_mal("mal_manga", payload, at, cfg),
+    ),
+    "google_books": KeyedProvider(GOOGLE_BOOKS_KEY_PLACEMENT, build_google_books_request, map_google_books),
     "coingecko": KeyedProvider(
         COINGECKO_KEY_HEADER,
         lambda secret, cfg: coingecko_request(secret, assets=coingecko_assets(cfg)),
@@ -682,7 +782,7 @@ KEYED: dict[str, KeyedProvider] = {
             payload, at, assets=coingecko_assets(cfg), symbol_by_id="coingecko_assets" in cfg
         ),
     ),
-    "fred": KeyedProvider("query:api_key", build_fred, map_fred),
+    "fred": KeyedProvider("query:api_key", build_fred, map_fred, meta_build=build_fred_meta),
     "finnhub_news": KeyedProvider("X-Finnhub-Token", build_finnhub, map_finnhub_news),
     "newsapi": KeyedProvider("X-Api-Key", build_newsapi, map_newsapi),
     "openweathermap": KeyedProvider("query:appid", build_openweathermap, map_openweathermap),

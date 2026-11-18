@@ -1,0 +1,613 @@
+<style>
+/* ---- fork C: settings + public ---- */
+.sp-tight { padding-top: 4px; }
+.sp-acts { display: flex; gap: 2px; }
+.sp-acts .icon-btn { width: 28px; height: 28px; border-color: transparent; }
+.sp-acts svg { width: 15px; height: 15px; }
+.sp-cron { font-size: 12px; color: var(--accent); }
+html[data-skin='default'] .sp-cron { display: none; }
+.sp-src-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; align-items: center; }
+.sp-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sp-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.sp-card { border: 1px solid var(--line); background: var(--raised); border-radius: var(--radius); padding: 12px; }
+.sp-card h3 { display: flex; gap: 8px; align-items: center; }
+.sp-kv { display: grid; grid-template-columns: 14ch 1fr; gap: 4px 12px; font-size: 13px; }
+.sp-kv dt { color: var(--muted); }
+.sp-kv dd { margin: 0; }
+.sp-editor { display: grid; grid-template-columns: 4ch 1fr; border: 1px solid var(--control); border-radius: var(--radius); background: var(--bg); font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 13px; line-height: 1.6; }
+.sp-gutter { padding: 10px 6px; text-align: right; color: var(--muted); border-right: 1px solid var(--line); user-select: none; white-space: pre; }
+.sp-editor textarea { font: inherit; line-height: inherit; color: var(--text); background: none; border: 0; padding: 10px 12px; resize: vertical; min-height: 300px; outline: none; }
+.sp-list { list-style: none; margin: 0; padding: 0; }
+.sp-list li { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: var(--radius); font-size: 13px; cursor: pointer; }
+.sp-list li:hover { background: var(--active); }
+.sp-list li[aria-current='true'] { background: var(--active); color: var(--strong); }
+html[data-skin='terminal'] .sp-list li[aria-current='true']::before { content: '>'; color: var(--accent); }
+.sp-meter { font-size: 12px; white-space: pre; }
+.sp-swatch { width: 26px; height: 26px; border: 1px solid var(--line); display: inline-block; }
+.sp-skin-opt { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: start; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; }
+.sp-skin-opt:has(input:checked) { border-color: var(--accent); }
+.sp-mini { grid-column: 2; height: 54px; border: 1px solid var(--line); padding: 6px 8px; font-size: 10px; line-height: 1.4; overflow: hidden; }
+.sp-mini.term { background: #0d1117; color: #3fb950; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.sp-mini.def { background: #161a17; color: #edf3ee; font-family: Inter, system-ui, sans-serif; border-radius: 6px; }
+.sp-disabled { opacity: .45; pointer-events: none; }
+.sp-danger { border: 1px solid var(--danger); border-radius: var(--radius); padding: 16px; display: grid; gap: 12px; }
+.sp-danger .row { justify-content: space-between; }
+.sp-matrix td, .sp-matrix th { text-align: center; }
+.sp-matrix td:first-child, .sp-matrix th:first-child { text-align: left; }
+.sp-matrix .switch { display: inline-block; vertical-align: middle; }
+
+/* Public screens hide the app chrome. */
+body:has(#login.on) .rail, body:has(#login.on) .topbar, body:has(#login.on) .statusline,
+body:has(#setup.on) .rail, body:has(#setup.on) .topbar, body:has(#setup.on) .statusline,
+body:has(#onboarding.on) .rail, body:has(#onboarding.on) .topbar, body:has(#onboarding.on) .statusline { display: none; }
+.app:has(#login.on), .app:has(#setup.on), .app:has(#onboarding.on) { grid-template-columns: 1fr; }
+.sp-public { min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; }
+.sp-term { width: min(560px, 100%); border: 1px solid var(--control); background: var(--surface); border-radius: var(--radius); }
+.sp-term.wide { width: min(760px, 100%); }
+.sp-term-bar { display: flex; gap: 8px; align-items: center; padding: 6px 12px; background: var(--raised); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.sp-term-body { padding: 20px 24px 24px; }
+.sp-banner { color: var(--accent); font-size: 12px; line-height: 1.35; white-space: pre; margin: 0 0 12px; overflow: hidden; }
+html[data-skin='default'] .sp-banner { display: none; }
+.sp-line { display: grid; grid-template-columns: 11ch 1fr; gap: 8px; align-items: center; }
+.sp-line label { color: var(--accent); font-weight: 600; font-size: 13px; }
+html[data-skin='default'] .sp-line { grid-template-columns: 1fr; }
+.sp-boot { list-style: none; margin: 0 0 16px; padding: 0; font-size: 13px; }
+.sp-boot li { display: grid; grid-template-columns: 8ch 1fr; gap: 8px; }
+.sp-steps { display: flex; gap: 0; font-size: 12px; margin-bottom: 16px; }
+.sp-steps span { flex: 1; padding: 6px 8px; border-bottom: 2px solid var(--line); color: var(--muted); }
+.sp-steps span.done { border-color: var(--accent); color: var(--text); }
+.sp-steps span.cur { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.sp-pack { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); cursor: pointer; align-items: start; }
+.sp-pack:has(input:checked) { border-color: var(--accent); background: var(--raised); }
+.sp-pack input { accent-color: var(--accent); margin-top: 3px; }
+@media (max-width: 900px) {
+  .sp-grid2, .sp-grid3 { grid-template-columns: 1fr; }
+  .sp-hide-sm { display: none; }
+  table.data { display: block; overflow-x: auto; }
+}
+</style>
+
+<!-- ================================================= SETTINGS: DATA SOURCES -->
+<section class="view" id="settings-sources" data-group="Settings" data-title="Data sources" data-path="settings/sources" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-sources" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="tabs" role="tablist">
+        <a role="tab" aria-selected="true" href="#settings-sources">Sources</a>
+        <a role="tab" aria-selected="false" href="#settings-mcp">MCP</a>
+        <a role="tab" aria-selected="false" href="#settings-permissions">Personal data permissions</a>
+      </div>
+      <div class="page-head">
+        <div><h1>Data sources</h1><p class="meta">Configure supported sources and collection schedules inside Umwelt-OS.</p></div>
+        <div class="actions"><button class="btn">starter packs</button><a class="btn primary" href="#source-wizard">add datasource ▾</a></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Filter by state">
+        <button role="tab" aria-selected="true">All<span class="count">7</span></button>
+        <button role="tab" aria-selected="false">Active<span class="count">5</span></button>
+        <button role="tab" aria-selected="false">Paused<span class="count">1</span></button>
+        <button role="tab" aria-selected="false">Needs attention<span class="count">2</span></button>
+        <button role="tab" aria-selected="false">Archived<span class="count">0</span></button>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <div class="prompt-wrap grow" style="max-width:360px"><input class="input" placeholder="filter sources…" aria-label="Filter sources"></div>
+        <span class="muted small right">7 sources · 4,812 records · next run 13:30:00</span>
+      </div>
+      <table class="data">
+        <thead><tr><th>Source</th><th>State</th><th>Schedule</th><th class="sp-hide-sm">Last collected</th><th class="sp-hide-sm">Last indexed</th><th>Actions</th></tr></thead>
+        <tbody>
+          <tr><td><span class="name">capture google_news</span><div class="muted small">Google News RSS</div><div class="sp-src-tags"><span class="muted small">can power:</span><span class="tag">feed</span><span class="tag">text</span><span class="tag">table</span></div></td>
+            <td><span class="badge ok">active</span></td><td><div class="sp-cron">*/30 * * * *</div><div class="small muted">every 30 min · GMT+7</div></td>
+            <td class="sp-hide-sm num">2026-11-17 13:00:12</td><td class="sp-hide-sm num">13:00:41</td><td><div class="sp-acts" data-acts></div></td></tr>
+          <tr><td><span class="name">capture open_meteo</span><div class="muted small">Open-Meteo forecast · Ho Chi Minh City</div><div class="sp-src-tags"><span class="muted small">can power:</span><span class="tag">table</span><span class="tag">chart</span><span class="tag">map</span><span class="tag">weather</span></div></td>
+            <td><span class="badge ok">active</span></td><td><div class="sp-cron">0 * * * *</div><div class="small muted">every hour · GMT+7</div></td>
+            <td class="sp-hide-sm num">2026-11-17 13:00:03</td><td class="sp-hide-sm num">13:00:09</td><td><div class="sp-acts" data-acts></div></td></tr>
+          <tr><td><span class="name">capture coingecko</span> <span class="badge mute">live</span><div class="muted small">CoinGecko crypto prices (demo key)</div><div class="sp-src-tags"><span class="muted small">can power:</span><span class="tag">table</span><span class="tag">chart</span><span class="tag">metric</span></div></td>
+            <td><span class="badge ok">active</span></td><td><div class="sp-cron">*/5 * * * *</div><div class="small muted">every 5 min · GMT+7</div></td>
+            <td class="sp-hide-sm num">2026-11-17 13:10:00</td><td class="sp-hide-sm muted">—</td><td><div class="sp-acts" data-acts></div></td></tr>
+          <tr><td><span class="name">EMSC earthquakes (M4+)</span> <span class="badge mute">live</span><div class="muted small">European-Mediterranean Seismological Centre</div><div class="sp-src-tags"><span class="muted small">can power:</span><span class="tag">map</span><span class="tag">feed</span></div></td>
+            <td><span class="badge ok">active</span></td><td><div class="sp-cron">*/30 * * * *</div><div class="small muted">every 30 min · GMT+7</div></td>
+            <td class="sp-hide-sm num">2026-11-17 13:00:21</td><td class="sp-hide-sm num">13:00:22</td><td><div class="sp-acts" data-acts></div></td></tr>
+          <tr><td><span class="name">NASA FIRMS active fires</span><div class="muted small">VIIRS 375 m · last 24 h</div><div class="sp-src-tags"><span class="muted small">can power:</span><span class="tag">map</span></div></td>
+            <td><span class="badge warn">needs key</span></td><td><div class="sp-cron">0 */3 * * *</div><div class="small muted">every 3 h · GMT+7</div></td>
+            <td class="sp-hide-sm muted">never</td><td class="sp-hide-sm muted">—</td><td><div class="sp-acts" data-acts></div></td></tr>
+          <tr><td><span class="name">alpha_vantage FX</span><div class="muted small">USD/VND, EUR/USD daily</div><div class="small err">fetch timed out after 20 s · retry 13:20:00</div></td>
+            <td><span class="badge err">failing</span></td><td><div class="sp-cron">15 9 * * 1-5</div><div class="small muted">weekdays 09:15 · GMT+7</div></td>
+            <td class="sp-hide-sm num">2026-11-17 11:15:02</td><td class="sp-hide-sm num">2026-11-16 09:15:40</td><td><div class="sp-acts" data-acts></div></td></tr>
+          <tr><td><span class="name">arxiv cs.AI</span><div class="muted small">arXiv listing · cs.AI, cs.CL</div><div class="sp-src-tags"><span class="muted small">can power:</span><span class="tag">feed</span><span class="tag">text</span></div></td>
+            <td><span class="badge mute">paused</span></td><td><div class="sp-cron">0 6 * * *</div><div class="small muted">daily 06:00 · GMT+7</div></td>
+            <td class="sp-hide-sm num">2026-11-12 06:00:30</td><td class="sp-hide-sm num">2026-11-12 06:01:12</td><td><div class="sp-acts" data-acts></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: MCP -->
+<section class="view" id="settings-mcp" data-group="Settings" data-title="MCP servers" data-path="settings/sources/mcp" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-sources" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="tabs" role="tablist">
+        <a role="tab" aria-selected="false" href="#settings-sources">Sources</a>
+        <a role="tab" aria-selected="true" href="#settings-mcp">MCP</a>
+        <a role="tab" aria-selected="false" href="#settings-permissions">Personal data permissions</a>
+      </div>
+      <div class="page-head">
+        <div><h1>MCP servers</h1><p class="meta">Tools the assistant may call through the Model Context Protocol. Each tool call is logged.</p></div>
+        <div class="actions"><button class="btn primary">add server</button></div>
+      </div>
+      <div class="sp-grid2">
+        <article class="pane">
+          <div class="pane-title"><span class="dot"></span><b>github</b><span>stdio · 14 tools</span><span class="act"><button class="btn sm">test</button><button class="btn sm">edit</button></span></div>
+          <div class="pane-body">
+            <dl class="sp-kv"><dt>command</dt><dd><code>npx -y @modelcontextprotocol/server-github</code></dd><dt>status</dt><dd><span class="badge ok">connected</span> 42 ms</dd><dt>last call</dt><dd class="num">13:04:51 · search_issues</dd></dl>
+            <pre style="margin-top:10px">search_repositories  get_file_contents  list_issues
+search_issues        create_issue       get_pull_request
+list_commits         … 7 more</pre>
+          </div>
+        </article>
+        <article class="pane">
+          <div class="pane-title"><span class="dot"></span><b>filesystem</b><span>stdio · 6 tools · read-only</span><span class="act"><button class="btn sm">test</button><button class="btn sm">edit</button></span></div>
+          <div class="pane-body">
+            <dl class="sp-kv"><dt>root</dt><dd><code>/data/notes</code></dd><dt>status</dt><dd><span class="badge ok">connected</span> 3 ms</dd><dt>last call</dt><dd class="num">12:58:02 · read_file</dd></dl>
+            <pre style="margin-top:10px">read_file  list_directory  search_files
+get_file_info  directory_tree  list_allowed_directories</pre>
+          </div>
+        </article>
+        <article class="pane">
+          <div class="pane-title"><span class="dot err"></span><b>home-assistant</b><span>sse · 0 tools</span><span class="act"><button class="btn sm">retry</button><button class="btn sm">edit</button></span></div>
+          <div class="pane-body">
+            <dl class="sp-kv"><dt>url</dt><dd><code>http://ha.local:8123/mcp_server/sse</code></dd><dt>status</dt><dd><span class="badge err">unreachable</span></dd></dl>
+            <div class="alert err" style="margin-top:10px"><span class="alert-k"></span><span>connect ECONNREFUSED 192.168.1.40:8123 · last ok 2026-11-15 22:10</span></div>
+          </div>
+        </article>
+        <article class="pane">
+          <div class="pane-title"><span class="dot mute"></span><b>postgres-readonly</b><span>stdio · disabled</span><span class="act"><button class="btn sm">enable</button></span></div>
+          <div class="pane-body">
+            <dl class="sp-kv"><dt>command</dt><dd><code>mcp-server-postgres $DATABASE_URL_RO</code></dd><dt>status</dt><dd><span class="badge mute">disabled</span></dd><dt>tools</dt><dd>query, list_tables, describe_table</dd></dl>
+          </div>
+        </article>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: PERMISSIONS -->
+<section class="view" id="settings-permissions" data-group="Settings" data-title="Personal data permissions" data-path="settings/sources/permissions" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-sources" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="tabs" role="tablist">
+        <a role="tab" aria-selected="false" href="#settings-sources">Sources</a>
+        <a role="tab" aria-selected="false" href="#settings-mcp">MCP</a>
+        <a role="tab" aria-selected="true" href="#settings-permissions">Personal data permissions</a>
+      </div>
+      <div class="page-head">
+        <div><h1>Personal data permissions</h1><p class="meta">Which data each model and agent may read. Cloud models never see categories marked local only.</p></div>
+      </div>
+      <table class="data sp-matrix">
+        <thead><tr><th>Data category</th><th>claude-sonnet-5-5<div class="small muted">cloud</div></th><th>claude-haiku-5-5<div class="small muted">cloud</div></th><th>ollama llama3.3<div class="small muted">local</div></th><th>n8n agents</th><th>Local only</th></tr></thead>
+        <tbody>
+          <tr><td><span class="name">Documents &amp; notes</span><div class="small muted">1,204 items</div></td><td><span class="switch on"></span></td><td><span class="switch on"></span></td><td><span class="switch on"></span></td><td><span class="switch"></span></td><td><span class="switch"></span></td></tr>
+          <tr><td><span class="name">News &amp; public feeds</span><div class="small muted">3,410 items</div></td><td><span class="switch on"></span></td><td><span class="switch on"></span></td><td><span class="switch on"></span></td><td><span class="switch on"></span></td><td><span class="switch"></span></td></tr>
+          <tr><td><span class="name">Memory (facts about owner)</span><div class="small muted">86 facts</div></td><td><span class="switch on"></span></td><td><span class="switch"></span></td><td><span class="switch on"></span></td><td><span class="switch"></span></td><td><span class="switch"></span></td></tr>
+          <tr><td><span class="name">Health (FHIR)</span><div class="small muted">212 records</div></td><td><span class="switch"></span></td><td><span class="switch"></span></td><td><span class="switch on"></span></td><td><span class="switch"></span></td><td><span class="switch on"></span></td></tr>
+          <tr><td><span class="name">Finance (bank exports)</span><div class="small muted">96 statements</div></td><td><span class="switch"></span></td><td><span class="switch"></span></td><td><span class="switch on"></span></td><td><span class="switch"></span></td><td><span class="switch on"></span></td></tr>
+          <tr><td><span class="name">Location history</span><div class="small muted">disabled source</div></td><td><span class="switch"></span></td><td><span class="switch"></span></td><td><span class="switch"></span></td><td><span class="switch"></span></td><td><span class="switch on"></span></td></tr>
+        </tbody>
+      </table>
+      <p class="help" style="margin-top:12px">Changes apply to new chats. Running jobs keep the permissions they started with.</p>
+      <div class="savebar" style="margin-top:16px"><button class="btn">cancel</button><button class="btn primary">save permissions</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: MODELS -->
+<section class="view" id="settings-models" data-group="Settings" data-title="Models" data-path="settings/models" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-models" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Models</h1><p class="meta">Choose which models answer chats and what data they may use.</p></div></div>
+
+      <div class="set-row">
+        <div><h2>Providers</h2><p class="help">Add the AI providers this workspace can use. Local providers (Ollama, LM Studio) run on your own machine or network.</p></div>
+        <div class="col">
+          <div class="sp-card"><h3><span class="dot"></span>Anthropic <span class="badge ok right">ok · 312 ms</span></h3>
+            <dl class="sp-kv" style="margin-top:8px"><dt>api key</dt><dd><code>sk-ant-••••••••••3f2a</code></dd><dt>endpoint</dt><dd>https://api.anthropic.com</dd><dt>models</dt><dd>2 added</dd></dl>
+            <div class="row" style="margin-top:8px"><button class="btn sm">test</button><button class="btn sm">edit</button><button class="btn sm danger">remove</button></div></div>
+          <div class="sp-card"><h3><span class="dot warn"></span>Ollama <span class="badge warn right">unreachable</span></h3>
+            <dl class="sp-kv" style="margin-top:8px"><dt>base url</dt><dd><code>http://localhost:11434</code></dd><dt>last ok</dt><dd>2026-11-16 21:40</dd></dl>
+            <div class="alert warn" style="margin-top:8px"><span class="alert-k"></span><span>connection refused. start ollama: <code>ollama serve</code></span></div>
+            <div class="row" style="margin-top:8px"><button class="btn sm">retry</button><button class="btn sm">edit</button></div></div>
+          <div><button class="btn">+ add provider</button></div>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h2>Added models</h2><p class="help">Each model has one role. Chat uses the default; fast handles titles and routing.</p></div>
+        <table class="data">
+          <thead><tr><th>Model</th><th>Provider</th><th>Role</th><th class="n">Context</th><th class="n">$/1M in·out</th></tr></thead>
+          <tbody>
+            <tr><td class="name">claude-sonnet-5-5</td><td>Anthropic</td><td><select class="input" aria-label="Role"><option selected>default chat</option><option>fast</option><option>off</option></select></td><td class="n">1M</td><td class="n">3.00 · 15.00</td></tr>
+            <tr><td class="name">claude-haiku-5-5</td><td>Anthropic</td><td><select class="input" aria-label="Role"><option>default chat</option><option selected>fast</option><option>off</option></select></td><td class="n">200k</td><td class="n">1.00 · 5.00</td></tr>
+            <tr><td class="name">nomic-embed-text</td><td>Ollama</td><td><select class="input" aria-label="Role"><option selected>embeddings</option><option>off</option></select></td><td class="n">8k</td><td class="n muted">local</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="set-row">
+        <div><h2>Embeddings</h2><p class="help">Used to index documents for search. Changing it re-indexes everything.</p></div>
+        <div class="sp-grid2">
+          <div class="field"><label for="emb-model">model</label><select id="emb-model" class="input"><option>nomic-embed-text (768 dim)</option></select></div>
+          <div class="field"><label for="emb-chunk">chunk size</label><input id="emb-chunk" class="input num" value="800 tokens"></div>
+          <p class="help" style="grid-column:1/-1">index: 48,201 chunks · last full rebuild 2026-11-10</p>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h2>Budgets &amp; timeouts</h2><p class="help">Hard stops. A chat that would pass the monthly budget is refused.</p></div>
+        <div class="col">
+          <div class="sp-grid3">
+            <div class="field"><label for="b-month">monthly budget (USD)</label><input id="b-month" class="input num" value="40.00"></div>
+            <div class="field"><label for="b-req">request timeout (s)</label><input id="b-req" class="input num" value="120"></div>
+            <div class="field"><label for="b-tok">max output tokens</label><input id="b-tok" class="input num" value="8192"></div>
+          </div>
+          <div class="sp-meter">november  <span class="ok">██████████████</span><span class="muted">░░░░░░░░░░░░░░░░</span>  $18.42 / $40.00  46%</div>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h2>Privacy &amp; egress</h2><p class="help">What may leave this server.</p></div>
+        <div class="col">
+          <label class="check"><span class="switch on"></span>redact emails and phone numbers before cloud calls</label>
+          <label class="check"><span class="switch on"></span>block cloud models for local-only data</label>
+          <label class="check"><span class="switch"></span>allow providers to retain prompts for training</label>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h2>Visualization router</h2><p class="help">Chooses how an answer is presented (text, table, chart, diagram, map, calculator). The internal router never leaves this server.</p></div>
+        <div class="field" style="max-width:380px"><label for="viz">router</label><select id="viz" class="input"><option>internal (default)</option><option>claude-haiku-5-5</option></select></div>
+      </div>
+      <div class="savebar"><button class="btn">cancel changes</button><button class="btn primary">save AI settings</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: PROMPTS -->
+<section class="view" id="settings-prompts" data-group="Settings" data-title="System prompts" data-path="settings/prompts" data-rail="settings" data-mode="INSERT">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-prompts" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>System prompts</h1><p class="meta">Instructions sent before every chat. Variables are filled at send time.</p></div><div class="actions"><button class="btn">+ new prompt</button></div></div>
+      <div class="grid">
+        <div class="pane s4">
+          <div class="pane-title"><b>prompts</b><span>4</span></div>
+          <ul class="sp-list">
+            <li aria-current="true"><span class="grow">assistant (default)</span><span class="badge ok">active</span></li>
+            <li><span class="grow">research analyst</span><span class="small muted">612 tok</span></li>
+            <li><span class="grow">daily brief writer</span><span class="small muted">388 tok</span></li>
+            <li><span class="grow">vietnamese reply</span><span class="small muted">140 tok</span></li>
+          </ul>
+        </div>
+        <div class="s8 col">
+          <div class="row"><span class="label">assistant.prompt.md</span><span class="small muted">modified · 742 tokens</span><span class="right small muted">Ln 9, Col 41 · UTF-8 · markdown</span></div>
+          <div class="sp-editor">
+            <div class="sp-gutter">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13</div>
+            <textarea aria-label="Prompt text" spellcheck="false">You are the owner's personal intelligence assistant on Umwelt-OS.
+Today is {{date}} in {{timezone}}. Reply in {{locale}}.
+
+Rules:
+- Answer only from the provided sources. Cite each claim as [n].
+- If the sources do not cover the question, say so plainly.
+- Prefer tables for numbers; give units and dates.
+- Never reveal data marked local_only to a cloud model.
+- Keep answers under 250 words unless asked for more.
+
+Workspace: {{workspace.name}}
+Tracked topics: {{topics}}</textarea>
+          </div>
+          <div class="row"><span class="small muted">variables</span><span class="tag">date</span><span class="tag">timezone</span><span class="tag">locale</span><span class="tag">workspace.name</span><span class="tag">topics</span></div>
+          <div class="savebar"><button class="btn">revert</button><button class="btn">preview with sample</button><button class="btn primary">save prompt</button></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: MEMORY -->
+<section class="view" id="settings-memory" data-group="Settings" data-title="Memory" data-path="settings/memory" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-memory" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Memory</h1><p class="meta">Facts the assistant keeps about you between chats. You can review each one in Knowledge &gt; Memory.</p></div></div>
+      <div class="set-row"><div><h2>Learning</h2><p class="help">How new memories are created.</p></div>
+        <div class="col"><label class="check"><span class="switch on"></span>save facts from chats</label><label class="check"><span class="switch on"></span>ask before saving health or finance facts</label><label class="check"><span class="switch"></span>save facts from uploaded documents</label></div></div>
+      <div class="set-row"><div><h2>Retention</h2><p class="help">Unused memories expire after this period.</p></div>
+        <div class="sp-grid2"><div class="field"><label for="m-ret">keep unused memories for</label><select id="m-ret" class="input"><option>180 days</option><option>1 year</option><option>forever</option></select></div>
+        <div class="field"><label for="m-max">max memories</label><input id="m-max" class="input num" value="500"></div>
+        <p class="help" style="grid-column:1/-1">86 / 500 used · 3 expire this week</p></div></div>
+      <div class="set-row"><div><h2>Clear memory</h2><p class="help">Deletes all 86 facts. Chats are kept.</p></div><div><button class="btn danger">clear all memories</button></div></div>
+      <div class="savebar"><button class="btn">cancel</button><button class="btn primary">save</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: WEB SEARCH -->
+<section class="view" id="settings-web-search" data-group="Settings" data-title="Web search" data-path="settings/web-search" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-web-search" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Web search</h1><p class="meta">Lets chat search the public web when you turn it on for a message.</p></div></div>
+      <div class="set-row"><div><h2>Provider</h2><p class="help">Queries are sent to this provider. Results are cited like your own sources.</p></div>
+        <div class="col">
+          <div class="field" style="max-width:380px"><label for="ws-p">provider</label><select id="ws-p" class="input"><option>Brave Search API</option><option>Tavily</option><option>SearXNG (self-hosted)</option></select></div>
+          <div class="field" style="max-width:380px"><label for="ws-key">api key</label><input id="ws-key" class="input" value="BSA-12ab" aria-invalid="true" aria-describedby="ws-key-err"><span class="field-err" id="ws-key-err">key looks too short. Brave keys are 31 characters.</span></div>
+          <div class="row"><button class="btn">test connection</button></div>
+          <div class="alert ok"><span class="alert-k"></span><span>previous key worked · "mekong water level" returned 10 results in 640 ms</span></div>
+        </div></div>
+      <div class="set-row"><div><h2>Limits</h2><p class="help">Per message.</p></div>
+        <div class="sp-grid2"><div class="field"><label for="ws-n">results</label><input id="ws-n" class="input num" value="8"></div><div class="field"><label for="ws-safe">safe search</label><select id="ws-safe" class="input"><option>moderate</option><option>strict</option><option>off</option></select></div></div></div>
+      <div class="savebar"><button class="btn">cancel</button><button class="btn primary">save</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: TRANSLATION -->
+<section class="view" id="settings-translation" data-group="Settings" data-title="Translation" data-path="settings/translation" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-translation" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Translation</h1><p class="meta">Translate feed items and documents into your reading language.</p></div></div>
+      <div class="set-row"><div><h2>Languages</h2><p class="help">Items already in a target language are not translated.</p></div>
+        <div class="col"><div class="chips"><button class="chip" aria-pressed="true">vietnamese</button><button class="chip" aria-pressed="true">english</button><button class="chip" aria-pressed="false">japanese</button><button class="chip" aria-pressed="false">german</button><button class="chip" aria-pressed="false">french</button></div>
+        <label class="check"><span class="switch on"></span>translate feed headlines automatically</label><label class="check"><span class="switch"></span>translate full articles on open</label></div></div>
+      <div class="set-row"><div><h2>Provider</h2><p class="help">Local keeps text on this server.</p></div>
+        <div class="field" style="max-width:380px"><label for="tr-p">provider</label><select id="tr-p" class="input"><option>claude-haiku-5-5 (cloud)</option><option>ollama llama3.3 (local)</option></select><span class="help">this month: 1,840 items · $0.62</span></div></div>
+      <div class="savebar"><button class="btn">cancel</button><button class="btn primary">save</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: MEMBERS -->
+<section class="view" id="settings-members" data-group="Settings" data-title="Members" data-path="settings/workspace" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-members" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Members</h1><p class="meta">People who can open this workspace.</p></div></div>
+      <table class="data">
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Last active</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="name">Owner</td><td>owner@umwelt.local</td><td><span class="badge ok">owner</span></td><td class="num">now</td><td></td></tr>
+          <tr><td class="name">Minh Tran</td><td>minh@example.org</td><td><select class="input" aria-label="Role"><option selected>editor</option><option>viewer</option></select></td><td class="num">2026-11-16 20:14</td><td><button class="btn sm danger">remove</button></td></tr>
+          <tr><td class="name">Lan Pham</td><td>lan@example.org</td><td><select class="input" aria-label="Role"><option>editor</option><option selected>viewer</option></select></td><td class="num">2026-11-09 08:02</td><td><button class="btn sm danger">remove</button></td></tr>
+          <tr><td class="muted">pending</td><td>an@example.org</td><td><span class="badge warn">invited</span></td><td class="muted">expires in 6 d</td><td><button class="btn sm">resend</button></td></tr>
+        </tbody>
+      </table>
+      <div class="set-row" style="margin-top:16px"><div><h2>Invite</h2><p class="help">They get a link valid for 7 days.</p></div>
+        <div class="row"><div class="field grow"><label for="inv-e">email</label><input id="inv-e" class="input" placeholder="name@example.org"></div><div class="field"><label for="inv-r">role</label><select id="inv-r" class="input"><option>viewer</option><option>editor</option></select></div><button class="btn primary" style="align-self:flex-end">send invite</button></div></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: GLOBAL -->
+<section class="view" id="settings-global" data-group="Settings" data-title="Global settings" data-path="settings/global" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-global" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Global settings</h1><p class="meta">Defaults for everyone in this workspace.</p></div></div>
+      <div class="set-row"><div><h2>Region</h2><p class="help">Used for schedules, dates and numbers.</p></div>
+        <div class="sp-grid2"><div class="field"><label for="g-tz">timezone</label><select id="g-tz" class="input"><option>Asia/Ho_Chi_Minh (GMT+7)</option></select></div><div class="field"><label for="g-loc">language</label><select id="g-loc" class="input"><option>en-us</option><option>vi-vi</option></select></div></div></div>
+      <div class="set-row"><div><h2>Data retention</h2><p class="help">Raw collected records older than this are deleted. Indexed summaries stay.</p></div>
+        <div class="sp-grid2"><div class="field"><label for="g-raw">raw records</label><select id="g-raw" class="input"><option>90 days</option><option>1 year</option></select></div><div class="field"><label for="g-chat">chats</label><select id="g-chat" class="input"><option>forever</option><option>1 year</option></select></div></div></div>
+      <div class="set-row"><div><h2>Danger zone</h2><p class="help">These cannot be undone.</p></div>
+        <div class="sp-danger">
+          <div class="row"><div><div class="label">purge collected data</div><div class="help">deletes 4,812 records from all sources</div></div><button class="btn danger">purge data</button></div>
+          <div class="row"><div><div class="label">delete workspace</div><div class="help">removes members, sources, dashboards and chats</div></div><button class="btn danger">delete workspace</button></div>
+        </div></div>
+      <div class="savebar"><button class="btn">cancel</button><button class="btn primary">save</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: WORKFLOWS -->
+<section class="view" id="settings-workflows" data-group="Settings" data-title="Workflows (n8n)" data-path="settings/n8n" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-workflows" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Workflows</h1><p class="meta">Automations run by n8n with a scoped Umwelt-OS token.</p></div><div class="actions"><button class="btn">open n8n ↗</button></div></div>
+      <div class="alert ok"><span class="alert-k"></span><span>connected to <code>http://n8n:5678</code> · n8n 1.82.1 · token scope: read sources, write tasks</span></div>
+      <table class="data" style="margin-top:16px">
+        <thead><tr><th>Workflow</th><th>Trigger</th><th>State</th><th>Last run</th><th class="n">Runs 7d</th><th></th></tr></thead>
+        <tbody>
+          <tr><td class="name">morning brief → telegram</td><td><span class="sp-cron">0 7 * * *</span></td><td><span class="badge ok">active</span></td><td class="num">07:00:04 · 3.2 s</td><td class="n">7</td><td><button class="btn sm">run now</button></td></tr>
+          <tr><td class="name">earthquake M5+ alert</td><td>webhook</td><td><span class="badge ok">active</span></td><td class="num">2026-11-16 18:41</td><td class="n">2</td><td><button class="btn sm">run now</button></td></tr>
+          <tr><td class="name">invoice pdf → documents</td><td>email (imap)</td><td><span class="badge err">error</span></td><td class="num">12:30:11 · failed</td><td class="n">14</td><td><button class="btn sm">logs</button></td></tr>
+          <tr><td class="name">weekly btc report</td><td><span class="sp-cron">0 9 * * 1</span></td><td><span class="badge mute">inactive</span></td><td class="muted">2026-11-03</td><td class="n">0</td><td><button class="btn sm">activate</button></td></tr>
+        </tbody>
+      </table>
+      <h2 class="t-h" style="margin:20px 0 8px">last run log · invoice pdf → documents</h2>
+<pre>12:30:08  <span class="ok">ok </span>  IMAP Trigger        1 new message from billing@isp.vn
+12:30:09  <span class="ok">ok </span>  Extract attachment  invoice-2026-11.pdf (182 KB)
+12:30:11  <span class="err">err</span>  Umwelt-OS: upload   403 forbidden: token lacks scope documents:write
+12:30:11  <span class="muted">---</span>  stopped. fix: add documents:write to the n8n token in Settings &gt; Workflows</pre>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: SYSTEM STATUS -->
+<section class="view" id="settings-system" data-group="Settings" data-title="System status" data-path="settings/system" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-system" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>System status</h1><p class="meta">Umwelt-OS 2.4.0 · build 997927f · uptime 6 d 04 h 12 m</p></div><div class="actions"><button class="btn">refresh</button><button class="btn">download diagnostics</button></div></div>
+      <div class="sp-grid3">
+        <div class="pane"><div class="pane-title"><span class="dot"></span><b>api</b><span>fastapi</span></div><div class="pane-body"><dl class="sp-kv"><dt>status</dt><dd><span class="badge ok">active (running)</span></dd><dt>p95</dt><dd class="num">84 ms</dd><dt>memory</dt><dd class="num">412 MB</dd></dl></div></div>
+        <div class="pane"><div class="pane-title"><span class="dot"></span><b>worker</b><span>4 procs</span></div><div class="pane-body"><dl class="sp-kv"><dt>status</dt><dd><span class="badge ok">active (running)</span></dd><dt>queue</dt><dd class="num">3 waiting · 1 running</dd><dt>failed 24h</dt><dd class="num warn">2</dd></dl></div></div>
+        <div class="pane"><div class="pane-title"><span class="dot"></span><b>postgres</b><span>16.4</span></div><div class="pane-body"><dl class="sp-kv"><dt>status</dt><dd><span class="badge ok">active</span></dd><dt>size</dt><dd class="num">3.8 GB</dd><dt>migration</dt><dd>0023 (head)</dd></dl></div></div>
+        <div class="pane"><div class="pane-title"><span class="dot"></span><b>redis</b><span>7.4</span></div><div class="pane-body"><dl class="sp-kv"><dt>status</dt><dd><span class="badge ok">active</span></dd><dt>memory</dt><dd class="num">38 MB</dd><dt>hit rate</dt><dd class="num">94.1%</dd></dl></div></div>
+        <div class="pane"><div class="pane-title"><span class="dot warn"></span><b>n8n</b><span>1.82.1</span></div><div class="pane-body"><dl class="sp-kv"><dt>status</dt><dd><span class="badge warn">degraded</span></dd><dt>last error</dt><dd>12:30 · 403 upload</dd></dl></div></div>
+        <div class="pane"><div class="pane-title"><span class="dot"></span><b>disk</b><span>/data</span></div><div class="pane-body"><div class="sp-meter"><span class="ok">████████</span><span class="muted">░░░░░░░░░░░░</span> 41%</div><p class="small muted">82 GB of 200 GB used</p></div></div>
+      </div>
+      <h2 class="t-h" style="margin:20px 0 8px">recent errors</h2>
+      <ul class="log">
+        <li><time>13:02:09</time><span class="lv-warn">WARN</span><span>worker · gdelt rate limited, retry in 120 s</span><span class="t2 muted small">req 7f3a</span></li>
+        <li><time>12:51:02</time><span class="lv-err">ERR</span><span>worker · bbc-world fetch timed out after 20 s</span><span class="t2 muted small">req 91c2</span></li>
+        <li><time>12:30:11</time><span class="lv-err">ERR</span><span>api · 403 POST /documents from n8n token</span><span class="t2 muted small">req 0b88</span></li>
+        <li><time>11:15:22</time><span class="lv-err">ERR</span><span>worker · alpha_vantage timed out after 20 s</span><span class="t2 muted small">req 44de</span></li>
+      </ul>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= SETTINGS: APPEARANCE -->
+<section class="view" id="settings-appearance" data-group="Settings" data-title="Appearance (this device)" data-path="settings/appearance" data-rail="settings">
+  <div class="page"><div class="settings">
+    <nav class="subnav" data-subnav="settings-appearance" aria-label="Settings"></nav>
+    <div class="settings-body">
+      <div class="page-head" style="padding-top:0"><div><h1>Appearance</h1><p class="meta">Applies to this browser only.</p></div></div>
+      <div class="set-row"><div><h2>Skin</h2><p class="help">Terminal turns the whole app into a dark IDE look with monospace type.</p></div>
+        <div class="sp-grid2" role="radiogroup" aria-label="Skin">
+          <label class="sp-skin-opt"><input type="radio" name="sp-skin" value="default"><span><b>default</b><br><span class="help">uses theme and accent below</span></span><div class="sp-mini def">Overview<br>Updated 9 minutes ago</div></label>
+          <label class="sp-skin-opt"><input type="radio" name="sp-skin" value="terminal" checked><span><b>terminal</b><br><span class="help">dark IDE palette, monospace</span></span><div class="sp-mini term"># Overview<br>13:11:58 INFO feed ok<span class="cursor"></span></div></label>
+        </div></div>
+      <div class="set-row" data-sp-locked><div><h2>Theme</h2><p class="help sp-lock-note">Terminal skin uses its own dark palette.</p></div>
+        <div class="col"><div class="row" role="radiogroup" aria-label="Theme"><label class="check"><input type="radio" name="sp-theme"> light</label><label class="check"><input type="radio" name="sp-theme" checked> dark</label><label class="check"><input type="radio" name="sp-theme"> system</label></div></div></div>
+      <div class="set-row" data-sp-locked><div><h2>Accent</h2><p class="help sp-lock-note">Terminal skin uses its own dark palette.</p></div>
+        <div class="row"><span class="sp-swatch accent-ink" style="background:var(--accent)" title="ink"></span><span class="sp-swatch" style="background:var(--info)" title="sea"></span><span class="sp-swatch" style="background:var(--warning)" title="earth"></span><span class="sp-swatch" style="background:var(--danger)" title="plum"></span></div></div>
+      <div class="set-row"><div><h2>Density</h2><p class="help">Compact fits more gadgets on screen.</p></div>
+        <div class="row" role="radiogroup" aria-label="Density"><label class="check"><input type="radio" name="sp-den" checked> comfortable</label><label class="check"><input type="radio" name="sp-den"> compact</label></div></div>
+      <div class="set-row"><div><h2>Language</h2><p class="help">Dates and numbers follow this too.</p></div>
+        <div class="field" style="max-width:260px"><select class="input" aria-label="Language"><option>en-us · English (US)</option><option>vi-vi · Tiếng Việt</option></select></div></div>
+      <div class="savebar"><button class="btn">cancel</button><button class="btn primary">save</button></div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================================================= PUBLIC: LOGIN -->
+<section class="view" id="login" data-group="Public" data-title="Login" data-path="login" data-rail="none">
+  <div class="sp-public">
+    <div class="sp-term">
+      <div class="sp-term-bar"><span class="dot"></span><span>ssh owner@umwelt.local</span><span class="right">tty1</span></div>
+      <div class="sp-term-body">
+<pre class="sp-banner" aria-hidden="true">  _   _               _ _        ___  ___
+ | | | |_ __ ___ _ _ | | |_     / _ \/ __|
+ | |_| | '  \ V  V / -_) |  _|  | (_) \__ \
+  \___/|_|_|_\_/\_/\___|_|\__|   \___/|___/</pre>
+        <p class="muted small" style="margin-bottom:16px">Umwelt-OS v2.4.0 (tty1) · personal intelligence OS · last login 2026-11-16 22:41 from 192.168.1.12</p>
+        <form class="col" style="gap:12px" onsubmit="return false">
+          <div class="sp-line"><label for="lg-u">login:</label><input id="lg-u" class="input" value="owner@umwelt.local" autocomplete="username"></div>
+          <div class="sp-line"><label for="lg-p">password:</label><input id="lg-p" class="input" type="password" value="hunter22" aria-invalid="true" aria-describedby="lg-err" autocomplete="current-password"></div>
+          <div class="field"><span class="field-err" id="lg-err">invalid credentials. 4 attempts left before a 15 min lock.</span></div>
+          <div class="row"><button class="btn primary">sign in</button><a class="btn ghost" href="#settings-appearance">appearance</a><a class="small right" href="#">forgot password</a></div>
+        </form>
+      </div>
+      <div class="pane-foot"><a href="#">privacy</a><a href="#">terms</a><span class="right">self-hosted · GMT+7</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================= PUBLIC: SETUP -->
+<section class="view" id="setup" data-group="Public" data-title="First-run setup" data-path="setup" data-rail="none">
+  <div class="sp-public">
+    <div class="sp-term wide">
+      <div class="sp-term-bar"><span class="dot"></span><span>umwelt-os setup</span><span class="right">step 1/2</span></div>
+      <div class="sp-term-body">
+        <h1 style="margin-bottom:12px">First-run setup</h1>
+        <ul class="sp-boot">
+          <li><span class="ok">[  OK  ]</span><span>postgres 16.4 reachable · migrations at 0023 (head)</span></li>
+          <li><span class="ok">[  OK  ]</span><span>redis 7.4 reachable</span></li>
+          <li><span class="ok">[  OK  ]</span><span>worker online · 4 processes</span></li>
+          <li><span class="ok">[  OK  ]</span><span>SECRET_KEY set · 64 bytes</span></li>
+          <li><span class="warn">[ WARN ]</span><span>no AI provider configured. chat stays off until you add one.</span></li>
+          <li><span class="muted">[ .... ]</span><span>create owner account<span class="cursor"></span></span></li>
+        </ul>
+        <form class="col" style="gap:12px" onsubmit="return false">
+          <div class="sp-grid2">
+            <div class="field"><label for="su-n">display name</label><input id="su-n" class="input" value="Owner"></div>
+            <div class="field"><label for="su-e">email</label><input id="su-e" class="input" value="owner@umwelt.local"></div>
+            <div class="field"><label for="su-p">password</label><input id="su-p" class="input" type="password" value="correcthorsebattery" aria-describedby="su-p-h"><span class="help" id="su-p-h">at least 12 characters</span></div>
+            <div class="field"><label for="su-tz">timezone</label><select id="su-tz" class="input"><option>Asia/Ho_Chi_Minh (GMT+7)</option></select></div>
+          </div>
+          <div class="row"><a class="btn primary" href="#onboarding">create owner and continue</a></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================= PUBLIC: ONBOARDING -->
+<section class="view" id="onboarding" data-group="Public" data-title="Onboarding" data-path="onboarding" data-rail="none">
+  <div class="sp-public">
+    <div class="sp-term wide">
+      <div class="sp-term-bar"><span class="dot"></span><span>umwelt-os onboarding</span><span class="right">step 2/4</span></div>
+      <div class="sp-term-body">
+        <div class="sp-steps"><span class="done">1 account</span><span class="cur">2 starter packs</span><span>3 model</span><span>4 dashboard</span></div>
+        <h1>Pick what to track</h1>
+        <p class="muted" style="margin:6px 0 16px">Each pack adds sources and a dashboard tab. You can change them later in Settings &gt; Data sources.</p>
+        <div class="col">
+          <label class="sp-pack"><input type="checkbox" checked><span><b>world monitor</b><br><span class="help">earthquakes, wildfires, disasters on a 3D globe</span></span><span class="small muted">4 sources</span></label>
+          <label class="sp-pack"><input type="checkbox" checked><span><b>markets</b><br><span class="help">crypto, VN-Index, FX, gold</span></span><span class="small muted">3 sources</span></label>
+          <label class="sp-pack"><input type="checkbox"><span><b>technology news</b><br><span class="help">Hacker News, arXiv cs.AI, GitHub trending</span></span><span class="small muted">3 sources</span></label>
+          <label class="sp-pack"><input type="checkbox" checked><span><b>local weather</b><br><span class="help">Open-Meteo forecast for your timezone city</span></span><span class="small muted">1 source</span></label>
+          <label class="sp-pack"><input type="checkbox"><span><b>personal</b><br><span class="help">tasks, goals, daily brief</span></span><span class="small muted">0 sources</span></label>
+        </div>
+        <div class="row" style="margin-top:16px"><a class="btn" href="#setup">back</a><span class="small muted">3 packs · 8 sources</span><a class="btn primary right" href="#dashboard">continue</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+/* fork C: settings subnav, row action icons, appearance skin radios. */
+(function () {
+  const groups = [
+    ['Data & AI', [['settings-sources', 'Data sources'], ['settings-models', 'Models'], ['settings-prompts', 'System prompts'], ['settings-memory', 'Memory'], ['settings-web-search', 'Web search'], ['settings-translation', 'Translation']]],
+    ['Workspace', [['settings-members', 'Members'], ['settings-global', 'Global settings'], ['settings-workflows', 'Workflows'], ['settings-system', 'System status']]],
+    ['This device', [['settings-appearance', 'Appearance']]],
+  ];
+  document.querySelectorAll('[data-subnav]').forEach((nav) => {
+    nav.innerHTML = groups.map(([g, items]) => '<span class="grp">' + g + '</span>' + items.map(([id, label]) =>
+      '<a href="#' + id + '"' + (id === nav.dataset.subnav ? ' aria-current="page"' : '') + '>' + label + '</a>').join('')).join('');
+  });
+  const svg = (d) => '<svg class="icon" viewBox="0 0 24 24">' + d + '</svg>';
+  const acts = [
+    ['Configure', svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>')],
+    ['Collect now', svg('<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>')],
+    ['Pause', svg('<path d="M9 5v14M15 5v14"/>')],
+    ['Test connection', svg('<path d="M5 12h14M12 5l7 7-7 7"/>')],
+    ['History', svg('<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2"/>')],
+  ];
+  document.querySelectorAll('[data-acts]').forEach((el) => {
+    el.innerHTML = acts.map(([l, i]) => '<button class="icon-btn" aria-label="' + l + '" title="' + l + '">' + i + '</button>').join('');
+  });
+  function syncSkin() {
+    const term = document.documentElement.dataset.skin === 'terminal';
+    document.querySelectorAll('input[name="sp-skin"]').forEach((r) => { r.checked = r.value === document.documentElement.dataset.skin; });
+    document.querySelectorAll('[data-sp-locked]').forEach((row) => {
+      row.lastElementChild.classList.toggle('sp-disabled', term);
+      row.querySelector('.sp-lock-note').hidden = !term;
+    });
+  }
+  document.addEventListener('change', (e) => {
+    if (e.target.name !== 'sp-skin') return;
+    document.documentElement.dataset.skin = e.target.value;
+    document.querySelectorAll('[data-skin-btn]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.skinBtn === e.target.value)));
+    document.dispatchEvent(new CustomEvent('skin:changed'));
+  });
+  document.addEventListener('skin:changed', syncSkin);
+  syncSkin();
+})();
+</script>

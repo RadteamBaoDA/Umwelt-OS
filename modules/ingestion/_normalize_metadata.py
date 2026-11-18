@@ -19,6 +19,7 @@ from modules.ingestion._native.records import validate_telegram_record_delivery
 from modules.ingestion.schemas import IngestionRecord, TelegramDeliveryProof, TelegramRawDelivery
 from modules.knowledge.documents.public import (
     MEASUREMENT_PROVIDER_IDS,
+    MEDIA_PROVIDER_IDS,
     NEWS_PROVIDER_IDS,
     ProviderRecordMetadata,
     TelegramDocumentOrder,
@@ -83,7 +84,7 @@ PROVIDER_FIELD_KEYS: dict[str, tuple[str, ...]] = {
     "github": ("record_type", "node_id", "html_url"),
     "telegram": (),
     **dict.fromkeys(
-        (*MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS), ()
+        (*MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS, *MEDIA_PROVIDER_IDS), ()
     ),  # envelope source_fields only
 }
 
@@ -99,6 +100,7 @@ ENVELOPE_REQUIRED_PROVIDERS = (
     "github_releases",
     "github",
     *NEWS_PROVIDER_IDS,
+    *MEDIA_PROVIDER_IDS,
 )
 
 

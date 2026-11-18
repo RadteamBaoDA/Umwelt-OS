@@ -44,5 +44,6 @@
   "watchlist.empty": "Danh sách theo dõi trống",
   "watchlist.emptyDetail": "Thêm một quy tắc để bắt đầu theo dõi.",
   "streamCount": "{count, plural, other {# bản ghi}}",
-  "openFullBrief": "Mở bản tin đầy đủ"
+  "openFullBrief": "Mở bản tin đầy đủ",
+  "foot.summary": "Việc đến hạn {tasks} · Mục tiêu đang chạy {goals}"
 }

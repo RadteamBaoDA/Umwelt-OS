@@ -39,6 +39,8 @@ export interface GridProjectionInputs {
   instances: GadgetInstance[];
   /** Measured frame header height in px (0 until measured). */
   frameHeaderHeight: number;
+  /** When set, the tablet flow applies only while the grid is narrower than this many px (terminal Overview). */
+  tabletMaxWidth?: number;
   gesture: ActiveGesture | null;
   /** Reports the current local readable projection for explicit owner adoption. */
   onReadableProjectionChange?: (placements: DashboardPlacement[] | null) => void;
@@ -46,11 +48,16 @@ export interface GridProjectionInputs {
   onGridMetricsChange?: (metrics: { cellSize: number; stride: number; frameHeaderHeight: number } | null) => void;
 }
 
-/** Tablet reading flow: only a view-only desktop layout, never while editing. */
+/** Tablet reading flow: only a view-only desktop layout, never while editing; optionally capped by `tabletMaxWidth`. */
 function useTabletProjection(inputs: GridProjectionInputs, gridMetrics: ReturnType<typeof getGridUnitMetrics>) {
   const { gridWidth, isTabletView, isEditMode, isMobileView, breakpoint, placements, instances, frameHeaderHeight } = inputs;
   // Tablet flow is view-only on the desktop layout; editing keeps the 20-column geometry.
-  const tabletActive = isTabletView && !isEditMode && !isMobileView && breakpoint === 'desktop';
+  const tabletActive =
+    isTabletView &&
+    !isEditMode &&
+    !isMobileView &&
+    breakpoint === 'desktop' &&
+    (inputs.tabletMaxWidth === undefined || gridWidth < inputs.tabletMaxWidth);
   const tabletMetrics = useMemo(
     () => (tabletActive ? getGridUnitMetrics(gridWidth, TABLET_GRID_COLUMNS) : null),
     [gridWidth, tabletActive],

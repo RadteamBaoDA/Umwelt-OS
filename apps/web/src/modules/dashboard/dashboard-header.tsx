@@ -2,7 +2,8 @@
 
 import { AlignJustify, ChevronDown, Edit3, Eye, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useState } from 'react';
+import React, { useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { applyDensity, readDensity, type DensityId } from '@/core/density';
 import { BareButton } from '@/components/bare-button';
 import { Button } from '@/components/ui/button';
@@ -144,26 +145,58 @@ export function DensityToggle() {
 interface HeaderProps extends SwitcherProps {
   /** Pre-joined "updated · stale" summary, or null when there is nothing to say. */
   summary: string | null;
+  /** Overview greeting strip rendered under the title (omitted on other tabs). */
+  greeting?: ReactNode;
   isOwner: boolean;
   isEditMode: boolean;
   canEditLayout: boolean;
   onToggleEdit: () => void;
+  /** Terminal-skin header shortcut: enters edit mode and opens the Add gadget dialog. */
+  onAddGadget: () => void;
   onOpenManagement: () => void;
 }
 
+/** Returns the app shell's statusline slot element, or null when no shell footer is mounted. */
+const findStatuslineSlot = (): HTMLElement | null => document.getElementById('statusline-info');
+
 /**
- * Page header (Dashboard artboard): switcher-as-title, freshness summary and the edit / manage actions.
+ * Renders the freshness summary into the app shell's statusline footer (`#statusline-info`) when that slot
+ * exists, and inline under the title otherwise (the slot is absent on routes without the shell footer).
+ *
+ * The slot is looked up once, after mount, in an effect. Until then (SSR and the first client pass) nothing
+ * renders, so the summary never flashes inline before it moves into the footer. The lookup is not repeated, so a
+ * shell that mounts after this header is not picked up until the header remounts. Side effects: reads the DOM only.
+ * Renders nothing for a null summary.
+ *
+ * @param props.summary Pre-joined summary text, or null to render nothing.
+ */
+export function StatuslineSummary({ summary }: { summary: string | null }) {
+  // undefined = not looked up yet (SSR / first pass); null = no shell footer mounted; Element = portal target.
+  const [slot, setSlot] = useState<Element | null | undefined>(undefined);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time post-mount read of the DOM slot; it cannot be known during render
+    setSlot(findStatuslineSlot());
+  }, []);
+  if (!summary || slot === undefined) return null;
+  if (slot) return createPortal(<span>{summary}</span>, slot);
+  return <p className="m-0 text-sm text-muted-foreground">{summary}</p>;
+}
+
+/**
+ * Page header (Dashboard artboard): switcher-as-title, optional greeting under the title, freshness summary
+ * (portalled into the statusline when available) and the edit / manage actions.
  */
 export function DashboardHeader(props: HeaderProps) {
   const t = useTranslations('dashboard');
-  const { summary, isOwner, isAdminViewer, isEditMode, canEditLayout, layoutOperationPending } = props;
+  const { summary, greeting, isOwner, isAdminViewer, isEditMode, canEditLayout, layoutOperationPending } = props;
   return (
-    <div className="flex flex-wrap items-end gap-3">
+    <div className="dash-header flex flex-wrap items-end gap-3">
       <div className="mr-auto flex min-w-0 basis-full flex-col gap-0.5 sm:basis-auto">
         <h1 className="m-0 min-w-0 text-2xl font-semibold leading-tight tracking-[-0.02em] text-foreground">
           <DashboardSwitcher {...props} />
         </h1>
-        {summary && <p className="m-0 text-sm text-muted-foreground">{summary}</p>}
+        {greeting && <div className="dash-greeting">{greeting}</div>}
+        <StatuslineSummary summary={summary} />
       </div>
       <DensityToggle />
       {!isAdminViewer && (
@@ -181,6 +214,13 @@ export function DashboardHeader(props: HeaderProps) {
       {isOwner && (
         <Button type="button" variant="outline" onClick={props.onOpenManagement}>
           {t('manage.topicsAndHighlights')}
+        </Button>
+      )}
+      {/* Terminal-only shortcut (hidden by CSS in the default skin); edit mode already has its own Add gadget button. */}
+      {!isAdminViewer && canEditLayout && !isEditMode && (
+        <Button type="button" variant="outline" className="dash-add-gadget" disabled={layoutOperationPending} onClick={props.onAddGadget}>
+          <Plus className="w-4 h-4" aria-hidden="true" />
+          <span>{t('addGadget.label')}</span>
         </Button>
       )}
     </div>
