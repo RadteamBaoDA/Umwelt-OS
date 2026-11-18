@@ -263,7 +263,7 @@
   "guideSteps.mcp.s3": "Create the source against that server and choose a schedule.",
   "guideSteps.mcp.s4": "Press Test connection, then activate the source.",
   "guideSteps.youtube.s1": "Choose one channel ID, a list of channel IDs, handles, or playlist IDs.",
-  "guideSteps.youtube.s2": "Paste it into Channel ID.",
+  "guideSteps.youtube.s2": "Paste it into the selected target field.",
   "guideSteps.youtube.s3": "Press Test connection, then activate the source.",
   "guideSteps.arxiv.s1": "Pick an arXiv category code such as cs.AI or q-fin.GN from arxiv.org/category_taxonomy.",
   "guideSteps.arxiv.s2": "Paste exactly one category into Category.",

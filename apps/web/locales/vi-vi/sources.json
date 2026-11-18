@@ -263,7 +263,7 @@
   "guideSteps.mcp.s3": "Tạo nguồn trên máy chủ đó và chọn lịch chạy.",
   "guideSteps.mcp.s4": "Nhấn Kiểm tra kết nối, rồi kích hoạt nguồn.",
   "guideSteps.youtube.s1": "Chọn một ID kênh, danh sách ID kênh, tên kênh hoặc ID danh sách phát.",
-  "guideSteps.youtube.s2": "Dán vào ID kênh.",
+  "guideSteps.youtube.s2": "Dán vào trường mục tiêu đã chọn.",
   "guideSteps.youtube.s3": "Nhấn Kiểm tra kết nối, rồi kích hoạt nguồn.",
   "guideSteps.arxiv.s1": "Chọn mã danh mục arXiv như cs.AI hoặc q-fin.GN từ arxiv.org/category_taxonomy.",
   "guideSteps.arxiv.s2": "Dán đúng một danh mục vào Danh mục.",
