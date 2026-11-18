@@ -190,4 +190,13 @@ describe('GadgetFrame', () => {
     await user.click(screen.getByRole('button', { name: 'Collect now' }));
     expect(collect.collectAndWait).toHaveBeenCalledWith('s1', 'csrf', expect.objectContaining({ signal: expect.anything() }));
   });
+  it('shows a short renderer descriptor as the title-bar meta: feed source count, highlights rules', () => {
+    const base = instance();
+    const feed = instance({ definition: { ...base.definition, renderer: 'news_feed', source_ids: ['a', 'b', 'c'] } });
+    const view = renderFrame({ instance: feed });
+    expect(view.container.querySelector('.gadget-meta')?.textContent).toBe('tail -f · 3 sources');
+    view.unmount();
+    renderFrame({ instance: instance({ definition: { ...base.definition, renderer: 'highlights' } }) });
+    expect(document.querySelector('.gadget-meta')?.textContent).toBe('rules');
+  });
 });

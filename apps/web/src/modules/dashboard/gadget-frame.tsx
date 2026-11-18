@@ -85,11 +85,12 @@ const REVEAL_ON_HOVER =
  *
  * @param ms Epoch milliseconds of the event.
  * @param locale Display locale id.
+ * @param style `long` ("2 minutes ago") or `narrow` ("2 min. ago") phrase length.
  * @returns Relative phrase such as "2 minutes ago".
  */
-function formatAgo(ms: number, locale: string): string {
+function formatAgo(ms: number, locale: string, style: 'long' | 'narrow' = 'long'): string {
   const minutes = Math.round((Date.now() - ms) / 60_000);
-  const rtf = new Intl.RelativeTimeFormat(locale === 'vi-vi' ? 'vi' : 'en', { numeric: 'auto' });
+  const rtf = new Intl.RelativeTimeFormat(locale === 'vi-vi' ? 'vi' : 'en', { numeric: 'auto', style });
   if (Math.abs(minutes) < 60) return rtf.format(-Math.max(0, minutes), 'minute');
   if (Math.abs(minutes) < 1440) return rtf.format(-Math.round(minutes / 60), 'hour');
   return rtf.format(-Math.round(minutes / 1440), 'day');
@@ -179,7 +180,8 @@ function useHeaderMeasurement(headerRef: RefObject<HTMLElement | null>, onHeader
  * Renderer-reported freshness and attribution for the footer line.
  * Freshness comes only from data the renderer actually loaded; absent means no badge.
  *
- * @returns `reportFreshness` (the renderer-facing setter), the footer text and its title, and the raw
+ * @returns `reportFreshness` (the renderer-facing setter), the footer text, its compact terminal variant
+ * `shortText` and the footer title, and the raw
  * `collectedAt` ISO string (null until a renderer reports one) used as the data-refresh reveal key.
  */
 function useGadgetFooter() {
@@ -196,7 +198,27 @@ function useGadgetFooter() {
   const freshnessLabel = Number.isFinite(collectedMs) ? t('freshness.updated', { time: formatAgo(collectedMs, display.locale) }) : null;
   const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
   const footerText = [attribution, freshnessLabel].filter(Boolean).join(' · ');
-  return { reportFreshness, footerText, freshnessTitle, collectedAt };
+  // Terminal title-bar meta: narrow relative time ("5 min. ago") so the muted text never needs a mid-word ellipsis.
+  const shortAgo = Number.isFinite(collectedMs) ? formatAgo(collectedMs, display.locale, 'narrow') : null;
+  const shortText = [attribution, shortAgo].filter(Boolean).join(' · ');
+  return { reportFreshness, footerText, shortText, freshnessTitle, collectedAt };
+}
+
+/**
+ * Terminal title-bar meta: a short renderer-specific descriptor when one exists (news feed: `tail -f · N sources`
+ * from its bound sources; highlights: `rules`), otherwise the compact freshness text. Decorative; the full
+ * provenance footer stays in the accessibility tree.
+ *
+ * @param instance Gadget whose renderer and bound source count select the descriptor.
+ * @param shortText Compact attribution/freshness text used as the fallback.
+ * @returns Text for the `.gadget-meta` span (empty when nothing is known).
+ */
+function useTerminalMeta(instance: GadgetInstance, shortText: string): string {
+  const t = useTranslations('dashboard');
+  const { renderer, source_ids: sourceIds } = instance.definition;
+  if (renderer === 'news_feed') return t('gadget.metaFeed', { count: sourceIds?.length ?? 0 });
+  if (renderer === 'highlights') return t('gadget.metaRules');
+  return shortText;
 }
 
 /** Highlight severity badge: critical is destructive, info is muted. */
@@ -362,7 +384,11 @@ function HeaderActions({
 } & Pick<GadgetFrameProps, 'onConfigure' | 'onRemove'>) {
   const t = useTranslations('dashboard');
   return (
-    <div className="flex shrink-0 flex-nowrap items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className="gadget-head-actions flex shrink-0 flex-nowrap items-center gap-1"
+      data-edit={isEditMode ? '' : undefined}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       {!isEditMode && (
         <Button
           type="button"
@@ -569,14 +595,21 @@ function GadgetHeader(p: {
       className={`gadget-header @container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}
     >
       <div
-        className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
+        className={`gadget-head-main flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
         onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
       >
         {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
-        <span className="gadget-dot rounded-full" data-tone={dotTone} aria-hidden="true" />
-        <h3 id={titleId} className="gadget-title min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
-          {displayTitle}
-        </h3>
+        {/* Dot and title stay one flex unit so the terminal meta can wrap away from them (gadget-skin.css). */}
+        <span className="gadget-head-id flex min-w-0 max-w-full items-center gap-2">
+          <span className="gadget-dot rounded-full" data-tone={dotTone} aria-hidden="true" />
+          <h3
+            id={titleId}
+            className="gadget-title min-w-0 truncate font-semibold text-sm text-foreground leading-tight"
+            title={displayTitle}
+          >
+            {displayTitle}
+          </h3>
+        </span>
         {metaText && (
           <span className="gadget-meta" aria-hidden="true">
             {metaText}
@@ -634,7 +667,8 @@ export function GadgetFrame({
   const bodyFloor = getGadgetReadingBodyFloor(definition.renderer);
   const { rendererHost, attachExpandedHost } = useRendererHost(isExpanded, { inlineHostRef, inlineScrollRef, expandedHostRef });
   useHeaderMeasurement(headerRef, onHeaderMeasured);
-  const { reportFreshness, footerText, freshnessTitle, collectedAt } = useGadgetFooter();
+  const { reportFreshness, footerText, shortText, freshnessTitle, collectedAt } = useGadgetFooter();
+  const metaText = useTerminalMeta(instance, shortText);
   // Each new collectedAt replays the data-refresh reveal on the body; the element itself is never remounted.
   useGadgetReveal(inlineScrollRef, collectedAt);
   const displayTitle = useDisplayTitle(instance);
@@ -664,7 +698,7 @@ export function GadgetFrame({
           unreadCount={unreadCount}
           ruleMatch={ruleMatch}
           sourceHealth={sourceHealth}
-          metaText={footerText}
+          metaText={metaText}
           onDragHandlePointerDown={onDragHandlePointerDown}
           onAsk={handleAskWithUmwelt}
           onExpand={toggleExpanded}

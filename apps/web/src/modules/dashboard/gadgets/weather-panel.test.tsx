@@ -103,6 +103,36 @@ describe('WeatherPanel', () => {
   });
 });
 
+describe('WeatherPanel terminal skin', () => {
+  afterEach(() => document.documentElement.removeAttribute('data-skin'));
+
+  it('renders the figure, one summary line and the same readings as the default panel', async () => {
+    document.documentElement.setAttribute('data-skin', 'terminal');
+    api.listWorldObservationWindow.mockResolvedValue({
+      truncated: false,
+      items: [
+        reading('a', 'temperature_2m', 0, 18.5, '°C'),
+        reading('b', 'temperature_2m', 1, 22, '°C'),
+        reading('c', 'temperature_2m', -1, 17, '°C'),
+        reading('d', 'wind_speed_10m', 0, 9, 'km/h'),
+        reading('e', 'precipitation', 0, 20, '%'),
+      ],
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const instance = { id: 'w9', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never;
+    render(
+      <QueryClientProvider client={client}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+          <WeatherPanel instance={instance} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    expect((await screen.findByTestId('weather-hero')).textContent).toBe('18.5°C');
+    expect(screen.getByTestId('weather-minmax').textContent).toBe('low 17° · high 22° · rain 20% · wind 9 km/h');
+    expect(screen.getByRole('link', { name: getCatalog('en-us', 'dashboard').openMeteoAttribution })).toBeTruthy();
+  });
+});
+
 describe('nearestReading', () => {
   it('picks the smallest time distance', () => {
     expect(nearestReading([{ ts: 0 }, { ts: 90 }, { ts: 200 }], 100)).toEqual({ ts: 90 });

@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl';
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { useSkin } from '@/core/use-skin';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -393,6 +394,64 @@ function useWeatherReadings(instance: GadgetInstance) {
 }
 
 /**
+ * Terminal-skin weather body (demo `.pane.weather`): big current temperature, one muted summary line (low, high,
+ * rain, wind), then the next-24h temperature line with `now … +24h` ticks. Presentation of the same model the
+ * default panel uses; the Open-Meteo attribution link stays as a small muted footer.
+ *
+ * @param props Derived model, the shared number format and the display timezone/locale for the mid tick.
+ * @returns Compact terminal weather section.
+ */
+function WeatherTerminal({
+  model,
+  now,
+  locale,
+}: {
+  model: WeatherModel;
+  now: number;
+  locale: ReturnType<typeof useDisplayPreferences>['locale'];
+}) {
+  const t = useTranslations('dashboard');
+  const { heroTemp, heroWind, heroPrecip, today, unit, next24h, zone } = model;
+  const parts = [
+    today && t('weather.termLowHigh', { min: Math.round(today.min), max: Math.round(today.max) }),
+    heroPrecip && t('weather.termRain', { value: Math.round(heroPrecip.value) }),
+    heroWind && t('weather.termWind', { value: Math.round(heroWind.value * 10) / 10, unit: heroWind.unit }),
+  ].filter(Boolean);
+  const mid = getDateTimeFormat(normalizeFormattingLocale(locale), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: zone,
+  }).format(new Date(now + DAY_MS / 2));
+  return (
+    <section className="weather-term flex h-full min-h-0 flex-col gap-1 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
+      <p className="weather-term-figure m-0" data-testid="weather-hero">
+        {heroTemp ? Math.round(heroTemp.value * 10) / 10 : '—'}
+        <small>{unit}</small>
+      </p>
+      {parts.length > 0 && (
+        <p className="weather-term-line m-0" data-testid="weather-minmax">
+          {parts.join(' · ')}
+        </p>
+      )}
+      {next24h.length >= 2 && (
+        <div role="img" aria-label={t('weather.next24h')} data-testid="weather-sparkline">
+          <Sparkline data={next24h} height={64} forecastFrom={now} line />
+          <div className="weather-term-ticks" aria-hidden="true">
+            <span>{t('weather.termNow')}</span>
+            <span>{mid}</span>
+            <span>+24h</span>
+          </div>
+        </div>
+      )}
+      <a className="weather-term-attr mt-auto" href="https://open-meteo.com/" target="_blank" rel="noreferrer">
+        {t('openMeteoAttribution')}
+      </a>
+    </section>
+  );
+}
+
+/**
  * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
  * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
  * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
@@ -404,6 +463,7 @@ function useWeatherReadings(instance: GadgetInstance) {
 function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
+  const terminal = useSkin() === 'terminal';
   const { sourceId, query, items } = useWeatherReadings(instance);
   const formatLocale = normalizeFormattingLocale(display.locale);
   const number = getNumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
@@ -416,6 +476,7 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   // Fetch time of the data, not wall-clock in render: keeps render pure; falls back to the newest reading when unset.
   const now = query.dataUpdatedAt || Math.max(...items.map((item) => Date.parse(item.observed_at)).filter(Number.isFinite), 0);
   const model = buildWeatherModel(items, now, display.timezone);
+  if (terminal) return <WeatherTerminal model={model} now={now} locale={display.locale} />;
   const { today, unit, next24h, chartRows, dayRows, zone } = model;
   const weekday = getDateTimeFormat(formatLocale, { weekday: 'short', timeZone: zone });
   /** X-axis tick label: short weekday in the reading's timezone. */

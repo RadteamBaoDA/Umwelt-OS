@@ -108,6 +108,17 @@ html[data-skin='terminal'] .live-map-titlebar .gadget-title {
   margin: 0;
   white-space: nowrap;
 }
+/* Title, meta (`37 events · 7d`) and the actions share one row: tighter gap and no closing ornament so the meta
+   is never clipped; the meta keeps its width, the title is what may ellipsize. */
+html[data-skin='terminal'] .live-map-titlebar {
+  gap: 6px;
+}
+html[data-skin='terminal'] .live-map-titlebar .gadget-title::after {
+  content: none;
+}
+html[data-skin='terminal'] .live-map-titlebar .gadget-meta {
+  flex-shrink: 0;
+}
 html[data-skin='terminal'] .live-map-titlebar-actions {
   display: flex;
   align-items: center;
@@ -115,7 +126,7 @@ html[data-skin='terminal'] .live-map-titlebar-actions {
   margin-left: auto;
 }
 html[data-skin='terminal'] .live-map-titlebar-actions .map-engine-seg {
-  margin-right: 4px;
+  margin-right: 2px;
 }
 html[data-skin='terminal'] .live-map-term-body {
   padding: 8px 10px;

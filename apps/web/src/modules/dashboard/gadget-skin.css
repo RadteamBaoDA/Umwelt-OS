@@ -184,12 +184,17 @@ html[data-skin='terminal'] .gadget-dot[data-tone='danger'] {
 }
 html[data-skin='terminal'] .gadget-meta {
   display: inline;
-  min-width: 0;
-  overflow: hidden;
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
-  text-overflow: ellipsis;
+}
+/* The meta never ellipsizes mid-word: when it does not fit beside the title it wraps to a second line that the
+   one-line clip hides (the full text stays in the provenance footer, which is visually hidden but readable). */
+html[data-skin='terminal'] .gadget-head-main {
+  flex-wrap: wrap;
+  max-height: 26px;
+  overflow: hidden;
 }
 /* The provenance footer moves into the title-bar meta; it stays in the accessibility tree (visually hidden). */
 html[data-skin='terminal'] [data-testid='gadget-provenance'] {
@@ -205,8 +210,8 @@ html[data-skin='terminal'] [data-testid='gadget-provenance'] {
 }
 
 /* Title keeps its width; the muted meta is the part that truncates. */
-html[data-skin='terminal'] .gadget-header .gadget-title {
-  flex-shrink: 0;
+html[data-skin='terminal'] .gadget-header .gadget-head-id {
+  flex-shrink: 0; /* a title wider than its pane ellipsizes (truncate) instead of overflowing the card */
 }
 
 /* Icon toggles inside gadgets (List | Cards): the pressed segment is a subtle tint with accent ink, not a filled
@@ -381,4 +386,50 @@ html[data-skin='terminal'] .obs-term-figure > small[data-tone='positive'] {
 }
 html[data-skin='terminal'] .obs-term-figure > small[data-tone='negative'] {
   color: var(--negative);
+}
+
+/* Weather gadget (weather-panel.tsx WeatherTerminal): big figure with a muted unit, one muted summary line, then the
+   next-24h line with `now … +24h` ticks (demo `.pane.weather`). */
+html[data-skin='terminal'] .weather-term-figure {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--strong, var(--text));
+  font-variant-numeric: tabular-nums;
+}
+html[data-skin='terminal'] .weather-term-figure > small {
+  margin-left: 2px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .weather-term-line {
+  font-size: 12px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .weather-term-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .weather-term-attr {
+  font-size: 10px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+/* Hover-revealed header actions (Ask, Expand) overlay the right edge of the title bar instead of reserving width,
+   so titles and meta get the full row; edit mode keeps its always-visible actions in the flow. */
+@media (pointer: fine) {
+  html[data-skin='terminal'] .gadget-header {
+    position: relative;
+  }
+  html[data-skin='terminal'] .gadget-head-actions:not([data-edit]) {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    z-index: 1;
+    transform: translateY(-50%);
+  }
 }
