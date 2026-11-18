@@ -32,15 +32,23 @@ export { BriefText };
  * Backend-provided widget `title_key` values (modules/dashboard/context.py) mapped to literal `daily` catalog keys;
  * the payload keeps its legacy camelCase ids, so the mapping lives here rather than in a runtime key concatenation.
  */
-const WIDGET_TITLE_KEY = {
+export const WIDGET_TITLE_KEY = {
   dayTasks: 'day.tasks',
   dayGoals: 'day.goals',
   dayStories: 'day.stories',
   dayEvents: 'day.events',
+  dayMarkets: 'day.markets',
+  dayWeather: 'day.weather',
+  dayHazards: 'day.hazards',
+  daySourceHealth: 'day.sourceHealth',
 } as const;
 
-/** Catalog key of a day-widget title; an id the backend adds later falls back to the events title. */
-function widgetTitleKey(titleKey: string) {
+/**
+ * Catalog key of a day-widget title; an id the backend adds later falls back to the events title.
+ * @param titleKey - Backend widget `title_key` (for example `dayMarkets`).
+ * @returns Literal `daily` catalog key.
+ */
+export function widgetTitleKey(titleKey: string) {
   return WIDGET_TITLE_KEY[titleKey as keyof typeof WIDGET_TITLE_KEY] ?? WIDGET_TITLE_KEY.dayEvents;
 }
 

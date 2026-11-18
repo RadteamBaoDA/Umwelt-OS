@@ -184,7 +184,7 @@ test('follow-up question in the task thread is answered by the real model', asyn
   expect((await page.content()).includes(KEY), 'API key never rendered').toBe(false);
 });
 
-test('dashboard day context serves the live brief; the brief gadget links to the thread when present', async ({ page }) => {
+test('dashboard day context serves the live brief; the owner adds the brief gadget, which cites facts and links to the thread', async ({ page }) => {
   test.setTimeout(2 * 60_000);
   // The day context is what the Daily brief gadget renders; it must return the task's live brief.
   const { timezone } = await (await page.request.get('/api/v1/briefs/schedule')).json() as { timezone: string };
@@ -192,17 +192,42 @@ test('dashboard day context serves the live brief; the brief gadget links to the
   const day = await (await page.request.get(`/api/v1/context/daily?date=${date}&timezone=${encodeURIComponent(timezone)}`)).json() as { brief: { content: string; status: string } | null };
   expect(day.brief?.status, 'brief is live on the dashboard').toBe('current');
   expect(day.brief?.content ?? '').toMatch(/\[\d+\]/);
-  await page.goto('/dashboard');
-  await page.waitForLoadState('networkidle').catch(() => undefined);
-  await shot(page, '07-dashboard');
-  const link = page.getByRole('link', { name: /Open full brief/i });
-  if (await link.isVisible().catch(() => false)) {
-    await link.click();
-    await expect(page).toHaveURL(/\/chat\/|\/settings\/scheduled-tasks/);
-    await shot(page, '07b-dashboard-brief-link-target');
-  } else {
-    test.info().annotations.push({ type: 'note', description: 'No Daily brief gadget on the owner dashboard layout; day-context API verified instead.' });
+  const task = await briefTask(page);
+  const { conversation_id: conversationId } = await (await page.request.get(`/api/v1/automations/${task.id}/conversation`)).json() as { conversation_id: string };
+  // The gadget shows the selected day in the owner's DISPLAY timezone; align it with the brief's timezone.
+  const headers = await writeHeaders(page);
+  const prefs = await (await page.request.get('/api/v1/settings/preferences')).json();
+  if (prefs.timezone !== timezone) {
+    const put = await page.request.put('/api/v1/settings/preferences', { headers, data: {
+      expected_revision: prefs.configuration_revision, theme: prefs.theme, locale: prefs.locale,
+      timezone, display_name: prefs.display_name ?? null } });
+    expect(put.ok(), `align timezone: ${put.status()}`).toBeTruthy();
   }
+  await page.goto('/dashboard');
+  const gadget = page.getByRole('region', { name: 'Daily brief', exact: true }).first();
+  if (!(await gadget.isVisible().catch(() => false))) {
+    // The owner adds the gadget through the picker; creating a task does not add it automatically.
+    await page.getByRole('button', { name: 'Edit layout' }).click();
+    await page.getByRole('button', { name: 'Add gadget', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Add gadget to dashboard' });
+    await dialog.getByRole('button', { name: /^Daily brief\b/ }).click();
+    const add = dialog.getByRole('button', { name: 'Add gadget', exact: true });
+    await expect(add).toBeEnabled({ timeout: 60_000 });
+    await add.click();
+    await expect(dialog).toBeHidden({ timeout: 60_000 });
+    const save = page.getByRole('button', { name: 'Save layout' });
+    if (await save.isEnabled().catch(() => false)) await save.click();
+    await page.getByRole('button', { name: 'Done editing' }).click();
+  }
+  await expect(gadget).toBeVisible({ timeout: 30_000 });
+  await expect(gadget.getByText(/\[[\dd+\]]/).first()).toBeVisible({ timeout: 30_000 });
+  await expect(gadget.getByRole('list', { name: 'Citations' })).toBeVisible();
+  const link = gadget.getByRole('link', { name: 'Open full brief' });
+  await expect(link).toHaveAttribute('href', `/chat/${conversationId}`);
+  await shot(page, '07-dashboard');
+  await link.click();
+  await expect(page).toHaveURL(new RegExp(`/chat/${conversationId}`));
+  await shot(page, '07b-dashboard-brief-link-target');
 });
 
 test('pausing the task disables the schedule; cleanup removes the provider', async ({ page }) => {
