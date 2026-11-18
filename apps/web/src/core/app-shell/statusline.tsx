@@ -117,6 +117,8 @@ export function Statusline({ apiStatus, preferences }: { apiStatus: ApiConnectio
   // Source counts and the model are terminal-only chrome: the default skin hides them, so it fetches nothing for them.
   const terminal = useSkin() === 'terminal';
   const counts = useSourceHealthCounts(terminal);
+  // Same slugged path as the top-bar prompt, so the status line reads dashboard/<name> rather than the id.
+  const routePath = useCrumbPath();
   const model = useDefaultChatModel(terminal);
   const locale = preferences?.locale ?? 'en-us';
   const zone = preferences?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -128,7 +130,7 @@ export function Statusline({ apiStatus, preferences }: { apiStatus: ApiConnectio
       <span className="statusline-mode" aria-hidden="true">
         {mode}
       </span>
-      <span className="statusline-route hide-sm">{pathname}</span>
+      <span className="statusline-route hide-sm">{routePath}</span>
       <span id="statusline-info" className="statusline-info" />
       {counts && <SourceCounts counts={counts} />}
       <span className="statusline-transport" aria-hidden="true">
@@ -235,15 +237,15 @@ function crumbPath(pathname: string, nameOf: (id: string) => string | undefined)
 }
 
 /**
- * Decorative terminal prompt `owner@umwelt:~<path> $` placed at the start of the top bar. Hidden from assistive technology
- * and visible only in the terminal skin (CSS); it duplicates the route and carries no information. The dashboard id is
- * replaced by the name slug using cached data only (no request).
+ * Current route with a dashboard id replaced by its name slug (`/dashboard/world`), read from the react-query cache only
+ * (no request). Subscribed to the query cache so the slug appears once the dashboard read lands after the first render.
+ *
+ * @returns The display path; the raw pathname when no cached name exists.
  */
-export function ShellCrumb() {
+function useCrumbPath(): string {
   const pathname = usePathname();
   const client = useQueryClient();
-  // Subscribed to the query cache so the slug appears once the dashboard read lands (the path renders before it).
-  const path = useSyncExternalStore(
+  return useSyncExternalStore(
     (onChange) => client.getQueryCache().subscribe(onChange),
     () =>
       crumbPath(pathname, (id) => {
@@ -252,6 +254,15 @@ export function ShellCrumb() {
       }),
     () => pathname,
   );
+}
+
+/**
+ * Decorative terminal prompt `owner@umwelt:~<path> $` placed at the start of the top bar. Hidden from assistive technology
+ * and visible only in the terminal skin (CSS); it duplicates the route and carries no information. The dashboard id is
+ * replaced by the name slug using cached data only (no request).
+ */
+export function ShellCrumb() {
+  const path = useCrumbPath();
   return (
     <span className="shell-crumb hide-sm" aria-hidden="true">
       <b>owner@umwelt</b>:<span className="shell-crumb-path">~{path}</span> $
