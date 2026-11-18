@@ -12,6 +12,7 @@ import { DateSelector } from './date-selector';
 import {
   dailyKeys,
   generateBrief,
+  getBriefSlotOwner,
   getDailyContext,
   type DailyBriefRevision,
   type DailyContextData,
@@ -143,11 +144,14 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
 }
 
 /**
- * Saved brief body: stale notice, text, citations and an "open full brief" link, or the empty message. The brief slot's
- * owning automation is not exposed to the web, so the link goes to Settings > Scheduled tasks, where the thread opens.
+ * Saved brief body: stale notice, text, citations and an "open full brief" link, or the empty message. The link is
+ * shown only while an automation owns the brief slot (a Daily brief task is enabled) and goes to Settings >
+ * Scheduled tasks, where the thread opens. The ownership read is best-effort: while loading or on error the link
+ * stays hidden.
  */
-function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
+export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
   const t = useTranslations('daily');
+  const owner = useQuery({ queryKey: dailyKeys.slotOwner, queryFn: ({ signal }) => getBriefSlotOwner(signal) });
   if (!brief) return <p className="text-sm text-muted-foreground">{t('noBrief')}</p>;
   return (
     <>
@@ -166,9 +170,11 @@ function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
           ))}
         </ol>
       )}
-      <Link href="/settings/scheduled-tasks" className="text-xs underline">
-        {t('openFullBrief')}
-      </Link>
+      {owner.data?.schedule_owner === 'automation' && (
+        <Link href="/settings/scheduled-tasks" className="text-xs underline">
+          {t('openFullBrief')}
+        </Link>
+      )}
     </>
   );
 }
