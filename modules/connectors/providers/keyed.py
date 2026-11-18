@@ -40,6 +40,22 @@ from modules.connectors.providers.macro import (
     parse_iso_date,
     provider_instant,
 )
+from modules.connectors.providers.media_keyed_catalogs import (
+    GOOGLE_BOOKS_KEY_PLACEMENT,
+    MAL_CLIENT_ID_HEADER,
+    build_google_books_request,
+    build_mal_request,
+    map_google_books,
+    map_mal,
+)
+from modules.connectors.providers.media_movies_tv import (
+    build_omdb_request,
+    build_tmdb_request,
+    build_trakt_request,
+    map_omdb,
+    map_tmdb,
+    map_trakt,
+)
 from modules.connectors.providers.news import (
     MAX_FEED_ITEMS,
     _record,
@@ -736,6 +752,29 @@ def coingecko_assets(cfg: Mapping[str, Any]) -> tuple[tuple[str, str, str], ...]
 # --------------------------------------------------------------------------- registry
 
 KEYED: dict[str, KeyedProvider] = {
+    "tmdb_movies": KeyedProvider(
+        "query:api_key",
+        lambda secret, cfg: build_tmdb_request("tmdb_movies", secret, cfg),
+        lambda payload, at, cfg: map_tmdb(payload, at, cfg, "tmdb_movies"),
+    ),
+    "tmdb_tv": KeyedProvider(
+        "query:api_key",
+        lambda secret, cfg: build_tmdb_request("tmdb_tv", secret, cfg),
+        lambda payload, at, cfg: map_tmdb(payload, at, cfg, "tmdb_tv"),
+    ),
+    "trakt_media": KeyedProvider("trakt-api-key", build_trakt_request, map_trakt),
+    "omdb_lookup": KeyedProvider("query:apikey", build_omdb_request, map_omdb),
+    "mal_anime": KeyedProvider(
+        MAL_CLIENT_ID_HEADER,
+        lambda secret, cfg: build_mal_request("mal_anime", secret, cfg),
+        lambda payload, at, cfg: map_mal("mal_anime", payload, at, cfg),
+    ),
+    "mal_manga": KeyedProvider(
+        MAL_CLIENT_ID_HEADER,
+        lambda secret, cfg: build_mal_request("mal_manga", secret, cfg),
+        lambda payload, at, cfg: map_mal("mal_manga", payload, at, cfg),
+    ),
+    "google_books": KeyedProvider(GOOGLE_BOOKS_KEY_PLACEMENT, build_google_books_request, map_google_books),
     "coingecko": KeyedProvider(
         COINGECKO_KEY_HEADER,
         lambda secret, cfg: coingecko_request(secret, assets=coingecko_assets(cfg)),

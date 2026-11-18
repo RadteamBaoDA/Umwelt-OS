@@ -224,6 +224,7 @@ def test_media_providers_and_media_field_validation() -> None:
     _rejects("tmdb_movies", {"release_status": "unknown"}, "release_status is unsupported")
     # Existing non-media providers preserve 64-char language limit (e.g. "English").
     assert _meta("gdelt_economy", {"language": "English", "sourcecountry": "US"}).source_fields["language"] == "English"
+    assert _meta("tmdb_movies", {"artwork_aspect": "landscape"}).source_fields["artwork_aspect"] == "landscape"
 
 
 def test_media_release_dates_accept_partial_dates_and_reject_invalid_calendar_values() -> None:

@@ -291,7 +291,7 @@
     "max_sources": 32,
     "minimum_height": 4,
     "minimum_width": 4,
-    "runtime_state": "planned",
+    "runtime_state": "available",
     "source_mode": "multi"
   },
   {
@@ -307,7 +307,7 @@
     "max_sources": 32,
     "minimum_height": 4,
     "minimum_width": 4,
-    "runtime_state": "planned",
+    "runtime_state": "available",
     "source_mode": "multi"
   }
 ]

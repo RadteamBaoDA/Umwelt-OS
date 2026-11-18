@@ -77,6 +77,24 @@ describe('ProviderGuide examples', () => {
     wrap(<ProviderGuide entry={entry} />);
     expect((screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement).disabled).toBe(true);
   });
+  it('shows the linked TMDB logo and required attribution notice', () => {
+    wrap(
+      <ProviderGuide
+        entry={{
+          ...entry,
+          provider_id: 'tmdb_movies',
+          attribution: 'Metadata by TMDB',
+          terms_url: 'https://www.themoviedb.org/terms-of-use',
+        }}
+      />,
+    );
+    const logo = screen.getByRole('link', { name: 'Visit The Movie Database website' });
+    expect(logo.getAttribute('href')).toBe('https://www.themoviedb.org');
+    expect(logo.querySelector('img')?.getAttribute('src')).toContain('/brand/tmdb-logo.svg');
+    expect(screen.getByText('Metadata by TMDB')).toBeTruthy();
+    expect(screen.getByText('This product uses the TMDB API but is not endorsed or certified by TMDB.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Usage terms' }).getAttribute('href')).toBe('https://www.themoviedb.org/terms-of-use');
+  });
 });
 
 describe('ProviderTerms', () => {

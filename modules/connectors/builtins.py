@@ -239,6 +239,11 @@ class BuiltinEnableRequest(BaseModel):
     media_formats: tuple[MediaFormat, ...] | None = Field(
         default=None, min_length=1, max_length=MAX_MEDIA_FORMATS
     )
+    listenbrainz_username: str | None = Field(default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    listenbrainz_days: StrictInt | None = Field(default=None, ge=1, le=90)
+    listenbrainz_sort: Literal["release_date", "release_group_date"] | None = None
+    listenbrainz_tags: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
+    listenbrainz_status: Literal["official", "promotion", "bootleg"] | None = None
     release_year: StrictInt | None = Field(default=None, ge=1800, le=2100)
     anime_season: AnimeSeason | None = None
     anilist_mode: AniListMode | None = None

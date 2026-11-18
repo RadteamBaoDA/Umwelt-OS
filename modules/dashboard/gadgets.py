@@ -202,13 +202,13 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
         "single",
         frozenset({"project_activity"}),
     ),
-    # Media shelf and release calendar stay planned in M1 until M3 UI renderers ship.
+    # Media shelf and release calendar render typed projection metadata in the dashboard.
     RendererDescriptor(
         "media_feed",
         1,
         4,
         4,
-        "planned",
+        "available",
         ("media_feed",),
         "multi",
         frozenset({"media", "video"}),
@@ -219,7 +219,7 @@ RENDERERS: tuple[RendererDescriptor, ...] = (
         1,
         4,
         4,
-        "planned",
+        "available",
         ("media_calendar",),
         "multi",
         frozenset({"media", "video"}),

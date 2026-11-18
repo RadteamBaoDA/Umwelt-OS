@@ -28,6 +28,8 @@ export interface FeedRowContext {
   /** Layout of the item stream; defaults to the list view. */
   view?: FeedView;
   isTelegram: boolean;
+  /** Workspace owner status; gates the new non-Telegram Ask AI row affordance. */
+  isOwner: boolean;
   selectMode: boolean;
   selected: Record<string, SelectedTelegramIdentity>;
   setSelected: React.Dispatch<React.SetStateAction<Record<string, SelectedTelegramIdentity>>>;
@@ -36,13 +38,13 @@ export interface FeedRowContext {
   onAskAbout: (items: { sourceId: string; documentId: string; documentVersionId: string }[]) => void;
 }
 
-/** Per-item actions (read, save, source, details, Ask AI) revealed on hover/focus so rows stay quiet at rest. */
+/** Per-item controls preserve Telegram Ask AI and gate the new ID-only action on owner status for other feeds. */
 function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const t = useTranslations('dashboard');
   const isRead = !!item.read;
   return (
     <div className="absolute right-0 top-0 flex flex-wrap items-center gap-1 bg-card pl-2 text-xs pointer-coarse:static pointer-coarse:w-full pointer-coarse:bg-transparent pointer-coarse:pl-0 pointer-coarse:opacity-100 text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
-      {ctx.isTelegram && item.documentVersionId && item.sourceId && (
+      {item.documentVersionId && item.sourceId && (ctx.isTelegram || ctx.isOwner) && (
         <Button
           type="button"
           variant="ghost"

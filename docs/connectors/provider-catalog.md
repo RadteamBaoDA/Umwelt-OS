@@ -51,6 +51,22 @@ below have not been accepted against live services in this implementation pass.
   or iTunes catalog ID. Wikidata and iTunes movie searches plus Letterboxd public RSS add keyless movie snapshots.
   These additions use the shared send gate, provider quotas, bounded parsing and atomic checkpoint/validator receipts.
   Terms-gated providers remain unavailable until required operator review; live acceptance remains open.
+  Optional-key `tmdb_movies`, `tmdb_tv`, `trakt_media`, `omdb_lookup`, `mal_anime`, `mal_manga` and `google_books` each use one gated GET per run.
+  YouTube Data API and Podcast Index use the gated native collection path. YouTube accepts the same target families
+  and format filters as the Atom connector. Each successful sweep commits the upload validators and video records
+  together with a ceiling of 40 one-unit requests. Podcast Index recent feeds use a publication watermark and
+  language/category filters. Search by term supports value-block filtering on its own endpoint. Both require
+  owner credentials and an operator terms review.
+  MyAnimeList uses a client ID for each ranking or seasonal snapshot. Google Books uses an API key for each volumes search.
+  `hardcover_books` sends a native GraphQL POST with the owner's bearer token. Each run reads up to two bounded
+  pages, and the accepted receipt commits records, query fingerprint and ID cursor together. Live GraphQL schema
+  verification remains pending.
+  TMDB uses a query `api_key`, Trakt uses `trakt-api-key` plus `trakt-api-version: 2`, and OMDb uses a query
+  `apikey`; request objects and HTTP client logs redact query credentials. TMDB Movie/TV genre IDs are mapped
+  separately, normalized ratings use the canonical 0–100 scale, and required TMDB attribution is retained.
+  Trakt accepts trending, anticipated, calendar and search modes. OMDb country, genre, language and minimum
+  rating filters run after fetch because OMDb has no matching query parameters. These keyed snapshots are
+  deduplicated without a time cursor; option fingerprints and accepted records commit in the same receipt.
 - **Technology and research:** `reddit`, `bluesky`, `openalex`, `hn_top`, `lobsters`, `github_trending`, `wwr_jobs`, `vietnamworks_jobs`, `itviec_jobs`,
   `wikipedia_mostread`, `wikipedia_top_views`, `disease_sh`.
 - **Other and account connectors:** generic `rss`, `web`, `rest`, and `mcp`; GitHub App and public
@@ -125,6 +141,19 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `wikidata_movies` | `implemented` | open | supported | yes | no | 360 | 2026-11-17 |
 | `itunes_movies` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
 | `letterboxd_rss` | `implemented` | review | supported | yes | no | 360 | 2026-11-17 |
+| `tmdb_movies` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `tmdb_tv` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `trakt_media` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `omdb_lookup` | `implemented` | personal | supported | yes | no | 1440 | 2026-11-18 |
+| `mal_anime` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `mal_manga` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
+| `youtube_api` | `implemented` | review | supported | yes | no | 30 | 2026-11-18 |
+| `podcast_index` | `implemented` | review | supported | yes | no | 60 | 2026-11-18 |
+| `listenbrainz_releases` | `implemented` | review | supported | yes | no | 360 | 2026-11-18 |
+| `steam_releases` | `implemented` | review | supported | yes | no | 360 | 2026-11-18 |
+| `igdb_games` | `implemented` | noncommercial | supported | yes | no | 360 | 2026-11-18 |
+| `google_books` | `implemented` | personal | supported | yes | no | 1440 | 2026-11-18 |
+| `hardcover_books` | `implemented` | personal | supported | yes | no | 360 | 2026-11-18 |
 | `rss` | `available` | unknown | - | yes | no | - | - |
 | `web` | `available` | unknown | - | yes | no | - | - |
 | `rest` | `available` | unknown | - | yes | no | - | - |
@@ -202,3 +231,16 @@ Generated from `modules/connectors/catalog.py` and `modules/connectors/provider_
 | `openweathermap` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `openaq` | `implemented` | open | supported | yes | no | 60 | 2026-10-21 |
 | `nasa_firms` | `implemented` | open | supported | yes | no | 360 | 2026-10-21 |
+
+
+## Media source configuration
+
+The source editor exposes the keyless media providers' identifying fields and supported optional filters.
+Open Library requires a subject or query for its selected mode, podcasts require one HTTPS feed URL or iTunes ID,
+and YouTube accepts one target family with up to eight channel IDs, handles, or playlist IDs. Existing single-channel
+YouTube configurations stay editable. YouTube format choices are all videos, long-form videos, or Shorts.
+
+Media filters use the same canonical values as the Dashboard media editor. Leaving a filter empty uses the provider
+default. Configure sends explicit null when a saved option is cleared, while the built-in wizard omits empty options.
+The optional Media starter pack uses the existing LiveChart and TVMaze built-in contracts. These UI controls have
+unit-test coverage. Live collection and authenticated browser acceptance remain separate verification gates.

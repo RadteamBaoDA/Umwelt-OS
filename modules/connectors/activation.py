@@ -503,7 +503,7 @@ async def _native_credential_error(
 ) -> str:
     """Return an owner-action code when the native credential for this revision is unusable, else ``""``.
 
-    Checks, in lock order, the REST header credential (``FOR UPDATE``), the GitHub or Telegram
+    Checks, in lock order, the fixed or configured REST credential (``FOR UPDATE``), the GitHub or Telegram
     credential, then the Google/Reddit OAuth grant (``FOR UPDATE``); each must be ready and bound to
     the source generation and desired revision. Codes: ``invalid_credential`` or
     ``native_unsupported`` (unsupported auth method). Mutates nothing.
@@ -511,10 +511,11 @@ async def _native_credential_error(
     from modules.connectors import collection
 
     desired = row.desired_configuration or {}
-    keyed_header = collection.KEYED_PROVIDERS.get(
-        source.provider or ""
-    )  # fixed header, no owner-set auth config
-    if keyed_header or desired.get("auth_method") == "http_header":
+    provider = source.provider or ""
+    fixed_placement = (
+        collection.KEYED_PROVIDERS.get(provider) or collection.NATIVE_REST_PLACEMENTS.get(provider)
+    )
+    if fixed_placement or desired.get("auth_method") == "http_header":
         credential = await session.get(ConnectorRestCredential, source.id, with_for_update=True)
         if (
             credential is None
@@ -522,7 +523,7 @@ async def _native_credential_error(
             or credential.encrypted_secret is None
             or credential.source_generation != source.generation
             or credential.configuration_revision != row.desired_revision
-            or credential.header_name != (keyed_header or desired.get("auth_header_name"))
+            or credential.header_name != (fixed_placement or desired.get("auth_header_name"))
         ):
             return "invalid_credential"
     elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):

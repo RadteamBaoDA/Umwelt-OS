@@ -240,6 +240,25 @@ class BackendResolveRequest(BaseModel):
     action: Literal["retry", "confirm_inactive"]
 
 
+class PodcastIndexCredentialRequest(BaseModel):
+    """Write-only paired credentials for Podcast Index request signing."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    expected_revision: int = Field(ge=1)
+    apiKey: SecretStr
+    apiSecret: SecretStr
+
+    @model_validator(mode="after")
+    def validate_pair(self) -> "PodcastIndexCredentialRequest":
+        """Reject empty, oversized or whitespace-bearing secrets using the native credential policy."""
+        _validate_secret_action("replace", self.apiKey)
+        _validate_secret_action("replace", self.apiSecret)
+        if not self.apiKey.get_secret_value().isascii():
+            raise ValueError("Podcast Index API keys must be ASCII")
+        return self
+
+
 class NativeRestCredentialRequest(BaseModel):
     """Owner re-entry of the REST header secret for the native backend; write-only, never echoed."""
 

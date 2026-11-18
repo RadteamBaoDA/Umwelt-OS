@@ -86,6 +86,19 @@ DISPATCHABLE = frozenset(
         "openweathermap",
         "openaq",
         "nasa_firms",
+        "google_books",
+        "hardcover_books",
+        "igdb_games",
+        "listenbrainz_releases",
+        "mal_anime",
+        "mal_manga",
+        "omdb_lookup",
+        "podcast_index",
+        "steam_releases",
+        "tmdb_movies",
+        "tmdb_tv",
+        "trakt_media",
+        "youtube_api",
     }
 )
 
@@ -184,6 +197,18 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
         ),
         30,
     ),
+    "tmdb_movies": 360,
+    "tmdb_tv": 360,
+    "trakt_media": 360,
+    "omdb_lookup": 1440,
+    "mal_anime": 360,
+    "mal_manga": 360,
+    "google_books": 1440,
+    "hardcover_books": 360,
+    "youtube_api": 30,
+    "podcast_index": 60,
+    "steam_releases": 360,
+    "igdb_games": 360,
 }
 
 

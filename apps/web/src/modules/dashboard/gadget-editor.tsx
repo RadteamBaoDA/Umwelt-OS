@@ -29,6 +29,7 @@ import {
   draftPatchForTemplate,
   fieldsFor,
   initialDraft,
+  isMediaDraftValid,
   mergeCatalogEntries,
   namesLookbackField,
   planSourceChange,
@@ -129,6 +130,7 @@ interface ValidityFlags {
   limitValid: boolean;
   lookbackValid: boolean;
   keywordsValid: boolean;
+  mediaValid: boolean;
   catalogLoading: boolean;
 }
 
@@ -139,6 +141,7 @@ function pickBlockReason(flags: ValidityFlags, t: ReturnType<typeof useTranslati
   if (!flags.limitValid) return t('limitHelp');
   if (!flags.lookbackValid) return t('lookbackHelp');
   if (!flags.keywordsValid) return t('keywordsHelp');
+  if (!flags.mediaValid) return t('media.invalid');
   return flags.catalogLoading ? t('metric.catalogLoading') : null;
 }
 
@@ -166,6 +169,7 @@ function useDraftValidity(
     limitValid: isLimitValid(draft.limit),
     lookbackValid: isLookbackValid(draft.lookback, draft.renderer),
     keywordsValid: splitList(draft.keywords).length <= 32 && splitList(draft.exclude).length <= 32,
+    mediaValid: isMediaDraftValid(draft),
     catalogLoading,
   };
   const blockReason = pickBlockReason(flags, t);
@@ -219,7 +223,8 @@ function useProviderFacts(draft: GadgetDraft, queries: ReturnType<typeof useEdit
 /**
  * Save mutation: creates a new definition or patches the saved one (revision guarded), invalidates the definition
  * list and reports the saved definition. Source ids are sent only when changed so a saved, now-incompatible source
- * never blocks unrelated edits; highlight rules only when touched.
+ * never blocks unrelated edits; highlight rules only when touched. Refreshes saved filter defaults with the revision
+ * before the follow-up callback, so a failed title/placement save can retry without restoring cleared overrides.
  */
 function useSaveDefinition(
   draft: GadgetDraft,
@@ -256,7 +261,7 @@ function useSaveDefinition(
     },
     onSuccess: async (saved) => {
       void client.invalidateQueries({ queryKey: dashboardKeys.definitions });
-      if (draft.base) patch({ base: saved });
+      if (draft.base) patch({ base: saved, mediaFilters: saved.filters });
       await onSaved(saved);
     },
   });
@@ -272,6 +277,36 @@ const FIELD_ERROR_KEY = {
   source_limit: 'fieldErrors.source_limit',
 } as const;
 
+/** Known media field paths from structured FastAPI 422 responses. */
+const MEDIA_FIELD_ERROR_KEY = {
+  media_types: 'media.invalid',
+  countries: 'media.invalid',
+  genres: 'media.invalid',
+  languages: 'media.invalid',
+  formats: 'media.invalid',
+  content_ratings: 'media.invalid',
+  release_year: 'media.invalid',
+  release_season: 'media.invalid',
+  min_rating: 'media.invalid',
+  release_window_days: 'media.invalid',
+  media_type: 'media.invalid',
+  release_status: 'media.invalid',
+  group_by: 'media.invalid',
+} as const;
+
+/** Extracts a known media field from server validation details; unknown shapes retain the generic banner. */
+function mediaFailureField(details: unknown): string | undefined {
+  if (!Array.isArray(details)) return undefined;
+  for (const item of details) {
+    const loc = (item as { loc?: unknown })?.loc;
+    if (Array.isArray(loc)) {
+      const field = loc.find((part) => typeof part === 'string' && part in MEDIA_FIELD_ERROR_KEY);
+      if (field) return field;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Maps a failed save to a field-scoped message. A 422 with a known code and `details.field` is shown under that
  * field; FastAPI's code-less pydantic 422 lists the offending `loc`, and a lookback range violation maps to its own
@@ -279,6 +314,7 @@ const FIELD_ERROR_KEY = {
  */
 function useSaveFailure(error: unknown) {
   const t = useTranslations('gadgetSettings');
+  const mediaField = error instanceof ApiError && error.status === 422 ? mediaFailureField(error.details) : undefined;
   const failure =
     error instanceof ApiError && error.status === 422 && error.code && error.code in FIELD_ERROR_KEY
       ? {
@@ -287,7 +323,9 @@ function useSaveFailure(error: unknown) {
         }
       : error instanceof ApiError && error.status === 422 && namesLookbackField(error.details)
         ? { field: 'lookback_days', message: t('lookbackHelp') }
-        : null;
+        : mediaField
+          ? { field: mediaField, message: t('media.invalid') }
+          : null;
   /** Localized server error for one field name, or null when the failure belongs elsewhere. */
   const fieldError = (field: string) => (failure?.field === field ? failure.message : null);
   return { failure, fieldError };
@@ -405,6 +443,8 @@ function isFieldRendered(
   if (field === 'regions') return facts.showRegion;
   if (field === 'metrics') return fields.has('metrics');
   if (field === 'map_layer_ids') return fields.has('map');
+  if (field === 'release_window_days') return fields.has('releaseWindow');
+  if (field in MEDIA_FIELD_ERROR_KEY) return fields.has('mediaScope');
   if (field === 'lookback_days') return fields.has('lookback');
   return field === 'source_ids';
 }
@@ -476,6 +516,7 @@ function useGadgetEditor({
     coinAssets: facts.coinAssets,
     limitValid,
     lookbackValid,
+    mediaValid: validity.mediaValid,
     fieldError,
     nameId,
     limitId,
@@ -591,15 +632,21 @@ function EditorFooter({ model, props }: { model: EditorModel; props: GadgetEdito
  */
 function useAutoOpenAdvanced(
   detailsRef: RefObject<HTMLDetailsElement | null>,
-  validity: { limitValid: boolean; keywordsValid: boolean; lookbackValid: boolean },
+  validity: { limitValid: boolean; keywordsValid: boolean; lookbackValid: boolean; mediaValid: boolean },
   failureField: string | undefined,
 ) {
-  const { limitValid, keywordsValid, lookbackValid } = validity;
+  const { limitValid, keywordsValid, lookbackValid, mediaValid } = validity;
   useEffect(() => {
-    if ((!limitValid || !keywordsValid || !lookbackValid) && detailsRef.current) detailsRef.current.open = true;
-  }, [detailsRef, limitValid, keywordsValid, lookbackValid]);
+    if ((!limitValid || !keywordsValid || !lookbackValid || !mediaValid) && detailsRef.current) detailsRef.current.open = true;
+  }, [detailsRef, limitValid, keywordsValid, lookbackValid, mediaValid]);
   useEffect(() => {
-    if ((failureField === 'map_layer_ids' || failureField === 'lookback_days') && detailsRef.current) detailsRef.current.open = true;
+    if (
+      (failureField === 'map_layer_ids' ||
+        failureField === 'lookback_days' ||
+        (failureField !== undefined && failureField in MEDIA_FIELD_ERROR_KEY)) &&
+      detailsRef.current
+    )
+      detailsRef.current.open = true;
   }, [detailsRef, failureField]);
 }
 
@@ -610,7 +657,9 @@ function EditorForm({ model, props }: { model: EditorModel; props: GadgetEditorP
   const { definition = null } = props;
   const detailsRef = useRef<HTMLDetailsElement>(null);
   useAutoOpenAdvanced(detailsRef, validity, model.failureField);
-  const hasAdvanced = (['keywords', 'limit', 'rules', 'lookback', 'map', 'cii', 'channels'] as const).some((key) => model.fields.has(key));
+  const hasAdvanced = (['keywords', 'limit', 'rules', 'lookback', 'map', 'cii', 'channels', 'mediaScope', 'mediaFilters'] as const).some(
+    (key) => model.fields.has(key),
+  );
   return (
     <form
       className="space-y-4"

@@ -212,6 +212,112 @@ export type BuiltinTypeOptions = {
   coin_ids?: string[];
   kp_min?: number;
   advisory_min_level?: 1 | 2 | 3 | 4;
+  /** Provider options mirror the Phase 2 connector schema; empty values remain absent until edited. */
+  media_ids?: number[];
+  anilist_mode?: 'airing' | 'trending' | 'updated';
+  openlibrary_mode?: 'subject' | 'search' | 'recent';
+  openlibrary_subject?: string;
+  openlibrary_query?: string;
+  ebooks_only?: boolean;
+  gutendex_topic?: string;
+  gutendex_search?: string;
+  gutendex_copyright?: boolean;
+  gutendex_mime_type?: string;
+  gutendex_author_year_start?: number;
+  gutendex_author_year_end?: number;
+  country_of_origin?: 'JP' | 'KR' | 'CN' | 'TW' | 'ALL';
+  media_tags?: string[];
+  media_statuses?: ('finished' | 'releasing' | 'not_yet_released' | 'cancelled' | 'hiatus')[];
+  tvmaze_mode?: 'schedule_country' | 'schedule_web';
+  tvmaze_global?: boolean;
+  ann_mode?: 'news' | 'encyclopedia';
+  ann_media_type?: 'anime' | 'manga';
+  ann_category?: 'news' | 'review' | 'feature' | 'interview' | 'press-release' | 'all';
+  ann_edition?: 'us' | 'w';
+  mangaupdates_types?: ('Manga' | 'Manhwa' | 'Manhua' | 'Novel' | 'Doujinshi')[];
+  licensed_only?: boolean;
+  exclude_genre?: string[];
+  series_ids?: number[];
+  manga_ids?: string[];
+  original_languages?: ('ja' | 'ko' | 'zh' | 'zh-hk')[];
+  available_translated_languages?: ('en' | 'ja' | 'ko' | 'zh' | 'zh-hk' | 'vi' | 'fr' | 'de' | 'es')[];
+  mangadex_content_ratings?: ('safe' | 'suggestive' | 'erotica' | 'pornographic')[];
+  mangadex_statuses?: ('ongoing' | 'completed' | 'hiatus' | 'cancelled')[];
+  publication_demographic?: ('shounen' | 'shoujo' | 'josei' | 'seinen' | 'none')[];
+  updated_at_since?: string;
+  excluded_tags?: string[];
+  country?: string;
+  kind?: 'books' | 'audio-books';
+  chart?: string;
+  itunes_podcast_id?: number;
+  lookback_days?: number;
+  genre_qids?: string[];
+  language?: string;
+  search_terms?: string;
+  letterboxd_username?: string;
+  tmdb_mode?: 'now_playing' | 'upcoming' | 'changes' | 'airing_today' | 'on_the_air';
+  tmdb_language?: string;
+  tmdb_certification_country?: string;
+  tmdb_certification?: string;
+  trakt_mode?:
+    | 'movies_trending'
+    | 'movies_anticipated'
+    | 'shows_trending'
+    | 'shows_anticipated'
+    | 'movies_calendar'
+    | 'shows_calendar'
+    | 'movies_search'
+    | 'shows_search';
+  trakt_query?: string;
+  trakt_calendar_days?: number;
+  trakt_certifications?: ('G' | 'PG' | 'PG-13' | 'R' | 'NC-17')[];
+  omdb_mode?: 'imdb_id' | 'title' | 'search';
+  omdb_imdb_id?: string;
+  omdb_title?: string;
+  omdb_search?: string;
+  omdb_type?: 'movie' | 'series' | 'episode';
+  mal_mode?: 'ranking' | 'season';
+  mal_ranking_type?:
+    | 'all'
+    | 'airing'
+    | 'upcoming'
+    | 'tv'
+    | 'ova'
+    | 'movie'
+    | 'special'
+    | 'bypopularity'
+    | 'favorite'
+    | 'manga'
+    | 'novels'
+    | 'oneshots'
+    | 'doujin'
+    | 'manhwa'
+    | 'manhua';
+  mal_season_year?: number;
+  mal_season?: 'winter' | 'spring' | 'summer' | 'fall';
+  podcast_index_query?: string;
+  podcast_index_languages?: string[];
+  podcast_index_categories?: string;
+  podcast_index_excluded_categories?: string;
+  podcast_index_since?: number;
+  podcast_index_value?: 'any' | 'lightning' | 'hive' | 'webmonetization';
+  listenbrainz_username?: string;
+  listenbrainz_days?: number;
+  listenbrainz_sort?: 'release_date' | 'release_group_date';
+  listenbrainz_tags?: string[];
+  listenbrainz_status?: 'official' | 'promotion' | 'bootleg';
+  steam_mode?: 'featured' | 'news';
+  steam_country?: string;
+  steam_language?: 'english' | 'vietnamese' | 'japanese' | 'schinese' | 'koreana' | 'french' | 'german' | 'spanish';
+  steam_appids?: number[];
+  igdb_game_types?: string[];
+  igdb_region?: 'europe' | 'north_america' | 'australia' | 'new_zealand' | 'japan' | 'china' | 'asia' | 'world';
+  igdb_platforms?: number[];
+  google_books_query?: string;
+  google_books_subject?: string;
+  google_books_print_type?: 'all' | 'books' | 'magazines';
+  google_books_filter?: 'ebooks' | 'free-ebooks' | 'paid-ebooks';
+  hardcover_mode?: 'catalog' | 'upcoming';
   /** Multi-dimensional media filter options (validated against provider `OPTION_FIELDS`). */
   media_country?: string;
   media_countries?: string[];
@@ -320,7 +426,7 @@ export type ConnectorCatalogEntry = {
 export type QuotaPolicy = {
   policy_key: string;
   budget_kind: string;
-  window: 'second' | 'minute' | 'day' | 'month';
+  window: 'second' | 'minute' | 'day' | 'day_pacific' | 'month';
   unit: string;
   limit_units: number | null;
   basis: string;
@@ -872,12 +978,18 @@ export function saveWorldProviderCredential(
   );
 }
 
-/** Stores a native REST provider key (CoinGecko) in the owner-only encrypted slot; the key is never returned. */
-export function saveNativeRestCredential(id: string, expectedRevision: number, secret: string, csrfToken: string, signal?: AbortSignal) {
+/** Stores an owner-provided REST credential or Podcast Index key pair in the encrypted, write-only slot. */
+export function saveNativeRestCredential(
+  id: string,
+  expectedRevision: number,
+  secret: string | { apiKey: string; apiSecret: string },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   return apiRequest<ConnectorActivation>(`/api/v1/connectors/${id}/credentials/native-rest`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify({ expected_revision: expectedRevision, secret }),
+    body: JSON.stringify({ expected_revision: expectedRevision, ...(typeof secret === 'string' ? { secret } : secret) }),
     signal,
   });
 }

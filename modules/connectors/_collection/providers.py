@@ -15,6 +15,7 @@ from modules.connectors import provider_options, quota
 from modules.connectors._collection.base import (
     ADAPTERS,
     KEYED_PROVIDERS,
+    NATIVE_REST_PLACEMENTS,
     PURE_MAX_BYTES,
     PURE_PROVIDERS,
     CredentialMissing,
@@ -32,6 +33,7 @@ from modules.connectors._collection.base import (
     _select,
     _state,
 )
+from modules.connectors.provider_specs import INCREMENTAL_PROVIDERS
 from modules.connectors.providers import news as _news
 from modules.connectors.providers import rest
 from modules.connectors.providers.keyed import KEYED, KEYED_MAX_BYTES
@@ -284,15 +286,19 @@ async def _fred_units(run: Run, meta_request: Any) -> str | None:
 
 
 async def _run_keyed(run: Run) -> None:
-    """Keyed free-tier providers: key read first (no lease and no send without it), gated sends.
+    """Run one keyed request with optional FRED metadata and incremental cursor acceptance.
 
-    Order matters: the credential and the request (which validates key shape and owner scope) are resolved
-    before the lease so a missing key or bad scope fails closed without consuming quota or a lease.
-    One send for the data; a provider with ``meta_build`` (FRED) and no static unit for the series makes
-    one more gated send for its unit, handed to the mapper as ``cfg["_fred_units"]``.
+    Credentials and owner scope are resolved before leasing. FRED metadata is fetched before its data request;
+    incremental providers commit the selected records and cursor together, and TMDB changes retains its fixed
+    window across pages.
     """
     from modules.connectors.providers.keyed import FRED_UNITS
     from modules.connectors.providers.macro import decode_json
+    from modules.connectors.providers.media_movies_tv import (
+        build_tmdb_request,
+        tmdb_changes_cursor,
+        tmdb_changes_window,
+    )
 
     provider = str(run.attempt.source.provider)
     row = KEYED[provider]
@@ -304,15 +310,28 @@ async def _run_keyed(run: Run) -> None:
         meta_request = _payload(row.meta_build, secret, cfg)
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
-    # Metadata first: if quota defers it, the run retries before the data send has spent any quota.
+    cursor = await _resume_cursor(run, lease) if provider in INCREMENTAL_PROVIDERS else None
+    window = None
+    if provider == "tmdb_movies" and cfg.get("tmdb_mode") == "changes":
+        window = tmdb_changes_window(cursor, collected_at)
+        request = build_tmdb_request(provider, secret, cfg, changes_window=window)
+    # Metadata first: quota deferral retries before the data request spends quota.
     if meta_request is not None and (units := await _fred_units(run, meta_request)):
         cfg = {**cfg, "_fred_units": units}
     fetched = await _get_body(run, request, max_bytes=KEYED_MAX_BYTES)
     body = _require_body(fetched)
     payload = body if row.binary else (await _payload_async(decode_json, body))
     records = await _payload_async(row.mapper, payload, collected_at, cfg)
-    await _accept_native(run, lease, records, _coverage(records), collected_at)
-
+    if provider in INCREMENTAL_PROVIDERS:
+        records, cursor_after = await _select(run, lease, records, collected_at)
+        if window is not None:
+            backlog = bool(run.extras.get("selection", {}).get("backlog"))
+            cursor_after = _payload(lambda: tmdb_changes_cursor(payload, window, backlog=backlog))
+        await _accept_native(
+            run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after
+        )
+    else:
+        await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 async def _run_coingecko(run: Run) -> None:
     """CoinGecko Demo: the first keyed preset; kept as a named entry point for its executor wiring and tests."""
@@ -721,6 +740,45 @@ async def _run_gutendex(run: Run) -> None:
     )
 
 
+async def _run_hardcover(run: Run) -> None:
+    """Fetch at most two gated Hardcover pages and commit only if the whole walk and credential proof hold."""
+    from modules.connectors.providers import hardcover
+
+    attempt = run.attempt
+    try:
+        header, secret = await _rest_secret(run)
+    except rest.ProviderHttpError as exc:
+        raise CredentialMissing from exc
+    if header != NATIVE_REST_PLACEMENTS[hardcover.PROVIDER] or not secret or attempt.credential_revision is None:
+        raise CredentialMissing
+    run.gate.bind_credential(
+        quota.credential_fingerprint(
+            secret,
+            deployment_key=run.settings.connector_credential_encryption_key.get_secret_value(),
+        )
+    )
+    cfg = attempt.source.configuration or {}
+    now = datetime.now(UTC)
+    lease = await _lease(run)
+    fingerprint = provider_options.native_fingerprint(hardcover.PROVIDER, cfg)
+    state = await _state(run)
+    after = hardcover.cursor_id(lease.cursor_before) if state.continuation_state == fingerprint else 0
+    records: list[IngestionRecord] = []
+    for _ in range(hardcover.MAX_PAGES):
+        request = hardcover.build_request(secret, cfg, now, after)
+        fetched = await _get_body(run, request, max_bytes=hardcover.MAX_BODY_BYTES)
+        page, after = await _payload_async(hardcover.map_page, _require_body(fetched), cfg, now, after)
+        records.extend(page)
+        if after == 0:
+            break
+    # Keep the leased cursor and fingerprint intact until every fetched page can be accepted together.
+    run.extras["native_fp"] = fingerprint
+    await _accept_native(
+        run, lease, records, _coverage(records), now, cursor_after=str(after),
+        provider_credential_revision=attempt.credential_revision,
+    )
+
+
 def _media_scope_fingerprint(provider: str, config: dict[str, Any]) -> str:
     """Fingerprint a provider's effective query scope so saved page cursors and validators cannot cross scopes."""
     payload = json.dumps(config, sort_keys=True, separators=(",", ":"), default=str)
@@ -980,6 +1038,7 @@ ADAPTERS.update(
         "anilist_manga": _run_anilist,
         "openlibrary_books": _run_openlibrary,
         "gutendex_books": _run_gutendex,
+        "hardcover_books": _run_hardcover,
         "apple_books_rss": _run_apple_books,
         "podcast_rss": _run_podcast_rss,
         "wikidata_movies": _run_wikidata_movies,

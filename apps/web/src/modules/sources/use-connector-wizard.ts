@@ -33,10 +33,17 @@ type ConnectGateInput = {
   googleReady: boolean;
   credentialConfigured: boolean;
   secret: string;
+  apiSecret?: string;
   telegramSecretAction: 'keep' | 'replace';
   authMethod: string;
   backendChoice: string | null;
 };
+
+/** Paired provider credentials are both required when entering or replacing the stored pair. */
+function podcastIndexCredentialReady({ secret, apiSecret, credentialConfigured }: ConnectGateInput): boolean {
+  const hasKey = Boolean(secret);
+  return hasKey === Boolean(apiSecret) && (hasKey || credentialConfigured);
+}
 
 /** True for Alpha Vantage and for API-key presets running on the native backend: the owner must provide the key. */
 function needsKey(provider: string, entry: ConnectorCatalogEntry | undefined, backendChoice: string | null): boolean {
@@ -50,6 +57,7 @@ function needsKey(provider: string, entry: ConnectorCatalogEntry | undefined, ba
 export function connectGate(input: ConnectGateInput): boolean {
   const { provider, entry, credentialConfigured } = input;
   const hasKey = Boolean(input.secret) || credentialConfigured;
+  if (provider === 'podcast_index' || provider === 'igdb_games') return podcastIndexCredentialReady(input);
   if (provider === 'reddit') return input.redditReady;
   if (isGoogleProvider(provider)) return input.googleReady && credentialConfigured;
   if (provider === 'telegram') return (input.telegramSecretAction === 'replace' && Boolean(input.secret)) || credentialConfigured;
@@ -59,12 +67,60 @@ export function connectGate(input: ConnectGateInput): boolean {
   return needsKey(provider, entry, input.backendChoice) ? hasKey : true;
 }
 
-/** True when every required scope field is filled and the either-or scopes (X, Mastodon) have exactly one side set. */
+/** Returns whether a source with alternative identifiers has exactly one configured target. */
+function alternativeScopeComplete(provider: string, configuration: ConnectorConfig): boolean {
+  if (provider === 'x') return scopeFilled(configuration.x_account) !== scopeFilled(configuration.x_query);
+  if (provider === 'mastodon') return scopeFilled(configuration.mastodon_account) !== scopeFilled(configuration.mastodon_hashtag);
+  if (provider === 'podcast_rss') return scopeFilled(configuration.feed_url) !== scopeFilled(configuration.itunes_podcast_id);
+  if (provider === 'youtube' || provider === 'youtube_api') {
+    return (
+      [
+        configuration.youtube_channel_id,
+        configuration.youtube_channels,
+        configuration.youtube_handles,
+        configuration.youtube_playlist_ids,
+      ].filter(scopeFilled).length === 1 &&
+      (provider !== 'youtube_api' ||
+        !configuration.youtube_playlist_ids ||
+        !configuration.youtube_filter ||
+        configuration.youtube_filter === 'all')
+    );
+  }
+  return true;
+}
+
+/** Requires a query or the endpoint target selected by a mode-dependent media provider. */
+function modeSelectedScopeComplete(provider: string, configuration: ConnectorConfig): boolean {
+  if (provider === 'steam_releases' || provider === 'igdb_games') return gameScopeComplete(provider, configuration);
+  if (provider === 'openlibrary_books' || provider === 'google_books') return bookScopeComplete(provider, configuration);
+  if (provider === 'mal_anime' && configuration.mal_mode === 'season') {
+    return scopeFilled(configuration.mal_season_year) && scopeFilled(configuration.mal_season);
+  }
+  if (provider !== 'omdb_lookup') return true;
+  const omdbMode = configuration.omdb_mode ?? 'title';
+  return scopeFilled(
+    omdbMode === 'imdb_id' ? configuration.omdb_imdb_id : omdbMode === 'search' ? configuration.omdb_search : configuration.omdb_title,
+  );
+}
+
+/** Requires the selected Open Library target or at least one Google Books query. */
+function bookScopeComplete(provider: string, configuration: ConnectorConfig): boolean {
+  if (provider === 'google_books') return scopeFilled(configuration.google_books_query) || scopeFilled(configuration.google_books_subject);
+  const mode = configuration.openlibrary_mode ?? 'subject';
+  return mode === 'recent' || scopeFilled(mode === 'search' ? configuration.openlibrary_query : configuration.openlibrary_subject);
+}
+
+/** Requires Steam app IDs for news and at least one bounded IGDB release selector. */
+function gameScopeComplete(provider: string, configuration: ConnectorConfig): boolean {
+  if (provider === 'steam_releases')
+    return (configuration.steam_mode ?? 'featured') !== 'news' || Boolean(configuration.steam_appids?.length);
+  return Boolean(configuration.igdb_game_types?.length || configuration.igdb_region || configuration.igdb_platforms?.length);
+}
+
+/** Requires identifying scopes and the active target for every mode-dependent source. */
 export function scopeGate(provider: string, configuration: ConnectorConfig): boolean {
   const required = (REQUIRED_SCOPE[provider] ?? []).every((key) => scopeFilled(configuration[key]));
-  const xOk = provider !== 'x' || scopeFilled(configuration.x_account) !== scopeFilled(configuration.x_query);
-  const mastodonOk = provider !== 'mastodon' || scopeFilled(configuration.mastodon_account) !== scopeFilled(configuration.mastodon_hashtag);
-  return required && xOk && mastodonOk;
+  return required && alternativeScopeComplete(provider, configuration) && modeSelectedScopeComplete(provider, configuration);
 }
 
 /** True when the provider's URL field (feed URL, page URL) is filled; other providers have none. */
@@ -231,6 +287,7 @@ export function useConnectorWizard(ctx: EditorContext, inputs: WizardInputs) {
     googleReady: inputs.googleReady,
     credentialConfigured: draft.providerCredentialConfigured,
     secret: draft.secret,
+    apiSecret: draft.apiSecret,
     telegramSecretAction: draft.telegramSecretAction,
     authMethod: draft.authMethod,
     backendChoice: draft.backendChoice,

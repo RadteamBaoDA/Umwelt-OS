@@ -2,6 +2,8 @@ import type { DashboardPlacement } from './api';
 
 /** Known minimum integer dimensions for standard gadget renderers. */
 export const RENDERER_MIN_SIZES: Record<string, { minW: number; minH: number }> = {
+  media_feed: { minW: 4, minH: 4 },
+  media_calendar: { minW: 4, minH: 4 },
   news_feed: { minW: 4, minH: 4 },
   telegram_feed: { minW: 4, minH: 4 },
   text_panel: { minW: 4, minH: 3 },
@@ -25,6 +27,8 @@ export const RENDERER_MIN_SIZES: Record<string, { minW: number; minH: number }> 
 
 /** Preferred first-placement size for new gadgets (mirrors server DEFAULT_SIZES); never below the minimum. */
 export const RENDERER_DEFAULT_SIZES: Record<string, { defaultW: number; defaultH: number }> = {
+  media_feed: { defaultW: 8, defaultH: 6 },
+  media_calendar: { defaultW: 6, defaultH: 6 },
   news_feed: { defaultW: 6, defaultH: 8 },
   telegram_feed: { defaultW: 6, defaultH: 8 },
   text_panel: { defaultW: 6, defaultH: 5 },

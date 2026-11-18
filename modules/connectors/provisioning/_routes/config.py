@@ -380,18 +380,20 @@ async def fetch_rest_sample(
     return RestSampleRead(status_code=200, truncated=truncated, sample=sample)
 
 
-def _check_draft_auth_mode(source: ConnectorSource, payload: DraftValidationRequest) -> None:
+def _check_draft_auth_mode(source: ConnectorSource, payload: ConnectorSettingsRequest) -> None:
     """Reject draft authentication modes that do not match the provider or source type (HTTP 422).
 
-    Pure validation: no session access. Mastodon's bearer token is optional, so an explicit
-    ``none`` is accepted for it. Header-auth providers must use the ``Authorization`` header.
+    Draft validation and settings saves share this rule. Fixed native credential slots are
+    provisioned separately and use ``none`` in this payload. Providers with configurable bearer
+    authentication use ``Authorization``; Mastodon also supports anonymous reads.
     """
     expected_auth = (
         "telegram_bot_token"
         if source.provider == "telegram"
         else "http_header"
         if source.provider
-        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        in (collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS)
+        and source.provider not in collection.NATIVE_REST_PLACEMENTS
         else "none"
         if source.provider
         else None
@@ -404,12 +406,7 @@ def _check_draft_auth_mode(source: ConnectorSource, payload: DraftValidationRequ
         raise HTTPException(
             status_code=422, detail="Authentication mode does not match the provider"
         )
-    if (
-        expected_auth == "http_header"
-        and source.provider
-        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        and payload.auth_header_name != "Authorization"
-    ):
+    if expected_auth == "http_header" and payload.auth_header_name != "Authorization":
         raise HTTPException(
             status_code=422, detail="Provider bearer credentials require the Authorization header"
         )
@@ -839,51 +836,9 @@ async def list_n8n_workflows(
     ]
 
 
-def _require_matching_auth(source: Any, payload: ConnectorSettingsRequest) -> None:
-    """Reject an authentication mode or header the provider and source type cannot use.
-
-    Telegram needs a bot token, header-auth and revisioned REST providers need ``http_header`` with
-    the ``Authorization`` header (Mastodon alone may choose ``none``), and header auth is limited to
-    REST sources. Pure validation.
-
-    Raises:
-        HTTPException: 422 on any mismatch.
-    """
-    expected_auth = (
-        "telegram_bot_token"
-        if source.provider == "telegram"
-        else "http_header"
-        if source.provider
-        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        else "none"
-        if source.provider
-        else None
-    )
-    if source.provider == "mastodon" and payload.auth_method == "none":
-        expected_auth = (
-            "none"  # Mastodon's bearer token is optional: public reads need no credential.
-        )
-    if expected_auth is not None and payload.auth_method != expected_auth:
-        raise HTTPException(
-            status_code=422, detail="Authentication mode does not match the provider"
-        )
-    if (
-        expected_auth == "http_header"
-        and source.provider
-        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        and payload.auth_header_name != "Authorization"
-    ):
-        raise HTTPException(
-            status_code=422, detail="Provider bearer credentials require the Authorization header"
-        )
-    if source.provider is None and payload.auth_method == "telegram_bot_token":
-        raise HTTPException(
-            status_code=422, detail="Telegram authentication requires a Telegram source"
-        )
-    if payload.auth_method == "http_header" and source.type != "api":
-        raise HTTPException(
-            status_code=422, detail="Header authentication is supported only for REST sources"
-        )
+def _require_matching_auth(source: ConnectorSource, payload: ConnectorSettingsRequest) -> None:
+    """Apply the draft authentication contract to a revisioned settings save, raising HTTP 422 on mismatch."""
+    _check_draft_auth_mode(source, payload)
 
 
 def _require_saveable(pending: Any) -> None:

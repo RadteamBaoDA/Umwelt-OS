@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
+import Image from 'next/image';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -31,9 +32,37 @@ function GuideRow({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
-/** Attribution text plus its provider terms link (when the catalog has a terms URL). */
+/** Show provider credit and terms; TMDB also requires its linked logo and non-endorsement notice. */
 function GuideAttribution({ entry }: { entry: ConnectorCatalogEntry }) {
   const t = useTranslations('sources');
+  const isTmdb = entry.provider_id === 'tmdb_movies' || entry.provider_id === 'tmdb_tv';
+  if (isTmdb) {
+    return (
+      <div className="grid justify-items-start gap-1">
+        <a
+          className="inline-flex w-fit rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          href="https://www.themoviedb.org"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t('tmdb.logoLink')}
+        >
+          <Image src="/brand/tmdb-logo.svg" alt={t('tmdb.logoAlt')} width={160} height={12} className="h-3 w-auto" />
+        </a>
+        <span>{entry.attribution}</span>
+        <span className="font-medium">{t('tmdb.attributionNotice')}</span>
+        {entry.terms_url ? (
+          <a
+            className="text-foreground underline underline-offset-2"
+            href={safeHttpUrl(entry.terms_url)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t('provider.terms')}
+          </a>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <>
       {entry.attribution}
@@ -159,11 +188,12 @@ export function ProviderGuide({
   if (!entry.terms_url && !entry.attribution) return null;
   const stale = source ? isStale(source.last_success_at, entry.default_interval_minutes ?? null, now) : false;
   const keyed = (entry.key_fields ?? []).length > 0;
-  const quotas = (entry.quota_policies ?? []).map((q) =>
-    q.limit_units === null
-      ? t('guide.quotaUnknown', { window: q.window })
-      : t('guide.quota', { limit: q.limit_units, unit: q.unit, window: q.window }),
-  );
+  const quotas = (entry.quota_policies ?? []).map((q) => {
+    const pacificDay = q.window === 'day_pacific';
+    const window = pacificDay ? t('youtubeApi.pacificDay') : q.window;
+    const unit = pacificDay ? t('youtubeApi.units') : q.unit;
+    return q.limit_units === null ? t('guide.quotaUnknown', { window }) : t('guide.quota', { limit: q.limit_units, unit, window });
+  });
   const steps = guideStepKeys(entry.provider_id, keyed);
   return (
     <section aria-label={t('guide.title')} className="grid gap-2 rounded-lg border border-border bg-surface p-3 text-sm">

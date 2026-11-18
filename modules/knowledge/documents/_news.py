@@ -542,7 +542,7 @@ async def news_current_scope_status(
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 _SLUG_RE = re.compile(r"^[a-z0-9_]+$")
 _LANG_TAG_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$")
-_ARTWORK_ASPECTS = frozenset({"poster", "square", "video"})
+_ARTWORK_ASPECTS = frozenset({"poster", "square", "video", "landscape"})
 
 
 def _validate_token_tuple(
@@ -1027,7 +1027,7 @@ async def list_gadget_document_projections(
 
 
 def _extract_media_projection(provider_metadata: Any) -> MediaProjectionRead | None:
-    """Build a typed ``MediaProjectionRead`` from ``source_fields`` or synthesize one for YouTube."""
+    """Build the media DTO from allowlisted provider fields, or synthesize one for YouTube."""
     if provider_metadata is None:
         return None
     sf = getattr(provider_metadata, "source_fields", None)
@@ -1036,8 +1036,8 @@ def _extract_media_projection(provider_metadata: Any) -> MediaProjectionRead | N
     media_type = sf.get("media_type")
     if isinstance(media_type, str) and media_type:
         raw_aspect = sf.get("artwork_aspect")
-        aspect: Literal["poster", "square", "video"] = (
-            cast(Literal["poster", "square", "video"], raw_aspect)
+        aspect: Literal["poster", "square", "video", "landscape"] = (
+            cast(Literal["poster", "square", "video", "landscape"], raw_aspect)
             if raw_aspect in _ARTWORK_ASPECTS
             else "poster"
         )

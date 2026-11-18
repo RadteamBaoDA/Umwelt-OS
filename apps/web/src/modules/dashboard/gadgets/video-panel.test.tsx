@@ -1,62 +1,122 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 import { VideoPanel } from './video-panel';
 
-const item = (id: string, image_url?: string | null) => ({
-  document_id: id,
-  document_version_id: id,
-  title: `Video ${id}`,
-  canonical_url: `https://www.youtube.com/watch?v=${id}`,
-  image_url,
-  provider_metadata: { provider: 'youtube', source_fields: { author: 'Chan' } },
-});
+const mocks = vi.hoisted(() => ({ list: vi.fn(), interact: vi.fn(), ask: vi.fn() }));
 vi.mock('@/modules/knowledge', () => ({
   documentKeys: { all: ['documents'] },
-  listGadgetDocumentProjections: vi.fn(async () => ({
-    items: [item('a', '/api/v1/media/proxy?x=1'), item('b', null), ...['c', 'd', 'e', 'f', 'g'].map((id) => item(id, null))],
-    next_cursor: null,
+  listGadgetDocumentProjections: mocks.list,
+  setGadgetDocumentInteraction: mocks.interact,
+}));
+vi.mock('../api', () => ({
+  dashboardKeys: { sources: ['sources'] },
+  listGadgetSources: vi.fn(async () => ({
+    items: [
+      { id: 's1', name: 'Feed one' },
+      { id: 's2', name: 'Feed two' },
+    ],
   })),
 }));
 vi.mock('../gadget-freshness', () => ({ useReportGadgetFreshness: () => undefined }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: mocks.ask }) }));
+vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
+vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: true }) }));
+vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-US', timezone: 'UTC' }) }));
 
-describe('VideoPanel thumbnails', () => {
-  it('shows a thumbnail only for items with an image and hides it on error', async () => {
-    const instance = { id: 'v', definition: { renderer: 'video_panel', source_ids: ['s'], scope: {} } } as never;
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <NextIntlClientProvider
-          locale="en-US"
-          messages={{ dashboard: getCatalog('en-us', 'dashboard'), daily: { streamCount: '{count}' } }}
-        >
-          <VideoPanel instance={instance} />
-        </NextIntlClientProvider>
-      </QueryClientProvider>,
-    );
-    await screen.findByText('Video b');
-    const imgs = document.querySelectorAll('img');
-    expect(imgs).toHaveLength(1);
-    fireEvent.error(imgs[0]!);
-    expect(document.querySelector('img')).toBeNull();
+const projection = (id: string, source = 's1') => ({
+  document_id: id,
+  document_version_id: `${id}-v1`,
+  version_number: 1,
+  source_id: source,
+  title: `Media ${id}`,
+  canonical_url: `https://media.example/${id}`,
+  published_at: '2026-01-02T03:04:00Z',
+  observed_at: '2026-01-02T03:04:00Z',
+  excerpt: 'Projection excerpt',
+  metadata_is_version_snapshot: true,
+  image_url: null,
+  media: { creator: 'Creator', duration_seconds: 125, media_type: 'video' },
+  read_at: null,
+  bookmarked_at: null,
+  dismissed_at: null,
+  provider_metadata: { provider: 'arbitrary-provider', source_fields: {} },
+});
+
+/** Renders the gadget with its query and locale providers for focused behavior checks. */
+function renderPanel(sourceIds = ['s1', 's2']) {
+  const instance = { id: 'v', definition: { renderer: 'video_panel', source_ids: sourceIds, scope: {} } } as never;
+  return render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard'), daily: { streamCount: '{count}' } }}>
+        <VideoPanel instance={instance} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
+}
+
+describe('VideoPanel', () => {
+  beforeEach(() => {
+    mocks.list.mockReset();
+    mocks.interact.mockReset().mockResolvedValue({});
+    mocks.ask.mockReset();
   });
 
-  it('shows 5 videos and expands in place', async () => {
-    const instance = { id: 'v', definition: { renderer: 'video_panel', source_ids: ['s'], scope: {} } } as never;
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <NextIntlClientProvider
-          locale="en-US"
-          messages={{ dashboard: getCatalog('en-us', 'dashboard'), daily: { streamCount: '{count}' } }}
-        >
-          <VideoPanel instance={instance} />
-        </NextIntlClientProvider>
-      </QueryClientProvider>,
-    );
-    await screen.findByText('Video b');
-    expect(screen.queryByText('Video g')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Show 2 more' }));
-    expect(screen.getByText('Video g')).toBeTruthy();
+  it('accepts media projections regardless of provider or URL hostname and shows creator, time and duration', async () => {
+    mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
+    renderPanel(['s1']);
+    expect(await screen.findByText('Media a')).toBeTruthy();
+    expect(screen.getByText(/Creator/)).toBeTruthy();
+    expect(screen.getByText(/2 min/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Media a' }).getAttribute('href')).toBe('https://media.example/a');
+  });
+
+  it('falls back to the document detail route when a projected external URL is unsafe', async () => {
+    mocks.list.mockResolvedValue({ items: [{ ...projection('a'), canonical_url: 'javascript:alert(1)' }], next_cursor: null });
+    renderPanel(['s1']);
+    const link = await screen.findByRole('link', { name: 'Media a' });
+    expect(link.getAttribute('href')).toBe('/knowledge/documents/a');
+    expect(link.hasAttribute('target')).toBe(false);
+  });
+
+  it('keeps source selection and opaque cursor pagination server-scoped', async () => {
+    mocks.list.mockImplementation(async (sources: string[], _channels: string[], cursor?: string) => ({
+      items: sources[0] === 's2' ? [projection('b', 's2')] : cursor ? [projection('b', 's2')] : [projection('a')],
+      next_cursor: sources[0] === 's2' || cursor ? null : 'opaque+/cursor',
+    }));
+    renderPanel();
+    await screen.findByText('Media a');
+    await userEvent.click(screen.getByRole('tab', { name: 'Feed two' }));
+    await screen.findByText('Media b');
+    expect(mocks.list).toHaveBeenLastCalledWith(['s2'], [], undefined);
+    await userEvent.click(screen.getByRole('tab', { name: 'All sources' }));
+    await screen.findByText('Media a');
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(mocks.list).toHaveBeenLastCalledWith(['s1', 's2'], [], 'opaque+/cursor'));
+  });
+
+  it('searches loaded projection metadata and sends only immutable IDs to Ask AI', async () => {
+    mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
+    renderPanel(['s1']);
+    await screen.findByText('Media a');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search media' }), { target: { value: 'creator' } });
+    expect(screen.getByText('Media a')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
+    expect(mocks.ask).toHaveBeenCalledWith({
+      context: { kind: 'selection', items: [{ sourceId: 's1', documentId: 'a', documentVersionId: 'a-v1' }] },
+    });
+    expect(JSON.stringify(mocks.ask.mock.calls)).not.toContain('Projection excerpt');
+  });
+
+  it('supports owner read and bookmark interactions', async () => {
+    mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
+    renderPanel(['s1']);
+    await screen.findByText('Media a');
+    await userEvent.click(screen.getByRole('button', { name: 'Mark read' }));
+    expect(mocks.interact).toHaveBeenCalledWith('a', 1, { read: true, bookmarked: undefined }, 'csrf');
+    expect(screen.getByRole('button', { name: 'Bookmark' })).toBeTruthy();
   });
 });

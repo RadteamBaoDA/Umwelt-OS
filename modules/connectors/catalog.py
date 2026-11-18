@@ -10,6 +10,7 @@ from modules.connectors.backends import (
     is_native_provider,
 )
 from modules.connectors.data_shapes import DataShape, source_data_shapes
+from modules.connectors.provider_options import MAL_RANKING_DEFAULTS
 from modules.connectors.provider_specs import (
     FREE_PROVIDER_SPECS,
     FreeProviderSpec,
@@ -665,6 +666,54 @@ _NEWS = {
     "published_at": "2026-01-01T08:00:00Z",
 }
 SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
+    "tmdb_movies": {
+        "title": "Example movie", "url": "https://www.themoviedb.org/movie/42",
+        "media_type": "movie", "attribution": "Metadata by TMDB",
+    },
+    "tmdb_tv": {
+        "title": "Example series", "url": "https://www.themoviedb.org/tv/42",
+        "media_type": "tv", "attribution": "Metadata by TMDB",
+    },
+    "trakt_media": {
+        "title": "Example film", "url": "https://trakt.tv/movies/example-film",
+        "media_type": "movie", "attribution": "Data via Trakt",
+    },
+    "omdb_lookup": {
+        "title": "Example movie", "url": "https://www.imdb.com/title/tt1234567/",
+        "media_type": "movie", "attribution": "Data via OMDb API",
+    },
+    "mal_anime": {
+        "title": "Example anime", "url": "https://myanimelist.net/anime/1",
+        "media_type": "anime", "attribution": "Data via MyAnimeList",
+    },
+    "mal_manga": {
+        "title": "Example manga", "url": "https://myanimelist.net/manga/1",
+        "media_type": "manga", "attribution": "Data via MyAnimeList",
+    },
+    "youtube_api": {
+        "title": "Example YouTube upload", "media_type": "youtube",
+        "attribution": "Data via YouTube Data API",
+    },
+    "podcast_index": {
+        "title": "Example podcast feed", "media_type": "podcast",
+        "attribution": "Data via Podcast Index",
+    },
+    "listenbrainz_releases": {
+        "title": "Example music release", "media_type": "music",
+        "attribution": "Data via ListenBrainz / MusicBrainz (CC0 1.0)",
+    },
+    "steam_releases": {
+        "title": "Example Steam game", "url": "https://store.steampowered.com/app/10/",
+        "media_type": "game", "attribution": "Data via Steam",
+    },
+    "google_books": {
+        "title": "Example book", "url": "https://books.google.com/books?id=example",
+        "media_type": "book", "attribution": "Data via Google Books",
+    },
+    "hardcover_books": {
+        "title": "Example book", "url": "https://hardcover.app/books/example",
+        "media_type": "book", "attribution": "Data via Hardcover",
+    },
     "anilist_anime": {
         "title": "Example anime",
         "url": "https://anilist.co/anime/1",
@@ -915,6 +964,14 @@ SAMPLE_OUTPUTS: dict[str, dict[str, Any]] = {
 
 # Scoped free presets: owner scope is validated server-side and the URL is never user-supplied.
 _SCOPED_EXAMPLES: dict[str, dict[str, Any]] = {
+    "mal_anime": {"mal_mode": "ranking", "mal_ranking_type": MAL_RANKING_DEFAULTS["mal_anime"]},
+    "mal_manga": {"mal_ranking_type": MAL_RANKING_DEFAULTS["mal_manga"]},
+    "google_books": {"google_books_subject": "History"},
+    "hardcover_books": {"hardcover_mode": "catalog"},
+    "youtube_api": {"youtube_handles": ["@GoogleDevelopers"]},
+    "podcast_index": {"podcast_index_languages": ["en"]},
+    "listenbrainz_releases": {"listenbrainz_days": 14},
+    "omdb_lookup": {"omdb_mode": "title", "omdb_title": "Example movie"},
     "google_news": {
         "news_query": "Vietnam economy",
         "news_site": "reuters.com",
@@ -955,7 +1012,11 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
             "execution": spec.execution,
             "default_interval_minutes": spec.default_interval_minutes,
             "realtime_tier": spec.realtime_tier,
-            "key_fields": ("api_key",) if spec.key_required else (),
+            "key_fields": (
+                ("api_key", "api_secret") if spec.id in {"podcast_index", "igdb_games"}
+                else ("api_key",) if spec.key_required
+                else ()
+            ),
             "endpoint_probe": spec.endpoint_probe,
             "quota_policies": spec.quota,
             "setup_guide": (
@@ -976,7 +1037,14 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
 
 
 def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
-    """Project a free-catalog spec into its catalog entry; unimplemented adapters stay ``planned``."""
+    """Project a free-catalog spec into its catalog entry, including declared scope and provider option fields.
+
+    Only registered adapters become available; unimplemented presets remain ``planned`` and expose no
+    collection modes. Scope fields describe source selection, provider options describe query/runtime
+    configuration, and both are included in the catalog contract for the wizard.
+    """
+    from modules.connectors.provider_options import OPTION_FIELDS
+
     # Planned until the adapter is registered (spec.code_implemented): planned entries must never pass
     # the "available/implemented/requires_credentials" provider-scope gates.
     ready = spec.code_implemented
@@ -992,7 +1060,7 @@ def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
             label=spec.label,
             auth_methods=("api_key",) if spec.key_required else ("none",),
             scope_fields=scope,
-            configuration_fields=(*scope, "schedule_interval_minutes"),
+            configuration_fields=(*scope, *OPTION_FIELDS.get(spec.id, ()), "schedule_interval_minutes"),
             collection_modes=("scheduled", "manual") if ready else (),
             supports_history=False,
             supports_edit=False,

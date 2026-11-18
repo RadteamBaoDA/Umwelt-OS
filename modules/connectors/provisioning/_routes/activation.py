@@ -1,5 +1,6 @@
 """Connector activation, deactivation, credential and backend-transition routes (registered on the shared router)."""
 
+import json
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
@@ -49,6 +50,7 @@ from modules.connectors.provisioning._routes.common import (
     BackendTransitionRequest,
     NativeRestCredentialRequest,
     OwnerWrite,
+    PodcastIndexCredentialRequest,
     Session,
     _activation_read,
     _owner_access,
@@ -699,7 +701,7 @@ async def remove_provider_credential(
     Owner-write authorization is enforced by the route dependency. The local
     configuration and delete intent commit before reconciliation; the external
     n8n credential remains until the later delete acknowledgement clears it. Native local-service
-    bearer tokens have no external operation and are erased in the same transaction.
+    bearer tokens and encrypted keyed/native REST secrets have no external deletion operation and are erased in the same transaction.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
@@ -755,7 +757,12 @@ async def remove_provider_credential(
         raise HTTPException(status_code=409, detail="Connector configuration revision changed")
     saved_source, updated = saved
     updated.state = "disabled"
-    if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS:
+    if source.provider in (
+        collection.HEADER_AUTH_PROVIDERS
+        | collection.REVISIONED_REST_PROVIDERS
+        | collection.KEYED_PROVIDERS.keys()
+        | collection.NATIVE_REST_PLACEMENTS.keys()
+    ):
         local_credential = await session.get(
             ConnectorRestCredential, source_id, with_for_update=True
         )
@@ -1085,7 +1092,7 @@ async def resolve_backend_transition(
 @router.put("/{source_id}/credentials/native-rest", response_model=ActivationRead)
 async def reenter_native_rest_credential(
     source_id: UUID,
-    payload: NativeRestCredentialRequest,
+    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
     session: Session,
     request: Request,
     _owner: OwnerWrite,
@@ -1096,7 +1103,10 @@ async def reenter_native_rest_credential(
     the current source generation and configuration revision, so a later settings save needs re-entry.
     FHIR and Home Assistant accept only the fixed ``Authorization`` header. Notion, Slack, Mastodon and X use
     the same encrypted write-only credential owner for their fixed bearer-token header; their
-    adapters apply the provider-required Bearer scheme when making requests.
+    adapters apply the provider-required Bearer scheme when making requests. YouTube and
+    Podcast Index use the same revisioned slot with separate adapter-owned wire authentication.
+    Podcast Index and IGDB require both credentials, encrypted atomically in one bound envelope.
+    IGDB maps the API key field to Twitch's client ID and the API secret to the client secret.
     """
     scope = _owner
     settings = request.app.state.settings
@@ -1114,6 +1124,7 @@ async def reenter_native_rest_credential(
     workspace_app_header = (
         "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
     )
+    native_header = collection.NATIVE_REST_PLACEMENTS.get(source.provider or "")
     local_header = (
         "Authorization"
         if source.provider in collection.HEADER_AUTH_PROVIDERS
@@ -1129,6 +1140,7 @@ async def reenter_native_rest_credential(
             keyed_header is None
             and local_header is None
             and workspace_app_header is None
+            and native_header is None
             and (
                 source.provider is not None
                 or desired.get("auth_method") != "http_header"
@@ -1141,18 +1153,32 @@ async def reenter_native_rest_credential(
         )
     if row.desired_revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
+    is_pair = isinstance(payload, PodcastIndexCredentialRequest)
+    if is_pair != (source.provider in {"podcast_index", "igdb_games"}):
+        raise HTTPException(status_code=422, detail="Credential fields do not match this provider")
+    if isinstance(payload, PodcastIndexCredentialRequest):
+        credential_secret = json.dumps(
+            {"apiKey": payload.apiKey.get_secret_value(), "apiSecret": payload.apiSecret.get_secret_value()},
+            separators=(",", ":"),
+        )
+    else:
+        credential_secret = payload.secret.get_secret_value()
+    if source.provider == "youtube_api" and (
+        not credential_secret.isascii() or not all(char.isalnum() or char in "_-" for char in credential_secret)
+    ):
+        raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider")
     if keyed_header is not None:
         from modules.connectors.providers.keyed import validate_key
         from modules.connectors.providers.macro import ProviderPayloadError
 
         try:
-            validate_key(str(source.provider), payload.secret.get_secret_value())
+            validate_key(str(source.provider), credential_secret)
         except ProviderPayloadError as exc:
             raise HTTPException(
                 status_code=422, detail="The API key is not acceptable for this provider"
             ) from exc
     header_name = (
-        keyed_header or local_header or workspace_app_header or str(desired["auth_header_name"])
+        keyed_header or native_header or local_header or workspace_app_header or str(desired["auth_header_name"])
     )
     operation_id = uuid7()
     try:
@@ -1163,9 +1189,9 @@ async def reenter_native_rest_credential(
             source_generation=source.generation,
             configuration_revision=payload.expected_revision,
             header_name=header_name,
-            secret=payload.secret.get_secret_value(),
+            secret=credential_secret,
         )
-        fingerprint = secret_fingerprint(key, payload.secret.get_secret_value())
+        fingerprint = secret_fingerprint(key, credential_secret)
     except CredentialEncryptionUnavailable as exc:
         raise HTTPException(
             status_code=503, detail="Connector credential encryption is not configured"
