@@ -37,7 +37,7 @@ Local develop `00ddd32` includes P01–P11, Collector/MCP, R07, R12, R14 and R15
 
 Every command below exists in `scripts/dev.ps1` or `Makefile`; none has been run for this document. Record each actual run in the acceptance record only after the deferred test stage.
 
-Expected Alembic head: `0024_brief_evidence_kinds` (the former 87-revision chain, including the `p12_*`/`p14_*`/`r*` revisions named below, was squashed into `0001_init`; the chain is `0001_init` → … → `0024_brief_evidence_kinds` in `infrastructure/postgres/migrations/versions/`).
+Expected Alembic head: `0027_brief_evidence_kinds` (the former 87-revision chain, including the `p12_*`/`p14_*`/`r*` revisions named below, was squashed into `0001_init`; the chain is `0001_init` → … → `0027_brief_evidence_kinds` in `infrastructure/postgres/migrations/versions/`).
 
 1. **Clean install.** Use a disposable checkout and empty Docker volumes. `./scripts/dev.ps1 setup`, then `./scripts/dev.ps1 dev` (or `make setup`, `make dev`). Confirm the migration service reaches the expected head, complete owner setup with `SETUP_TOKEN`, optionally run `./scripts/dev.ps1 seed` (`make seed`), and exercise authenticated Dashboard, Chat and Settings.
 2. **Phase 0 upgrade.** Start from a preserved Phase 0 database and `.env` (keep the existing secrets; `setup` never replaces `.env`). Back up first (step 5), stop old writers, run `./scripts/dev.ps1 migrate` (`make migrate`), then start the final API/worker. Follow the migration-specific quiescence notes in [deployment.md](deployment.md) (Agent Chat lifecycle, whole-Source cleanup). Structural downgrade functions are not an operational rollback.

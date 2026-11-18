@@ -15,8 +15,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0024_brief_evidence_kinds"
-down_revision: str | Sequence[str] | None = "0023_obs_source_observed_idx"
+revision: str = "0027_brief_evidence_kinds"
+down_revision: str | Sequence[str] | None = "0026_chat_sql_history"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

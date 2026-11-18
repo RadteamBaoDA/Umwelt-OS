@@ -4,7 +4,7 @@
 - Phase 1 (Daily brief), delivered:
   - A Scheduled tasks settings page with the Daily brief template: schedule, section selection, extra instruction, per-task model role, enable/pause/delete.
   - Each task posts its brief into a dedicated chat thread as a scheduled-task message. The brief slot stays single-owner (internal cron or one task).
-  - The brief can include market, weather, hazard and source-health facts. Migration `0024_brief_evidence_kinds` widens the `daily_brief_evidence.fact_kind` CHECK to these kinds.
+  - The brief can include market, weather, hazard and source-health facts. Migration `0027_brief_evidence_kinds` widens the `daily_brief_evidence.fact_kind` CHECK to these kinds.
   - Every observation source used in the prompt is re-checked for eligibility on every read, and withheld briefs are scrubbed on read and export and excluded from Memory.
   - Retry reuses a saved brief. The thread header shows the schedule with Pause/Resume. The gadget opens the task thread, and story citations link to /news.
 - Phase 2 (Topic watch), delivered:
