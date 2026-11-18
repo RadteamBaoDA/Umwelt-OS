@@ -183,10 +183,15 @@ function BriefError({
   );
 }
 
+/** An edited task already carries its timezone, so only a new task must wait for the workspace brief timezone. */
+function zoneBlocksSave(target: Automation | undefined, zonePending: boolean): boolean {
+  return !target && zonePending;
+}
+
 /**
  * Daily brief editor dialog. Creates an enabled schedule-triggered rule with one `generate_brief` action
  * (`deliver_chat: true`), edits an existing task with its `expected_revision`, or converts a legacy brief rule.
- * Sections are sent in canonical order; a blank instruction is sent as null. A 409 `brief_slot_owned` response shows an
+ * Sections are sent in canonical order; an edited task keeps its own timezone (the workspace brief timezone only applies to new tasks); a blank instruction is sent as null. A 409 `brief_slot_owned` response shows an
  * inline error with a Convert action when `legacyRule` is known. Side effects: one POST or PATCH, then list invalidation.
  */
 export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, onClose }: BriefTaskEditorProps) {
@@ -198,7 +203,7 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
   const [conflict, setConflict] = useState(false);
   const zone = useQuery({ queryKey: ['brief-timezone'], queryFn: getBriefTimezone, retry: false });
   const model = useQuery({ queryKey: ['brief-model'], queryFn: getBriefModel, retry: false });
-  const timezone = zone.data ?? target?.trigger.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const timezone = target?.trigger.timezone ?? zone.data ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   /** Builds the generate_brief action from the form, keeping unrelated fields of the action being converted. */
   const buildAction = (previous?: Action): Action => ({
@@ -228,7 +233,7 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
     },
   });
 
-  const invalid = form.sections.size === 0 || !/^\d{2}:\d{2}$/.test(form.time) || zone.isPending;
+  const invalid = form.sections.size === 0 || !/^\d{2}:\d{2}$/.test(form.time) || zoneBlocksSave(target, zone.isPending);
 
   return (
     <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>

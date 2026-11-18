@@ -47,11 +47,11 @@ export function parseBriefCron(cron: string): { time: string; days: BriefDays } 
   return { time, days: match[3] === '*' ? 'daily' : 'weekdays' };
 }
 
-/** Plain-language sentence for the two generated cron patterns; any other cron is returned unchanged. */
-export function describeSchedule(cron: string, locale: 'en-US' | 'vi-VN'): string {
+/**
+ * Structured description of the two generated cron patterns (`days` and "HH:MM" `time`), or null for any other cron.
+ * Wording is left to the caller so every string stays in the locale catalogs.
+ */
+export function describeSchedule(cron: string): { days: BriefDays; time: string } | null {
   const parsed = parseBriefCron(cron);
-  if (!parsed) return cron;
-  const vi = locale === 'vi-VN';
-  const label = parsed.days === 'daily' ? (vi ? 'Hằng ngày' : 'Every day') : vi ? 'Các ngày trong tuần' : 'Weekdays';
-  return `${label} ${vi ? 'lúc' : 'at'} ${parsed.time}`;
+  return parsed && { days: parsed.days, time: parsed.time };
 }

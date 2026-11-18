@@ -123,4 +123,33 @@ describe('brief task editor', () => {
     expect([id, revision]).toEqual(['l1', 2]);
     expect(patch.actions?.[0]).toMatchObject({ type: 'generate_brief', deliver_chat: true, extra_instruction: null });
   });
+
+  it('keeps the other fields of the converted action', async () => {
+    const rich = { ...legacy, actions: [{ type: 'generate_brief', scope: 'daily', instruction: 'keep me' }] } as api.Automation;
+    vi.mocked(api.createScheduledTask).mockRejectedValue(new ApiError(409, 'conflict', { code: 'brief_slot_owned' }));
+    vi.mocked(api.patchAutomation).mockResolvedValue(rich);
+    render(view(<BriefTaskEditor legacyRule={rich} csrfToken="csrf" onClose={vi.fn()} />));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Convert existing rule' }));
+    await waitFor(() => expect(api.patchAutomation).toHaveBeenCalled());
+    expect(vi.mocked(api.patchAutomation).mock.calls[0][2].actions?.[0]).toMatchObject({ instruction: 'keep me' });
+  });
+
+  it('edits an existing task with its revision and own timezone', async () => {
+    vi.mocked(api.patchAutomation).mockResolvedValue(task);
+    render(view(<BriefTaskEditor rule={task} csrfToken="csrf" onClose={vi.fn()} />));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.patchAutomation).toHaveBeenCalled());
+    const [id, revision, patch] = vi.mocked(api.patchAutomation).mock.calls[0];
+    expect([id, revision]).toEqual(['t1', 2]);
+    expect(patch.trigger).toMatchObject({ cron: '0 7 * * *', timezone: 'UTC' });
+  });
+
+  it('renders the editor in Vietnamese', async () => {
+    locale = 'vi-vi';
+    render(view(<BriefTaskEditor csrfToken="csrf" onClose={vi.fn()} />));
+    expect(await screen.findByText('Múi giờ')).toBeTruthy();
+  });
 });

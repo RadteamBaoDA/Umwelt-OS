@@ -18,9 +18,9 @@ describe('scheduled task model', () => {
   });
 
   it('describes generated crons and echoes the rest', () => {
-    expect(describeSchedule('0 7 * * *', 'en-US')).toBe('Every day at 07:00');
-    expect(describeSchedule('0 7 * * 1-5', 'vi-VN')).toBe('Các ngày trong tuần lúc 07:00');
-    expect(describeSchedule('*/5 * * * *', 'en-US')).toBe('*/5 * * * *');
+    expect(describeSchedule('0 7 * * *')).toEqual({ days: 'daily', time: '07:00' });
+    expect(describeSchedule('0 7 * * 1-5')).toEqual({ days: 'weekdays', time: '07:00' });
+    expect(describeSchedule('*/5 * * * *')).toBeNull();
   });
 
   it('classifies like the Python scheduled_task_kind', () => {

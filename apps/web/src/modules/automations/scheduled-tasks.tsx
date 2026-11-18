@@ -10,7 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-session';
-import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
+import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import {
   errorMessageKey,
@@ -76,6 +76,20 @@ function TemplateGrid({
   );
 }
 
+/** Plain-language schedule for the two generated cron patterns (localized); any other cron is shown raw. */
+function ScheduleText({ cron }: { cron: string }) {
+  const t = useTranslations('automations');
+  const schedule = describeSchedule(cron);
+  if (!schedule) return <>{cron}</>;
+  return (
+    <>
+      {schedule.days === 'daily'
+        ? t('scheduledTasks.schedule.daily', { time: schedule.time })
+        : t('scheduledTasks.schedule.weekdays', { time: schedule.time })}
+    </>
+  );
+}
+
 /** One task row; loads its newest run for the Last run column and wires the action buttons to the parent callbacks. */
 function TaskRow({
   rule,
@@ -118,7 +132,7 @@ function TaskRow({
       <TableCell>
         <div className="font-mono text-xs">{cron}</div>
         <div className="text-xs text-muted-foreground">
-          {describeSchedule(cron, normalizeFormattingLocale(display.locale) as 'en-US' | 'vi-VN')}
+          <ScheduleText cron={cron} />
         </div>
       </TableCell>
       <TableCell className="text-sm">
@@ -131,17 +145,17 @@ function TaskRow({
       </TableCell>
       <TableCell>
         <div className="flex gap-1">
-          {label('run', t('scheduledTasks.runNow'), onRun, <PlayIcon size={16} />, busy || !rule.enabled)}
+          {label('run', t('scheduledTasks.runNow'), onRun, <PlayIcon size={16} aria-hidden />, busy || !rule.enabled)}
           {label(
             'toggle',
             rule.enabled ? t('scheduledTasks.pause') : t('scheduledTasks.resume'),
             onToggle,
-            rule.enabled ? <PauseIcon size={16} /> : <PlayIcon size={16} />,
+            rule.enabled ? <PauseIcon size={16} aria-hidden /> : <PlayIcon size={16} aria-hidden />,
             busy,
           )}
-          {label('edit', t('scheduledTasks.edit'), onEdit, <PencilIcon size={16} />)}
-          {label('history', t('scheduledTasks.history'), onHistory, <HistoryIcon size={16} />)}
-          {label('thread', t('scheduledTasks.openThread'), onThread, <MessageSquareIcon size={16} />, !conversation.data)}
+          {label('edit', t('scheduledTasks.edit'), onEdit, <PencilIcon size={16} aria-hidden />)}
+          {label('history', t('scheduledTasks.history'), onHistory, <HistoryIcon size={16} aria-hidden />)}
+          {label('thread', t('scheduledTasks.openThread'), onThread, <MessageSquareIcon size={16} aria-hidden />, !conversation.data)}
         </div>
       </TableCell>
     </TableRow>
@@ -180,6 +194,7 @@ function useTaskActions(csrfToken: string, setNotice: (message: string | null) =
     onSuccess: (_run, rule) => {
       setNotice(t('run.queued'));
       void client.invalidateQueries({ queryKey: ['automation-last-run', rule.id] });
+      void client.invalidateQueries({ queryKey: ['automation-conversation', rule.id] });
     },
     onError: fail,
   });
