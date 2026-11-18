@@ -52,6 +52,7 @@ const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/templ
   loading: () => <div aria-hidden="true" className="h-8 w-32" />,
 });
 
+const TaskDraftCard = dynamic(() => import('./task-draft-card').then((m) => m.TaskDraftCard));
 const TaskBriefMessage = dynamic(() => import('./task-brief-message').then((m) => m.TaskBriefMessage));
 
 type WebReasonKey =
@@ -892,6 +893,8 @@ const TranscriptMessage = React.memo(function TranscriptMessage(props: Transcrip
             citations={msg.citations}
           />
         ))}
+
+      {!isUser && msg.task_draft ? <TaskDraftCard draft={msg.task_draft} /> : null}
 
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
     </div>

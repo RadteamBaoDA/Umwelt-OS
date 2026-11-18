@@ -478,5 +478,11 @@
   "taskThread.pause": "Pause",
   "taskThread.resume": "Resume",
   "taskThread.paused": "Paused",
-  "taskThread.toggleFailed": "Could not update the task. Reload and try again."
+  "taskThread.toggleFailed": "Could not update the task. Reload and try again.",
+  "taskDraft.title": "Proposed scheduled task",
+  "taskDraft.notSaved": "Not saved yet",
+  "taskDraft.review": "Review and create",
+  "taskDraft.exists": "A Daily brief task already exists",
+  "taskDraft.open": "Open Scheduled tasks",
+  "taskDraft.created": "Created"
 }

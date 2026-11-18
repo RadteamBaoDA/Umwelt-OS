@@ -223,5 +223,6 @@
   "scheduledTasks.cancel": "Cancel",
   "scheduledTasks.slotConflict": "A daily brief already exists as an automation rule. Convert it into a scheduled task instead.",
   "scheduledTasks.convert": "Convert existing rule",
-  "scheduledTasks.converting": "Converting…"
+  "scheduledTasks.converting": "Converting…",
+  "scheduledTasks.describeInChat": "Describe in chat"
 }

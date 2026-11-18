@@ -49,14 +49,44 @@ export interface BriefTaskEditorProps {
   legacyRule?: Automation;
   /** Open as a conversion of `legacyRule` (its settings prefill the form, Save patches it). */
   convert?: boolean;
+  /** Pre-fills a NEW task (ignored when editing or converting); used by the chat draft card. */
+  initial?: BriefInitial;
   csrfToken: string;
   /** Called after a successful save, just before `onClose`; lets the host move to the view that shows the task. */
   onSaved?: () => void;
   onClose: () => void;
 }
 
-/** Reads the form defaults from the source rule's brief action and generated cron, falling back to the template defaults. */
-function initialState(source?: Automation) {
+/** Form values a host may pre-fill into a new task (the chat draft card). */
+export interface BriefInitial {
+  time: string;
+  days: BriefDays;
+  sections: readonly BriefSection[];
+  extraInstruction: string | null;
+  modelRole: BriefModelRole;
+}
+
+/** Form state of a new task pre-filled from `initial` (a chat draft). */
+function draftState(initial: BriefInitial) {
+  return {
+    sections: new Set<BriefSection>(initial.sections.length ? initial.sections : ALL_BRIEF_SECTIONS),
+    instruction: initial.extraInstruction ?? '',
+    time: initial.time,
+    days: initial.days,
+    modelRole: initial.modelRole,
+  };
+}
+
+/**
+ * Reads the form defaults from the source rule's brief action and generated cron; without a source, from `initial`
+ * (a chat draft) when given, else the template defaults.
+ */
+function initialState(source?: Automation, initial?: BriefInitial) {
+  return !source && initial ? draftState(initial) : ruleState(source);
+}
+
+/** Form state read from the source rule's brief action and cron (template defaults when absent). */
+function ruleState(source?: Automation) {
   const action = source?.actions.find((item) => item.type === 'generate_brief');
   const parsed = parseBriefCron(source?.trigger.cron ?? '');
   return {
@@ -234,16 +264,16 @@ function zoneBlocksSave(edited: Automation | undefined, zonePending: boolean): b
 }
 
 /**
- * Daily brief editor dialog. Creates an enabled schedule-triggered rule with one `generate_brief` action
+ * Daily brief editor dialog. `initial` pre-fills a new task only (no I/O until Save). Creates an enabled schedule-triggered rule with one `generate_brief` action
  * (`deliver_chat: true`), edits an existing task with its `expected_revision`, or converts a legacy brief rule.
  * Sections are sent in canonical order; an edited task keeps its own timezone (the workspace brief timezone applies to new and converted tasks); `model_role` carries the chosen model role; a blank instruction is sent as null. A 409 `brief_slot_owned` response shows an
  * inline error with a Convert action when `legacyRule` is known. Side effects: one POST or PATCH, then list invalidation and `onSaved` before `onClose`.
  */
-export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, onSaved, onClose }: BriefTaskEditorProps) {
+export function BriefTaskEditor({ rule, legacyRule, convert = false, initial, csrfToken, onSaved, onClose }: BriefTaskEditorProps) {
   const t = useTranslations('automations');
   const client = useQueryClient();
   const target = rule ?? (convert ? legacyRule : undefined);
-  const [form, setForm] = useState(() => initialState(target));
+  const [form, setForm] = useState(() => initialState(target, initial));
   const [errorKey, setErrorKey] = useState<ReturnType<typeof errorMessageKey> | null>(null);
   const [conflict, setConflict] = useState(false);
   const zone = useQuery({ queryKey: ['brief-timezone'], queryFn: getBriefTimezone, retry: false });

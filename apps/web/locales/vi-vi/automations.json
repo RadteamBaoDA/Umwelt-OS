@@ -223,5 +223,6 @@
   "scheduledTasks.cancel": "Hủy",
   "scheduledTasks.slotConflict": "Bản tin hằng ngày đã tồn tại dưới dạng quy tắc tự động hóa. Hãy chuyển nó thành tác vụ định kỳ.",
   "scheduledTasks.convert": "Chuyển quy tắc hiện có",
-  "scheduledTasks.converting": "Đang chuyển…"
+  "scheduledTasks.converting": "Đang chuyển…",
+  "scheduledTasks.describeInChat": "Mô tả trong chat"
 }

@@ -478,5 +478,11 @@
   "taskThread.pause": "Tạm dừng",
   "taskThread.resume": "Tiếp tục",
   "taskThread.paused": "Đã tạm dừng",
-  "taskThread.toggleFailed": "Không cập nhật được tác vụ. Hãy tải lại và thử lại."
+  "taskThread.toggleFailed": "Không cập nhật được tác vụ. Hãy tải lại và thử lại.",
+  "taskDraft.title": "Tác vụ định kỳ được đề xuất",
+  "taskDraft.notSaved": "Chưa lưu",
+  "taskDraft.review": "Xem lại và tạo",
+  "taskDraft.exists": "Đã có tác vụ Bản tin hằng ngày",
+  "taskDraft.open": "Mở Tác vụ định kỳ",
+  "taskDraft.created": "Đã tạo"
 }

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { ClockIcon, HistoryIcon, MessageSquareIcon, PauseIcon, PencilIcon, PlayIcon, SunIcon } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -256,7 +257,7 @@ function RulesStatus({ rules }: { rules: UseQueryResult<{ items: Automation[] }>
   );
 }
 
-/** "New task" dropdown: "From a template" and "Blank task" (the "Describe in chat" entry arrives in Phase 3). */
+/** "New task" dropdown: "From a template", "Blank task" and "Describe in chat" (a link to the chat, where the assistant drafts a task card). */
 function NewTaskMenu({ onTemplates, onBlank }: { onTemplates: () => void; onBlank: () => void }) {
   const t = useTranslations('automations');
   return (
@@ -267,6 +268,9 @@ function NewTaskMenu({ onTemplates, onBlank }: { onTemplates: () => void; onBlan
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={onTemplates}>{t('scheduledTasks.fromTemplate')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={onBlank}>{t('scheduledTasks.blankTask')}</DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/chat">{t('scheduledTasks.describeInChat')}</Link>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
