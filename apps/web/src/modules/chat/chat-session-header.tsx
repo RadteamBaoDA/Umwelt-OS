@@ -13,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { dailyKeys } from '@/modules/dashboard/public-api';
 import { PickQrButton } from '@/modules/pick';
 import { ScheduleText, getAutomation, patchAutomation } from '@/modules/automations';
 
@@ -118,7 +119,8 @@ function MoreMenu({
 
 /**
  * Schedule sentence and Pause/Resume control of a scheduled-task thread. Reads the automation (`GET /automations/{id}`)
- * and PATCHes `enabled` fenced by the loaded revision; the result replaces the cached automation. While the read is
+ * and PATCHes `enabled` fenced by the loaded revision; the result replaces the cached automation, success also refreshes the
+ * Settings list and daily-brief slot owner, and failure (e.g. 409) refetches the automation. While the read is
  * pending or failed it shows the static task badge, so the header never blocks on or breaks over this lookup.
  *
  * @param props.automationId - Automation owning the thread.
@@ -131,7 +133,14 @@ function TaskScheduleLine({ automationId, csrfToken }: { automationId: string; c
   const rule = useQuery({ queryKey: key, queryFn: () => getAutomation(automationId) });
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => patchAutomation(automationId, rule.data!.revision, { enabled }, csrfToken),
-    onSuccess: (next) => client.setQueryData(key, next),
+    onSuccess: (next) => {
+      client.setQueryData(key, next);
+      // Pausing changes the Settings list and who owns the daily-brief slot.
+      void client.invalidateQueries({ queryKey: ['automations'] });
+      void client.invalidateQueries({ queryKey: dailyKeys.slotOwner });
+    },
+    // A 409 means the revision moved: refetch it so the next click uses the current one.
+    onError: () => void client.invalidateQueries({ queryKey: key }),
   });
   const cron = rule.data?.trigger.cron;
   return (

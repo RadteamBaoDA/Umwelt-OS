@@ -144,7 +144,7 @@
   "action.statusSkipped": "Bỏ qua",
   "action.statusRequiresReview": "Cần xem xét",
   "errorCode": "Mã: {code}",
-  "run.noNewDataSince": "Không có dữ liệu mới kể từ {time}",
+  "run.noNewData": "Không có dữ liệu mới lúc {time}",
   "resultReference": "Kết quả: {reference}",
   "reason": "lý do {code}",
   "run.meta": "Phiên bản {revision} · độ sâu {depth} · lần thử {attempts}",

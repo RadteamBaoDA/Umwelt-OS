@@ -13,4 +13,5 @@ export {
   previewHighlightRules,
 } from './api';
 export { BriefText } from './brief-text';
+export { dailyKeys } from './daily-api';
 export { formatRelativeTime } from './gadgets/relative-time';

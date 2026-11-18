@@ -55,7 +55,7 @@ function ActionRow({
       {action.error_code === 'no_new_data' && (
         // A reused brief: the action succeeded without generating, so the run's own finish time is the "since" anchor.
         <p className="text-xs text-muted-foreground">
-          {t('run.noNewDataSince', { time: formatDateTime(run.finished_at ?? run.created_at, display.locale, display.timezone) })}
+          {t('run.noNewData', { time: formatDateTime(run.finished_at ?? run.created_at, display.locale, display.timezone) })}
         </p>
       )}
       {action.error_code && action.error_code !== 'no_new_data' && (

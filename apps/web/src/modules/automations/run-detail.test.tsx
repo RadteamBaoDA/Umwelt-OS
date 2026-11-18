@@ -15,7 +15,7 @@ import { RunDetail } from './run-detail';
 const rule = { id: 'a1', name: 'Daily brief', revision: 1, actions: [] } as unknown as Automation;
 
 describe('RunDetail no_new_data', () => {
-  it('shows "No new data since" with the run finish time instead of the raw code', async () => {
+  it('shows "No new data at" with the run finish time instead of the raw code', async () => {
     const run = {
       id: 'r1',
       automation_id: 'a1',
@@ -38,7 +38,7 @@ describe('RunDetail no_new_data', () => {
         </NextIntlClientProvider>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText(/No new data since .*7:05/)).toBeInTheDocument();
+    expect(await screen.findByText(/No new data at .*7:05/)).toBeInTheDocument();
     expect(screen.queryByText(/Code: no_new_data/)).toBeNull();
   });
 });

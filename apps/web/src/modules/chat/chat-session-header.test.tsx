@@ -98,6 +98,15 @@ describe('ChatSessionHeader scheduled-task thread', () => {
     expect(await screen.findByRole('button', { name: 'Resume' })).toBeInTheDocument();
   });
 
+  it('refetches the automation after a failed pause (409) so the revision is current', async () => {
+    automations.getAutomation.mockReset();
+    automations.getAutomation.mockResolvedValue(rule);
+    automations.patchAutomation.mockRejectedValue(new Error('409'));
+    renderHeader(task);
+    await userEvent.click(await screen.findByRole('button', { name: 'Pause' }));
+    await vi.waitFor(() => expect(automations.getAutomation).toHaveBeenCalledTimes(2));
+  });
+
   it('falls back to the static label when the automation cannot be read', async () => {
     automations.getAutomation.mockRejectedValue(new Error('404'));
     renderHeader(task);
