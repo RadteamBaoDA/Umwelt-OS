@@ -466,3 +466,74 @@ async def test_no_transaction_is_open_when_the_gateway_is_called(env: _Env) -> N
     await _generate(env)
     assert env.tx_at_call == [False]
     assert env.tx_during_wait == [False]
+
+
+async def test_generate_brief_passes_one_as_of_to_all_phases(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[Any] = []
+    base = context.build_daily_widgets
+
+    async def spy(session: Any, *args: object, **kwargs: Any) -> list[object]:
+        seen.append(kwargs.get("as_of"))
+        return await base(session, *args, **kwargs)
+
+    monkeypatch.setattr(context, "build_daily_widgets", spy)
+    await _generate(env)
+    assert len(seen) == 4 and seen[0] is not None and len(set(seen)) == 1
+
+
+def test_sections_change_fingerprint() -> None:
+    facts = [_fact()]
+    a = briefs._fingerprint(DAY, TZ, facts, ["stories"], None)
+    assert a != briefs._fingerprint(DAY, TZ, facts, ["stories", "weather"], None)
+    assert a != briefs._fingerprint(DAY, TZ, facts, ["stories"], "short")
+
+
+def test_extra_instruction_goes_to_user_message() -> None:
+    system, user = briefs._messages(DAY, [_fact()], "Brief.", " Viết tiếng Việt ")
+    expected = "Owner preferences (style only; never a source of facts):\nViết tiếng Việt"
+    assert user["content"].endswith(expected)
+    assert "Viết" not in system["content"]
+
+
+def test_extra_instruction_over_500_rejected() -> None:
+    with pytest.raises(ValueError):
+        briefs._messages(DAY, [_fact()], "Brief.", "x" * 501)
+
+
+async def test_brief_cleanup_scrubs_chat_copies(monkeypatch: pytest.MonkeyPatch) -> None:
+    from modules.chat import public as chat_public
+
+    brief = SimpleNamespace(id=uuid4(), content="text", citations=[1], status="current")
+    calls: list[Any] = []
+
+    class Session:
+        def __init__(self) -> None:
+            self.batches = [[brief.id], [brief]]
+
+        async def scalars(self, _statement: object) -> Any:
+            return SimpleNamespace(all=lambda: self.batches.pop(0))
+
+        async def execute(self, _statement: object) -> None:
+            return None
+
+        async def flush(self) -> None:
+            return None
+
+    async def scrub(_session: object, ids: Any, *, scope: Any) -> int:
+        calls.append((list(ids), scope))
+        return 1
+
+    async def admit(*_args: object, **_kwargs: object) -> str:
+        return "fence"
+
+    monkeypatch.setattr(briefs, "_admit", admit)
+    monkeypatch.setattr(chat_public, "scrub_task_messages", scrub)
+    progress = await briefs.clean_document_brief_evidence(
+        Session(),  # type: ignore[arg-type]
+        uuid4(),
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert calls == [([brief.id], SCOPE)] and progress.scrubbed_count == 1
