@@ -219,14 +219,16 @@ async def _receipt(
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> tuple[dict[str, Any] | None, datetime | None]:
-    """Return the request's ingestion-run telemetry and, once that run is terminal, its end time.
+) -> tuple[dict[str, Any] | None, datetime | None, bool]:
+    """Return the request's ingestion-run telemetry, its end time once terminal, and whether it is in flight.
 
     The end time (the run's last update) bounds the Document read so a later run's items never leak
-    into this post; it is None while the run is still going or unknown (no upper bound then).
+    into this post; it is None while the run is still going or unknown (no upper bound then). The
+    flag is True only for a run found and not yet terminal: its Documents are still being created,
+    so the settle waits instead of closing an accepted collection as ``no_new_data``.
     """
     if ingestion_run_id is None:
-        return None, None
+        return None, None, False
     history = await ingestion.list_source_runs(
         session,
         cand.source_id,
@@ -236,9 +238,9 @@ async def _receipt(
     )
     for run in history.items if history is not None else []:
         if run.run_id == ingestion_run_id:
-            until = run.updated_at if run.status in _TERMINAL_RUN else None
-            return run.collection_stats, until
-    return None, None
+            terminal = run.status in _TERMINAL_RUN
+            return run.collection_stats, run.updated_at if terminal else None, not terminal
+    return None, None, False
 
 
 async def _close(
@@ -327,6 +329,7 @@ async def settle_candidate(
 
     Reads the request through the connectors owner (a missing request closes the action as
     ``collection_unavailable``); ``queued``/``running`` stays ``pending`` for a later tick;
+    an accepted request whose ingestion run is still in flight also stays ``pending``;
     ``failed``/``cancelled`` close as ``collection_<status>`` without a post. A settled request
     reads at most ``max_items`` Documents of the Source created since the run began and, when the
     ingestion run is terminal, no later than its end (newest first):
@@ -346,8 +349,9 @@ async def settle_candidate(
             request = None
         docs: list[Any] = []
         stats: dict[str, Any] | None = None
+        in_flight = False
         if request is not None and request.status in ("succeeded", "no_changes"):
-            stats, until = await _receipt(session, cand, request.ingestion_run_id, **kw)
+            stats, until, in_flight = await _receipt(session, cand, request.ingestion_run_id, **kw)
             docs = await documents.list_recent_source_documents(
                 session, cand.source_id, cand.since, cand.max_items, until=until, **kw
             )
@@ -355,7 +359,7 @@ async def settle_candidate(
     if request is None:
         await _close(factory, cand, "collection_unavailable", **kw)
         return "closed"
-    if request.status in ("queued", "running"):
+    if request.status in ("queued", "running") or in_flight:
         return "pending"
     if request.status in ("failed", "cancelled"):
         await _close(factory, cand, f"collection_{request.status}", **kw)

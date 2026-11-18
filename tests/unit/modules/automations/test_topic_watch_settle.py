@@ -54,6 +54,7 @@ class World:
         self.closed: list[tuple[Any, str]] = []
         self.raise_missing = False
         self.until: datetime | None = None
+        self.in_flight = False
         self.read_until: Any = "unset"
 
         async def get_request(
@@ -88,8 +89,10 @@ class World:
         monkeypatch.setattr(settle, "_close", close)
         monkeypatch.setattr(settle, "_read_session", _FakeSession)
 
-    async def _receipt(self, *_a: Any, **_k: Any) -> tuple[dict[str, Any] | None, datetime | None]:
-        return self.stats, self.until
+    async def _receipt(
+        self, *_a: Any, **_k: Any
+    ) -> tuple[dict[str, Any] | None, datetime | None, bool]:
+        return self.stats, self.until, self.in_flight
 
 
 async def _noop() -> None:
@@ -202,3 +205,16 @@ def test_post_carries_the_task_id_seen_count_and_inert_titles() -> None:
     assert post.metadata["stats"]["seen"] == 4
     assert "evil" not in post.content and "http" not in post.content
     assert post.metadata["items"][0]["title"].startswith("Read www.evil.example")
+
+
+@pytest.mark.asyncio
+async def test_accepted_request_waits_for_its_ingestion_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Documents appear only when the ingestion run finishes; an in-flight run must not close as no_new_data."""
+    w = World(monkeypatch)
+    w.in_flight = True
+    assert await _run(_cand()) == "pending"
+    assert w.closed == [] and w.published == []
+    w.in_flight, w.docs = False, [_doc(1)]
+    assert await _run(_cand()) == "posted"
