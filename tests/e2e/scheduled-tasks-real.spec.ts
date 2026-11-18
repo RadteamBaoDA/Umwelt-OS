@@ -32,7 +32,7 @@ const mask = (text: string) => (KEY ? text.split(KEY).join('***') : text);
 /** Saves a full-page screenshot for the HTML report (never on settings pages that show credentials). */
 async function shot(page: Page, name: string) {
   mkdirSync(SHOTS, { recursive: true });
-  await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
 
 /** Points the chat and brief roles at the real provider and grants remote reasoning consent; probes streaming. */
@@ -131,6 +131,7 @@ test('owner sets up the Daily brief task from the template', async ({ page }) =>
   await dialog.getByRole('button', { name: 'Save' }).click();
   await expect(dialog).toBeHidden();
   await page.getByRole('tab', { name: 'Yours' }).click();
+  await expect(page.getByRole('tab', { name: 'Yours' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByText('Every day at 07:00')).toBeVisible();
   const task = await briefTask(page);
   expect(task.enabled).toBe(true);

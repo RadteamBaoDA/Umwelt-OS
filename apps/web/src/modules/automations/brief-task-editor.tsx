@@ -50,6 +50,8 @@ export interface BriefTaskEditorProps {
   /** Open as a conversion of `legacyRule` (its settings prefill the form, Save patches it). */
   convert?: boolean;
   csrfToken: string;
+  /** Called after a successful save, just before `onClose`; lets the host move to the view that shows the task. */
+  onSaved?: () => void;
   onClose: () => void;
 }
 
@@ -235,9 +237,9 @@ function zoneBlocksSave(edited: Automation | undefined, zonePending: boolean): b
  * Daily brief editor dialog. Creates an enabled schedule-triggered rule with one `generate_brief` action
  * (`deliver_chat: true`), edits an existing task with its `expected_revision`, or converts a legacy brief rule.
  * Sections are sent in canonical order; an edited task keeps its own timezone (the workspace brief timezone applies to new and converted tasks); `model_role` carries the chosen model role; a blank instruction is sent as null. A 409 `brief_slot_owned` response shows an
- * inline error with a Convert action when `legacyRule` is known. Side effects: one POST or PATCH, then list invalidation.
+ * inline error with a Convert action when `legacyRule` is known. Side effects: one POST or PATCH, then list invalidation and `onSaved` before `onClose`.
  */
-export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, onClose }: BriefTaskEditorProps) {
+export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, onSaved, onClose }: BriefTaskEditorProps) {
   const t = useTranslations('automations');
   const client = useQueryClient();
   const target = rule ?? (convert ? legacyRule : undefined);
@@ -268,6 +270,7 @@ export function BriefTaskEditor({ rule, legacyRule, convert = false, csrfToken, 
     },
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['automations'] });
+      onSaved?.();
       onClose();
     },
     onError: (error) => {

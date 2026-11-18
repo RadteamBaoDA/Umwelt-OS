@@ -73,6 +73,17 @@ describe('scheduled tasks workspace', () => {
     expect(await screen.findByRole('button', { name: 'Already set up' })).toBeDisabled();
   });
 
+  it('returns to Yours after creating a task from Templates', async () => {
+    vi.mocked(api.listAutomations).mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [task] });
+    vi.mocked(api.createScheduledTask).mockResolvedValue(task);
+    render(view(<ScheduledTasksWorkspace />));
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Templates' }), { button: 0 });
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Yours' })).toHaveAttribute('aria-selected', 'true'));
+  });
+
   it('opens the editor for the ?edit deep link', async () => {
     window.history.pushState({}, '', '/settings/scheduled-tasks?edit=t1');
     vi.mocked(api.listAutomations).mockResolvedValue({ items: [task] });

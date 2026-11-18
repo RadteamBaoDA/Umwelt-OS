@@ -298,7 +298,7 @@ function useDeepLink(
 /**
  * Settings › Scheduled tasks workspace: Yours / Templates tabs, the "New task" menu, the task table and the Daily brief
  * editor dialog. Tasks are the rules classified by `scheduledTaskKind`; run, pause/resume, edit, history and open-thread
- * act on those rules through the automations API with revision fences. Errors surface as one localized status line.
+ * act on those rules through the automations API with revision fences. A successful save returns to the Yours tab. Errors surface as one localized status line.
  */
 export function ScheduledTasksWorkspace() {
   const t = useTranslations('automations');
@@ -389,6 +389,7 @@ export function ScheduledTasksWorkspace() {
           legacyRule={legacy}
           convert={editor.mode === 'convert'}
           csrfToken={csrfToken}
+          onSaved={() => setTab('yours')}
           onClose={() => setEditor(null)}
         />
       )}
