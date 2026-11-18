@@ -24,6 +24,7 @@ import { useWorkspace } from '@/core/workspace-context';
 import { BriefShareButton, SharedBriefs } from './brief-sharing';
 import { BriefText } from './brief-text';
 import { useSession } from '@/core/session';
+import { getRuleConversationId } from '@/modules/automations';
 
 export { BriefText };
 
@@ -145,13 +146,20 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
 
 /**
  * Saved brief body: stale notice, text, citations and an "open full brief" link, or the empty message. The link is
- * shown only while an automation owns the brief slot (a Daily brief task is enabled) and goes to Settings >
- * Scheduled tasks, where the thread opens. The ownership read is best-effort: while loading or on error the link
- * stays hidden.
+ * shown only while an automation owns the brief slot (a Daily brief task is enabled) and goes to
+ * the task's chat thread (`/chat/{conversation_id}`), or to Settings > Scheduled tasks while the task has no thread yet.
+ * The ownership and conversation reads are best-effort: while the ownership read loads or fails the link stays hidden,
+ * and a failed conversation read falls back to Settings.
  */
 export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
   const t = useTranslations('daily');
   const owner = useQuery({ queryKey: dailyKeys.slotOwner, queryFn: ({ signal }) => getBriefSlotOwner(signal) });
+  const automationId = owner.data?.schedule_owner === 'automation' ? owner.data.automation_id : null;
+  const thread = useQuery({
+    queryKey: ['automation-conversation', automationId],
+    queryFn: () => getRuleConversationId(automationId!),
+    enabled: Boolean(automationId),
+  });
   if (!brief) return <p className="text-sm text-muted-foreground">{t('noBrief')}</p>;
   return (
     <>
@@ -171,7 +179,7 @@ export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) 
         </ol>
       )}
       {owner.data?.schedule_owner === 'automation' && (
-        <Link href="/settings/scheduled-tasks" className="text-xs underline">
+        <Link href={thread.data ? `/chat/${encodeURIComponent(thread.data)}` : '/settings/scheduled-tasks'} className="text-xs underline">
           {t('openFullBrief')}
         </Link>
       )}

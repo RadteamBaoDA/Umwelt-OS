@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({ getBriefSlotOwner: vi.fn() }));
+const automations = vi.hoisted(() => ({ getRuleConversationId: vi.fn() }));
+vi.mock('@/modules/automations', () => automations);
 vi.mock('./daily-api', () => ({ dailyKeys: { slotOwner: ['brief-slot-owner'] }, ...api }));
 vi.mock('./brief-text', () => ({ BriefText: () => null }));
 vi.mock('./brief-sharing', () => ({ BriefShareButton: () => null, SharedBriefs: () => null }));
@@ -42,8 +44,19 @@ describe('SavedBriefBody full-brief link', () => {
 
   it('is shown while an automation owns the brief slot', async () => {
     api.getBriefSlotOwner.mockResolvedValue({ logical_job: 'daily_brief', schedule_owner: 'automation', automation_id: 'a1' });
+    automations.getRuleConversationId.mockResolvedValue('c1');
     render(view());
-    expect(await screen.findByRole('link', { name: 'Open full brief' })).toBeTruthy();
+    const link = await screen.findByRole('link', { name: 'Open full brief' });
+    await vi.waitFor(() => expect(link.getAttribute('href')).toBe('/chat/c1'));
+  });
+
+  it('falls back to Scheduled tasks while the task has no thread yet', async () => {
+    api.getBriefSlotOwner.mockResolvedValue({ logical_job: 'daily_brief', schedule_owner: 'automation', automation_id: 'a1' });
+    automations.getRuleConversationId.mockResolvedValue(null);
+    render(view());
+    const link = await screen.findByRole('link', { name: 'Open full brief' });
+    await vi.waitFor(() => expect(automations.getRuleConversationId).toHaveBeenCalledWith('a1'));
+    expect(link.getAttribute('href')).toBe('/settings/scheduled-tasks');
   });
 
   it('is hidden when the internal cron owns the slot (no Daily brief task)', async () => {
