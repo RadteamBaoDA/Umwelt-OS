@@ -188,6 +188,15 @@ test('follow-up question in the topic thread is answered', async ({ page }) => {
 
 test('Show on dashboard adds a Feed gadget that lists an item', async ({ page }) => {
   test.setTimeout(3 * 60_000);
+  // The deep link opens Add gadget only on an existing dashboard; a fresh install has none yet.
+  await page.goto('/dashboard');
+  const dashboards = await (await page.request.get('/api/v1/dashboards')).json() as { items?: unknown[] } | unknown[];
+  if ((Array.isArray(dashboards) ? dashboards : dashboards.items ?? []).length === 0) {
+    await page.getByRole('button', { name: 'Create a dashboard' }).click();
+    await page.getByLabel('Dashboard name').fill('E2E home');
+    await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Edit layout' })).toBeEnabled({ timeout: 30_000 });
+  }
   await page.goto('/settings/scheduled-tasks');
   await topicRow(page).getByRole('link', { name: 'Show on dashboard' }).click();
   await expect(page).toHaveURL(/\/dashboard/);
