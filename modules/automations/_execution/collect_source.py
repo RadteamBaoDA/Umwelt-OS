@@ -14,6 +14,7 @@ from core.errors import DomainError, RateLimitedError
 from core.worker_context import worker_session_factory
 from core.workspaces.schemas import Scope
 from modules.automations._execution.runs import _mark
+from modules.automations._topic_watch import role_model_id
 from modules.automations.schemas import topic_consent_hash
 from modules.connectors import public as connectors
 
@@ -30,8 +31,8 @@ async def _collect_source(
     """Request one collection for the action's Source and settle the action row; returns the outcome.
 
     Consent gate: the stored ``consent.hash`` must equal the hash of the revision's current watch,
-    cron, timezone and model role; otherwise the action is ``skipped`` with ``consent_required`` and
-    the run is dropped without any request. On success the action is ``succeeded`` with
+    cron, timezone, model role and the model id the role maps to now; otherwise the action is
+    ``skipped`` with ``consent_required`` and the run is dropped without any request. On success the action is ``succeeded`` with
     ``result_reference="collection:<request id>"`` (the collection result is settled by the connectors
     worker, not here). A rate-limited or unexpected failure is retried through ``_transient``; any other
     owner-module refusal (source inactive, revision changed) fails the action as ``collection_rejected``.
@@ -41,7 +42,20 @@ async def _collect_source(
 
     factory = worker_session_factory(ctx)
     spec = rev.actions[row.ordinal - 1]
-    expected = topic_consent_hash(spec["watch"], rev.trigger, spec["model_role"])
+    try:
+        async with factory() as session:
+            model_id = await role_model_id(
+                session, ctx["settings"], ctx.get("redis"), scope=scope, role=spec["model_role"]
+            )
+    except Exception:  # noqa: BLE001  # deliberate boundary: a settings read failure is retried with bounds
+        return await _transient(
+            factory,
+            run.id,
+            row.ordinal,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    expected = topic_consent_hash(spec["watch"], rev.trigger, spec["model_role"], model_id)
     if (spec.get("consent") or {}).get("hash") != expected:
         await _mark(
             factory,

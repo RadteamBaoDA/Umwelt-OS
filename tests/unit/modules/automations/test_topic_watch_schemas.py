@@ -76,3 +76,33 @@ def test_spec_normalises_sites_and_bounds() -> None:
             CollectSourceAction.model_validate(
                 {"type": "collect_source", "watch": {**WATCH, **bad}}
             )
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        # Consent binds the cron: a non-schedule trigger has none (it was a KeyError, then a 500).
+        {
+            "trigger": {"type": "new_document"},
+            "actions": [{"type": "collect_source", "watch": WATCH}],
+        },
+        # Not the sole action: the rule would not be a topic watch, so delete would never retire its Source.
+        {
+            "trigger": TRIGGER,
+            "actions": [
+                {"type": "collect_source", "watch": WATCH},
+                {"type": "create_task", "title": "t"},
+            ],
+        },
+    ],
+)
+def test_collect_source_is_only_a_schedule_rule_with_one_action(definition: dict) -> None:
+    with pytest.raises(ValidationError, match="only action"):
+        AutomationDefinition.model_validate(definition)
+
+
+def test_consent_hash_binds_the_mapped_model_id() -> None:
+    base = topic_consent_hash(WATCH, TRIGGER, "background", "default/m1@")
+    assert base == topic_consent_hash(WATCH, TRIGGER, "background", "default/m1@")
+    assert base != topic_consent_hash(WATCH, TRIGGER, "background", "default/m2@")
+    assert base != topic_consent_hash(WATCH, TRIGGER, "background")

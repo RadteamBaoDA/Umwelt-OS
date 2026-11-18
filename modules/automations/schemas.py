@@ -283,10 +283,15 @@ class AutomationDefinition(BaseModel):
 
         A schedule faster than every five minutes is refused when any action is ``run_agent`` or
         ``collect_source`` (model spend); otherwise the floor is one minute. A rule holds at most one
-        ``collect_source`` action (one Topic watch per Source).
+        ``collect_source`` action (one Topic watch per Source), and that action must be the rule's
+        only action on a schedule trigger: consent binds the cron, and a Topic watch is classified,
+        retired and listed only in that shape.
         """
-        if sum(a.type == "collect_source" for a in self.actions) > 1:
+        watches = sum(a.type == "collect_source" for a in self.actions)
+        if watches > 1:
             raise ValueError("a rule may hold only one collect_source action")
+        if watches and (self.trigger.type != "schedule" or len(self.actions) != 1):
+            raise ValueError("collect_source must be the only action of a schedule rule")
         for cond in self.conditions:
             check_condition(self.trigger.type, cond.field, cond.operator, cond.value)
         if self.trigger.type == "schedule":
@@ -335,14 +340,24 @@ def scheduled_task_kind(
     return None
 
 
-def topic_consent_hash(watch: dict[str, Any], trigger: dict[str, Any], model_role: str) -> str:
-    """Return the sha256 hex of the consent-bound definition: watch spec, cron, timezone and model role.
+def topic_consent_hash(
+    watch: dict[str, Any], trigger: dict[str, Any], model_role: str, model_id: str = ""
+) -> str:
+    """Return the sha256 hex of the consent-bound definition: watch spec, cron, timezone, role and model.
 
-    Pure and stable (sorted keys, compact separators). Consent is valid only while the stored hash equals
-    the hash of the current definition, so editing any of these fields requires consent again.
+    ``model_id`` is the model the role maps to when the hash is made (``""`` when unmapped), so
+    re-pointing the role at a different model requires new consent. Pure and stable (sorted keys,
+    compact separators). Consent is valid only while the stored hash equals the hash of the current
+    definition, so editing any of these fields requires consent again.
     """
     blob = json.dumps(
-        {"watch": watch, "cron": trigger["cron"], "tz": trigger["timezone"], "role": model_role},
+        {
+            "watch": watch,
+            "cron": trigger["cron"],
+            "tz": trigger["timezone"],
+            "role": model_role,
+            "model": model_id,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )

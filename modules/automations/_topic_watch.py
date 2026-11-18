@@ -15,10 +15,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import Settings
 from core.errors import ForbiddenError, ValidationFailedError
 from core.workspaces.schemas import Scope, WorkspaceContext
 from modules.automations.schemas import CollectSourceAction, topic_consent_hash
 from modules.connectors import public as connectors
+from modules.settings import public as settings_public
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,23 @@ def _writer(scope: Scope) -> WorkspaceContext:
 def previous_watch(actions: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the stored ``collect_source`` action of a revision, or None when it holds none."""
     return next((a for a in actions if a.get("type") == "collect_source"), None)
+
+
+async def role_model_id(
+    session: AsyncSession, settings: Settings, redis: Any, *, scope: Scope, role: str
+) -> str:
+    """Return the identity of the model ``role`` maps to now (``""`` when the role is unmapped).
+
+    Read-only: resolves the owner's AI execution config for ``scope``, derives the role's view and
+    formats ``provider/model@version``. The identity is part of the consent hash, so a role re-pointed
+    at another model stops an unattended run until the owner consents again. Raises whatever the
+    settings owner raises for a missing or inactive workspace scope.
+    """
+    base = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
+    mapping = settings_public.derive_for_role(base, role).defaults.resolve(role)
+    if mapping is None:
+        return ""
+    return f"{mapping.provider_id or 'default'}/{mapping.model}@{mapping.version or ''}"
 
 
 def _consent(
@@ -76,9 +95,11 @@ async def prepare_topic_watch(
     scope: Scope,
     multi_workspace_enabled: bool,
     allow_consent: bool,
+    settings: Settings,
 ) -> tuple[dict[str, Any], bool]:
     """Return the ``collect_source`` action to persist and whether a new Source was provisioned.
 
+    The consent hash covers the model id the chosen role maps to now (read through ``settings``).
     Resolves consent first (a mismatched estimate raises before any Source exists), then provisions the
     Source on first save or re-configures it when the watch spec or model role changed. The returned
     dict carries the server-assigned ``source_id`` and ``consent`` and never the request-only
@@ -89,7 +110,8 @@ async def prepare_topic_watch(
     spec = CollectSourceAction.model_validate(action)
     watch = spec.watch.model_dump(mode="json")
     estimate = connectors.estimate_tokens(spec.watch.max_items)
-    new_hash = topic_consent_hash(watch, trigger, spec.model_role)
+    model_id = await role_model_id(session, settings, None, scope=scope, role=spec.model_role)
+    new_hash = topic_consent_hash(watch, trigger, spec.model_role, model_id)
     consent = _consent(spec, new_hash, previous, estimate=estimate, allow_consent=allow_consent)
     config = connectors.TopicWatchConfig(
         topic=spec.watch.topic,
@@ -142,6 +164,7 @@ async def prepare_topic_actions(
     scope: Scope,
     multi_workspace_enabled: bool,
     allow_consent: bool,
+    settings: Settings,
 ) -> tuple[list[dict[str, Any]], list[UUID]]:
     """Replace each dumped ``collect_source`` action with its prepared form; return the new Sources.
 
@@ -165,6 +188,7 @@ async def prepare_topic_actions(
                 scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled,
                 allow_consent=allow_consent,
+                settings=settings,
             )
         except BaseException:
             await retire_sources(
@@ -217,14 +241,19 @@ async def retire_topic_watch(
 
     ``purge_items=True`` uses the sources purge operation. The owner commands commit their own work,
     so call this after the rule's own transaction has been committed. A missing Source is a no-op.
+    The rule is already written, so a failure here (for example a Source that is already archived or
+    being purged) is logged by error type and swallowed: the Source stays archivable from its page.
     """
     source_id = action.get("source_id")
     if not source_id:
         return
-    await connectors.retire_topic_watch_source(
-        session,
-        UUID(str(source_id)),
-        purge_items=purge_items,
-        scope=_writer(scope),
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
+    try:
+        await connectors.retire_topic_watch_source(
+            session,
+            UUID(str(source_id)),
+            purge_items=purge_items,
+            scope=_writer(scope),
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except Exception as exc:  # noqa: BLE001  # post-commit cleanup must not fail the finished delete or edit
+        logger.warning("Topic watch retire failed; error_type=%s", type(exc).__name__)

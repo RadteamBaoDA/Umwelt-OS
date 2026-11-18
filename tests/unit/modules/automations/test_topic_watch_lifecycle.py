@@ -44,6 +44,11 @@ class Calls:
         async def retire(_s: Any, source_id: Any, *, purge_items: bool, **_k: Any) -> None:
             self.events.append(("retire", source_id, purge_items))
 
+        async def model_id(*_a: Any, **_k: Any) -> str:
+            return self.model_id
+
+        self.model_id = "default/m1@"
+        monkeypatch.setattr(lifecycle, "role_model_id", model_id)
         monkeypatch.setattr(lifecycle.connectors, "provision_topic_watch_source", provision)
         monkeypatch.setattr(lifecycle.connectors, "update_topic_watch_source", update)
         monkeypatch.setattr(lifecycle.connectors, "retire_topic_watch_source", retire)
@@ -69,6 +74,7 @@ async def _prepare(
         scope=SCOPE,  # type: ignore[arg-type]
         multi_workspace_enabled=False,
         allow_consent=allow,
+        settings=SimpleNamespace(),  # type: ignore[arg-type]
     )
 
 
@@ -78,7 +84,9 @@ async def test_create_provisions_once_and_stores_consent_for_matching_estimate(m
     stored, created = await _prepare(_action(grant_consent_est_tokens=EST), allow=True)
     assert created and calls.events == [("provision", "Watch", 23400, "background")]
     assert stored["source_id"] == str(SOURCE) and "grant_consent_est_tokens" not in stored
-    assert stored["consent"]["hash"] == topic_consent_hash(WATCH, TRIGGER, "background")
+    assert stored["consent"]["hash"] == topic_consent_hash(
+        WATCH, TRIGGER, "background", "default/m1@"
+    )
     assert stored["consent"]["est_tokens"] == EST
 
 
@@ -105,7 +113,7 @@ async def test_editing_the_topic_clears_consent_unless_regranted(monkeypatch) ->
     calls = Calls(monkeypatch)
     previous = _action(source_id=str(SOURCE))
     previous["consent"] = {
-        "hash": topic_consent_hash(WATCH, TRIGGER, "background"),
+        "hash": topic_consent_hash(WATCH, TRIGGER, "background", "default/m1@"),
         "granted_at": "2026-11-18T00:00:00+00:00",
         "est_tokens": EST,
     }
@@ -118,7 +126,9 @@ async def test_editing_the_topic_clears_consent_unless_regranted(monkeypatch) ->
     regranted, _ = await _prepare(
         _action(watch=edited, grant_consent_est_tokens=EST), previous, allow=True
     )
-    assert regranted["consent"]["hash"] == topic_consent_hash(edited, TRIGGER, "background")
+    assert regranted["consent"]["hash"] == topic_consent_hash(
+        edited, TRIGGER, "background", "default/m1@"
+    )
     # A schedule change alone also invalidates consent (the hash covers cron and timezone).
     moved, _ = await _prepare(
         _action(), previous, allow=True, trigger={**TRIGGER, "cron": "0 9 * * *"}
@@ -243,3 +253,167 @@ async def test_failure_after_provisioning_retires_the_orphan_source(monkeypatch)
         )
     assert [e[0] for e in calls.events] == ["provision", "retire"]
     assert calls.events[1] == ("retire", SOURCE, False) and session.rolled_back
+
+
+@pytest.mark.asyncio
+async def test_repointing_the_role_to_another_model_clears_consent(monkeypatch) -> None:
+    """Owner ruling: consent covers the model the role maps to, not just the role name."""
+    calls = Calls(monkeypatch)
+    previous = _action(source_id=str(SOURCE))
+    previous["consent"] = {
+        "hash": topic_consent_hash(WATCH, TRIGGER, "background", "default/m1@"),
+        "granted_at": "2026-11-18T00:00:00+00:00",
+        "est_tokens": EST,
+    }
+    calls.model_id = "default/m2@"
+    stored, _ = await _prepare(_action(), previous, allow=True)
+    assert "consent" not in stored
+
+
+@pytest.mark.asyncio
+async def test_delete_retires_whenever_the_rule_holds_a_watch(monkeypatch) -> None:
+    """Retirement keys on the stored watch, not on the rule being classified as a topic watch."""
+    calls = Calls(monkeypatch)
+    _delete_patches(monkeypatch, calls.events)
+    monkeypatch.setattr(public, "scheduled_task_kind", lambda *_a: None)
+    await public.delete_automation(
+        None,  # type: ignore[arg-type]
+        uuid4(),
+        1,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert ("retire", SOURCE, False) in calls.events
+
+
+@pytest.mark.asyncio
+async def test_retire_after_commit_logs_instead_of_raising(monkeypatch) -> None:
+    Calls(monkeypatch)
+
+    async def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("already archived")
+
+    monkeypatch.setattr(lifecycle.connectors, "retire_topic_watch_source", boom)
+    await lifecycle.retire_topic_watch(
+        None,  # type: ignore[arg-type]
+        _action(source_id=str(SOURCE)),
+        purge_items=False,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+
+
+def _create_patches(monkeypatch: pytest.MonkeyPatch, admits: list[bool]) -> None:
+    async def admit(*_a: Any, lock: bool = False, **_k: Any) -> str:
+        admits.append(lock)
+        return "fence"
+
+    async def release(*_a: Any, **_k: Any) -> None:
+        return None
+
+    async def commit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(public, "_admit", admit)
+    monkeypatch.setattr(public, "validate_definition", lambda *_a: None)
+    monkeypatch.setattr(
+        public,
+        "_append_revision",
+        lambda *_a: SimpleNamespace(trigger=TRIGGER, conditions=[], actions=[]),
+    )
+    monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
+    monkeypatch.setattr(public, "commit_with_replay", commit)
+
+    async def read(*_a: Any, **_k: Any) -> Any:
+        return None
+
+    monkeypatch.setattr(public, "_read", read)
+
+
+def _watch_payload() -> AutomationCreate:
+    return AutomationCreate.model_validate(
+        {
+            "name": "Watch",
+            "trigger": TRIGGER,
+            "actions": [{"type": "collect_source", "watch": {"topic": "ai chips"}}],
+            "enabled": False,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_retakes_the_admission_lock_after_the_source_commit(monkeypatch) -> None:
+    """create_source commits and releases the admission lock; it must be re-taken before the write."""
+    Calls(monkeypatch)
+    admits: list[bool] = []
+    _create_patches(monkeypatch, admits)
+    await public.create_automation(
+        _CreateSession(),  # type: ignore[arg-type]
+        _watch_payload(),
+        {},
+        SimpleNamespace(),  # type: ignore[arg-type]
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert admits == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_create_recounts_the_quota_after_the_source_commit(monkeypatch) -> None:
+    """Another writer may fill the quota while the lock was released: conflict, and retire the Source."""
+    calls = Calls(monkeypatch)
+    _create_patches(monkeypatch, [])
+    session = _CreateSession()
+    results = iter([[], list(range(public.MAX_AUTOMATIONS_PER_OWNER))])
+
+    async def scalars(_statement: Any) -> Any:
+        return SimpleNamespace(all=lambda: next(results))
+
+    session.scalars = scalars  # type: ignore[method-assign]
+    with pytest.raises(public.AutomationConflict) as caught:
+        await public.create_automation(
+            session,  # type: ignore[arg-type]
+            _watch_payload(),
+            {},
+            SimpleNamespace(),  # type: ignore[arg-type]
+            scope=SCOPE,  # type: ignore[arg-type]
+            multi_workspace_enabled=False,
+        )
+    assert caught.value.code == "quota_exceeded"
+    assert [e[0] for e in calls.events] == ["provision", "retire"]
+
+
+@pytest.mark.asyncio
+async def test_update_refences_the_head_and_compensates_a_moved_revision(monkeypatch) -> None:
+    """A fresh Source commits mid-command; the head revision is re-checked under the re-taken lock."""
+    calls = Calls(monkeypatch)
+    _create_patches(monkeypatch, [])
+    heads = iter([SimpleNamespace(revision=1, name="Rule"), SimpleNamespace(revision=2)])
+
+    async def owned(*_a: Any, **_k: Any) -> Any:
+        return next(heads)
+
+    async def current(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(trigger=TRIGGER, conditions=[], actions=[])
+
+    monkeypatch.setattr(public, "_owned_head", owned)
+    monkeypatch.setattr(public, "_current_revision", current)
+    payload = public.AutomationUpdate.model_validate(
+        {
+            "expected_revision": 1,
+            "trigger": TRIGGER,
+            "actions": [{"type": "collect_source", "watch": {"topic": "ai chips"}}],
+        }
+    )
+    with pytest.raises(public.AutomationConflict) as caught:
+        await public.update_automation(
+            _CreateSession(),  # type: ignore[arg-type]
+            uuid4(),
+            payload,
+            {},
+            SimpleNamespace(),  # type: ignore[arg-type]
+            scope=SCOPE,  # type: ignore[arg-type]
+            multi_workspace_enabled=False,
+        )
+    assert caught.value.code == "stale_revision"
+    assert [e[0] for e in calls.events] == ["provision", "retire"]

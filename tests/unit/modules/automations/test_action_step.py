@@ -934,7 +934,7 @@ def _watch_rev(*, consent_for: dict[str, Any] | None = None, **over: Any) -> Any
     }
     basis = consent_for or {"watch": watch, "trigger": trigger}
     spec["consent"] = {
-        "hash": topic_consent_hash(basis["watch"], basis["trigger"], "background"),
+        "hash": topic_consent_hash(basis["watch"], basis["trigger"], "background", "default/m1@"),
         "granted_at": "2026-11-18T00:00:00+00:00",
         "est_tokens": 15600,
     }
@@ -945,7 +945,11 @@ SOURCE_ID = uuid4()
 
 
 async def _run_collect(
-    monkeypatch: pytest.MonkeyPatch, rev: Any, *, error: Exception | None = None
+    monkeypatch: pytest.MonkeyPatch,
+    rev: Any,
+    *,
+    error: Exception | None = None,
+    model_id: str = "default/m1@",
 ) -> tuple[str, list[Any]]:
     """Run ``_collect_source`` with a spy factory, ``_mark`` and the connectors request command."""
     from modules.automations._execution import collect_source as module
@@ -964,6 +968,10 @@ async def _run_collect(
             raise error
         return request_id
 
+    async def role_model(*_a: Any, **_k: Any) -> str:
+        return model_id
+
+    monkeypatch.setattr(module, "role_model_id", role_model)
     monkeypatch.setattr(module, "_mark", mark)
     monkeypatch.setattr(module.connectors, "request_topic_watch_collection", request)
     monkeypatch.setattr(
@@ -972,7 +980,7 @@ async def _run_collect(
     run = SimpleNamespace(id=RUN_ID)
     row = SimpleNamespace(ordinal=1)
     outcome = await module._collect_source(
-        {},
+        {"settings": None},
         run,
         row,
         rev,
@@ -1017,6 +1025,16 @@ async def test_collect_source_after_edit_requires_consent(monkeypatch: pytest.Mo
     }
     outcome, calls = await _run_collect(monkeypatch, _watch_rev(consent_for=moved))
     assert outcome == "dropped" and not any(c[0] == "request" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_requires_consent_again_when_the_role_model_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner ruling: the role now maps to another model than the one consented to."""
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(), model_id="default/m2@")
+    assert outcome == "dropped" and calls[0][2:4] == ("skipped", "consent_required")
+    assert not any(c[0] == "request" for c in calls)
 
 
 @pytest.mark.asyncio

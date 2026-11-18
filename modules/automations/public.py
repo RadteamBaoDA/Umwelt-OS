@@ -350,6 +350,23 @@ async def _owned_head(
     return head
 
 
+async def _require_quota(session: AsyncSession, scope: Scope) -> None:
+    """Raise ``AutomationConflict("quota_exceeded")`` when the owner already holds the maximum live rules."""
+    live = (
+        await session.scalars(
+            select(Automation.id)
+            .where(
+                Automation.workspace_id == scope.workspace_id,
+                Automation.owner_id == _actor(scope),
+                Automation.deleted_at.is_(None),
+            )
+            .limit(MAX_AUTOMATIONS_PER_OWNER)
+        )
+    ).all()
+    if len(live) >= MAX_AUTOMATIONS_PER_OWNER:
+        raise AutomationConflict("quota_exceeded", "Automation limit reached")
+
+
 async def create_automation(
     session: AsyncSession,
     payload: AutomationCreate,
@@ -368,25 +385,14 @@ async def create_automation(
     transaction) exist for the explicit demo seed; routes and tools use the defaults. A
     ``collect_source`` action provisions its Topic watch Source before the rule is written (the
     sources owner commits internally), so a later failure retires that Source again; only
-    ``allow_consent=True`` (the HTTP route) may store the owner's consent.
+    ``allow_consent=True`` (the HTTP route) may store the owner's consent. Because that Source commit
+    drops the admission lock, the lock and the quota are re-checked before the rule is written.
     """
     fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
     )
     validate_definition(payload, registry, settings)
-    live = (
-        await session.scalars(
-            select(Automation.id)
-            .where(
-                Automation.workspace_id == scope.workspace_id,
-                Automation.owner_id == _actor(scope),
-                Automation.deleted_at.is_(None),
-            )
-            .limit(MAX_AUTOMATIONS_PER_OWNER)
-        )
-    ).all()
-    if len(live) >= MAX_AUTOMATIONS_PER_OWNER:
-        raise AutomationConflict("quota_exceeded", "Automation limit reached")
+    await _require_quota(session, scope)
     trigger, conditions, actions = _dump(payload)
     actions, fresh = await prepare_topic_actions(
         session,
@@ -397,8 +403,16 @@ async def create_automation(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
         allow_consent=allow_consent,
+        settings=settings,
     )
     try:
+        if fresh:
+            # create_source committed, which released the admission lock: take it again and re-count
+            # the quota before the rule is written (a conflict compensates the fresh Source below).
+            fence = await _admit(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+            )
+            await _require_quota(session, scope)
         head = Automation(
             workspace_id=scope.workspace_id,
             owner_id=_actor(scope),
@@ -493,6 +507,7 @@ async def update_automation(
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
             allow_consent=allow_consent,
+            settings=settings,
         )
         parts = (parts[0], parts[1], prepared)
     else:
@@ -500,6 +515,17 @@ async def update_automation(
         # later (changed fields or disabled module) must still be pausable.
         parts = (current.trigger, current.conditions, current.actions)
     try:
+        if fresh:
+            # create_source committed and released the admission and head locks: take them again and
+            # re-check the revision fence before writing (a conflict compensates the fresh Source).
+            fence = await _admit(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+            )
+            head = await _owned_head(session, automation_id, lock=True, scope=scope)
+            if head.revision != payload.expected_revision:
+                raise AutomationConflict(
+                    "stale_revision", f"Rule is at revision {head.revision}", head.revision
+                )
         rev = await _write_revision(
             session,
             head,
@@ -622,7 +648,7 @@ async def delete_automation(
         access_fence=fence,
     )
     watch = previous_watch(current.actions)
-    if kind == "topic_watch" and watch is not None:
+    if watch is not None:
         await retire_topic_watch(
             session,
             watch,
