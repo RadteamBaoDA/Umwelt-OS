@@ -474,5 +474,9 @@
   "taskThread.edit": "Sửa tác vụ",
   "taskThread.runLine": "Bản tin hằng ngày · {time}",
   "taskThread.runLog": "nhật ký chạy",
-  "taskThread.citations": "Nguồn của bản tin"
+  "taskThread.citations": "Nguồn của bản tin",
+  "taskThread.pause": "Tạm dừng",
+  "taskThread.resume": "Tiếp tục",
+  "taskThread.paused": "Đã tạm dừng",
+  "taskThread.toggleFailed": "Không cập nhật được tác vụ. Hãy tải lại và thử lại."
 }

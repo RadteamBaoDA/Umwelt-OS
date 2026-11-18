@@ -76,8 +76,12 @@ function TemplateGrid({
   );
 }
 
-/** Plain-language schedule for the two generated cron patterns (localized); any other cron is shown raw. */
-function ScheduleText({ cron }: { cron: string }) {
+/**
+ * Plain-language schedule for the two generated cron patterns (localized); any other cron is shown raw.
+ *
+ * @param props.cron - Cron expression of the task's schedule trigger.
+ */
+export function ScheduleText({ cron }: { cron: string }) {
   const t = useTranslations('automations');
   const schedule = describeSchedule(cron);
   if (!schedule) return <>{cron}</>;

@@ -4,6 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { MoreHorizontalIcon, PlusIcon } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -13,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { PickQrButton } from '@/modules/pick';
+import { ScheduleText, getAutomation, patchAutomation } from '@/modules/automations';
 
 export const profileTitleKeys: Record<
   string,
@@ -55,6 +57,8 @@ export interface ChatSessionHeaderProps {
   actionError?: string | null;
   /** Settings link that edits the scheduled task owning this thread; its presence marks a task thread (badge + edit link). */
   taskEditHref?: string;
+  /** Automation id of the scheduled task owning this thread; enables the schedule sentence and Pause/Resume. */
+  taskAutomationId?: string;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
 }
@@ -113,6 +117,46 @@ function MoreMenu({
 }
 
 /**
+ * Schedule sentence and Pause/Resume control of a scheduled-task thread. Reads the automation (`GET /automations/{id}`)
+ * and PATCHes `enabled` fenced by the loaded revision; the result replaces the cached automation. While the read is
+ * pending or failed it shows the static task badge, so the header never blocks on or breaks over this lookup.
+ *
+ * @param props.automationId - Automation owning the thread.
+ * @param props.csrfToken - Session CSRF token for the PATCH.
+ */
+function TaskScheduleLine({ automationId, csrfToken }: { automationId: string; csrfToken: string }) {
+  const t = useTranslations('chat');
+  const client = useQueryClient();
+  const key = ['automation', automationId];
+  const rule = useQuery({ queryKey: key, queryFn: () => getAutomation(automationId) });
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => patchAutomation(automationId, rule.data!.revision, { enabled }, csrfToken),
+    onSuccess: (next) => client.setQueryData(key, next),
+  });
+  const cron = rule.data?.trigger.cron;
+  return (
+    <>
+      <span className="rounded bg-secondary px-2 py-0.5 font-semibold">
+        {rule.data && cron ? <ScheduleText cron={cron} /> : t('taskThread.badge')}
+      </span>
+      {rule.data && (
+        <>
+          {!rule.data.enabled && <span>{t('taskThread.paused')}</span>}
+          <Button type="button" variant="outline" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate(!rule.data!.enabled)}>
+            {t(rule.data.enabled ? 'taskThread.pause' : 'taskThread.resume')}
+          </Button>
+        </>
+      )}
+      {toggle.isError && (
+        <span role="alert" className="text-destructive">
+          {t('taskThread.toggleFailed')}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * Session header shared by the quick drawer and the /chat route: title, QR pick, one "More" menu (rename, export, pin, archive, delete), new chat (the agent picker lives in the composer).
  *
  * @param props - See {@link ChatSessionHeaderProps}.
@@ -134,6 +178,7 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
     onSetArchived,
     actionError,
     taskEditHref,
+    taskAutomationId,
     onSendPrompt,
     onNewChat,
   } = props;
@@ -171,7 +216,11 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
       </div>
       {full && taskEditHref && (
         <p className="flex w-full items-center gap-2 text-xs text-muted-foreground">
-          <span className="rounded bg-secondary px-2 py-0.5 font-semibold">{t('taskThread.badge')}</span>
+          {taskAutomationId ? (
+            <TaskScheduleLine automationId={taskAutomationId} csrfToken={csrfToken} />
+          ) : (
+            <span className="rounded bg-secondary px-2 py-0.5 font-semibold">{t('taskThread.badge')}</span>
+          )}
           <Link href={taskEditHref} className="underline">
             {t('taskThread.edit')}
           </Link>

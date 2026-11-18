@@ -116,6 +116,11 @@ export function listAutomations(): Promise<{ items: Automation[] }> {
   return apiRequest(base);
 }
 
+/** Reads one live rule (trigger, enabled flag and revision); rejects with ApiError (404) when it no longer exists. */
+export function getAutomation(id: string): Promise<Automation> {
+  return apiRequest(`${base}/${encodeURIComponent(id)}`);
+}
+
 /** Reads trigger fields, action availability by owning module and webhook alias names. */
 export function getCapabilities(): Promise<Capabilities> {
   return apiRequest(`${base}/capabilities`);

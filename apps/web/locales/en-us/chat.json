@@ -474,5 +474,9 @@
   "taskThread.edit": "Edit task",
   "taskThread.runLine": "Daily brief · {time}",
   "taskThread.runLog": "run log",
-  "taskThread.citations": "Brief sources"
+  "taskThread.citations": "Brief sources",
+  "taskThread.pause": "Pause",
+  "taskThread.resume": "Resume",
+  "taskThread.paused": "Paused",
+  "taskThread.toggleFailed": "Could not update the task. Reload and try again."
 }

@@ -61,6 +61,17 @@ function taskEditHref(
 }
 
 /**
+ * Header props of a scheduled-task thread: the Settings edit link and the owning automation id.
+ *
+ * @param conv - Open conversation detail, if loaded.
+ * @returns Both props for a task thread with a known automation id, else an empty object.
+ */
+function taskThreadProps(conv: Parameters<typeof taskEditHref>[0]) {
+  const href = taskEditHref(conv);
+  return href ? { taskEditHref: href, taskAutomationId: conv?.context_resource_id ?? undefined } : {};
+}
+
+/**
  * Stack between the transcript and the composer: the agent todo list, a pending generative-UI input request and the
  * provider-gate alert. Renders nothing for the parts whose state is absent; no side effects beyond forwarding callbacks.
  */
@@ -201,7 +212,7 @@ export function ChatSession({
           onSetPinned={onSetPinned}
           onSetArchived={onSetArchived}
           actionError={actionError}
-          taskEditHref={taskEditHref(d.detail.data)}
+          {...taskThreadProps(d.detail.data)}
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}
