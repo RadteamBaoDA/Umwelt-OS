@@ -21,7 +21,7 @@ from modules.connectors.topic_watch_rules import (
     title_key,
     token_cap,
 )
-from modules.ingestion.public import IngestionRecord, ReceiveBatch
+from modules.ingestion.public import IngestionRecord
 
 PUBLIC = ["93.184.216.34"]
 
@@ -179,11 +179,12 @@ def harness(monkeypatch):
         accepted=[], seen=set(), searches=[], search=None, gateway=FakeGateway(), cap=None
     )
 
-    async def state(run):
-        return SimpleNamespace(cursor=None)
+    async def lease(run):
+        return SimpleNamespace(token="lease", cursor_before=None)
 
-    async def accept(run, records, before, after, update=None):
-        box.accepted.append((records, update))
+    async def accept(run, lease, records, coverage, collected_at, state_update=None):
+        assert coverage == "returned_snapshot"
+        box.accepted.append(([r.model_dump() for r in records], state_update))
 
     async def seen(session, **kwargs):
         return {pid for pid in kwargs["provider_ids"] if pid in box.seen}
@@ -196,8 +197,8 @@ def harness(monkeypatch):
         box.searches.append(query)
         return box.search(query)
 
-    monkeypatch.setattr(tw, "_state", state)
-    monkeypatch.setattr(tw, "_accept_generic", accept)
+    monkeypatch.setattr(tw, "_lease", lease)
+    monkeypatch.setattr(tw, "_accept_native", accept)
     monkeypatch.setattr(tw.ingestion, "seen_provider_ids", seen)
     monkeypatch.setattr(tw, "_open_model", open_model)
     monkeypatch.setattr("modules.chat.public.search_web_for_collection", search)
@@ -338,23 +339,17 @@ async def test_seen_urls_not_refetched(harness):
 
 
 @pytest.mark.asyncio
-async def test_records_pass_the_generic_batch_contract(harness):
+async def test_records_carry_provider_envelope(harness):
     await tw._run_topic_watch(make_run(Gate({})))
     records, update = harness.accepted[0]
     assert update.coverage == "complete" and update.stats["reason"] is None
     for raw in records:
         parsed = IngestionRecord.model_validate({**raw, "collected_at": raw["observed_at"]})
         meta = parsed.metadata
-        assert "provider_record" not in meta  # reserved key: ReceiveBatch rejects it
+        assert meta["provider_record"]["provider"] == "topic_watch"
         assert meta["content_scope"] == "feed_summary" and meta["full_text_available"] is False
         assert meta["canonical_url"] == parsed.provider_id
         assert parsed.content.startswith(meta["title"])
-    ReceiveBatch(
-        source_id=uuid4(),
-        source_generation=1,
-        batch_key="connector-request:x",
-        records=[IngestionRecord.model_validate(r) for r in records],
-    )
 
 
 @pytest.mark.asyncio

@@ -30,8 +30,9 @@ from modules.connectors import public as connectors
 from modules.connectors._collection.base import (
     ADAPTERS,
     Run,
-    _accept_generic,
-    _state,
+    _accept_native,
+    _lease,
+    _records,
 )
 from modules.connectors._collection.web import _decode_page, _parse_page
 from modules.connectors.providers import rest
@@ -548,13 +549,18 @@ def _review_messages(watch: _Watch, cand: _Candidate, page: _Page) -> list[dict[
 
 
 def _record(cand: _Candidate, page: _Page, summary: str) -> dict[str, Any]:
-    """Build the ingestion record; URL, title and site come from the search hit and the fetch only.
+    """Build the ingestion record; URL, title and site come from the search hit and the fetch only."""
+    from modules.knowledge.documents.public import ProviderRecordMetadata
 
-    Carries no ``provider_record`` envelope: the generic batch path reserves that key for trusted
-    native normalization and rejects the whole batch when an adapter supplies it.
-    """
     site = urlsplit(page.url).hostname or ""
     title = _clean_summary(cand.title)[:240] or site
+    envelope = ProviderRecordMetadata(
+        provider="topic_watch",
+        identity=page.url,
+        timestamp_basis="collection",
+        coverage="returned_snapshot",
+        content_truncated=False,
+    )
     return {
         "provider_id": page.url,
         "content": f"{title}\n\n{summary}",
@@ -566,6 +572,7 @@ def _record(cand: _Candidate, page: _Page, summary: str) -> dict[str, Any]:
             "summary": summary,
             "content_scope": "feed_summary",
             "full_text_available": False,
+            "provider_record": envelope.model_dump(mode="json"),
         },
     }
 
@@ -665,19 +672,21 @@ async def _review(
 
 
 async def _run_topic_watch(run: Run) -> None:
-    """Collect one Topic watch run and settle it through the generic acceptance path.
+    """Collect one Topic watch run and settle it through the native (leased) acceptance path.
 
     Pipeline: open the role-bound model (policy checked first), plan queries, search, de-duplicate
     (site filter, canonical URL, title, already-stored URLs), then fetch and judge pages within the
     token cap. Overrun, search-quota exhaustion or the soft deadline settle ``coverage="partial"``
     with ``stats.reason`` and keep the items already saved. Failures that need the owner raise
     ``TopicWatchFailure`` (a missing Redis client is ``search_unavailable``, before any spend);
-    fence loss and terms signals propagate untouched.
+    fence loss and terms signals propagate untouched. ``topic_watch`` is a registered native provider,
+    so ingestion refuses the generic batch path: the lease is reserved before any search or fetch and
+    the records (with their typed ``provider_record`` envelope) settle as one native page.
     """
     watch = _watch_from(run)
     if _redis(run) is None:  # search quota and consent live in Redis; fail before any model spend
         raise TopicWatchFailure("search_unavailable")
-    state = await _state(run)
+    lease = await _lease(run)
     deadline = time.monotonic() + SOFT_DEADLINE_SECONDS
     stats = _new_stats()
     model = await _open_model(run, watch)
@@ -687,12 +696,15 @@ async def _run_topic_watch(run: Run) -> None:
     records, stop = await _review(run, model, watch, found, stats, deadline)
     reason = reason or stop
     stats.update(items=len(records), tokens=model.budget.used, reason=reason)
-    await _accept_generic(
+    await _accept_native(
         run,
-        records,
-        state.cursor,
-        state.cursor,
-        CollectionStateUpdate(coverage="partial" if reason else "complete", stats=stats),
+        lease,
+        _records(records) if records else [],
+        "returned_snapshot",  # equals every record envelope's coverage (ingress rejects a mismatch)
+        datetime.now(UTC),
+        state_update=CollectionStateUpdate(
+            coverage="partial" if reason else "complete", stats=stats
+        ),
     )
 
 
