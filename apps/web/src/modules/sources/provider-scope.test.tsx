@@ -79,7 +79,8 @@ describe('ProviderGuide', () => {
       const { unmount } = view(entry({ provider_id }));
       const badge = screen.getByTestId('attribution-badge');
       expect(badge.textContent).toBe(label);
-      expect(badge.getAttribute('href')).toBe(href);
+      // The TMDB badge is plain text: its logo link already points at the same page.
+      expect(badge.getAttribute('href')).toBe(provider_id === 'tmdb_movies' ? null : href);
       unmount();
     }
     view(entry({}));

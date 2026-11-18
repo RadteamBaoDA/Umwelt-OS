@@ -85,6 +85,7 @@ export const SCOPE_HINT_KEY = {
   youtube_channels: 'scopeHint.youtube_channels',
   youtube_handles: 'scopeHint.youtube_handles',
   youtube_playlist_ids: 'scopeHint.youtube_playlist_ids',
+  youtube_video_category_id: 'scopeHint.youtube_video_category_id',
   letterboxd_username: 'scopeHint.letterboxd_username',
   search_terms: 'scopeHint.search_terms',
   openlibrary_subject: 'scopeHint.openlibrary_subject',

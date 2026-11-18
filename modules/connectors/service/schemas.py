@@ -564,6 +564,8 @@ class ConnectorConfig(BaseModel):
     youtube_handles: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
     youtube_playlist_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=8)
     youtube_filter: YoutubeFilter | None = None
+    youtube_api_mode: Literal["uploads", "most_popular"] | None = None
+    youtube_video_category_id: str | None = Field(default=None, pattern=r"^[0-9]{1,4}$")
 
     @field_validator("youtube_channels")
     @classmethod

@@ -129,7 +129,13 @@ _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] 
 
 
 # The keyed upgrade accepts the same mutually exclusive target choices as Atom.
-_PROVIDER_SCOPE_RULES["youtube_api"] = _PROVIDER_SCOPE_RULES["youtube"]
+_PROVIDER_SCOPE_RULES["youtube_api"] = (
+    # most_popular carries no target (validate_youtube_api_options rejects any); uploads needs exactly one.
+    lambda c: (
+        _PROVIDER_SCOPE_RULES["youtube"][0](c) if c.youtube_api_mode != "most_popular" else False
+    ),
+    _PROVIDER_SCOPE_RULES["youtube"][1],
+)
 
 
 def _check_provider_keys(source: ConnectorSource, provider: str) -> None:

@@ -11,6 +11,13 @@ YOUTUBE_TARGET_FIELDS = frozenset(
     {"youtube_channel_id", "youtube_channels", "youtube_handles", "youtube_playlist_ids"}
 )
 YOUTUBE_SCOPE_FIELDS = YOUTUBE_TARGET_FIELDS | {"youtube_filter"}
+# most_popular mode, its category and region choose WHICH videos are collected, so they are identity
+# (all optional: legacy uploads sources stored without them keep their scope hash and documents).
+YOUTUBE_API_SCOPE_FIELDS = YOUTUBE_SCOPE_FIELDS | {
+    "youtube_api_mode",
+    "youtube_video_category_id",
+    "media_country",
+}
 PODCAST_INDEX_SCOPE_FIELDS = frozenset({"podcast_index_query"})
 LISTENBRAINZ_SCOPE_FIELDS = frozenset({"listenbrainz_username"})
 STEAM_SCOPE_FIELDS = frozenset({"steam_mode", "steam_country", "steam_language", "steam_appids"})
@@ -245,7 +252,7 @@ GATED_EXECUTOR_PROVIDERS = (
 )
 PROVIDER_SCOPE_FIELDS = MappingProxyType(
     {
-        **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_SCOPE_FIELDS),
+        "youtube_api": YOUTUBE_API_SCOPE_FIELDS,
         "podcast_index": PODCAST_INDEX_SCOPE_FIELDS,
         "listenbrainz_releases": frozenset(
             {

@@ -241,6 +241,7 @@ _PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
         "published_at",
         "provider_updated_at",
         "image_url",
+        "rating",  # media:starRating average scaled to 0-100, kept so min_rating can filter
     },
     "arxiv": {
         "author",

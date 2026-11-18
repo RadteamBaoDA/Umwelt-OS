@@ -31,6 +31,7 @@ from modules.connectors.backends import (
     PODCAST_INDEX_SCOPE_FIELDS,
     STEAM_SCOPE_FIELDS,
     TVMAZE_SCOPE_FIELDS,
+    YOUTUBE_API_SCOPE_FIELDS,
     YOUTUBE_SCOPE_FIELDS,
     YOUTUBE_TARGET_FIELDS,
 )
@@ -62,7 +63,9 @@ def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
 
 # Providers whose scope needs at least one target field. Provider validation enforces any mutual exclusion.
 _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
-    **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_TARGET_FIELDS),
+    "youtube": YOUTUBE_TARGET_FIELDS,
+    # most_popular needs no channel target; the mode itself is the alternative that completes scope.
+    "youtube_api": YOUTUBE_TARGET_FIELDS | {"youtube_api_mode"},
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
     "google_books": frozenset({"google_books_query", "google_books_subject"}),
@@ -76,7 +79,8 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "listenbrainz_releases": LISTENBRAINZ_SCOPE_FIELDS,
     "steam_releases": STEAM_SCOPE_FIELDS,
     "igdb_games": IGDB_SCOPE_FIELDS,
-    **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_SCOPE_FIELDS),
+    "youtube": YOUTUBE_SCOPE_FIELDS,
+    "youtube_api": YOUTUBE_API_SCOPE_FIELDS,
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),

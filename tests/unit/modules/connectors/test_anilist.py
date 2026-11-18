@@ -299,6 +299,122 @@ async def test_runner_accepts_bounded_pages_before_advancing_checkpoint(
     assert accepted["cursor_after"] == "1:0"
 
 
+async def _run_with_pages(
+    monkeypatch: pytest.MonkeyPatch, collect: object
+) -> tuple[dict[str, object], list[int]]:
+    """Drive ``_run_anilist`` from page 1 with a stub collector; return accepted kwargs and pages seen."""
+    from modules.connectors._collection import providers as collection_providers
+    from modules.connectors.providers import anilist
+
+    config = {"anilist_mode": "updated"}
+    fingerprint = anilist_query_fingerprint("anilist_anime", config)
+    run = SimpleNamespace(
+        attempt=SimpleNamespace(
+            source=SimpleNamespace(provider="anilist_anime", configuration=config)
+        ),
+        extras={},
+        gate=SimpleNamespace(fetch_bytes=object()),
+    )
+    accepted: dict[str, object] = {}
+    pages: list[int] = []
+
+    class NoWait:
+        async def pace(self, key: str, interval: float) -> float:
+            return 0.0
+
+    async def wrapped(_fetch: object, _provider: str, *, page: int, **kwargs: object) -> object:
+        pages.append(page)
+        return await collect(page)  # type: ignore[operator]
+
+    async def accept(*_args: object, **kwargs: object) -> None:
+        accepted.update(kwargs)
+
+    async def state(_run: object) -> object:
+        return SimpleNamespace(continuation_state=fingerprint)
+
+    lease = SimpleNamespace(cursor_before="1:1767225600")
+    monkeypatch.setattr(collection_providers, "_ANILIST_PACER", NoWait())
+    monkeypatch.setattr(collection_providers, "_lease", lambda _run: _resolved(lease))
+    monkeypatch.setattr(collection_providers, "_state", state)
+    monkeypatch.setattr(collection_providers, "_accept_native", accept)
+    monkeypatch.setattr(anilist, "collect_anilist", wrapped)
+    await collection_providers._run_anilist(run)
+    return accepted, pages
+
+
+@pytest.mark.asyncio
+async def test_runner_stops_and_checkpoints_when_rate_limit_budget_is_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors.providers.anilist import AniListPage
+
+    async def collect(page: int) -> AniListPage:
+        return AniListPage((), True, MAX_RESULTS, rate_limit_remaining=0)
+
+    accepted, pages = await _run_with_pages(monkeypatch, collect)
+    assert pages == [1]
+    assert accepted["cursor_after"] == "2:1767225600"
+
+
+@pytest.mark.asyncio
+async def test_runner_keeps_paging_while_rate_limit_budget_remains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors.providers.anilist import AniListPage
+
+    async def collect(page: int) -> AniListPage:
+        return AniListPage((), page == 1, MAX_RESULTS if page == 1 else 1, rate_limit_remaining=5)
+
+    accepted, pages = await _run_with_pages(monkeypatch, collect)
+    assert pages == [1, 2]
+    assert accepted["cursor_after"] == "1:0"
+
+
+@pytest.mark.asyncio
+async def test_runner_propagates_429_retry_after_without_accepting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors.public import ProviderRateLimited
+
+    retry_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    async def collect(page: int) -> object:
+        raise ProviderRateLimited(retry_at)
+
+    accepted: dict[str, object] = {}
+    with pytest.raises(ProviderRateLimited) as caught:
+        accepted, _ = await _run_with_pages(monkeypatch, collect)
+    assert caught.value.next_eligible_at == retry_at
+    assert accepted == {}
+
+
+@pytest.mark.asyncio
+async def test_collector_exposes_bounded_rate_limit_remaining_header() -> None:
+    async def fetch_bytes(url: str, **kwargs: object) -> Fetched:
+        return Fetched(json.dumps(_payload([_media()])).encode(), rate_limit_remaining=0)
+
+    page = await collect_anilist(
+        fetch_bytes, "anilist_manga", config={}, collected_at=datetime.now(UTC), page=1
+    )
+    assert page.rate_limit_remaining == 0
+
+
+def test_rate_limit_header_parser_rejects_malformed_values() -> None:
+    import httpx
+
+    from modules.connectors.providers.rest import _rate_limit_remaining
+
+    parse = lambda value: _rate_limit_remaining(httpx.Headers({"X-RateLimit-Remaining": value}))  # noqa: E731
+    assert (parse("0"), parse(" 27 "), parse("-1"), parse("abc"), parse("1" * 7)) == (
+        0,
+        27,
+        None,
+        None,
+        None,
+    )
+    assert _rate_limit_remaining(httpx.Headers()) is None
+
+
 async def _resolved(value: object) -> object:
     """Return a value through an awaitable lambda used to replace the lease helper."""
     return value

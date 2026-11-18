@@ -74,6 +74,8 @@ function alternativeScopeComplete(provider: string, configuration: ConnectorConf
   if (provider === 'mastodon') return scopeFilled(configuration.mastodon_account) !== scopeFilled(configuration.mastodon_hashtag);
   if (provider === 'podcast_rss') return scopeFilled(configuration.feed_url) !== scopeFilled(configuration.itunes_podcast_id);
   if (provider === 'youtube' || provider === 'youtube_api') {
+    // The most-popular chart takes no channel, handle or playlist target; region and category are optional.
+    if (provider === 'youtube_api' && configuration.youtube_api_mode === 'most_popular') return true;
     return (
       [
         configuration.youtube_channel_id,

@@ -392,6 +392,7 @@ export const MEDIA_PROVIDER_FIELDS = {
   mal_anime: ['mal_mode', 'mal_ranking_type', 'mal_season_year', 'mal_season', 'anime_season', ...MAL_FILTER_FIELDS],
   mal_manga: ['mal_ranking_type', 'media_countries', ...MAL_FILTER_FIELDS],
   hardcover_books: ['hardcover_mode', 'media_genres', 'release_year', 'min_rating'],
+  youtube: ['min_rating'],
   youtube_api: ['media_countries', 'media_languages', 'release_year', 'content_ratings'],
   podcast_index: [
     'podcast_index_query',

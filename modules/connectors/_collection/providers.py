@@ -719,6 +719,9 @@ async def _run_anilist(run: Run) -> None:
         if not result.has_next_page or result.row_count < MAX_RESULTS:
             cursor_after = "1:0"
             break
+        if result.rate_limit_remaining == 0:
+            # Budget exhausted: stop here with the next page as the checkpoint so the next run resumes.
+            break
         page_number += 1
     run.extras["native_fp"] = fingerprint
     await _accept_native(

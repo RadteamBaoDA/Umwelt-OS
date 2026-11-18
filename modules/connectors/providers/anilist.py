@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -369,6 +369,8 @@ class AniListPage:
     records: tuple[IngestionRecord, ...]
     has_next_page: bool
     row_count: int
+    # AniList's X-RateLimit-Remaining after this request; None when the header was absent.
+    rate_limit_remaining: int | None = None
 
 
 def map_anilist_page(
@@ -446,4 +448,5 @@ async def collect_anilist(
         raise ValueError("anilist_response_invalid") from exc
     if isinstance(payload, Mapping) and payload.get("errors"):
         raise ValueError("anilist_graphql_error")
-    return map_anilist_page(provider, payload, collected_at=collected_at, config=config)
+    page_result = map_anilist_page(provider, payload, collected_at=collected_at, config=config)
+    return replace(page_result, rate_limit_remaining=fetched.rate_limit_remaining)

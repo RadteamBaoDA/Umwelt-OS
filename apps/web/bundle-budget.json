@@ -1,5 +1,5 @@
 {
-  "maxRouteFirstLoadKb": 825,
+  "maxRouteFirstLoadKb": 827,
   "totalClientKb": 2313,
   "routes": {
     "/(workspace)/chat/[[...id]]/page": 822,

@@ -458,11 +458,13 @@ function fillDeviceLocation(item: PackItem, setText: (id: string, value: string)
 /** True when the owner already has this item (a built-in with a source, or a non-archived source of the same provider and default name), so it is shown as added and not preselected. */
 function isItemAdded(item: PackItem, builtinById: Map<string, BuiltinSource>, sources: Source[], defaultName: string): boolean {
   if (item.kind === 'builtin') return builtinById.get(item.provider)?.source_id != null;
+  // TVMaze was a name-matched built-in before it became a scoped item, so any live source of the provider counts.
+  const anyName = item.provider === 'tvmaze_schedule';
   return sources.some(
     (source) =>
       source.provider === item.provider &&
       source.status !== 'archived' &&
-      source.name.trim().toLowerCase() === defaultName.trim().toLowerCase(),
+      (anyName || source.name.trim().toLowerCase() === defaultName.trim().toLowerCase()),
   );
 }
 

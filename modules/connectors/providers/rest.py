@@ -76,6 +76,8 @@ class Fetched:
     """One bounded response body; ``body is None`` means HTTP 304.
 
     ``final_url`` is the URL that produced the body after redirects; ``None`` means the request URL.
+    ``rate_limit_remaining`` is the provider's ``X-RateLimit-Remaining`` as a bounded non-negative
+    integer, or ``None`` when absent or malformed.
     """
 
     body: bytes | None
@@ -83,6 +85,13 @@ class Fetched:
     last_modified: str | None = None
     content_type: str | None = None
     final_url: str | None = None
+    rate_limit_remaining: int | None = None
+
+
+def _rate_limit_remaining(headers: httpx.Headers) -> int | None:
+    """Parse ``X-RateLimit-Remaining`` as a plain integer of at most six digits, else ``None``."""
+    raw = headers.get("x-ratelimit-remaining", "").strip()
+    return int(raw) if raw.isascii() and raw.isdigit() and len(raw) <= 6 else None
 
 
 async def resolve_public(host: str, port: int) -> list[str]:
@@ -302,6 +311,7 @@ async def fetch_bounded(
                     response.headers.get("last-modified"),
                     response.headers.get("content-type"),
                     current if current != url else None,
+                    _rate_limit_remaining(response.headers),
                 )
     raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
 

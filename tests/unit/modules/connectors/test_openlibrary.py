@@ -213,7 +213,7 @@ def test_openlibrary_pushes_down_release_year_and_single_genre() -> None:
             )
         ).query
     )
-    assert search["first_publish_year"] == ["1965"] and search["subject"] == ["science_fiction"]
+    assert search["first_publish_year"] == ["1965"] and search["subject"] == ["science fiction"]
     several = openlibrary_request(
         {
             "openlibrary_mode": "search",

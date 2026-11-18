@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 from xml.etree import ElementTree
 
 from modules.connectors.provider_options import filter_media_records
+from modules.connectors.provider_options_media import wikidata_selector_sets
 from modules.connectors.providers._media_common import (
     MEDIA_ATTRIBUTIONS,
     media_user_agent,
@@ -46,34 +47,25 @@ class LetterboxdPage:
 
 
 # Spec 3.1 E: canonical MediaGenre -> Wikidata film-genre QID. Only genres with a QID can be pushed down.
+# The spec table's QIDs were corrected to the well-known Wikidata film-genre items (action film Q188473,
+# comedy film Q157443, ...); live verification of these values is pending owner approval (no live calls).
+# Film genres with no MediaGenre slug (crime Q959790, war Q369747, musical Q842256, western Q172980,
+# family Q1361932) stay unmapped, as do non-film slugs, so those selections are only post-filtered.
 _GENRE_QIDS = {
-    "action": "Q41263",
+    "action": "Q188473",
+    "adventure": "Q319221",
     "sci_fi": "Q471839",
+    "fantasy": "Q157394",
+    "romance": "Q1054574",
     "thriller": "Q2484376",
     "horror": "Q200092",
-    "comedy": "Q157444",
+    "comedy": "Q157443",
     "drama": "Q130232",
+    "mystery": "Q1200678",
     "documentary": "Q93204",
     "non_fiction": "Q93204",
+    "animation": "Q202866",
 }
-
-
-def _both_or_either(
-    first: tuple[str, ...] | None, second: tuple[str, ...] | None
-) -> tuple[str, ...] | None:
-    """Combine two restrictions the way the post-fetch filter does (AND); ``None`` means unrestricted."""
-    if first is None or second is None:
-        return first if second is None else second
-    return tuple(value for value in first if value in second)
-
-
-def _string_tuple(value: object) -> tuple[str, ...]:
-    """Coerce a stored list/tuple/scalar option to a tuple of strings (invalid shapes become empty)."""
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, (list, tuple)):
-        return tuple(item for item in value if isinstance(item, str))
-    return ()
 
 
 def _wikidata_pushdown(
@@ -84,28 +76,26 @@ def _wikidata_pushdown(
     Genres: explicit ``genre_qids`` win; otherwise ``media_genres`` is pushed down only when every selected
     genre has a spec 3.1 E QID (a partial push-down would drop genres the owner also selected; the post-fetch
     filter still enforces the rest). Countries and languages are ``None`` when unrestricted, else the
-    intersection of every configured selector (matching the AND semantics of ``filter_media_records``).
-    Every value is re-validated, so nothing unvalidated reaches the SPARQL text.
+    intersection of every configured selector (matching the AND semantics of ``filter_media_records``),
+    with languages lowercased first. Every value is re-validated, so nothing unvalidated reaches the SPARQL text.
 
     Raises:
-        ValueError: ``wikidata_scope_invalid`` when a selector is not an ISO code / QID.
+        ValueError: ``wikidata_scope_invalid`` when a selector is not an ISO code / QID, or a selected
+        country/language dimension is empty after intersection (never an empty ``VALUES`` clause).
     """
-    media_genres = _string_tuple(config.get("media_genres"))
+    raw_genres = config.get("media_genres")
+    media_genres = (
+        (raw_genres,)
+        if isinstance(raw_genres, str)
+        else tuple(g for g in raw_genres if isinstance(g, str))
+        if isinstance(raw_genres, (list, tuple))
+        else ()
+    )
     if not genres and media_genres and all(g in _GENRE_QIDS for g in media_genres):
         genres = tuple(sorted({_GENRE_QIDS[g] for g in media_genres}))
-    countries = _both_or_either(
-        _string_tuple(config.get("media_countries")) if config.get("media_countries") else None,
-        _string_tuple(config.get("media_country")) if config.get("media_country") else None,
-    )
-    languages = _both_or_either(
-        _string_tuple(config.get("media_languages")) if config.get("media_languages") else None,
-        _string_tuple(config.get("language")) if config.get("language") else None,
-    )
+    countries, languages = wikidata_selector_sets(config)
     if countries is not None and any(not _ISO2.fullmatch(code) for code in countries):
         raise ValueError("wikidata_scope_invalid")
-    if languages is not None:
-        # P218 holds ISO 639-1 only; regional tags such as zh-hk can never match it.
-        languages = tuple(code.lower() for code in languages if _LANG2.fullmatch(code))
     return genres, countries, languages
 
 

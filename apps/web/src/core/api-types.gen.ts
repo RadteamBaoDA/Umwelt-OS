@@ -8991,6 +8991,8 @@ export interface components {
             x_account?: string | null;
             /** X Query */
             x_query?: string | null;
+            /** Youtube Api Mode */
+            youtube_api_mode?: ("uploads" | "most_popular") | null;
             /** Youtube Channel Id */
             youtube_channel_id?: string | null;
             /** Youtube Channels */
@@ -9001,6 +9003,8 @@ export interface components {
             youtube_handles?: string[] | null;
             /** Youtube Playlist Ids */
             youtube_playlist_ids?: string[] | null;
+            /** Youtube Video Category Id */
+            youtube_video_category_id?: string | null;
         };
         /**
          * ConnectorConfigurationRead

@@ -471,6 +471,7 @@ _ENTRIES = (
             "youtube_handles",
             "youtube_playlist_ids",
             "youtube_filter",
+            "min_rating",
             "history_mode",
             "timezone",
             "schedule_interval_minutes",

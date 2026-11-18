@@ -711,6 +711,8 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
         "release_year",
     ),
     "youtube_api": ("media_countries", "media_languages", "release_year", "content_ratings"),
+    # Atom exposes media:starRating, so the rating floor is a post-fetch filter (videos without one are kept).
+    "youtube": ("min_rating",),
     "podcast_index": (
         "podcast_index_query",
         "podcast_index_languages",

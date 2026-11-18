@@ -107,7 +107,8 @@ def openlibrary_request(config: Mapping[str, object], cursor: str | None = None)
             query["first_publish_year"] = int(str(config["release_year"]))
         genres = config.get("media_genres")
         if isinstance(genres, (list, tuple)) and len(genres) == 1 and genres[0] in _SUBJECT_SLUG:
-            query["subject"] = _SUBJECT_SLUG[str(genres[0])]
+            # search.json matches subject text, so send "science fiction" rather than the URL slug form.
+            query["subject"] = _SUBJECT_SLUG[str(genres[0])].replace("_", " ")
         return f"{BASE}/search.json?{urlencode(query)}"
     if mode == "recent":
         offset = max(0, _recent_offset(cursor) - RECENT_OVERLAP)

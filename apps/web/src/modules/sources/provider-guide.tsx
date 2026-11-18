@@ -20,7 +20,7 @@ import {
   type Source,
 } from './api';
 import { isStale, periodKind } from './freshness';
-import { AttributionBadge } from './attribution-badges';
+import { AttributionBadge, hasAttributionBadge } from './attribution-badges';
 import { guideStepKeys, keyAccessKeys } from './guide-keys';
 
 /** One term/definition row of the guide's description list. */
@@ -50,7 +50,7 @@ function GuideAttribution({ entry }: { entry: ConnectorCatalogEntry }) {
         >
           <Image src="/brand/tmdb-logo.svg" alt={t('tmdb.logoAlt')} width={160} height={12} className="h-3 w-auto" />
         </a>
-        <AttributionBadge providerId={entry.provider_id} />
+        <AttributionBadge providerId={entry.provider_id} link={false} />
         <span>{entry.attribution}</span>
         <span className="font-medium">{t('tmdb.attributionNotice')}</span>
         {entry.terms_url ? (
@@ -68,7 +68,9 @@ function GuideAttribution({ entry }: { entry: ConnectorCatalogEntry }) {
   }
   return (
     <>
-      {badge} {entry.attribution}
+      {badge}
+      {hasAttributionBadge(entry.provider_id) && !isTmdb ? ' ' : null}
+      {entry.attribution}
       {entry.terms_url ? (
         <>
           {' '}

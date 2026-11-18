@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modules.connectors.provider_options_filters import filter_media_records
 from modules.connectors.providers.news import safe_xml_root
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.public import IngestionRecord
@@ -29,6 +30,7 @@ _MAX_MAPPED_BYTES = 9 * 1024 * 1024
 _ARXIV_ADVISORY_KEY = 1_380_004_657  # signed int32 form of 0x52413331
 _ATOM = "http://www.w3.org/2005/Atom"
 _YT = "http://www.youtube.com/xml/schemas/2015"
+_MEDIA = "http://search.yahoo.com/mrss/"
 _HF_RATE_LIMIT_ITEM = re.compile(r'^\s*"(api|pages|resolvers)"\s*;\s*r=(\d+)\s*;\s*t=(\d+)\s*$')
 
 
@@ -150,14 +152,28 @@ class YoutubeSnapshotPage:
 
 
 def youtube_query_fingerprint(config: ConnectorConfig) -> str:
-    """Hash the validated YouTube target and content filter so cursors cannot cross source scopes."""
-    scope = {
-        "targets": [
+    """Hash the validated YouTube target, content filter and chart scope so cursors cannot cross scopes.
+
+    ``most_popular`` has no feed targets (the chart is addressed by region and category), so its
+    fingerprint hashes those instead. Optional components are added only when set, which keeps the
+    fingerprint (and saved validator cursors) of pre-existing sources unchanged.
+    """
+    chart = config.youtube_api_mode == "most_popular"
+    scope: dict[str, object] = {
+        "targets": []
+        if chart
+        else [
             {"url": target.url, "handle": target.handle, "channel_id": target.channel_id}
             for target in _youtube_targets(config)
         ],
         "filter": config.youtube_filter or "all",
     }
+    if chart:
+        scope["mode"] = "most_popular"
+        scope["region"] = config.media_country
+        scope["category"] = config.youtube_video_category_id
+    if config.min_rating is not None:
+        scope["min_rating"] = config.min_rating
     encoded = json.dumps(scope, sort_keys=True, separators=(",", ":"))
     return sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
@@ -605,6 +621,14 @@ def _youtube_entry(
     }
     if author:
         source_fields["author"] = author[:1000]
+    average = entry.find(f"{{{_MEDIA}}}group/{{{_MEDIA}}}community/{{{_MEDIA}}}starRating")
+    try:
+        # media:starRating@average is 1-5 stars; the shared min_rating filter uses a 0-100 scale.
+        rating = float(average.attrib["average"]) * 20 if average is not None else None
+    except (KeyError, ValueError):
+        rating = None
+    if rating is not None and 0 <= rating <= 100:
+        source_fields["rating"] = round(rating, 2)
     if _YT_VIDEO_ID.fullmatch(video_id):
         source_fields["image_url"] = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
     if published_raw is not None:
@@ -820,6 +844,11 @@ def _records_from_feed(
         records.append(record)
     if truncated:
         _mark_truncated(records)
+    if source.provider == "youtube" and config.min_rating is not None:
+        # keep_missing: videos with ratings disabled stay; only a known rating below the floor is dropped.
+        records = filter_media_records(
+            {"min_rating": config.min_rating}, records, keep_missing=True
+        )
     return ProviderCollectionPage(
         records=tuple(records),
         coverage="truncated" if truncated else "returned_snapshot",

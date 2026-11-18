@@ -44,6 +44,7 @@ _VIDEO = re.compile(r"[A-Za-z0-9_-]{11}")
 _DURATION = re.compile(r"P(?:(\d{1,5})D)?T?(?:(\d{1,5})H)?(?:(\d{1,5})M)?(?:(\d{1,5})S)?")
 _YOUTUBE_PAGES = 2
 _YOUTUBE_PAGE_SIZE = 25
+_YOUTUBE_CHART_SIZE = 50
 _PODCAST_LIMIT = 50
 
 
@@ -315,6 +316,48 @@ async def _youtube_uploads(
     return records, returned_etag, page_token
 
 
+async def _youtube_most_popular(
+    fetch: FetchBytes,
+    key: str,
+    config: ConnectorConfig,
+    cfg: Mapping[str, Any],
+    now: datetime,
+    fingerprint: str,
+    prior_etag: str | None,
+) -> MediaNativePage:
+    """Read the regional most-popular chart in one 1-unit ``videos.list`` call and wrap it as a page.
+
+    Sends ``chart=mostPopular`` with the optional ``regionCode`` (``media_country``) and
+    ``videoCategoryId`` and at most 50 results; ``If-None-Match`` makes an unchanged chart a 304 that
+    returns no records and keeps the validator. Rows map like uploads, except the chart has no scoped
+    channel and no channel country, so ``media_country`` (the request region) is excluded from the
+    post-fetch filter. A malformed row raises ``RestSchemaChanged`` before anything is accepted.
+    """
+    params = {
+        "part": "snippet,contentDetails,statistics",
+        "chart": "mostPopular",
+        "maxResults": str(_YOUTUBE_CHART_SIZE),
+    }
+    if config.media_country:
+        params["regionCode"] = config.media_country
+    if config.youtube_video_category_id:
+        params["videoCategoryId"] = config.youtube_video_category_id
+    response = await _youtube_fetch(fetch, key, "videos", params, prior_etag)
+    records: list[IngestionRecord] = []
+    etag = prior_etag
+    if response.body is not None:
+        rows = _rows(_decode(response), "items", _YOUTUBE_CHART_SIZE)
+        records = [_youtube_record(row, None, None, now) for row in rows]
+        etag = _etag(response.etag)
+    state = {"chart": {"etag": etag}} if etag is not None and len(etag) <= 128 else {}
+    filters = {k: v for k, v in cfg.items() if k != "media_country"}
+    return MediaNativePage(
+        tuple(filter_records("youtube_api", filters, records)),
+        "returned_snapshot",
+        json.dumps({"scope": fingerprint, "etags": state}, sort_keys=True, separators=(",", ":")),
+    )
+
+
 async def collect_youtube_api(
     config: ConnectorConfig,
     key: str,
@@ -335,6 +378,10 @@ async def collect_youtube_api(
     ).hexdigest()[:24]
     fp = "youtube-api:" + fingerprint
     prior = _object(_state(cursor, fp).get("etags"))
+    if config.youtube_api_mode == "most_popular":
+        return await _youtube_most_popular(
+            fetch, key, config, cfg, now, fp, _etag(_object(prior.get("chart")).get("etag"))
+        )
     validators: dict[str, dict[str, str]] = {}
     records: dict[str, IngestionRecord] = {}
     truncated = False

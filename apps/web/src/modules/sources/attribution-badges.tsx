@@ -9,6 +9,11 @@ const ATTRIBUTION_BADGES = {
   mangaupdates_releases: { label: 'MangaUpdates', href: 'https://www.mangaupdates.com' },
 } as const;
 
+/** Whether a provider id has a required attribution badge (the badge component renders nothing otherwise). */
+export function hasAttributionBadge(providerId: string): boolean {
+  return Object.hasOwn(ATTRIBUTION_BADGES, providerId);
+}
+
 /**
  * Renders the mandatory attribution badge for a provider id as an external link (new tab, noopener), or as plain
  * text when `link` is false (inside buttons, where a nested anchor would be invalid). Renders nothing for
