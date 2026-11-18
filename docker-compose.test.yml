@@ -60,7 +60,7 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000","searxng:8080"]'
       # Public https providers stay blocked unless the harness opts in for the real-model chat e2e (.env.e2e-real).
       AI_ALLOW_PUBLIC_PROVIDERS: ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}
       # Opt-in real-search e2e (searxng on the compose bridge); empty keeps the public-address guard strict.
@@ -84,7 +84,7 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000","searxng:8080"]'
       # Public https providers stay blocked unless the harness opts in for the real-model chat e2e (.env.e2e-real).
       AI_ALLOW_PUBLIC_PROVIDERS: ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}
       # Opt-in real-search e2e (searxng on the compose bridge); empty keeps the public-address guard strict.
@@ -108,7 +108,7 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000","searxng:8080"]'
       AI_ALLOW_PUBLIC_PROVIDERS: ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}
       # Opt-in real-search e2e (searxng on the compose bridge); empty keeps the public-address guard strict.
       WEB_SEARCH_ALLOWED_CIDRS: ${E2E_WEB_SEARCH_ALLOWED_CIDRS:-[]}
@@ -128,7 +128,7 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000","searxng:8080"]'
       # Public https providers stay blocked unless the harness opts in for the real-model chat e2e (.env.e2e-real).
       AI_ALLOW_PUBLIC_PROVIDERS: ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}
       # Opt-in real-search e2e (searxng on the compose bridge); empty keeps the public-address guard strict.
@@ -148,7 +148,7 @@ services:
       SETUP_TOKEN: bbd-os-disposable-test-token
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
-      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000","searxng:8080"]'
       # Public https providers stay blocked unless the harness opts in for the real-model chat e2e (.env.e2e-real).
       AI_ALLOW_PUBLIC_PROVIDERS: ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}
       # Opt-in real-search e2e (searxng on the compose bridge); empty keeps the public-address guard strict.

@@ -205,6 +205,14 @@ test('dashboard day context serves the live brief; the owner adds the brief gadg
     expect(put.ok(), `align timezone: ${put.status()}`).toBeTruthy();
   }
   await page.goto('/dashboard');
+  // A fresh install has no dashboard yet; the owner creates one before adding gadgets.
+  const create = page.getByRole('button', { name: 'Create a dashboard' });
+  if (await create.waitFor({ timeout: 15_000 }).then(() => true, () => false)) {
+    await create.click();
+    await page.getByLabel('Dashboard name').fill('E2E home');
+    await page.getByRole('dialog').getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Edit layout' })).toBeEnabled({ timeout: 30_000 });
+  }
   const gadget = page.getByRole('region', { name: 'Daily brief', exact: true }).first();
   if (!(await gadget.isVisible().catch(() => false))) {
     // The owner adds the gadget through the picker; creating a task does not add it automatically.
