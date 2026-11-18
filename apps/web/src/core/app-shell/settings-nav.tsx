@@ -12,7 +12,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 export const groupActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
 /** Ids (in display order) of the "Data & AI" settings group; every other destination falls under "Workspace". */
-const dataAiIds = ['data-sources', 'ai-router', 'system-prompts', 'memory-settings', 'web-search-settings', 'translation-settings'];
+const dataAiIds = [
+  'data-sources',
+  'scheduled-tasks',
+  'ai-router',
+  'system-prompts',
+  'memory-settings',
+  'web-search-settings',
+  'translation-settings',
+];
 
 /**
  * Settings panel: a surface card (18px radius, line border) with a 230px inner nav column and the page content on the right.

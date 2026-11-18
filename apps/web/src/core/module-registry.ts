@@ -15,6 +15,7 @@ export type ShellMessageKey =
   | 'memorySettings'
   | 'webSearchSettings'
   | 'n8nSettings'
+  | 'scheduledTasks'
   | 'systemStatus'
   | 'sourcesTab'
   | 'mcpTab'
@@ -78,6 +79,7 @@ export const settingsGroups: NavigationDestination[] = [
 
 /** Owner-only settings links shown after the three design groups and Members/Translation in the settings panel nav (not in the main Settings rail or palette). */
 export const settingsExtraLinks: NavigationDestination[] = [
+  { id: 'scheduled-tasks', href: '/settings/scheduled-tasks', messageKey: 'scheduledTasks' },
   { id: 'global-settings', href: '/settings/global', messageKey: 'globalSettings', adminOnly: true },
   { id: 'memory-settings', href: '/settings/memory', messageKey: 'memorySettings' },
   { id: 'web-search-settings', href: '/settings/web-search', messageKey: 'webSearchSettings' },

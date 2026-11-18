@@ -2,6 +2,8 @@ import type { ApiResponse } from '@/core/api-contract';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import type { AutomationRequestErrorKey } from './message-keys';
 
+/** Daily brief sections a task can include, in display order. */
+export type BriefSection = 'stories' | 'markets' | 'weather' | 'hazards' | 'agenda' | 'source_health';
 export type TriggerType =
   'schedule' | 'new_event' | 'new_document' | 'entity_changed' | 'task_due' | 'goal_deadline' | 'webhook' | 'connector_sync_result';
 export type ActionType = 'run_agent' | 'create_task' | 'create_notification' | 'generate_brief' | 'call_webhook';
@@ -34,6 +36,9 @@ export interface Action {
   message?: string;
   link?: string | null;
   scope?: 'daily';
+  sections?: BriefSection[];
+  extra_instruction?: string | null;
+  deliver_chat?: boolean;
   alias?: string;
   event?: string;
 }
@@ -51,6 +56,8 @@ export interface Automation extends Definition {
   revision: number;
   created_at: string;
   updated_at: string;
+  /** Next scheduled fire time (UTC ISO), or null when paused or not schedule-driven. */
+  next_run_at?: string | null;
 }
 
 /** Trigger or action type with owning-module availability, as reported by the server. */
@@ -195,4 +202,29 @@ export function errorMessageKey(error: unknown, fallback: 'action.failed' | 'sav
   }
   if (error.status === 422) return error.code === 'pause_before_brief_edit' ? 'pauseBeforeBriefEdit' : 'invalidServer';
   return fallback;
+}
+
+/** Creates an enabled scheduled task rule (unlike `createAutomation`, which always starts disabled). */
+export function createScheduledTask(name: string, definition: Definition, csrfToken: string): Promise<Automation> {
+  return apiRequest(base, {
+    method: 'POST',
+    headers: jsonHeaders(csrfToken),
+    body: JSON.stringify({ name, enabled: true, ...definition }),
+  });
+}
+
+/** Returns the newest run of one rule (empty list before the first), for the "Last run" column. */
+export function getLastRun(id: string): Promise<{ items: Run[] }> {
+  return apiRequest(`${base}/${encodeURIComponent(id)}/runs?limit=1`);
+}
+
+/** Reads the workspace brief timezone from the existing brief schedule; the editor falls back to the browser zone on failure. */
+export async function getBriefTimezone(): Promise<string> {
+  return (await apiRequest<{ timezone: string }>('/api/v1/briefs/schedule')).timezone;
+}
+
+/** Reads the workspace `brief` role model name (read-only display); null when unset or not readable. */
+export async function getBriefModel(): Promise<string | null> {
+  const body = await apiRequest<ApiResponse<'/api/v1/settings/models'>>('/api/v1/settings/models');
+  return body.defaults.brief?.model || null;
 }
