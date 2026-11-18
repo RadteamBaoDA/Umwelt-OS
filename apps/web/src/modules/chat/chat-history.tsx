@@ -7,7 +7,6 @@ import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   EllipsisIcon,
-  Loader2Icon,
   PanelLeftClose,
   PencilIcon,
   PinIcon,
@@ -17,6 +16,7 @@ import {
   Trash2Icon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
@@ -335,11 +335,10 @@ function ConversationRow({
             <span className="block text-xs font-normal text-muted-foreground">{stamp}</span>
           </span>
           {isActive && activeLoading && (
-            <Loader2Icon
-              data-testid="conversation-loading"
-              className="size-3.5 shrink-0 animate-spin text-muted-foreground"
-              aria-label={t('loading')}
-            />
+            // role=img keeps the accessible "loading" name the bare icon carried; the Spinner siblings are aria-hidden.
+            <span data-testid="conversation-loading" role="img" aria-label={t('loading')} className="inline-flex shrink-0">
+              <Spinner className="size-3.5 text-muted-foreground" />
+            </span>
           )}
         </Button>
         <DropdownMenu>

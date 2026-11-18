@@ -8,6 +8,7 @@ import type { ApiConnectionStatus } from '@/core/app-shell/connection-footer';
 import { formatDateWith } from '@/core/format';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRealtime } from '@/core/realtime-provider';
+import { useSkin } from '@/core/use-skin';
 import { useAiSettings } from '@/modules/chat';
 import { listAllSources, sourceKeys, type Source } from '@/modules/sources';
 import './shell-skin.css';
@@ -50,13 +51,14 @@ export function sourceHealth(source: SourceHealthFields, now: number): SourceHea
 }
 
 /**
- * Counts active sources by health for the statusline. Reads the same `listAllSources` cache entry the dashboard uses
- * (no extra request); realtime source invalidations keep it current. Paused and archived sources are not counted.
+ * Counts active sources by health for the statusline. Reads the same `listAllSources` cache entry the dashboard uses;
+ * realtime source invalidations keep it current. Paused and archived sources are not counted.
  *
+ * @param enabled When false (default skin, where the segments are hidden) no request is made.
  * @returns Counts once the source list has loaded, or `null` while loading or after a failed read (segments hidden).
  */
-export function useSourceHealthCounts(): SourceHealthCounts | null {
-  const query = useQuery({ queryKey: sourceKeys.listAll, queryFn: listAllSources });
+export function useSourceHealthCounts(enabled = true): SourceHealthCounts | null {
+  const query = useQuery({ queryKey: sourceKeys.listAll, queryFn: listAllSources, enabled });
   const items = query.data?.items;
   const asOf = query.dataUpdatedAt;
   return useMemo(() => {
@@ -74,10 +76,11 @@ export function useSourceHealthCounts(): SourceHealthCounts | null {
 /**
  * Model id of the owner's default chat model, read from the shared `['ai-settings']` query the model picker uses.
  *
+ * @param enabled When false (default skin, where the segment is hidden) no request is made.
  * @returns The default chat model id, or `null` while loading, on error, or when no default is set.
  */
-export function useDefaultChatModel(): string | null {
-  const query = useAiSettings<{ defaults?: { chat?: { model: string } | null } }>();
+export function useDefaultChatModel(enabled = true): string | null {
+  const query = useAiSettings<{ defaults?: { chat?: { model: string } | null } }>({ enabled });
   return query.data?.defaults?.chat?.model ?? null;
 }
 
@@ -110,8 +113,10 @@ export function Statusline({ apiStatus, preferences }: { apiStatus: ApiConnectio
   const t = useTranslations('shell');
   const pathname = usePathname();
   const { status: realtimeStatus } = useRealtime();
-  const counts = useSourceHealthCounts();
-  const model = useDefaultChatModel();
+  // Source counts and the model are terminal-only chrome: the default skin hides them, so it fetches nothing for them.
+  const terminal = useSkin() === 'terminal';
+  const counts = useSourceHealthCounts(terminal);
+  const model = useDefaultChatModel(terminal);
   const locale = preferences?.locale ?? 'en-us';
   const zone = preferences?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   // Chat routes use INSERT, every other route NORMAL; the chip only shows in the terminal skin.

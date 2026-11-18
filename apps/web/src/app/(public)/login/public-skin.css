@@ -21,9 +21,9 @@ html[data-skin='terminal'] .auth-panel {
   overflow: hidden;
 }
 
-/* Title bar: `$ umwelt` drawn as a pseudo-element over a raised strip. */
+/* Title bar: `ssh owner@umwelt.local` (design `.sp-term-bar`) drawn as a pseudo-element over a raised strip. */
 html[data-skin='terminal'] .auth-panel::before {
-  content: '$ umwelt' / '';
+  content: '● ssh owner@umwelt.local' / '';
   display: block;
   padding: 6px 12px;
   background: var(--raised);

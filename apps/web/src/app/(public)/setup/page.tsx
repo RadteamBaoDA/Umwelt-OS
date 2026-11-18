@@ -16,6 +16,7 @@ import { UmweltLogo } from '@/components/brand/umwelt-mark';
 import { AppearanceControl } from '@/modules/account';
 import { LegalLinks } from '@/modules/legal';
 import '../login/public-skin.css';
+import { TerminalBanner } from '../login/terminal-banner';
 
 /** Build localized validation for first-run owner creation without changing its API contract. */
 function createSetupSchema(passwordMismatch: string) {
@@ -61,6 +62,7 @@ export default function SetupPage() {
       </header>
       <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
         <section className="auth-panel flex flex-col gap-6" aria-labelledby="setup-title">
+          <TerminalBanner />
           <div className="grid gap-1">
             <h1 id="setup-title" className="m-0 text-2xl font-semibold leading-tight">
               {t('title')}

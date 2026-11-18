@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 import { Statusline, ShellCrumb, sourceHealth } from './statusline';
 
@@ -15,7 +15,10 @@ vi.mock('@/modules/sources', () => ({
   listAllSources: () => mockListAll(),
   sourceKeys: { listAll: ['sources', 'list', 'all'] },
 }));
-vi.mock('@/modules/chat', () => ({ useAiSettings: () => ({ data: mockAiSettings }) }));
+// Mirrors react-query: a disabled read returns no data.
+vi.mock('@/modules/chat', () => ({
+  useAiSettings: (options?: { enabled?: boolean }) => ({ data: options?.enabled === false ? undefined : mockAiSettings }),
+}));
 
 /** Renders the statusline under the English catalog with a fresh query client, so visible labels are the real strings. */
 function renderStatusline(apiStatus: 'connected' | 'unavailable' = 'connected') {
@@ -46,6 +49,21 @@ describe('Statusline', () => {
     mockPath = '/dashboard';
     mockListAll = async () => ({ items: [], next_cursor: null });
     mockAiSettings = undefined;
+    // Source counts and the model are terminal-only; most cases render in the terminal skin.
+    document.documentElement.setAttribute('data-skin', 'terminal');
+  });
+  afterEach(() => document.documentElement.removeAttribute('data-skin'));
+
+  it('fetches neither sources nor the model in the default skin, where those segments are hidden', async () => {
+    document.documentElement.removeAttribute('data-skin');
+    const listAll = vi.fn(async () => ({ items: [], next_cursor: null }));
+    mockListAll = listAll;
+    mockAiSettings = { defaults: { chat: { model: 'claude-sonnet-5-5' } } };
+    const { container } = renderStatusline();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listAll).not.toHaveBeenCalled();
+    expect(container.querySelector('.statusline-sources')).toBeNull();
+    expect(screen.queryByText(/^model:/)).toBeNull();
   });
 
   it('is a labelled footer with no live region or role=status of its own', () => {
