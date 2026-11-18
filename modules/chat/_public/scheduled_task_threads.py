@@ -18,7 +18,11 @@ from core.workspaces.admission import actor_id
 from core.workspaces.schemas import Scope
 from modules.chat._public.conversations import delete_conversation_in_scope
 from modules.chat.models import Conversation, Message
-from modules.chat.schemas import MAX_SELECTED_REFS, MAX_SOURCE_SCOPE, SelectedEvidenceRef
+from modules.chat.schemas import MAX_SOURCE_SCOPE, SelectedEvidenceRef
+
+# Retrieval drops selected_refs longer than MAX_SELECTED_REFS (retrieval.py), so brief refs get a
+# smaller fixed share; this stops the brief from pushing the request over that limit.
+MAX_BRIEF_SELECTED_REFS = 40
 
 # Conversation metadata keys only the scheduler may write; client create/patch payloads cannot set them.
 RESERVED_METADATA_KEYS = frozenset({"scheduled_task", "task_source_scope", "task_kind"})
@@ -271,7 +275,7 @@ async def latest_task_brief(
     None when there is no brief, when it is withheld (``withheld_brief_ids``: deleted, paused or
     local-only source, stale support, malformed id) or when its text is the scrub placeholder. Refs
     are the brief's document support restricted to ``pinned_scope`` and capped at
-    ``MAX_SELECTED_REFS``. Read-only and lock-free, so it is safe in the turn's short transaction.
+    ``MAX_BRIEF_SELECTED_REFS``. Read-only and lock-free, so it is safe in the turn's short transaction.
     """
     from modules.dashboard import public as dashboard  # local import: dashboard imports chat
 
@@ -316,4 +320,4 @@ async def latest_task_brief(
             ),
         )
     text = _BRIEF_MARKER.sub("", content).strip()[:TASK_BRIEF_CONTEXT_CHARS]
-    return TaskBriefContext(text=text, refs=list(refs.values())[:MAX_SELECTED_REFS])
+    return TaskBriefContext(text=text, refs=list(refs.values())[:MAX_BRIEF_SELECTED_REFS])
