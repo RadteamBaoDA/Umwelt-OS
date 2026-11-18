@@ -207,11 +207,11 @@ async def withheld_brief_ids(
 
     A brief is withheld when Dashboard no longer reports it live (a captured source was deleted,
     paused or made local-only, or its support changed) or when its stored id is missing or
-    unreadable, so the check fails closed. Writes nothing, but the Dashboard lookup takes share
-    locks on the briefs' captured Sources and Documents in canonical order on ``session``, so a
-    caller that already holds other Source or Document locks must call this on a fresh session
-    first. One batched lookup for the whole transcript, scoped to ``scope`` and the caller's
-    ``multi_workspace_enabled`` flag.
+    unreadable, so the check fails closed. Writes nothing and takes no row locks (the Dashboard
+    lookup runs with ``lock=False``), so it is safe on a long export session and in any lock order:
+    withholding only decides what to display. One batched lookup for the whole transcript, scoped
+    to ``scope`` and the caller's ``multi_workspace_enabled`` flag. Only the newest 500 briefs are
+    checked (``metadatas`` oldest-first); older ones are withheld.
     """
     from modules.dashboard import public as dashboard  # local import: dashboard imports chat
 
@@ -229,7 +229,11 @@ async def withheld_brief_ids(
         {
             str(i)
             for i in await dashboard.live_brief_ids(
-                session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+                session,
+                ids,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                lock=False,
             )
         }
         if ids

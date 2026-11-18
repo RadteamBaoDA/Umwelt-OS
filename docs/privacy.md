@@ -37,7 +37,7 @@ is not classified in the table below or a writer passes `shared=True`.
 | --- | --- | --- |
 | agents/_harness_steps `_lock_native_output_fences_for_publication` | publication fence | shared |
 | agents/_public_cleanup `_cleanup_finalized_marker`, `_cleanup_unavailable_marker`, `_cleanup_phase_a`, `_cleanup_phase_b` | copied-evidence erasure | exclusive |
-| chat/public `delete_conversation`, `purge_document_copied_evidence_page` | erasure | exclusive |
+| chat/public `delete_conversation_in_scope`, `purge_document_copied_evidence_page` | erasure | exclusive |
 | chat/public `read_memory_export_origin` | consent read | shared |
 | chat/routes `create_conversation`, `send_message`, `mutate_message`, `_locked_poll`, `cancel_response` (2 sites) | consent-gated publish/read | shared |
 | chat/user_input `expire_stale_requests` (all affected workspaces, sorted), `await_user_input` | consent-gated run update | shared |

@@ -228,7 +228,7 @@ async def read_memory_export_origin(
         return None
     now = _datetime.now(_UTC)
     # Memory origins never admit scheduled-task threads: their briefs can be withheld at read time,
-    # and the withheld lookup (Source locks) must not run inside this Memory-side transaction.
+    # and that lookup must not run inside this Memory-side transaction.
     conversation_scope = _chat_export_scope(
         now, now, scope.workspace_id, include_task_threads=False
     )
@@ -780,7 +780,7 @@ async def _export_message_records(
     Order: stream candidate rows (stream closed), resolve the page's exact evidence fences in
     one owner call, then build records under the page byte budget. ``has_more`` also holds when
     the byte budget left candidates unserved. Scheduled-task brief messages whose sources are no
-    longer eligible (one batched ``withheld_brief_ids`` lookup, which takes share locks) export as
+    longer eligible (one batched, lock-free ``withheld_brief_ids`` lookup) export as
     the scrub placeholder with no citations, and each such message's fence records
     ``brief_withheld`` so the final fence check can detect a later change. Writes nothing.
 
@@ -971,9 +971,8 @@ async def _revalidate_export_rows(
     became ephemeral or non-task automation-owned, or whose scheduled-task brief was published
     live (``brief_withheld`` False) but is withheld now; otherwise ``(None, citation_fences)`` with
     the message fences' citation fences gathered for evidence revalidation. Writes nothing; fresh
-    time is taken per fence. The withheld lookup runs once after the row loop and takes share
-    locks, so it precedes the caller's citation revalidation (Source/Document locks) and no other
-    locks are held at that point.
+    time is taken per fence. The withheld lookup runs once after the row loop and is lock-free,
+    so it adds no Source/Document locks to the export session.
 
     Raises:
         ValueError: when a fence carries an identity inconsistent with ``record_kind``.

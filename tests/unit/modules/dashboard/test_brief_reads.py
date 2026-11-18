@@ -133,3 +133,74 @@ async def test_live_brief_ids_reaches_prelock_with_more_than_100_rows(
         multi_workspace_enabled=False,
     )
     assert out == {r.id for r in rows} and lock_calls == [1]
+
+
+def _lockfree_patch(monkeypatch: pytest.MonkeyPatch, match: Any) -> list[str]:
+    from modules.dashboard import briefs
+
+    async def admit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    prelocks: list[str] = []
+
+    async def prelock(*_a: Any, **_k: Any) -> None:
+        prelocks.append("x")
+
+    monkeypatch.setattr(_brief_reads, "_admit", admit)
+    monkeypatch.setattr(_brief_reads, "_actor", lambda _scope: uuid4())
+    monkeypatch.setattr(briefs, "prelock_captured_inputs", prelock)
+    monkeypatch.setattr(briefs, "_captured_inputs_match", match)
+    return prelocks
+
+
+@pytest.mark.asyncio
+async def test_live_brief_ids_lock_false_never_prelocks_and_match_error_is_not_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    good, boom, no = uuid4(), uuid4(), uuid4()
+
+    async def match(_s: Any, row: Any, **k: Any) -> bool:
+        assert k["lock"] is False
+        if row.id == boom:
+            raise KeyError("x")
+        return row.id == good
+
+    prelocks = _lockfree_patch(monkeypatch, match)
+    session = _Session([SimpleNamespace(id=i) for i in (good, boom, no)])
+    out = await _brief_reads.live_brief_ids(
+        session,  # type: ignore[arg-type]
+        [good, boom, no],
+        scope=SCOPE,
+        multi_workspace_enabled=False,
+        lock=False,
+    )
+    assert out == {good} and prelocks == []
+
+
+@pytest.mark.asyncio
+async def test_live_brief_ids_keeps_the_newest_500_and_fails_closed_on_the_oldest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def match(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    _lockfree_patch(monkeypatch, match)
+    ids = [uuid4() for _ in range(501)]  # oldest first
+    requested: list[Any] = []
+
+    class _Capture(_Session):
+        async def scalars(self, statement: Any) -> list[Any]:
+            requested.extend(
+                v for v in statement.compile().params.values() if isinstance(v, list | tuple)
+            )
+            return [SimpleNamespace(id=i) for i in ids]
+
+    out = await _brief_reads.live_brief_ids(
+        _Capture([]),  # type: ignore[arg-type]
+        ids,
+        scope=SCOPE,
+        multi_workspace_enabled=False,
+        lock=False,
+    )
+    assert len(requested[0]) == 500 and ids[0] not in requested[0] and ids[-1] in requested[0]
+    assert len(out) == 501  # the fake DB ignores the filter; the request bound is asserted above

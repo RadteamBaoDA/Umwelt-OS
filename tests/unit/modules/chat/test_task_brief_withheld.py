@@ -57,7 +57,8 @@ async def test_ineligible_brief_is_withheld(monkeypatch: pytest.MonkeyPatch) -> 
     live_id = str(uuid4())
     seen: list[list[UUID]] = []
 
-    async def live(_s: Any, ids: list[UUID], **_k: Any) -> set[UUID]:
+    async def live(_s: Any, ids: list[UUID], **k: Any) -> set[UUID]:
+        assert k["lock"] is False  # withholding never takes row locks
         seen.append(ids)
         return {UUID(live_id)}
 
@@ -122,37 +123,23 @@ def test_task_brief_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_conversation_withholds_on_its_own_session_before_the_citation_filter(
+async def test_get_conversation_withholds_on_the_request_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Route wiring: the lookup uses a fresh factory session and runs before citation locks."""
+    """Route wiring: the lock-free lookup runs on the request session and scrubs the brief."""
     from modules.chat import routes
     from tests.unit.modules.chat._routes_patch import patch_routes
     from tests.unit.modules.chat.test_p15_w3_api import _ConversationSession
 
     msg = _brief_message()
     main = _ConversationSession([msg], [])
-    own = object()
-    order: list[str] = []
-
-    class _Factory:
-        def __call__(self) -> "_Factory":
-            return self
-
-        async def __aenter__(self) -> object:
-            return own
-
-        async def __aexit__(self, *_a: Any) -> None:
-            order.append("released")
 
     async def lookup(session: Any, metas: Any, **kwargs: Any) -> frozenset[str]:
-        order.append("lookup")
-        assert session is own and kwargs["multi_workspace_enabled"] is False
+        assert session is main and kwargs["multi_workspace_enabled"] is False
         assert metas == [msg.metadata_json]
         return frozenset({BRIEF})
 
     async def keep(_s: Any, lists: Any, _scope: Any = None) -> list[list[Any]]:
-        order.append("citations")
         return [list(x) for x in lists]
 
     async def default_scope(*_a: Any, **_k: Any) -> Any:
@@ -162,15 +149,10 @@ async def test_get_conversation_withholds_on_its_own_session_before_the_citation
     monkeypatch.setattr(routes, "multi_workspace_enabled", lambda: False)
     patch_routes(monkeypatch, "_filter_citation_lists", keep)
     patch_routes(monkeypatch, "owner_default_scope", default_scope)
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(session_factory=_Factory()))
-    )
     detail = await routes.get_conversation(
         msg.conversation_id,
         main,  # type: ignore[arg-type]
         SimpleNamespace(owner_id=1),  # type: ignore[arg-type]
         SimpleNamespace(headers={}),  # type: ignore[arg-type]
-        request,  # type: ignore[arg-type]
     )
-    assert order == ["lookup", "released", "citations"]
     assert detail.messages[0].content == SCRUBBED_CONTENT and detail.messages[0].task is None
