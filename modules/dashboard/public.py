@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from modules.dashboard import briefs, gadgets, layouts  # noqa: F401
+from modules.dashboard._brief_reads import (  # deliberate late import
+    get_brief,
+    live_brief_ids,
+)
 from modules.dashboard._common import (
     DASHBOARD_QUOTA_LOCK_NAMESPACE as DASHBOARD_QUOTA_LOCK_NAMESPACE,
 )
@@ -342,10 +346,12 @@ __all__ = [
     "clean_document_brief_evidence",
     "count_source_gadgets",
     "generate_brief",
+    "get_brief",
     "latest_brief",
     "legacy_brief_coverage",
     "list_briefs",
     "list_shared_briefs",
+    "live_brief_ids",
     "read_brief_access_projection",
     "read_brief_translation_input",
     "read_schedule",

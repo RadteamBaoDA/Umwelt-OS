@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -345,12 +345,13 @@ class _BriefFactory:
         """No-op rollback."""
 
 
-def _brief_harness(
+def _brief_harness(  # noqa: C901  # one fixture wiring every patched collaborator
     monkeypatch: pytest.MonkeyPatch,
     briefs: list[str],
     *,
     fail_first_mark: bool = False,
     fence_current: bool = True,
+    fail_first_post: bool = False,
 ) -> tuple[dict[str, Any], list[Any], list[tuple[Any, ...]]]:
     """Patch ``_generate_brief`` collaborators; return (message store, calls, marks)."""
     from modules.automations._execution import actions
@@ -358,7 +359,7 @@ def _brief_harness(
     store: dict[str, Any] = {}
     appended: list[Any] = []
     marks: list[tuple[Any, ...]] = []
-    state = {"failed": False}
+    state = {"failed": False, "post_failed": False}
 
     async def admit(*_a: Any, **_k: Any) -> str:
         return "fence"
@@ -372,11 +373,13 @@ def _brief_harness(
     async def mark(
         _f: Any, _run: Any, _ord: Any, status: str, code: Any, ref: Any = None, **_k: Any
     ) -> None:
-        if fail_first_mark and not state["failed"]:
+        if fail_first_mark and status == "succeeded" and not state["failed"]:
             # The post already committed; recording the outcome is what crashes.
             state["failed"] = True
             raise RuntimeError("boom after post commit")
-        marks.append((status, code if status == "skipped" else ref))
+        # A succeeded action may carry a reason code (e.g. ``no_new_data``) as a third element.
+        extra = (code,) if status == "succeeded" and code else ()
+        marks.append((status, code if status == "skipped" else ref, *extra))
 
     async def locked_run(*_a: Any, **_k: Any) -> Any:
         return SimpleNamespace(id=RUN_ID, document_evidence_revoked=False, status="running")
@@ -399,11 +402,24 @@ def _brief_harness(
             id=briefs[0], revision=1, content="Hi", citations=[{"ref": "f1", "source_ids": []}]
         )
 
+    async def get_brief(_s: Any, brief_id: Any, **_k: Any) -> Any:
+        appended.append(("get_brief", brief_id))
+        return SimpleNamespace(
+            id=brief_id,
+            revision=1,
+            content="Hi",
+            citations=[{"ref": "f1", "source_ids": []}],
+            status="current",
+        )
+
     async def ensure(*_a: Any, **_k: Any) -> Any:
         return "conv"
 
     async def append(_s: Any, _c: Any, *, dedupe_key: str, **kwargs: Any) -> tuple[Any, bool]:
         appended.append(("append", dedupe_key, kwargs["metadata"]))
+        if fail_first_post and not state["post_failed"]:
+            state["post_failed"] = True
+            raise RuntimeError("chat unavailable")
         created = dedupe_key not in store
         store.setdefault(dedupe_key, kwargs["content"])
         return uuid4(), created
@@ -421,6 +437,7 @@ def _brief_harness(
         monkeypatch.setattr(actions, name, fn)
     monkeypatch.setattr(actions.dashboard, "read_schedule", read_schedule)
     monkeypatch.setattr(actions.dashboard, "generate_brief", generate)
+    monkeypatch.setattr(actions.dashboard, "get_brief", get_brief)
     monkeypatch.setattr(actions.chat, "ensure_automation_conversation", ensure)
     monkeypatch.setattr(actions.chat, "append_task_message", append)
     return store, appended, marks
@@ -433,13 +450,13 @@ def _brief_rev(**spec: Any) -> Any:
     return SimpleNamespace(name="Morning", trigger=trigger, actions=[action])
 
 
-async def _run_brief(rev: Any) -> str:
-    """Run ``_generate_brief`` for action 1 of the shared run."""
+async def _run_brief(rev: Any, reference: str | None = None) -> str:
+    """Run ``_generate_brief`` for action 1 of the shared run (``reference`` = row's saved ref)."""
     from modules.automations._execution import actions
 
     ctx = {"session_factory": _BriefFactory(), "settings": object(), "redis": object()}
     run = SimpleNamespace(id=RUN_ID, automation_id=uuid4())
-    row = SimpleNamespace(ordinal=1, action_type="generate_brief")
+    row = SimpleNamespace(ordinal=1, action_type="generate_brief", result_reference=reference)
     return await actions._generate_brief(
         ctx,  # type: ignore[arg-type]
         run,  # type: ignore[arg-type]
@@ -458,7 +475,7 @@ async def test_brief_task_posts_to_thread(monkeypatch: pytest.MonkeyPatch) -> No
     assert ("generate", ["stories"], "x") in calls
     meta = next(c[2] for c in calls if c[0] == "append")
     assert meta["brief_id"] == "B" and meta["task_kind"] == "daily_brief"
-    assert marks == [("succeeded", "brief:B")]
+    assert marks == [("pending", "brief_pending:B"), ("succeeded", "brief:B")]
 
 
 @pytest.mark.asyncio
@@ -480,14 +497,45 @@ async def test_old_spec_without_deliver_chat_posts_nothing(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_retry_posts_brief_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    store, calls, marks = _brief_harness(monkeypatch, ["B"], fail_first_mark=True)
+    bid = str(uuid4())
+    store, calls, marks = _brief_harness(monkeypatch, [bid], fail_first_mark=True)
     # Attempt 1 posts and commits, then recording the outcome crashes (-> transient retry).
     assert await _run_brief(_brief_rev()) == "retry"
-    assert list(store) == ["brief:B"]
+    assert list(store) == [f"brief:{bid}"]
     # The retry re-appends under the same dedupe key: nothing new is stored, outcome recorded.
-    assert await _run_brief(_brief_rev()) == "succeeded"
-    assert list(store) == ["brief:B"] and marks == [("succeeded", "brief:B")]
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert list(store) == [f"brief:{bid}"] and marks[-1] == ("succeeded", f"brief:{bid}")
     assert sum(1 for c in calls if c[0] == "append") == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_post_retry_does_not_regenerate(monkeypatch: pytest.MonkeyPatch) -> None:
+    bid = str(uuid4())
+    store, calls, marks = _brief_harness(monkeypatch, [bid], fail_first_post=True)
+    assert await _run_brief(_brief_rev()) == "retry"
+    # The brief id was recorded on the action row before the post was attempted.
+    assert marks == [("pending", f"brief_pending:{bid}")] and store == {}
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert sum(1 for c in calls if c[0] == "generate") == 1  # no second paid generation
+    assert ("get_brief", UUID(bid)) in calls
+    assert list(store) == [f"brief:{bid}"] and marks[-1] == ("succeeded", f"brief:{bid}")
+
+
+@pytest.mark.asyncio
+async def test_reused_brief_records_no_new_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, ["B"])
+    store["brief:B"] = "Hi"  # an earlier run already posted this exact brief
+    assert await _run_brief(_brief_rev()) == "succeeded"
+    assert marks[-1] == ("succeeded", "brief:B", "no_new_data")
+
+
+@pytest.mark.asyncio
+async def test_resumed_post_is_not_no_new_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    bid = str(uuid4())
+    store, _calls, marks = _brief_harness(monkeypatch, [bid])
+    store[f"brief:{bid}"] = "Hi"  # this run's own earlier post committed before the crash
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert marks[-1] == ("succeeded", f"brief:{bid}")
 
 
 @pytest.mark.asyncio
@@ -495,7 +543,7 @@ async def test_stale_fence_posts_nothing_and_skips(monkeypatch: pytest.MonkeyPat
     store, calls, marks = _brief_harness(monkeypatch, ["B"], fence_current=False)
     assert await _run_brief(_brief_rev()) == "dropped"
     assert store == {} and not any(c[0] == "append" for c in calls)
-    assert marks == [("skipped", "stale_revision")]
+    assert marks[-1] == ("skipped", "stale_revision")
 
 
 @pytest.mark.asyncio
@@ -512,7 +560,7 @@ async def test_reused_brief_posts_nothing_new(monkeypatch: pytest.MonkeyPatch) -
     store, _calls, marks = _brief_harness(monkeypatch, ["B"])
     await _run_brief(_brief_rev())
     await _run_brief(_brief_rev())
-    assert list(store) == ["brief:B"] and len(marks) == 2
+    assert list(store) == ["brief:B"] and sum(m[0] == "succeeded" for m in marks) == 2
 
 
 @pytest.mark.asyncio
@@ -805,11 +853,11 @@ async def test_post_brief_revoked_or_review_run_posts_nothing(
     monkeypatch: pytest.MonkeyPatch, current: Any
 ) -> None:
     skipped, calls = await _post(monkeypatch, current)
-    assert skipped == "document_evidence_unavailable" and calls == []
+    assert skipped == ("document_evidence_unavailable", False) and calls == []
 
 
 @pytest.mark.asyncio
 async def test_post_brief_stale_revision_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     current = SimpleNamespace(document_evidence_revoked=False, status="running")
     skipped, calls = await _post(monkeypatch, current, fence_current=False)
-    assert skipped == "stale_revision" and calls == []
+    assert skipped == ("stale_revision", False) and calls == []

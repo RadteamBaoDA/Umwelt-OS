@@ -568,6 +568,9 @@ def _make_evidence_guard(
     return evidence_guard
 
 
+PENDING_BRIEF_PREFIX = "brief_pending:"
+
+
 async def _generate_brief(
     ctx: dict[str, Any],
     run: AutomationRun,
@@ -584,89 +587,55 @@ async def _generate_brief(
     ``deliver_chat`` makes a successful brief also post into the rule's chat thread. The post runs
     in its own short transaction after generation and is keyed on the brief id, so a retry after
     any failure (including a crash after the commit) never posts twice. ``BriefEmpty`` posts nothing.
+
+    Before the post the brief id is saved on the action row (``brief_pending:<id>``, status still
+    pending), so a retry after a failed post reloads that brief instead of paying for a second
+    generation. A post that finds the brief already in the thread from an earlier run (not from
+    this run's own resumed attempt) ends ``succeeded`` with the reason code ``no_new_data``.
     """
     spec = rev.actions[row.ordinal - 1]
     factory = worker_session_factory(ctx)
     try:
-        async with factory() as session:
-            # Model I/O follows, so admission is non-locking; the transaction is released after generation.
-            fence = await _admit(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-            )
-            if not await _action_modules_enabled(
-                session,
-                row.action_type,
+        resumed = await _resume_brief(
+            factory, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        brief = resumed or await _produce_brief(
+            ctx,
+            factory,
+            run,
+            row,
+            spec,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if isinstance(brief, str):
+            return brief
+        delivers = (
+            bool(spec.get("deliver_chat"))
+            and scheduled_task_kind(rev.trigger, rev.actions) is not None
+        )
+        if delivers and resumed is None:
+            await _mark(
+                factory,
+                run.id,
+                row.ordinal,
+                "pending",
+                None,
+                f"{PENDING_BRIEF_PREFIX}{getattr(brief, 'id', 'daily')}",
                 scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled,
-            ):
-                await session.rollback()
-                await _restore_paused_action(
-                    factory,
-                    run.id,
-                    row.ordinal,
-                    status="pending",
-                    session_hash=None,
-                    scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled,
-                )
-                return "paused"
-            current_run = await session.scalar(
-                select(AutomationRun).where(
-                    AutomationRun.workspace_id == scope.workspace_id,
-                    AutomationRun.owner_id == _actor(scope),
-                    AutomationRun.id == run.id,
-                )
             )
-            if current_run is None or not await _run_evidence_current(
-                session,
-                current_run,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=fence,
-            ):
-                await session.rollback()
-                await _mark(
-                    factory,
-                    run.id,
-                    row.ordinal,
-                    "skipped",
-                    "document_evidence_unavailable",
-                    scope=scope,
-                    multi_workspace_enabled=multi_workspace_enabled,
-                )
-                return "dropped"
-            schedule = await dashboard.read_schedule(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-            )
-            day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
-            evidence_guard = _make_evidence_guard(
-                run.id, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-            )
-
-            brief = await dashboard.generate_brief(
-                session,
-                day,
-                schedule.timezone,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                settings=cast(Settings, ctx["settings"]),
-                redis=cast(Redis, ctx["redis"]),
-                force=False,
-                publish_guard=evidence_guard,
-                sections=spec.get("sections"),
-                extra_instruction=spec.get("extra_instruction"),
-                model_role=spec.get("model_role", "brief"),
-            )
-        if await _deliver_brief(
+        outcome = await _deliver_brief(
             factory, run, row, brief, rev, spec, scope, multi_workspace_enabled
-        ):
+        )
+        if outcome == "skipped":
             return "dropped"
         await _mark(
             factory,
             run.id,
             row.ordinal,
             "succeeded",
-            None,
+            "no_new_data" if outcome == "reused" and resumed is None else None,
             f"brief:{getattr(brief, 'id', 'daily')}",
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
@@ -675,6 +644,111 @@ async def _generate_brief(
     except Exception as exc:  # noqa: BLE001  # deliberate boundary: every failure is mapped to an outcome so the loop continues
         return await _brief_failure(
             exc, factory, run, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+
+
+async def _resume_brief(
+    factory: async_sessionmaker[AsyncSession],
+    row: AutomationRunAction,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> Any | None:
+    """Reload the brief saved on the action row by an earlier attempt, or None to generate.
+
+    Only a still-live brief (``status == "current"``) is resumed; a missing, foreign or stale one
+    (its source became ineligible meanwhile) returns None so a fresh brief is generated rather than
+    posting withheld content.
+    """
+    ref = row.result_reference or ""
+    if not ref.startswith(PENDING_BRIEF_PREFIX):
+        return None
+    async with factory() as session:
+        brief = await dashboard.get_brief(
+            session,
+            UUID(ref.removeprefix(PENDING_BRIEF_PREFIX)),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return brief if brief is not None and brief.status == "current" else None
+
+
+async def _produce_brief(
+    ctx: dict[str, Any],
+    factory: async_sessionmaker[AsyncSession],
+    run: AutomationRun,
+    row: AutomationRunAction,
+    spec: Mapping[str, Any],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> Any:
+    """Run the pre-generation checks and generate; return the brief or ``"paused"``/``"dropped"``.
+
+    Admission is non-locking because model I/O follows; the transaction is released after
+    generation. A disabled module restores the pending action; revoked document evidence marks the
+    action skipped.
+    """
+    async with factory() as session:
+        fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if not await _action_modules_enabled(
+            session, row.action_type, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        ):
+            await session.rollback()
+            await _restore_paused_action(
+                factory,
+                run.id,
+                row.ordinal,
+                status="pending",
+                session_hash=None,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            return "paused"
+        current_run = await session.scalar(
+            select(AutomationRun).where(
+                AutomationRun.workspace_id == scope.workspace_id,
+                AutomationRun.owner_id == _actor(scope),
+                AutomationRun.id == run.id,
+            )
+        )
+        if current_run is None or not await _run_evidence_current(
+            session,
+            current_run,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        ):
+            await session.rollback()
+            await _mark(
+                factory,
+                run.id,
+                row.ordinal,
+                "skipped",
+                "document_evidence_unavailable",
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            return "dropped"
+        schedule = await dashboard.read_schedule(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        day = datetime.now(UTC).astimezone(ZoneInfo(schedule.timezone)).date()
+        return await dashboard.generate_brief(
+            session,
+            day,
+            schedule.timezone,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            settings=cast(Settings, ctx["settings"]),
+            redis=cast(Redis, ctx["redis"]),
+            force=False,
+            publish_guard=_make_evidence_guard(
+                run.id, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            ),
+            sections=spec.get("sections"),
+            extra_instruction=spec.get("extra_instruction"),
+            model_role=spec.get("model_role", "brief"),
         )
 
 
@@ -734,20 +808,23 @@ async def _deliver_brief(
     spec: Mapping[str, Any],
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> bool:
-    """Post the brief when the action asks for it; return True when the action was skipped instead.
+) -> str:
+    """Post the brief when the action asks for it; return ``posted``, ``reused``, ``skipped`` or ``none``.
+
+    ``reused`` means the brief was already in the thread (``append_task_message`` created nothing);
+    ``none`` means this action does not post.
 
     Only a real schedule task (``scheduled_task_kind``) owns a thread, so any other rule never
     posts even with ``deliver_chat`` set. A failed re-check in ``_post_brief`` marks the action
     ``skipped`` with that error code and nothing is posted.
     """
     if not spec.get("deliver_chat") or scheduled_task_kind(rev.trigger, rev.actions) is None:
-        return False
-    skipped = await _post_brief(
+        return "none"
+    skipped, created = await _post_brief(
         factory, run, brief, rev, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
     if skipped is None:
-        return False
+        return "posted" if created else "reused"
     await _mark(
         factory,
         run.id,
@@ -757,7 +834,7 @@ async def _deliver_brief(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
-    return True
+    return "skipped"
 
 
 async def _post_brief(
@@ -768,13 +845,14 @@ async def _post_brief(
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> str | None:
+) -> tuple[str | None, bool]:
     """Post a generated brief into the rule's chat thread in one short transaction.
 
     Takes the access fence, then re-locks the run and re-checks it (the model I/O released every
     lock): a missing run, revoked document evidence, a ``requires_review`` run or a stale revision
     (rule edited, disabled or deleted) rolls back without creating or touching the thread and
-    returns the skip error code for the caller to record. Otherwise returns None after commit.
+    returns ``(skip_error_code, False)`` for the caller to record. Otherwise returns
+    ``(None, created)`` after commit, ``created`` being False when the message already existed.
 
     Idempotent on ``brief:<brief.id>``: a reused or retried brief appends nothing the second time.
     Brief citations are fact refs, not document chunks, so the message's document ``citations`` stay
@@ -792,10 +870,10 @@ async def _post_brief(
             or current.status == "requires_review"
         ):
             await session.rollback()
-            return "document_evidence_unavailable"
+            return "document_evidence_unavailable", False
         if not await _fence_current(session, current, scope=scope, share=True):
             await session.rollback()
-            return "stale_revision"
+            return "stale_revision", False
         conversation_id = await chat.ensure_automation_conversation(
             session,
             run.automation_id,
@@ -806,7 +884,7 @@ async def _post_brief(
         source_ids = list(
             dict.fromkeys(sid for c in brief.citations for sid in c.get("source_ids", []))
         )
-        await chat.append_task_message(
+        _message_id, created = await chat.append_task_message(
             session,
             conversation_id,
             content=brief.content,
@@ -823,7 +901,7 @@ async def _post_brief(
             scope=scope,
         )
         await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return None
+    return None, created
 
 
 async def _automation_conversation(

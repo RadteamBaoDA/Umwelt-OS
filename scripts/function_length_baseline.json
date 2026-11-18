@@ -13,7 +13,6 @@
   "modules/agents/specialists.py::update_profile_in_uow": 107,
   "modules/agents/worker.py::_recover_abandoned": 114,
   "modules/agents/worker.py::process_agent_run": 114,
-  "modules/automations/_execution/actions.py::_generate_brief": 124,
   "modules/automations/_execution/actions.py::_prepare_action": 125,
   "modules/automations/_execution/actions.py::_send_webhook": 187,
   "modules/automations/_execution/actions.py::_start_agent": 163,
