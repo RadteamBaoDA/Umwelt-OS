@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
@@ -228,6 +228,19 @@ describe('ShellCrumb', () => {
     mockPath = '/dashboard/abc';
     const { container } = renderCrumb([{ id: 'abc', name: 'Thế Giới  World!' }]);
     expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/the-gioi-world $');
+  });
+
+  it('switches to the slug when the dashboard list lands after the first render', () => {
+    mockPath = '/dashboard/abc';
+    const client = new QueryClient();
+    const { container } = render(
+      <QueryClientProvider client={client}>
+        <ShellCrumb />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/abc $');
+    act(() => client.setQueryData(['dashboards'], [{ id: 'abc', name: 'World' }]));
+    expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/world $');
   });
 
   it('keeps the plain path for /dashboard', () => {

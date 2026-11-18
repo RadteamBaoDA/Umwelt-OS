@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslations } from 'next-intl';
 import type { ApiConnectionStatus } from '@/core/app-shell/connection-footer';
 import { formatDateWith } from '@/core/format';
@@ -242,10 +242,16 @@ function crumbPath(pathname: string, nameOf: (id: string) => string | undefined)
 export function ShellCrumb() {
   const pathname = usePathname();
   const client = useQueryClient();
-  const path = crumbPath(pathname, (id) => {
-    const list = client.getQueryData<{ id: string; name: string }[]>(dashboardKeys.all);
-    return list?.find((d) => d.id === id)?.name ?? client.getQueryData<{ name: string }>(dashboardKeys.detail(id))?.name;
-  });
+  // Subscribed to the query cache so the slug appears once the dashboard read lands (the path renders before it).
+  const path = useSyncExternalStore(
+    (onChange) => client.getQueryCache().subscribe(onChange),
+    () =>
+      crumbPath(pathname, (id) => {
+        const list = client.getQueryData<{ id: string; name: string }[]>(dashboardKeys.all);
+        return list?.find((d) => d.id === id)?.name ?? client.getQueryData<{ name: string }>(dashboardKeys.detail(id))?.name;
+      }),
+    () => pathname,
+  );
   return (
     <span className="shell-crumb hide-sm" aria-hidden="true">
       <b>owner@umwelt</b>:<span className="shell-crumb-path">~{path}</span> $
