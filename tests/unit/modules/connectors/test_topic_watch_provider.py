@@ -163,15 +163,24 @@ async def test_provision_activation_error_raises_conflict(monkeypatch) -> None:
     async def activate(*a, **k):
         return "native_unsupported"
 
+    async def archive(_session, sid, **_k):
+        calls.append(("archive",))
+
+    class Session:
+        async def rollback(self) -> None:
+            calls.append(("rollback",))
+
     monkeypatch.setattr(topic_watch, "activate_native_in_uow", activate)
+    monkeypatch.setattr(topic_watch.sources, "archive_source", archive)
     with pytest.raises(ConflictError):
         await topic_watch.provision_topic_watch_source(
-            object(),
+            Session(),  # type: ignore[arg-type]
             name="n",
             config=_config(),
             scope=SimpleNamespace(workspace_id=uuid4(), user_id=1),
             multi_workspace_enabled=False,
         )
+    assert [c[0] for c in calls[-2:]] == ["rollback", "archive"]  # no orphan Source
 
 
 async def test_update_rewrites_config_reactivates_and_keeps_schedule_disabled(monkeypatch) -> None:

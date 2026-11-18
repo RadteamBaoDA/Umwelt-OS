@@ -51,6 +51,7 @@ from modules.connectors.provider_specs import (
     get_provider_spec,
     min_interval_minutes,
 )
+from modules.connectors.provisioning._routes.common import _source
 from modules.connectors.public import (
     AgentBrowserGrantPatch,
     CollectionFence,
@@ -513,22 +514,6 @@ async def _prove_admission(
         raise HTTPException(status_code=409, detail="Collection admission is no longer current")
 
 
-async def _source(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
-) -> ConnectorSource:
-    """Read only the explicit owner/job Source projection; absent/foreign identity is 404.
-
-    All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
-    """
-    source = await sources.get_connector_source(
-        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
-    )
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
-    return source
-
-
 async def _collector(
     session: AsyncSession,
     source_id: UUID,
@@ -719,6 +704,7 @@ async def configure_source(
     source = await _source(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )
+    connectors_public.refuse_managed_source(source.provider)
     if is_native_provider(source.provider):
         raise HTTPException(
             status_code=409, detail="Use provider settings to configure a native source"
@@ -937,8 +923,10 @@ async def _queue_native_collection(
     Slow/unofficial providers (floor >= 6 h) get a cooldown equal to their schedule floor
     (429 + ``Retry-After``); the lookup is skipped for fast providers. Rolls back, re-admits with
     the original fence, then ``scheduler.request_collection`` (terms-ineligible maps to 409
-    ``terms_not_accepted``).
+    ``terms_not_accepted``). A Topic watch Source is refused first (409
+    ``managed_by_scheduled_task``): its Scheduled task is the only collector.
     """
+    connectors_public.refuse_managed_source(source.provider)
     last_started = None
     if min_interval_minutes(source.provider) >= COLLECT_COOLDOWN_FLOOR_MINUTES:
         last_started = await session.scalar(

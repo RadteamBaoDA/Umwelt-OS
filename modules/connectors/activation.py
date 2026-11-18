@@ -628,6 +628,7 @@ async def activate_native_in_uow(
         workspace_id=source.workspace_id,
         source_id=source_id,
         interval_minutes=interval,
-        enabled=True,
+        # A Topic watch runs only from its Scheduled task (consent-gated); it never self-schedules.
+        enabled=source.provider != "topic_watch",
     )
     return ""

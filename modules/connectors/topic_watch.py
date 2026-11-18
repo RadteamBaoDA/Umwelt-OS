@@ -6,6 +6,7 @@ the connector scheduler never runs it on its own. Other modules call these comma
 ``modules.connectors.public``.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -20,6 +21,8 @@ from modules.connectors.public import ConnectorConfig, serialize_source_configur
 from modules.connectors.service.config import save_connector_configuration
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceCreate
+
+logger = logging.getLogger(__name__)
 
 # Never self-scheduled; the value only fills the (disabled) ConnectorSchedule row.
 _DISABLED_INTERVAL_MINUTES = 1440
@@ -137,7 +140,9 @@ async def provision_topic_watch_source(
     The Source is a private ``web``/``topic_watch`` source named ``name`` (truncated to 200).
     Source creation commits inside the sources owner; configuration, activation and the disabled
     schedule are then flushed in the caller's transaction. Raises ``ConflictError`` with a bounded
-    owner-action code when activation is refused (for example ``source_inactive``).
+    owner-action code when activation is refused (for example ``source_inactive``). Any failure
+    after the creation commit rolls back and archives the new Source (best effort, error type logged
+    only) before re-raising, so a failed provision never leaves an orphan Source.
     """
     created = await sources.create_source(
         session,
@@ -145,14 +150,26 @@ async def provision_topic_watch_source(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
-    source = await sources.get_connector_source(
-        session, created.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-    )
-    if source is None:
-        raise NotFoundError("Source not found")
-    await _save_and_activate(
-        session, source, config, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-    )
+    try:
+        source = await sources.get_connector_source(
+            session, created.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if source is None:
+            raise NotFoundError("Source not found")
+        await _save_and_activate(
+            session, source, config, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    except BaseException:
+        await session.rollback()
+        try:
+            await sources.archive_source(
+                session, created.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
+        except Exception as exc:  # noqa: BLE001  # compensation must not mask the original failure
+            logger.warning(
+                "Topic watch provision cleanup failed; error_type=%s", type(exc).__name__
+            )
+        raise
     return source.id
 
 
@@ -166,7 +183,9 @@ async def update_topic_watch_source(
 ) -> None:
     """Rewrite a watch Source's configuration, re-activate it and keep its schedule disabled.
 
-    Raises ``NotFoundError`` for a missing or foreign Source and ``ConflictError`` as in provision.
+    Raises ``NotFoundError`` for a missing or foreign Source, ``ConflictError`` with
+    ``topic_watch_source_archived`` when the Source was archived outside the task, and
+    ``ConflictError`` as in provision otherwise.
     Flush-only; the caller commits.
     """
     source = await sources.get_connector_source(
@@ -174,6 +193,8 @@ async def update_topic_watch_source(
     )
     if source is None or source.provider != "topic_watch":
         raise NotFoundError("Source not found")
+    if source.status != "active":
+        raise ConflictError("topic_watch_source_archived")
     await _save_and_activate(
         session, source, config, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )

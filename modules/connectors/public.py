@@ -541,6 +541,7 @@ _LAZY_DTO_MODULES = {
     "request_topic_watch_collection": "modules.connectors.topic_watch",
     "estimate_tokens": "modules.connectors.topic_watch_rules",
     "token_cap": "modules.connectors.topic_watch_rules",
+    "refuse_managed_source": "modules.connectors.topic_watch_rules",
 }
 
 
@@ -598,6 +599,9 @@ if TYPE_CHECKING:
     )
     from modules.connectors.topic_watch_rules import (
         estimate_tokens as estimate_tokens,
+    )
+    from modules.connectors.topic_watch_rules import (
+        refuse_managed_source as refuse_managed_source,
     )
     from modules.connectors.topic_watch_rules import (
         token_cap as token_cap,

@@ -276,8 +276,10 @@ async def _check_activation_preconditions(
 
     Read-only (no lock, no commit). Order matters for the reported detail: stale revision,
     reconciling, pending deactivation, backend transition, unresolved credential operation,
-    then source status/generation. Returns the row narrowed to non-``None``.
+    then source status/generation. Returns the row narrowed to non-``None``. A Topic watch Source is
+    refused first (409 ``managed_by_scheduled_task``): its Scheduled task owns activation.
     """
+    connector_owner.refuse_managed_source(source.provider)
     row = await provisioning.activation_status(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )
@@ -1014,6 +1016,7 @@ async def start_backend_transition(
     gate = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
     source = await _source(session, source_id, multi_workspace_enabled=gate, scope=scope)
+    connector_owner.refuse_managed_source(source.provider)
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     if payload.target_backend == "native" and not collection.supports_native(source):

@@ -13,6 +13,19 @@ MAX_URL_CHARS = 2048
 _TRACKING_KEYS = frozenset({"fbclid", "gclid"})
 
 
+def refuse_managed_source(provider: str | None) -> None:
+    """Raise HTTP 409 ``managed_by_scheduled_task`` for a Topic watch Source on a generic route.
+
+    A watch is configured, consented to and scheduled only through its Scheduled task: the generic
+    configure, activate, backend and collect routes could otherwise change the topic or token budget,
+    or collect, without the one-time consent. Pure apart from the raised error.
+    """
+    from fastapi import HTTPException
+
+    if provider == "topic_watch":
+        raise HTTPException(status_code=409, detail="managed_by_scheduled_task")
+
+
 def estimate_tokens(max_items: int) -> int:
     """Return the per-run token estimate: planning plus at most ``2 * max_items`` page reviews."""
     return PLAN_TOKENS + max_items * 2 * PAGE_TOKENS
