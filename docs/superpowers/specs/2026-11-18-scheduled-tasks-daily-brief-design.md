@@ -32,8 +32,6 @@ second is a **topic watch** where the AI finds sources on its own for a user-giv
 ## Non-goals
 - Telegram delivery (no outbound Telegram exists; deferred). The checkbox is hidden.
 - Multiple daily briefs per workspace (brief history is per day per spec §1449).
-- Per-task model choice in Phase 1: brief uses the workspace's configured brief model; the editor shows it read-only.
-  (Mockup showed a selector; owner may promote it later.)
 - Free-roaming research agent. Topic watch is a fixed pipeline, not `run_agent`.
 - New HTML-extraction or crawling dependencies.
 
@@ -77,6 +75,9 @@ second is a **topic watch** where the AI finds sources on its own for a user-giv
 - Deleting a topic watch **asks**, with "also delete the N collected items" **off by default**. Kept items stay
   under the Source, which becomes an ordinary archived source (still searchable). The task's chat thread is always
   deleted with the task.
+
+- 2026-11-18 (later): **per-task model choice in Phase 1**, as a choice among the configured model roles
+  (brief / chat / background).
 
 ## Builder-check calls (made by Claude; owner may override)
 1. **When a run posts.** A run posts only when it yields a brief revision that has not been posted to the thread yet;

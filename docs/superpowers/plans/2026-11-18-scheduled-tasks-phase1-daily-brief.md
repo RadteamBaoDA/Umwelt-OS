@@ -15,7 +15,7 @@
 - "Scheduled task" is UI wording only. Do not create `modules/scheduled_tasks`, and do not add backend names starting `task_` for this feature (`modules/tasks` already means to-dos). Exception: the chat metadata keys defined below (`scheduled_task`, `task_source_scope`).
 - Use one daily brief per workspace. The existing `dashboard.claim_brief_slot` / `BriefSlotOwned` enforces it; reuse it.
 - Telegram delivery is out of scope. Do not render the checkbox.
-- Phase 1 has no per-task model selector. The editor shows the workspace `brief` role model read-only.
+- Per-task model choice is a configured model role (brief/chat/background), added as Task 6b by owner decision 2026-11-18.
 - No migration and no new dependency.
 - Every new or changed production function, method, component or hook gets a JSDoc block or Python docstring stating its contract (AGENTS.md "Mandatory Code Documentation").
 - Run GitNexus impact (`impact({target, direction:"upstream"})`) before editing any existing symbol, and report HIGH/CRITICAL. Run `detect_changes` before every commit. The worktree has no `.gitnexus/run.cjs`, so use the MCP tools or run the CLI from `d:/Project/Umwelt-OS`.
@@ -284,6 +284,35 @@
 - [ ] **Step 3: Implement** the components, routing, nav registration and locale keys, following the `umwelt-os-ui-system` skill.
 - [ ] **Step 4: Run** `npm --prefix apps/web run test -- src/modules/automations locales` and `make typecheck`. Expected: PASS.
 - [ ] **Step 5: Run** `detect_changes`, then commit: `feat(web): scheduled tasks settings page with daily brief editor`.
+
+### Task 6b: Per-task model choice (owner decision 2026-11-18, added after Task 6 dispatch)
+
+**Owner decision:** each scheduled task can choose which configured model runs it. This replaces the spec non-goal "no per-task model in Phase 1".
+
+**Design call (controller):** the task chooses a configured **model role**, not a free-form model string. The options are `brief` (default), `chat` and `background`. Each role already has a provider/model mapping, privacy destinations and egress approval in Settings › Models, so no new validation surface is needed. `background` falls back to brief, then chat (`ModelDefaults.resolve`).
+
+**Files:**
+- Modify: `modules/dashboard/briefs.py` (`generate_brief` gains `model_role`; `_resolve_brief_egress` uses `settings_public.derive_for_role(config, model_role)` and `config.defaults.resolve(model_role)`; `_fingerprint` includes `model_role` only when it is not `"brief"`, so existing hashes stay stable)
+- Modify: `modules/automations/schemas.py` (`GenerateBriefAction.model_role: Literal["brief", "chat", "background"] = "brief"`), `modules/automations/_execution/actions.py` (pass `spec.get("model_role", "brief")`)
+- Modify web: `apps/web/src/modules/automations/brief-task-editor.tsx` (a model Select listing the three roles, each labelled with the resolved model name from the existing Models settings API; an unconfigured role is shown disabled), plus locales
+- Regenerate `api-types.gen.ts`
+- Tests: extend `tests/unit/modules/dashboard/test_briefs_three_phase.py`, `tests/unit/modules/automations/test_schemas.py` and `test_action_step.py`, and the editor test
+
+**Interfaces:**
+- `generate_brief(..., model_role: Literal["brief","chat","background"] = "brief")`
+- `BriefRead.model_alias` stays the role name actually used (today it stores `egress.role`)
+
+- [ ] **Step 1: Write failing tests.**
+  - `test_model_role_selects_role_mapping`: `model_role="chat"` makes `derive_for_role` receive `"chat"` and the gateway get the chat mapping.
+  - `test_default_model_role_keeps_fingerprint`: `model_role="brief"` gives the same fingerprint as before this task.
+  - `test_model_role_changes_fingerprint`.
+  - `test_generate_brief_action_rejects_unknown_model_role`.
+  - Action passes `model_role` through.
+  - Editor: the select shows the 3 roles, the save payload includes `model_role`, and an unconfigured role is disabled.
+- [ ] **Step 2: Run them.** Expected: FAIL.
+- [ ] **Step 3: Implement.** The privacy re-check in `_BriefEgress.verify_settings` must use the same role.
+- [ ] **Step 4: Run** `uv run pytest tests/unit/modules/dashboard tests/unit/modules/automations -q` and `npm --prefix apps/web run test -- src/modules/automations`, plus typecheck. Expected: PASS.
+- [ ] **Step 5: Run `detect_changes`, then commit** `feat: per-task model role for scheduled daily brief`.
 
 ### Task 7: Web — task threads in Chat and brief messages
 
