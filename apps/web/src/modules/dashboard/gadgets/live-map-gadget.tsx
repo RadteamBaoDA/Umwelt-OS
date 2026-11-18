@@ -2,7 +2,17 @@
 
 import { X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { lazy, Suspense, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ShowMoreButton, useShowMore } from '@/components/show-more';
@@ -10,9 +20,11 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { useSkin } from '@/core/use-skin';
 import type { GadgetFilters, GadgetInstance, GadgetScope } from '../api';
 import { liveMapWeatherKey } from '../gadget-editor-model';
 import { LiveEventLegend } from './live-map-legend';
+import { LiveMapTerminalFilters, LiveMapTitleBar, TerminalEventRow } from './live-map-terminal';
 import { safeLiveLink } from '../live-map-data';
 import { LiveMapConfig } from '../live-map-config';
 import { LIVE_TAG_KEY, LIVE_TAGS, providerMeta } from '../live-feed/sources';
@@ -150,6 +162,7 @@ const COMPACT_ROW_CLASS = 'grid h-[26px] grid-cols-[auto_minmax(0,1fr)_auto_auto
  *
  * @param props.onSelect Called with the event key when its title button is pressed.
  * @param props.inDialog Use the stacked row layout (no caller currently sets this).
+ * @param props.terminal Render terminal-skin rows (`HH:MM KIND title #tag`) instead of the default rows.
  */
 function LiveEventList({
   events,
@@ -157,12 +170,14 @@ function LiveEventList({
   emptyState,
   resetKey,
   inDialog = false,
+  terminal = false,
 }: {
   events: StoredEvent[];
   onSelect: (key: string) => void;
   emptyState: ReactNode;
   resetKey: string;
   inDialog?: boolean;
+  terminal?: boolean;
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
@@ -184,27 +199,31 @@ function LiveEventList({
   return (
     <div className={inDialog ? 'min-h-0' : 'min-h-0 flex-1 overflow-y-auto'}>
       <ul aria-label={t('liveMap.events')} className="divide-y divide-border">
-        {shown.visible.map((event) => (
-          <li key={event.key} className={rowClass}>
-            {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
-              <time dateTime={event.observed_at} className="whitespace-nowrap tabular-nums text-muted-foreground">
-                {format(event.observed_at)}
-              </time>
-            ) : (
-              <span className="whitespace-nowrap text-muted-foreground">{t('liveMap.timeUnknown')}</span>
-            )}
-            <Button type="button" variant="ghost" className={titleClass} onClick={() => onSelect(event.key)}>
-              <span className="min-w-0 truncate">{event.title}</span>
-            </Button>
-            <span className="live-event-source flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">
-              {event.source}
-            </span>
-            {/* Links sit in their own cell so a long title or source truncates before they are pushed out of the row. */}
-            <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-muted-foreground">
-              <EventLinks event={event} separator={inDialog} />
-            </span>
-          </li>
-        ))}
+        {shown.visible.map((event) =>
+          terminal ? (
+            <TerminalEventRow key={event.key} event={event} onSelect={onSelect} />
+          ) : (
+            <li key={event.key} className={rowClass}>
+              {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
+                <time dateTime={event.observed_at} className="whitespace-nowrap tabular-nums text-muted-foreground">
+                  {format(event.observed_at)}
+                </time>
+              ) : (
+                <span className="whitespace-nowrap text-muted-foreground">{t('liveMap.timeUnknown')}</span>
+              )}
+              <Button type="button" variant="ghost" className={titleClass} onClick={() => onSelect(event.key)}>
+                <span className="min-w-0 truncate">{event.title}</span>
+              </Button>
+              <span className="live-event-source flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">
+                {event.source}
+              </span>
+              {/* Links sit in their own cell so a long title or source truncates before they are pushed out of the row. */}
+              <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-muted-foreground">
+                <EventLinks event={event} separator={inDialog} />
+              </span>
+            </li>
+          ),
+        )}
       </ul>
       <div className="flex justify-center">
         <ShowMoreButton state={shown} />
@@ -528,30 +547,207 @@ function LiveEmptyState({
  * @param props.onSelect Called with an event key when its row is pressed.
  * @param props.emptyState Shown by the list when there are no events.
  * @param props.resetKey Filter key; changing it collapses the "show more" expansion.
+ * @param props.terminal Terminal skin: `live events 37` heading and terminal rows.
  */
 function OverviewEventsPanel({
   events,
   onSelect,
   emptyState,
   resetKey,
+  terminal,
 }: {
   events: StoredEvent[];
   onSelect: (key: string) => void;
   emptyState: ReactNode;
   resetKey: string;
+  terminal: boolean;
 }) {
   const t = useTranslations('dashboard');
   return (
-    <div className="flex min-h-[10.5rem] shrink-0 flex-col">
+    <div className={terminal ? 'live-events-term flex flex-col' : 'flex min-h-[10.5rem] shrink-0 flex-col'}>
       <div className="flex shrink-0 items-center gap-3">
         <h3 className="shrink-0 text-xs font-medium text-muted-foreground">
-          {t('liveMap.events')} ({events.length})
+          {t('liveMap.events')} {terminal ? <span className="live-events-count">{events.length}</span> : `(${events.length})`}
         </h3>
         <LiveEventLegend events={events} />
       </div>
-      <LiveEventList events={events} onSelect={onSelect} emptyState={emptyState} resetKey={resetKey} />
+      <LiveEventList events={events} onSelect={onSelect} emptyState={emptyState} resetKey={resetKey} terminal={terminal} />
     </div>
   );
+}
+
+/**
+ * Measured plot area of the live map: renders the WebGL map once it has a size, plus the selected-event card.
+ *
+ * @param props.setNode Ref callback of the element whose size drives the map.
+ * @param props.showMap False until the plot has a measurable size (the map is not created before that).
+ * @param props.mapProps Props forwarded to the map renderer (features, selection, size, weather overlay).
+ * @param props.onClearSelection Closes the selected-event card.
+ */
+function LiveMapPlot({
+  setNode,
+  overview,
+  showMap,
+  mapProps,
+  engine,
+  selectedEvent,
+  onClearSelection,
+}: {
+  setNode: (node: HTMLDivElement | null) => void;
+  overview: boolean;
+  showMap: boolean;
+  mapProps: ComponentProps<typeof WorldMap> extends infer P ? Omit<P, 'projection'> : never;
+  engine: 'globe' | 'flat';
+  selectedEvent: StoredEvent | undefined;
+  onClearSelection: () => void;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <div
+      ref={setNode}
+      role="group"
+      aria-label={t('map.plotLabel')}
+      className={`live-map-plot relative overflow-hidden rounded border border-border ${overview ? 'min-h-24 flex-1 basis-0' : 'min-h-48 flex-[2]'}`}
+    >
+      {showMap && (
+        <div className="absolute inset-0">
+          <Suspense fallback={<p role="status">{t('map.rendererLoading')}</p>}>
+            <WorldMap {...mapProps} projection={engine === 'globe' ? 'globe' : 'mercator'} />
+          </Suspense>
+        </div>
+      )}
+      {selectedEvent && <SelectedEventPopup event={selectedEvent} onClose={onClearSelection} />}
+    </div>
+  );
+}
+
+/**
+ * Terminal-skin overview pane (developer-theme `.dash-map`): title bar with the engine/collapse actions, refresh and
+ * sources icons, one filter row, the map plot, the event list with its legend, and the credit footer line.
+ * Filter state is owned by the caller so the default and terminal layouts share one set of filters.
+ */
+function TerminalOverviewMap(p: {
+  filtered: StoredEvent[];
+  days: string;
+  onDays: (value: string) => void;
+  tags: string[];
+  onTags: Dispatch<SetStateAction<string[]>>;
+  query: string;
+  onQuery: (value: string) => void;
+  toolbarStart?: ReactNode;
+  refreshing: boolean;
+  onRefresh: () => void;
+  onOpenSources: () => void;
+  plot: ReactNode;
+  onSelect: (key: string) => void;
+  emptyState: ReactNode;
+  resetKey: string;
+  sourcesDialog: ReactNode;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <section className="live-map-term flex h-full min-h-0 w-full flex-col overflow-hidden bg-card text-card-foreground">
+      <LiveMapTitleBar
+        count={p.filtered.length}
+        days={p.days}
+        actions={p.toolbarStart}
+        refreshing={p.refreshing}
+        onRefresh={p.onRefresh}
+        onOpenSources={p.onOpenSources}
+      />
+      <div className="live-map-term-body flex min-h-0 flex-1 flex-col gap-2">
+        <LiveMapTerminalFilters
+          tags={p.tags}
+          onTags={p.onTags}
+          query={p.query}
+          onQuery={p.onQuery}
+          days={p.days}
+          onDays={p.onDays}
+          count={p.filtered.length}
+        />
+        {p.plot}
+        <OverviewEventsPanel events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} terminal />
+      </div>
+      <p className="live-map-foot shrink-0">{t('map.basemapCredit')}</p>
+      {p.sourcesDialog}
+    </section>
+  );
+}
+
+/** Default-skin live map layout: toolbar chips, plot, weather notes, credit line and event list (or overview panel). */
+function DefaultLiveMap(p: {
+  toolbarStart?: ReactNode;
+  tags: string[];
+  onTags: Dispatch<SetStateAction<string[]>>;
+  query: string;
+  onQuery: (value: string) => void;
+  days: string;
+  onDays: (value: string) => void;
+  results: ReturnType<typeof useLiveFeed>['results'];
+  onRefresh: () => void;
+  overview: boolean;
+  onOpenSources: () => void;
+  plot: ReactNode;
+  weather: ReactNode;
+  filtered: StoredEvent[];
+  onSelect: (key: string) => void;
+  emptyState: ReactNode;
+  resetKey: string;
+  sourcesDialog: ReactNode;
+  sourceStatus: ReactNode;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <section className="flex h-full min-h-0 w-full flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
+      <LiveMapToolbar
+        toolbarStart={p.toolbarStart}
+        tags={p.tags}
+        onTags={p.onTags}
+        query={p.query}
+        onQuery={p.onQuery}
+        days={p.days}
+        onDays={p.onDays}
+        results={p.results}
+        onRefresh={p.onRefresh}
+        onOpenSources={p.overview ? p.onOpenSources : undefined}
+      />
+      {p.plot}
+      {p.weather}
+      <p className="shrink-0 text-xs text-muted-foreground">{t('map.basemapCredit')}</p>
+      {p.overview ? (
+        <>
+          <OverviewEventsPanel events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} terminal={false} />
+          {p.sourcesDialog}
+        </>
+      ) : (
+        <>
+          <LiveEventList events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} />
+          {p.sourceStatus}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Static part of the map renderer props: features, selection, measured size, interactivity and weather layer. */
+function baseMapProps(p: {
+  points: ReturnType<typeof useLiveFeed>['points'];
+  activeSelection: string | null;
+  size: { width: number; height: number };
+  visible: boolean;
+  isEditMode: boolean;
+  weatherLayer: NonNullable<GadgetFilters['map_weather_layer']> | null;
+}) {
+  return {
+    focusSelected: true,
+    features: p.points,
+    selectedFeatureId: p.activeSelection,
+    width: p.size.width,
+    height: p.size.height,
+    visible: p.visible,
+    interactive: !p.isEditMode,
+    weatherLayer: p.weatherLayer,
+  };
 }
 
 /**
@@ -575,7 +771,7 @@ function LiveMapContent({
   toolbarStart?: ReactNode;
   visible?: boolean;
 }) {
-  const t = useTranslations('dashboard');
+  const terminal = useSkin() === 'terminal';
   const { setNode, size } = useElementSize();
   const [tags, setTags] = useState<string[]>([]);
   const [query, setQuery] = useState('');
@@ -591,15 +787,8 @@ function LiveMapContent({
   const activeSelection = selectedEvent ? selected : null;
   const listResetKey = `${tags.join(',')}|${days}|${query}`;
   const mapProps = {
-    focusSelected: true,
-    features: points,
-    selectedFeatureId: activeSelection,
+    ...baseMapProps({ points, activeSelection, size, visible, isEditMode, weatherLayer }),
     onSelectFeature: setSelected,
-    width: size.width,
-    height: size.height,
-    visible,
-    interactive: !isEditMode,
-    weatherLayer,
     weatherWorkspaceId: isOwner && termsAccepted(config, 'openweather') ? workspaceId : undefined,
     weatherRevision: config.data?.revision,
     onWeatherStateChange: setWeatherState,
@@ -607,50 +796,48 @@ function LiveMapContent({
   const emptyState = (
     <LiveEmptyState config={config} accepted={accepted} onOpenSources={overview ? () => setSourcesOpen(true) : undefined} />
   );
+  const plot = (
+    <LiveMapPlot
+      setNode={setNode}
+      overview={overview}
+      showMap={size.width > 0 && size.height > 0}
+      mapProps={mapProps}
+      engine={engine}
+      selectedEvent={selectedEvent}
+      onClearSelection={() => setSelected(null)}
+    />
+  );
+  const sourcesDialog = (
+    <LiveSourcesDialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
+      <LiveSourceStatus providers={providers} config={config} statuses={statuses} inDialog />
+    </LiveSourcesDialog>
+  );
+  // Props both layouts share; each layout picks what it renders (the terminal one ignores `results`/`weather`).
+  const shared = {
+    toolbarStart,
+    tags,
+    onTags: setTags,
+    query,
+    onQuery: setQuery,
+    days,
+    onDays: setDays,
+    filtered,
+    onSelect: setSelected,
+    emptyState,
+    resetKey: listResetKey,
+    plot,
+    sourcesDialog,
+    onRefresh: feed.refresh,
+    onOpenSources: () => setSourcesOpen(true),
+  };
+  if (overview && terminal) return <TerminalOverviewMap {...shared} refreshing={results.some((result) => result.isFetching)} />;
   return (
-    <section className="flex h-full min-h-0 w-full flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-      <LiveMapToolbar
-        toolbarStart={toolbarStart}
-        tags={tags}
-        onTags={setTags}
-        query={query}
-        onQuery={setQuery}
-        days={days}
-        onDays={setDays}
-        results={results}
-        onRefresh={feed.refresh}
-        onOpenSources={overview ? () => setSourcesOpen(true) : undefined}
-      />
-      <div
-        ref={setNode}
-        role="group"
-        aria-label={t('map.plotLabel')}
-        className={`relative overflow-hidden rounded border border-border ${overview ? 'min-h-24 flex-1 basis-0' : 'min-h-48 flex-[2]'}`}
-      >
-        {size.width > 0 && size.height > 0 && (
-          <div className="absolute inset-0">
-            <Suspense fallback={<p role="status">{t('map.rendererLoading')}</p>}>
-              <WorldMap {...mapProps} projection={engine === 'globe' ? 'globe' : 'mercator'} />
-            </Suspense>
-          </div>
-        )}
-        {selectedEvent && <SelectedEventPopup event={selectedEvent} onClose={() => setSelected(null)} />}
-      </div>
-      <LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />
-      <p className="shrink-0 text-xs text-muted-foreground">{t('map.basemapCredit')}</p>
-      {overview ? (
-        <>
-          <OverviewEventsPanel events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
-          <LiveSourcesDialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
-            <LiveSourceStatus providers={providers} config={config} statuses={statuses} inDialog />
-          </LiveSourcesDialog>
-        </>
-      ) : (
-        <>
-          <LiveEventList events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
-          <LiveSourceStatus providers={providers} config={config} statuses={statuses} />
-        </>
-      )}
-    </section>
+    <DefaultLiveMap
+      {...shared}
+      results={results}
+      overview={overview}
+      weather={<LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />}
+      sourceStatus={<LiveSourceStatus providers={providers} config={config} statuses={statuses} />}
+    />
   );
 }

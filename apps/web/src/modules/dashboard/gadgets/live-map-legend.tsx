@@ -19,6 +19,15 @@ const LEGEND_TONE: Partial<Record<LiveTag, string>> = {
 };
 
 /**
+ * Token colour of one category tag (muted for unknown tags); shared by the legend dots and the terminal event rows.
+ *
+ * @param tag Category tag (lower-case).
+ */
+export function legendTone(tag: string): string {
+  return LEGEND_TONE[tag as LiveTag] ?? 'var(--muted)';
+}
+
+/**
  * Counts how many events carry each category tag, in `LIVE_TAGS` order, keeping only tags with at least one event.
  * Tags are already lower-cased and de-duplicated per event by the feed store, so one event counts once per tag.
  *
@@ -46,8 +55,10 @@ export function LiveEventLegend({ events }: { events: { tags: string[] }[] }) {
     <span className="dash-live-legend" data-testid="live-legend">
       {counts.map(({ tag, count }) => (
         <span key={tag} className="dash-live-legend-item">
-          <span className="dash-live-legend-dot" aria-hidden="true" style={{ background: LEGEND_TONE[tag] ?? 'var(--muted)' }} />
-          {t(LIVE_TAG_KEY[tag])} {count}
+          <span className="dash-live-legend-dot rounded-full" aria-hidden="true" style={{ background: legendTone(tag) }} />
+          {/* Terminal skin keeps only dot + count visible (demo legend); the name stays for assistive tech. */}
+          <span className="dash-live-legend-name">{t(LIVE_TAG_KEY[tag])} </span>
+          {count}
         </span>
       ))}
     </span>

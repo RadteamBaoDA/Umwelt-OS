@@ -94,3 +94,180 @@ html[data-skin='terminal'] .live-event-source {
 html[data-skin='terminal'] .live-event-source::before {
   content: '#' / '';
 }
+
+/* Terminal overview map pane (developer-theme .dash-map): title bar, one filter row, globe, event list, credit
+   footer. Rendered only in the terminal skin (live-map-gadget.tsx), so no default-skin rule depends on these. */
+html[data-skin='terminal'] .live-map-titlebar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+html[data-skin='terminal'] .live-map-titlebar .gadget-title {
+  margin: 0;
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .live-map-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+html[data-skin='terminal'] .live-map-titlebar-actions .map-engine-seg {
+  margin-right: 4px;
+}
+html[data-skin='terminal'] .live-map-term-body {
+  padding: 8px 10px;
+}
+html[data-skin='terminal'] .live-map-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+html[data-skin='terminal'] .live-map-prompt {
+  position: relative;
+  min-width: 0;
+}
+html[data-skin='terminal'] .live-map-prompt > span {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--accent);
+  pointer-events: none;
+}
+html[data-skin='terminal'] .live-map-prompt input {
+  width: 100%;
+  padding-left: 22px;
+}
+html[data-skin='terminal'] .live-map-cat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text);
+  text-transform: lowercase;
+  background: var(--bg);
+  border: 1px solid var(--control);
+  border-radius: var(--radius-md);
+}
+html[data-skin='terminal'] .live-map-filters [data-slot='select-trigger'] {
+  width: auto;
+  min-width: 64px;
+}
+@media (pointer: fine) {
+  html[data-skin='terminal'] .live-map-cat {
+    min-height: 28px;
+    height: 28px;
+  }
+}
+html[data-skin='terminal'] .live-map-term .live-map-plot {
+  background: var(--bg);
+  border-color: var(--line);
+}
+html[data-skin='terminal'] .live-events-term {
+  flex: 0 1 245px;
+  min-height: 167px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+html[data-skin='terminal'] .live-events-term h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+html[data-skin='terminal'] .live-events-count {
+  font-weight: 400;
+  color: var(--muted);
+}
+/* Legend in the terminal skin: dot and count only; the category name stays for assistive tech. */
+html[data-skin='terminal'] .dash-live-legend-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+html[data-skin='terminal'] .live-events-term .dash-live-legend {
+  gap: 8px;
+  color: var(--text);
+}
+html[data-skin='terminal'] .live-events-term ul > li {
+  border-top-width: 0;
+}
+html[data-skin='terminal'] .live-event-row-term {
+  display: grid;
+  grid-template-columns: 5ch 6.5ch minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  height: 26px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+html[data-skin='terminal'] .live-event-row-term > time,
+html[data-skin='terminal'] .live-event-row-term > span:first-child {
+  color: var(--muted);
+}
+html[data-skin='terminal'] .live-event-kind {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+html[data-skin='terminal'] .live-event-title {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+html[data-skin='terminal'] .live-event-title:hover {
+  color: var(--accent);
+}
+html[data-skin='terminal'] .live-event-row-term .live-event-source {
+  font-size: 10px;
+}
+html[data-skin='terminal'] .live-event-links {
+  display: inline-flex;
+  gap: 6px;
+  color: var(--muted);
+}
+html[data-skin='terminal'] .live-event-links:empty {
+  display: none;
+}
+html[data-skin='terminal'] .live-event-links a:hover {
+  color: var(--accent);
+}
+@media (pointer: coarse) {
+  html[data-skin='terminal'] .live-event-row-term {
+    height: auto;
+    min-height: 44px;
+  }
+}
+html[data-skin='terminal'] .live-map-foot {
+  padding: 6px 12px;
+  font-size: 10px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+html[data-skin='terminal'] .live-events-term h3 {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .live-event-kind {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -363,7 +363,9 @@ export function WorldMap({
 
   return (
     <div className="relative h-full min-h-48 shrink-0 w-full">
-      <div ref={hostRef} className={failed ? 'hidden' : 'absolute inset-0'} />
+      {/* Explicit size: maplibre-gl.css gives .maplibregl-map `position: relative`, which can win over `absolute inset-0`
+          depending on stylesheet order and collapse the host to 0px height; h-full/w-full keeps the map visible either way. */}
+      <div ref={hostRef} className={failed ? 'hidden' : 'absolute inset-0 h-full w-full'} />
       {failed && (
         <p role="status" className="absolute left-2 top-2 rounded bg-card px-2 py-1 text-xs text-muted-foreground">
           {t('map.webglUnavailable')}

@@ -12,6 +12,7 @@ import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-vie
 import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Button } from '@/components/ui/button';
 import { useLocalPref } from '@/core/use-local-pref';
+import { useSkin } from '@/core/use-skin';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
@@ -128,6 +129,67 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
       <Attribution story={story} />
     </li>
   );
+}
+
+/** Stories observed within this many minutes carry the NEW level in the terminal log rows; older ones read INFO. */
+const NEW_STORY_MINUTES = 15;
+
+/**
+ * Terminal-skin log row of an embedded story: `HH:MM:SS  LEVEL  title  #publisher` (developer-theme `.log li`).
+ * The title button opens the story detail exactly like the default row; the tag links to the publisher's article when
+ * the evidence URL is a safe http(s) URL (licence text stays in the link title). LEVEL is NEW for stories observed in
+ * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal.
+ *
+ * @param props.vm Story list view model (selection callback, translation and display preferences).
+ * @param props.story Story shown by this row.
+ */
+function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const { onSelectStory, shown, display, t } = vm;
+  // Lazy initial state keeps the clock read out of render purity; the level is a snapshot taken when the row mounts.
+  const [now] = useState(() => Date.now());
+  const clock = new Intl.DateTimeFormat(normalizeFormattingLocale(display.locale), {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZone: display.timezone,
+  });
+  const observed = Date.parse(story.observed_at);
+  const isNew = now - observed < NEW_STORY_MINUTES * 60_000;
+  const { tag, href, license } = storyLogTag(story);
+  return (
+    <li className="story-log-row" data-testid="news-log-row">
+      <time dateTime={story.observed_at} title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
+        {Number.isNaN(observed) ? '' : clock.format(new Date(observed))}
+      </time>
+      <span className={isNew ? 'story-log-level story-log-new' : 'story-log-level story-log-info'}>
+        {isNew ? t('log.new') : t('log.info')}
+      </span>
+      <button type="button" className="story-log-title" onClick={(event) => onSelectStory(story.id, event.currentTarget)}>
+        {shown(story)?.title ?? story.title}
+      </button>
+      {tag && href ? (
+        <a className="story-log-tag" href={href} target="_blank" rel="noopener noreferrer" title={license}>
+          {tag}
+        </a>
+      ) : tag ? (
+        <span className="story-log-tag">{tag}</span>
+      ) : null}
+    </li>
+  );
+}
+
+/**
+ * Short lower-case publisher tag of a story for the terminal log row, with its safe article URL and licence text.
+ * Uses the first evidence item that names a publisher, else the first evidence item's source name; empty tag when none.
+ */
+function storyLogTag(story: Story): { tag: string; href: string | undefined; license: string | undefined } {
+  const item = story.evidence?.find((e) => e.publisher) ?? story.evidence?.[0];
+  return {
+    tag: (item?.publisher ?? item?.source_name ?? '').toLowerCase().replace(/\s+/g, ''),
+    href: safeHttpUrl(item?.url),
+    license: item?.license_label ?? undefined,
+  };
 }
 
 /** Count/time/relevance meta line and partial-data reasons under a story row. */
@@ -352,6 +414,14 @@ function StoryLead({ vm, story }: { vm: StoryListVm; story: Story }) {
 function StoryListBody({ vm }: { vm: StoryListVm }) {
   const { leadStory, more, view, embedded } = vm;
   const rows = more.visible;
+  if (vm.log)
+    return (
+      <ol className="story-log shrink-0">
+        {rows.map((story) => (
+          <StoryLogRow key={story.id} vm={vm} story={story} />
+        ))}
+      </ol>
+    );
   return leadStory ? (
     // Wide gadgets put the lead left and the list right; narrow ones stack them.
     <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -483,9 +553,11 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
       ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
       : null;
   // Cards mode drops the lead hero: every story is a card. Embedded lists collapse to the lead + 4 rows or 6 cards.
-  const heroStory = p.view === 'cards' ? null : leadStory;
+  // Terminal skin renders the list view as a log (no lead hero), eight rows before "show more".
+  const log = useSkin() === 'terminal' && embedded && p.view === 'list';
+  const heroStory = p.view === 'cards' || log ? null : leadStory;
   const listStories = heroStory ? stories.filter((story) => story.id !== heroStory.id) : stories;
-  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : 4, `${p.sourceTab}|${p.view}`);
+  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : log ? 8 : 4, `${p.sourceTab}|${p.view}`);
 
   return {
     ...p,
@@ -496,6 +568,7 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     scores,
     relevanceVaries,
     leadStory: heroStory,
+    log,
     listStories,
     more,
     showOriginal,

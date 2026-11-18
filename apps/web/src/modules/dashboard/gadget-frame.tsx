@@ -546,6 +546,8 @@ function GadgetHeader(p: {
   unreadCount: number;
   ruleMatch: GadgetFrameProps['ruleMatch'];
   sourceHealth: GadgetFrameProps['sourceHealth'];
+  /** Provenance/freshness text shown as the muted title-bar meta in the terminal skin (hidden in the default skin). */
+  metaText: string;
   onDragHandlePointerDown: GadgetFrameProps['onDragHandlePointerDown'];
   onAsk: () => void;
   onExpand: () => void;
@@ -553,7 +555,13 @@ function GadgetHeader(p: {
   onConfigure: GadgetFrameProps['onConfigure'];
   onRemove: GadgetFrameProps['onRemove'];
 }) {
-  const { headerRef, titleId, displayTitle, instance, isEditMode, unreadCount, ruleMatch, sourceHealth } = p;
+  const { headerRef, titleId, displayTitle, instance, isEditMode, unreadCount, ruleMatch, sourceHealth, metaText } = p;
+  // Terminal title-bar dot: failing sources read danger, stale ones warning, otherwise healthy (accent).
+  const dotTone = sourceHealth?.some((tick) => tick.status === 'failing')
+    ? 'danger'
+    : sourceHealth?.some((tick) => tick.status === 'stale')
+      ? 'warn'
+      : 'ok';
   const { onDragHandlePointerDown, onAsk, onExpand, expandRef, onConfigure, onRemove } = p;
   return (
     <header
@@ -565,9 +573,15 @@ function GadgetHeader(p: {
         onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
       >
         {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
+        <span className="gadget-dot rounded-full" data-tone={dotTone} aria-hidden="true" />
         <h3 id={titleId} className="gadget-title min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
           {displayTitle}
         </h3>
+        {metaText && (
+          <span className="gadget-meta" aria-hidden="true">
+            {metaText}
+          </span>
+        )}
       </div>
       <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} sourceHealth={sourceHealth} />
       <HeaderActions
@@ -650,6 +664,7 @@ export function GadgetFrame({
           unreadCount={unreadCount}
           ruleMatch={ruleMatch}
           sourceHealth={sourceHealth}
+          metaText={footerText}
           onDragHandlePointerDown={onDragHandlePointerDown}
           onAsk={handleAskWithUmwelt}
           onExpand={toggleExpanded}

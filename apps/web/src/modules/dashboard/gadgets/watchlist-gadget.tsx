@@ -4,6 +4,7 @@ import { Plus, Search } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSkin } from '@/core/use-skin';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
@@ -296,6 +297,7 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
   const daily = useTranslations('daily');
 
   const [filterQuery, setFilterQuery] = useState<string>('');
+  const terminal = useSkin() === 'terminal';
 
   const definition = instance.definition;
   const highlightRules: HighlightRule[] = definition.highlight_rules ?? [];
@@ -318,7 +320,15 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
           className="text-figure-sm"
           title={highlightRules.length > 0 ? daily('highlightRules.applied', { count: highlightRules.length }) : undefined}
         >
-          {t('watchlist.summary', { alerting: alertingCount, total: items.length })}
+          {terminal ? (
+            // Terminal skin: the alerting count is the big figure, the rest a muted tail (developer-theme `.metric`).
+            <>
+              <span className="watch-figure">{alertingCount}</span>{' '}
+              <span className="watch-figure-tail">{t('watchlist.summaryTail', { total: items.length })}</span>
+            </>
+          ) : (
+            t('watchlist.summary', { alerting: alertingCount, total: items.length })
+          )}
         </p>
         {onAddRule && (
           <Button type="button" variant="ghost" size="sm" onClick={onAddRule} className="h-7 shrink-0 gap-1 px-2 text-xs">
