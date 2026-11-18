@@ -136,15 +136,18 @@ export function Statusline({ apiStatus, preferences }: { apiStatus: ApiConnectio
         <span className={`statusline-dot rounded-full statusline-dot-${dotTone(realtimeStatus)}`} />
         {t('realtime')}
       </span>
-      {model && (
-        <span className="statusline-model hide-sm" aria-hidden="true">
-          {t('statusline.model', { model })}
+      {/* Right-hand group: model, locale · zone and clock stay together at the end of the bar, as in the demo footer. */}
+      <span className="statusline-end">
+        {model && (
+          <span className="statusline-model hide-sm" aria-hidden="true">
+            {t('statusline.model', { model })}
+          </span>
+        )}
+        <span className="statusline-locale hide-sm">
+          {locale} · {zone}
         </span>
-      )}
-      <span className="statusline-locale hide-sm">
-        {locale} · {zone}
+        <StatuslineClock locale={locale} timezone={zone} />
       </span>
-      <StatuslineClock locale={locale} timezone={zone} />
     </footer>
   );
 }

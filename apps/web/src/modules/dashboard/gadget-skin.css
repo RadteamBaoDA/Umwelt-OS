@@ -27,6 +27,7 @@ html[data-skin='terminal'] .gadget-header {
 html[data-skin='terminal'] .gadget-title {
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.55;
   color: var(--strong);
 }
 

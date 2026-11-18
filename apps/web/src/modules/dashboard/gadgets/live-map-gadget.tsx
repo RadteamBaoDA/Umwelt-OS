@@ -177,7 +177,7 @@ function LiveEventList({
     return (value: string) => formatter.format(new Date(value));
   }, [display.locale, display.timezone]);
   // Page rows are one line (time | title | source), 26px high, so the overview list shows at least five rows.
-  const rowClass = inDialog ? 'py-1 text-xs' : COMPACT_ROW_CLASS;
+  const rowClass = `live-event-row ${inDialog ? 'py-1 text-xs' : COMPACT_ROW_CLASS}`;
   const titleClass = inDialog
     ? 'h-auto w-full justify-start whitespace-normal p-1 text-left'
     : 'h-6 min-w-0 justify-start truncate p-1 text-left';
@@ -196,7 +196,9 @@ function LiveEventList({
             <Button type="button" variant="ghost" className={titleClass} onClick={() => onSelect(event.key)}>
               <span className="min-w-0 truncate">{event.title}</span>
             </Button>
-            <span className="flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">{event.source}</span>
+            <span className="live-event-source flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">
+              {event.source}
+            </span>
             {/* Links sit in their own cell so a long title or source truncates before they are pushed out of the row. */}
             <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-muted-foreground">
               <EventLinks event={event} separator={inDialog} />

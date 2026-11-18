@@ -166,6 +166,20 @@ describe('Statusline', () => {
     renderStatusline();
     expect(screen.queryByText(/^model:/)).toBeNull();
   });
+
+  it('groups the model, locale and clock into one right-aligned end group after the transport segment', () => {
+    mockAiSettings = { defaults: { chat: { model: 'claude-sonnet-5-5' } } };
+    const { container } = renderStatusline();
+    const footer = container.querySelector('.statusline');
+    const end = container.querySelector('.statusline-end');
+    expect(end).not.toBeNull();
+    expect(footer?.lastElementChild).toBe(end);
+    expect(end?.querySelector('.statusline-model')).not.toBeNull();
+    expect(end?.querySelector('.statusline-locale')?.textContent).toBe('en-us · UTC');
+    expect(end?.querySelector('.statusline-clock')).not.toBeNull();
+    expect(end?.querySelector('.statusline-transport')).toBeNull();
+    expect(footer?.querySelector('.statusline-transport')).not.toBeNull();
+  });
 });
 
 describe('sourceHealth', () => {

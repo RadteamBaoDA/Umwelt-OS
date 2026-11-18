@@ -55,8 +55,22 @@
   .statusline-dot-danger {
     background: var(--danger);
   }
-  .statusline-clock {
+  /* Right-hand group. The wrapper takes the auto margin (pushing model, locale and clock to the end of the bar) and
+     no padding of its own; the segments inside keep the 12px rhythm of the left-hand segments. */
+  .statusline > .statusline-end {
+    display: flex;
+    align-items: center;
     margin-left: auto;
+    min-width: 0;
+    padding: 0;
+  }
+  .statusline-end > span {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    padding: 0 12px;
+  }
+  .statusline-clock {
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }

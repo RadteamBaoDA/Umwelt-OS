@@ -42,8 +42,8 @@ html[data-skin='terminal'] :is(.dashboard-gadget-body, #dashboard-overview-map) 
   overflow: hidden;
 }
 html[data-skin='terminal'] :is(.dashboard-gadget-body, #dashboard-overview-map) .map-engine-seg > [data-slot='button'][data-size] {
-  min-height: 26px;
-  height: 26px;
+  min-height: 24px;
+  height: 24px;
   padding: 0 8px;
   font-size: 11px;
   font-weight: 400;
@@ -68,4 +68,29 @@ html[data-skin='terminal']
   .map-engine-seg
   > [data-slot='button'][data-size][aria-pressed]::after {
   content: none;
+}
+
+/* Map controls and gadget fields: 28px high, 12px text (demo .dash-ctrl). Fine pointers only; coarse keeps 44px. */
+@media (pointer: fine) {
+  html[data-skin='terminal']
+    :is(.dashboard-gadget-body, #dashboard-overview-map)
+    :is(input:not([type='checkbox']):not([type='radio']), [data-slot='select-trigger']) {
+    height: 28px;
+    min-height: 28px;
+    padding-block: 0;
+    font-size: 12px;
+  }
+}
+
+/* Live event rows (demo .dash-evl): muted time, source as a blue #tag, row highlight on hover. */
+html[data-skin='terminal'] .live-event-row:hover {
+  background: var(--active);
+}
+html[data-skin='terminal'] .live-event-source {
+  font-size: 11px;
+  color: var(--info);
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .live-event-source::before {
+  content: '#' / '';
 }

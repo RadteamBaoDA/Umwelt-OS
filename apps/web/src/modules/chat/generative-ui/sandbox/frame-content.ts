@@ -6,7 +6,7 @@
  * `window.sendPrompt` postMessage bridge.
  */
 
-import { buildSandboxStylesheet, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
+import { buildSandboxStylesheet, buildImportMapScriptTag, type SandboxPalette, type SandboxTheme } from '../design-system';
 import { resolveWidgetLocale } from '../copy';
 import type { AppLocaleId } from '@/core/i18n';
 import { IDIOMORPH_INLINE_SCRIPT } from './idiomorph-inline';
@@ -319,6 +319,8 @@ export interface FrameDocumentOptions {
   jsExpressions?: string;
   /** Active Umwelt-OS theme (`'light'` or `'dark'`). Defaults to `'light'`. */
   theme?: SandboxTheme;
+  /** Optional palette overrides (terminal skin, from `resolveTerminalPalette`) layered over the theme tokens. */
+  palette?: SandboxPalette;
   /** Whether to include and execute `jsFunctions` and `jsExpressions` in the initial document. */
   executeScripts?: boolean;
   /** Optional title for the frame document. */
@@ -380,13 +382,14 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
     jsFunctions = '',
     jsExpressions = '',
     theme = 'light',
+    palette = {},
     executeScripts = false,
     nonce = createFrameNonce(),
     locale = resolveWidgetLocale(),
   } = options;
 
   const safeBody = processPartialHtml(html);
-  const stylesheet = escapeStyleTagContent(buildSandboxStylesheet(theme));
+  const stylesheet = escapeStyleTagContent(buildSandboxStylesheet(theme, palette));
   const customCss = escapeStyleTagContent(css);
   const themeClass = theme === 'dark' ? ' class="dark"' : '';
 

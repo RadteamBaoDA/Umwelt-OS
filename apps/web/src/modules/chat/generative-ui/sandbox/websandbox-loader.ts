@@ -8,7 +8,7 @@
  * parent cookies, storage, or CSRF tokens.
  */
 
-import { buildSandboxStylesheet, type SandboxTheme } from '../design-system';
+import { buildSandboxStylesheet, type SandboxPalette, type SandboxTheme } from '../design-system';
 import { processPartialHtml } from './process-partial-html';
 
 /**
@@ -102,8 +102,9 @@ export function executeSandboxScripts(iframe: HTMLIFrameElement | null, jsFuncti
  *
  * @param iframe - Target `HTMLIFrameElement` (no-op if null).
  * @param theme - Active theme (`'light'` or `'dark'`).
+ * @param palette - Optional palette overrides (`resolveTerminalPalette`); omitted or empty keeps the theme palette.
  */
-export function syncSandboxTheme(iframe: HTMLIFrameElement | null, theme: SandboxTheme): void {
+export function syncSandboxTheme(iframe: HTMLIFrameElement | null, theme: SandboxTheme, palette?: SandboxPalette): void {
   if (!iframe) return;
   enforceStrictSandboxAttribute(iframe);
   iframe.dataset.theme = theme;
@@ -113,7 +114,7 @@ export function syncSandboxTheme(iframe: HTMLIFrameElement | null, theme: Sandbo
       {
         type: 'umwelt:theme',
         theme,
-        stylesheet: buildSandboxStylesheet(theme),
+        stylesheet: buildSandboxStylesheet(theme, palette),
         nonce: frameNonce(iframe),
       },
       '*',

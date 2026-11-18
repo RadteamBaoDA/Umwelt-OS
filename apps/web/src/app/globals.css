@@ -305,6 +305,40 @@ html[data-skin='terminal'] table th {
   letter-spacing: 0.04em;
 }
 
+/* Page title and tab row follow the demo's 1.55 body leading: 22px / 34px title, 13px / 38px tabs. */
+html[data-skin='terminal'] .workspace-main h1 {
+  font-size: 22px;
+  line-height: 1.55;
+}
+html[data-skin='terminal'] [data-slot='tabs-trigger'] {
+  line-height: 1.55;
+}
+
+/* Gadget hero figures: 34px bold (demo .metric); the compact figure keeps 24px. */
+html[data-skin='terminal'] .text-figure {
+  font-size: 34px;
+  line-height: 1.1;
+  font-weight: 700;
+}
+html[data-skin='terminal'] .text-figure-sm {
+  font-weight: 700;
+}
+
+/* Gadget tables (demo table.data): 8px header and 9px body cell padding, hairline rule under each row. */
+html[data-skin='terminal'] .dashboard-gadget-body table th {
+  padding: 8px 10px;
+  font-weight: 500;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+html[data-skin='terminal'] .dashboard-gadget-body table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+html[data-skin='terminal'] .dashboard-gadget-body table tr:hover td {
+  background: var(--active);
+}
+
 /* Bracketed buttons: [ label ]. Ghost, link, bare and icon buttons stay plain. The search trigger and pressed toggle
    chips draw their own ornaments, so they are excluded too. */
 html[data-skin='terminal']
