@@ -2405,7 +2405,8 @@ export interface paths {
          *         response: HTTP response object for no-store header attachment.
          *
          *     Returns:
-         *         ConversationDetailRead schema containing conversation metadata and messages.
+         *         ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task
+         *         brief messages whose sources are no longer eligible come back as the scrub placeholder.
          *
          *     Raises:
          *         HTTPException: 404 if conversation is not found.
