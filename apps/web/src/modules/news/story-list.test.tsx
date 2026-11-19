@@ -12,7 +12,14 @@ vi.mock('./story-api', () => ({
 }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-US', timezone: 'UTC' }) }));
 vi.mock('@/modules/translations/use-content-translation', () => ({
-  useContentTranslation: () => ({ results: new Map(), issues: new Map() }),
+  useContentTranslation: () => ({
+    enabled: false,
+    targetLanguage: 'vi',
+    results: new Map(),
+    issues: new Map(),
+    pendingIds: new Set(),
+    translate: vi.fn(),
+  }),
 }));
 
 const renderList = (noSources?: boolean) =>

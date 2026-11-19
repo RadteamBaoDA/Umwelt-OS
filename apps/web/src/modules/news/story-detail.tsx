@@ -11,9 +11,7 @@ import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchStory } from './story-api';
-import { TranslatedBadge } from '@/modules/translations';
-import { TranslationNote } from '@/modules/translations';
-import { useContentTranslation } from '@/modules/translations';
+import { TranslateActionButton, TranslatedBadge, TranslationNote, useContentTranslation } from '@/modules/translations';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import type { Story, StoryEvidence } from './story-types';
 
@@ -117,10 +115,38 @@ function StoryDetailStatus({ vm }: { vm: StoryDetailVm }) {
   );
 }
 
+/** Translation button, badge, or failure note for the currently opened story detail. */
+function StoryDetailTranslation({ vm, story }: { vm: StoryDetailVm; story: NonNullable<StoryDetailVm['story']> }) {
+  const { translation, showOriginal, setShowOriginal, translateLabel } = vm;
+  if (translation.results.has(story.id)) {
+    return (
+      <TranslatedBadge
+        showOriginal={showOriginal}
+        targetLanguage={translation.targetLanguage}
+        onToggle={() => setShowOriginal((v) => !v)}
+      />
+    );
+  }
+  if (!translation.enabled || !story.translation_revision) return null;
+  const pending = translation.pendingIds.has(story.id);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <TranslateActionButton
+        label={translateLabel}
+        pending={pending}
+        onClick={() => {
+          setShowOriginal(false);
+          translation.translate([{ id: story.id, revision: story.translation_revision as string }]);
+        }}
+      />
+      {!pending ? <TranslationNote issue={translation.issues.get(story.id)} /> : null}
+    </div>
+  );
+}
+
 /** Story badges, title, citation tools, excerpt and partial-data notices. */
 function StoryArticle({ vm }: { vm: StoryDetailVm }) {
-  const { t, d, display, incompleteLabel, copied, story, translation, translated, firstUrl, showOriginal, setShowOriginal, copyCitation } =
-    vm;
+  const { t, d, display, incompleteLabel, copied, story, translated, firstUrl, copyCitation } = vm;
   return story ? (
     <article className="space-y-3" aria-labelledby="story-detail-title">
       <div className="flex flex-wrap items-center gap-2">
@@ -158,11 +184,7 @@ function StoryArticle({ vm }: { vm: StoryDetailVm }) {
       <p className="text-xs text-muted-foreground">
         {t('observed', { date: formatDateTime(story.observed_at, display.locale, display.timezone) })} · {display.timezone}
       </p>
-      {translation.results.has(story.id) ? (
-        <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} />
-      ) : (
-        <TranslationNote issue={translation.issues.get(story.id)} />
-      )}
+      <StoryDetailTranslation vm={vm} story={story} />
       <p role="status" className="text-xs text-muted-foreground">
         {copied === 'ok' ? d('copied') : copied === 'failed' ? d('copyFailed') : ''}
       </p>
@@ -354,10 +376,14 @@ function useStoryDetailView(p: ReturnType<typeof useStoryDetailQuery>) {
   // A later authority failure revokes the whole cursor snapshot, including earlier cached pages.
   const visiblePages = contentAvailable ? pages : [];
   const story = visiblePages.find((page) => page.story !== null)?.story ?? undefined;
+  const tTrans = useTranslations('translations');
   const targets = story?.translation_revision ? [{ id: story.id, revision: story.translation_revision }] : [];
   const translation = useContentTranslation('news_story', targets);
   const [showOriginal, setShowOriginal] = useState(false);
   const translated = showOriginal || !story ? undefined : (translation.results.get(story.id)?.translation ?? undefined);
+  const translateLabel = tTrans('translateTo', {
+    language: translation.targetLanguage === 'vi' ? tTrans('languageVi') : tTrans('languageEn'),
+  });
   const evidence = visiblePages.flatMap((page) => page.story?.evidence ?? []);
   const omissionReasons = [...new Set(visiblePages.flatMap((page) => page.incomplete_reasons))];
   const firstUrl = evidence.map((item) => safeHttpUrl(item.url)).find(Boolean) ?? null;
@@ -375,6 +401,7 @@ function useStoryDetailView(p: ReturnType<typeof useStoryDetailQuery>) {
     targets,
     translation,
     translated,
+    translateLabel,
     evidence,
     omissionReasons,
     firstUrl,

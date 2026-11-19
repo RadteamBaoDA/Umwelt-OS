@@ -3,7 +3,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bookmark, Search, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { ItemTranslateButton, TranslationStatusBanner, useItemTranslation, type ItemTranslationController } from '@/modules/translations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
@@ -224,6 +225,11 @@ function VideoPanelView({
   ask: (item: VideoRecord) => void;
 }) {
   const t = useTranslations('dashboard');
+  const translationTargets = useMemo(
+    () => visibleItems.map((item) => ({ id: item.document_id, revision: item.document_version_id })),
+    [visibleItems],
+  );
+  const translation = useItemTranslation('document', translationTargets);
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={t('video.sourcesRequired')} />}
@@ -231,6 +237,7 @@ function VideoPanelView({
         <FeedSourceTabs sourceIds={sourceIds} sourceNames={sources} value={activeSource} onChange={setActiveSource} />
       )}
       {sourceIds.length > 0 && <VideoSearch value={search} onChange={setSearch} label={t('video.search')} />}
+      <TranslationStatusBanner issues={translation.issues} />
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />}
       {query.isError && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
       {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && (
@@ -265,6 +272,7 @@ function VideoPanelView({
               ask={() => ask(item)}
               toggleRead={() => mutate({ item, read: !item.read_at })}
               toggleBookmark={() => mutate({ item, bookmarked: !item.bookmarked_at })}
+              translation={translation}
             />
           ))}
       </ul>
@@ -323,6 +331,7 @@ function VideoRow({
   ask,
   toggleRead,
   toggleBookmark,
+  translation,
 }: {
   item: VideoRecord;
   isOwner: boolean;
@@ -334,11 +343,13 @@ function VideoRow({
   ask: () => void;
   toggleRead: () => void;
   toggleBookmark: () => void;
+  translation: ItemTranslationController;
 }) {
   const t = useTranslations('dashboard');
   const creator = creatorOf(item);
   const duration = item.media?.duration_seconds;
   const externalUrl = safeHttpUrl(item.canonical_url);
+  const displayTitle = translation.shown(item.document_id)?.title ?? item.title;
   return (
     <li className="flex items-start gap-3 py-2">
       <VideoThumb src={item.image_url} />
@@ -349,7 +360,7 @@ function VideoRow({
           rel={externalUrl ? 'noopener noreferrer' : undefined}
           className="line-clamp-2 text-sm font-semibold text-foreground hover:underline underline-offset-4"
         >
-          {item.title}
+          {displayTitle}
         </a>
         <p className="mt-0.5 text-xs text-muted-foreground">
           <time dateTime={timestamp} title={dateLabel}>
@@ -358,29 +369,32 @@ function VideoRow({
           {creator ? ` · ${creator}` : ''}
           {duration != null ? ` · ${t('video.duration', { duration: Math.round(duration / 60) })}` : ''}
         </p>
-        {isOwner && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={ask}>
-              <Sparkles className="mr-1 size-3.5" />
-              {t('askAbout.message')}
-            </Button>
-            <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={pending} onClick={toggleRead}>
-              {read ? t('markUnread') : t('markRead')}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              disabled={pending}
-              onClick={toggleBookmark}
-              aria-pressed={bookmarked}
-              aria-label={bookmarked ? t('removeBookmark') : t('bookmark')}
-            >
-              <Bookmark className="size-3.5" fill={bookmarked ? 'currentColor' : 'none'} />
-            </Button>
-          </div>
-        )}
+        <div className="mt-1 flex flex-wrap items-center gap-1">
+          <ItemTranslateButton controller={translation} target={{ id: item.document_id, revision: item.document_version_id }} />
+          {isOwner && (
+            <>
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={ask}>
+                <Sparkles className="mr-1 size-3.5" />
+                {t('askAbout.message')}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={pending} onClick={toggleRead}>
+                {read ? t('markUnread') : t('markRead')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                disabled={pending}
+                onClick={toggleBookmark}
+                aria-pressed={bookmarked}
+                aria-label={bookmarked ? t('removeBookmark') : t('bookmark')}
+              >
+                <Bookmark className="size-3.5" fill={bookmarked ? 'currentColor' : 'none'} />
+              </Button>
+            </>
+          )}
+        </div>
       </div>
     </li>
   );

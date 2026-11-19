@@ -35,6 +35,7 @@ import {
 import { ShowMoreButton, useShowMore } from './show-more';
 import { useLocalPref } from '@/core/use-local-pref';
 import { useAutoFetchWhenEmpty, useFeedFilters, useFeedModeration, useFeedQueries } from './use-feed-state';
+import { CollectionTranslationBar, TranslationStatusBanner, useItemTranslation } from '@/modules/translations';
 
 export type { FeedStreamItem } from './feed-model';
 
@@ -358,6 +359,18 @@ function useFeedSignals(feedItems: FeedStreamItem[], onUnreadCountChange: FeedGa
   return { unreadCount, volume };
 }
 
+/** Builds the on-demand document translation controller for the currently visible feed items. */
+function useFeedTranslation(items: FeedStreamItem[]) {
+  const targets = useMemo(
+    () =>
+      items
+        .filter((item): item is FeedStreamItem & { documentVersionId: string } => Boolean(item.documentVersionId))
+        .map((item) => ({ id: item.id, revision: item.documentVersionId })),
+    [items],
+  );
+  return useItemTranslation('document', targets);
+}
+
 /** Renders the scrollable feed item stream with owner-aware Ask AI affordances and existing Telegram controls. */
 function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: FeedStreamProps) {
   const { openDrawer } = useChatController();
@@ -392,6 +405,7 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
   });
 
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
+  const translation = useFeedTranslation(more.visible);
   const rowContext: FeedRowContext = {
     view,
     isTelegram: definition.renderer === 'telegram_feed',
@@ -402,6 +416,7 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
     interactionPending: moderation.interactionMutation.isPending,
     onInteract: (change) => moderation.interactionMutation.mutate(change),
     onAskAbout: askAbout,
+    translation,
   };
 
   return (
@@ -429,12 +444,7 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
         view={view}
         setView={setView}
       />
-      <FeedSourceTabs
-        sourceIds={sourceIds}
-        sourceNames={sourcesQuery.data?.items}
-        value={sourceFilter}
-        onChange={filters.setSourceFilter}
-      />
+      <FeedSourceTabs sourceIds={sourceIds} sourceNames={sourcesQuery.data?.items} value={sourceFilter} onChange={filters.setSourceFilter} />
       <FeedModerationBars
         moderation={moderation}
         selected={selectedTelegramItems}
@@ -443,6 +453,8 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
         undoRef={undoRef}
         onAskAbout={askAbout}
       />
+      {more.visible.length > 0 ? <CollectionTranslationBar controller={translation} /> : null}
+      <TranslationStatusBanner issues={translation.issues} />
       <FeedStatus
         docsQuery={docsQuery}
         feedItemCount={feedItems.length}
@@ -455,12 +467,7 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
       />
       <FeedItems items={more.visible} ctx={rowContext} />
       <ShowMoreButton state={more} />
-      <FeedFooter
-        docsQuery={docsQuery}
-        hasInitialItems={Boolean(initialItems?.length)}
-        feedItemCount={feedItems.length}
-        listExpanded={more.hiddenCount === 0}
-      />
+      <FeedFooter docsQuery={docsQuery} hasInitialItems={Boolean(initialItems?.length)} feedItemCount={feedItems.length} listExpanded={more.hiddenCount === 0} />
     </div>
   );
 }

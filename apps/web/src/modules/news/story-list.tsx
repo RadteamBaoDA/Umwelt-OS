@@ -18,9 +18,14 @@ import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
-import { TranslatedBadge } from '@/modules/translations';
-import { TranslationNote } from '@/modules/translations';
-import { useContentTranslation } from '@/modules/translations';
+import {
+  isWorkspaceTranslationBlocker,
+  TranslateActionButton,
+  TranslatedBadge,
+  TranslationNote,
+  TranslationStatusBanner,
+  useContentTranslation,
+} from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
 import { formatRelativeTime, useReportGadgetFreshness } from '@/modules/dashboard/public-api';
@@ -84,6 +89,8 @@ export function StoryList(props: StoryListProps) {
 
       <StoryTrends vm={vm} />
 
+      <TranslationStatusBanner issues={vm.translation.issues} />
+
       <StoryListStatus vm={vm} />
 
       <StoryListBody vm={vm} />
@@ -105,10 +112,48 @@ export function StoryList(props: StoryListProps) {
   );
 }
 
-/** One compact story row: title, excerpt, count/time meta and publisher attribution. */
+/** Per-story on-demand Translate button or Original/Translation flip control; sits outside the selection button so controls are never nested. */
+function StoryTranslateControl({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const tTrans = useTranslations('translations');
+  const { translation, isShowingOriginal, toggleItemOriginal, translateStory } = vm;
+  if (!translation.enabled || !story.translation_revision) return null;
+  if (translation.results.has(story.id)) {
+    const showingOriginal = isShowingOriginal(story.id);
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-6 px-1.5 text-xs font-normal text-muted-foreground hover:text-foreground"
+        onClick={() => toggleItemOriginal(story.id)}
+      >
+        {showingOriginal ? tTrans('translationShort') : tTrans('originalShort')}
+      </Button>
+    );
+  }
+  return (
+    <TranslateActionButton
+      compact
+      label={tTrans('translate')}
+      pending={translation.pendingIds?.has(story.id) ?? false}
+      onClick={() => translateStory(story)}
+    />
+  );
+}
+
+/** Renders an item-specific translation error note for one story row (workspace blockers live in the top banner). */
+function StoryRowIssue({ vm, storyId }: { vm: StoryListVm; storyId: string }) {
+  if (vm.translation.results.has(storyId)) return null;
+  const issue = vm.translation.issues.get(storyId);
+  if (!issue || issue.status === 'pending' || isWorkspaceTranslationBlocker(issue)) return null;
+  return <TranslationNote issue={issue} />;
+}
+
+/** One compact story row: title, excerpt, count/time meta, publisher attribution, and per-story translation action. */
 function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; story: Story }) {
-  const { onSelectStory, translation, shown } = vm;
-  const excerpt = cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt);
+  const { onSelectStory, shown } = vm;
+  const displayTitle = shown(story)?.title ?? story.title;
+  const excerpt = cleanExcerpt(displayTitle, shown(story)?.excerpt ?? story.excerpt);
   const card = vm.embedded && vm.view === 'cards';
   return (
     <li data-testid={card ? 'news-card' : undefined} className={card ? 'min-w-0 rounded-md border border-border p-2' : undefined}>
@@ -120,14 +165,17 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
         className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 ${card ? 'py-1' : 'py-3'}`}
       >
         <span className="flex items-start justify-between gap-2">
-          <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
+          <span className="font-medium leading-snug">{displayTitle}</span>
           <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         </span>
         {excerpt ? <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{excerpt}</span> : null}
-        {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
         <StoryRowMeta vm={vm} story={story} />
       </Button>
-      <Attribution story={story} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Attribution story={story} />
+        <StoryTranslateControl vm={vm} story={story} />
+      </div>
+      <StoryRowIssue vm={vm} storyId={story.id} />
     </li>
   );
 }
@@ -250,16 +298,16 @@ type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 /** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow terminal panes the embedded List | Cards toggle and refresh move from the title bar into this row (CSS picks the copy), so no control is lost. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
   const terminal = useSkin() === 'terminal';
-  const { embedded, actionsHost, translation, incompleteNotice, showOriginal, setShowOriginal, refreshButton, pageActions } = vm;
+  const { embedded, actionsHost, incompleteNotice, refreshButton, pageActions, translationToolbarAction } = vm;
   return embedded ? (
-    // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
+    // Slim meta row: partial-data notice on the left, on-demand translation control + refresh on the right (no overlap with stories).
     <div className="story-meta-row flex h-6 shrink-0 items-center justify-between gap-2">
       <div className="min-w-0 truncate">
         <FootBarSlot>{incompleteNotice}</FootBarSlot>
       </div>
       <TitleBarSlot>
         <div className="flex items-center gap-1">
-          {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+          {translationToolbarAction}
           <div className="feed-view-slot flex items-center gap-1">
             <FeedViewToggle view={vm.view} setView={vm.setView} />
             {refreshButton}
@@ -420,7 +468,10 @@ function StoryLead({ vm, story }: { vm: StoryListVm; story: Story }) {
           </span>
         </span>
       </Button>
-      <Attribution story={story} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Attribution story={story} />
+        <StoryTranslateControl vm={vm} story={story} />
+      </div>
     </div>
   );
 }
@@ -539,17 +590,52 @@ function useStoryListData(props: StoryListProps) {
   };
 }
 
-/** Requests translations for loaded stories and derives the partial-data notice, relevance spread and lead story. */
+/** Wires on-demand translation for loaded stories and derives the partial-data notice, relevance spread and lead story. */
 function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const { t, incompleteLabel, stories, incompleteReasons, embedded } = p;
-  // Only the stories currently loaded are requested for translation.
+  const tTrans = useTranslations('translations');
+  // Only the stories currently loaded are eligible for on-demand translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
   // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
   useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
+  const [perItemOriginal, setPerItemOriginal] = useState<ReadonlySet<string>>(() => new Set());
+
+  /** True when this story is currently displaying its original language rather than its ready translation. */
+  const isShowingOriginal = (storyId: string) => (perItemOriginal.has(storyId) ? !showOriginal : showOriginal);
+
+  /** Flips one story between original and translated text without changing the rest of the list. */
+  const toggleItemOriginal = (storyId: string) => {
+    setPerItemOriginal((prev) => {
+      const next = new Set(prev);
+      if (next.has(storyId)) next.delete(storyId);
+      else next.add(storyId);
+      return next;
+    });
+  };
+
+  /** Triggers on-demand translation for a single story and reveals its translation once ready. */
+  const translateStory = (story: Story) => {
+    if (!story.translation_revision) return;
+    setPerItemOriginal((prev) => {
+      const next = new Set(prev);
+      if (showOriginal) next.add(story.id);
+      else next.delete(story.id);
+      return next;
+    });
+    translation.translate?.([{ id: story.id, revision: story.translation_revision }]);
+  };
+
+  /** Triggers on-demand translation for all currently loaded translatable stories. */
+  const translateAll = () => {
+    setShowOriginal(false);
+    setPerItemOriginal(new Set());
+    translation.translate?.(targets);
+  };
+
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
-  const shown = (story: Story) => (showOriginal ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
+  const shown = (story: Story) => (isShowingOriginal(story.id) ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
 
   // Embedded gadgets show the partial-data notice in the slim top meta row.
   const incompleteNotice = incompleteReasons.size ? (
@@ -590,12 +676,17 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     more,
     showOriginal,
     setShowOriginal,
+    isShowingOriginal,
+    toggleItemOriginal,
+    translateStory,
+    translateAll,
+    tTrans,
   };
 }
 
-/** Builds the refresh button and the translated-badge plus refresh action group. */
+/** Builds the refresh button, on-demand translation toolbar action, and page action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
-  const { t, storiesQuery, trendQuery, showTrends, embedded, translation, showOriginal, setShowOriginal } = p;
+  const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } = p;
   const refreshButton = (
     <Button
       variant="ghost"
@@ -611,14 +702,36 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
     </Button>
   );
 
+  const pendingCount = translation.pendingIds?.size ?? 0;
+  const untranslatedCount = targets.filter((item) => !translation.results.has(item.id)).length;
+  const translationToolbarAction: ReactNode = (
+    <>
+      {translation.results.size ? (
+        <TranslatedBadge
+          showOriginal={showOriginal}
+          targetLanguage={translation.targetLanguage}
+          onToggle={() => setShowOriginal((v) => !v)}
+        />
+      ) : null}
+      {translation.enabled && untranslatedCount > 0 ? (
+        <TranslateActionButton
+          compact
+          label={pendingCount > 0 ? tTrans('translatingCount', { count: pendingCount }) : tTrans('translateAll')}
+          pending={pendingCount > 0}
+          onClick={translateAll}
+        />
+      ) : null}
+    </>
+  );
+
   const pageActions: ReactNode = (
     <>
-      {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+      {translationToolbarAction}
       {refreshButton}
     </>
   );
 
-  return { ...p, refreshButton, pageActions };
+  return { ...p, refreshButton, translationToolbarAction, pageActions };
 }
 
 /** Provides relative-time formatting and the compact story row renderer. */

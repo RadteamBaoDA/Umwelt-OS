@@ -206,7 +206,7 @@ async def translate_input(
 ) -> dict[str, str]:
     """Translate ``source.fields``; ``deadline`` is a ``time.monotonic()`` instant. All-or-nothing."""
     fields = source.fields
-    if source.resource_type == "news_story":
+    if source.resource_type in ("news_story", "document"):
         if len(fields["title"]) > MAX_TITLE or len(fields["excerpt"]) > MAX_EXCERPT:
             raise TranslationBlocked("input_too_large")
     elif len(fields["content"]) > MAX_BRIEF:
@@ -220,7 +220,7 @@ async def translate_input(
         local or (execution_config.privacy.allow_remote_reasoning and policy.reasoning_allowed)
     ):
         raise TranslationBlocked("privacy_blocked")
-    if source.resource_type != "news_story":
+    if source.resource_type not in ("news_story", "document"):
         return {
             "content": await _translate_brief(
                 gateway,

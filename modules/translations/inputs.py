@@ -20,6 +20,11 @@ __all__ = ["TranslationInput", "load_translation_input"]
 _OWNERS = {
     "news_story": ("modules.news.public", "read_story_translation_input", "story_id"),
     "daily_brief": ("modules.dashboard.public", "read_brief_translation_input", "brief_id"),
+    "document": (
+        "modules.knowledge.documents.public",
+        "read_document_translation_input",
+        "document_id",
+    ),
 }
 
 

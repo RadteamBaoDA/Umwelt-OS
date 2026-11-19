@@ -263,6 +263,7 @@ from modules.knowledge.documents._tools import (
     list_tool_documents,
     revalidate_tool_document_fences,
 )
+from modules.knowledge.documents._translation import read_document_translation_input
 from modules.knowledge.documents._upload import (
     _assert_upload_absence,
     _upload_document_state,
@@ -283,6 +284,7 @@ from modules.knowledge.documents._versions import (
     review_version_fences,
     review_version_locator,
 )
+from modules.knowledge.documents._translation import read_document_translation_input
 
 # Schema/DTO contract re-exports so other modules can import them from this facade.
 from modules.sources import public as sources
@@ -492,6 +494,7 @@ __all__ = [
     "read_chat_evidence_chunks",
     "read_document_access_projection",
     "read_document_cleanup_job_identity",
+    "read_document_translation_input",
     "read_evidence_refs",
     "read_extraction_evidence_refs",
     "read_extraction_input",

@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import type { TranslationResult } from './types';
 
@@ -17,7 +18,41 @@ const REASON_KEYS = {
 } as const;
 const CODES = Object.keys(REASON_KEYS) as (keyof typeof REASON_KEYS)[];
 
-/** One short line saying why a story/brief is still shown in its original language (pending, blocked or failed). */
+/** Workspace-level block codes that should be surfaced once per gadget instead of repeated on every row. */
+const WORKSPACE_BLOCKER_CODES = new Set<string>(['model_capability_missing', 'privacy_blocked', 'translation_disabled']);
+
+/**
+ * True when an issue reflects a workspace configuration blocker rather than an item-specific failure.
+ *
+ * @param issue Translation result in pending, blocked, or failed state.
+ * @returns True if the error code applies to the whole workspace/gadget.
+ */
+export function isWorkspaceTranslationBlocker(issue: TranslationResult | undefined): boolean {
+  return Boolean(issue?.errorCode && WORKSPACE_BLOCKER_CODES.has(issue.errorCode));
+}
+
+/**
+ * Resolves the optional settings destination for a configuration-related translation block code.
+ *
+ * @param errorCode Machine error code returned by the translation worker.
+ * @returns Route href and literal `translations` catalog key for the action link, or null.
+ */
+export function translationSettingsHint(errorCode: string | null | undefined): {
+  href: string;
+  labelKey: 'control.openAiSettings' | 'control.openPrivacySettings' | 'control.openSettings';
+} | null {
+  if (errorCode === 'model_capability_missing') return { href: '/settings/ai', labelKey: 'control.openAiSettings' };
+  if (errorCode === 'privacy_blocked') return { href: '/settings/privacy', labelKey: 'control.openPrivacySettings' };
+  if (errorCode === 'translation_disabled') return { href: '/settings/translation', labelKey: 'control.openSettings' };
+  return null;
+}
+
+/**
+ * One short line saying why a story/brief is still shown in its original language (pending, blocked or failed).
+ * Configuration blockers include a direct link to the relevant Settings page.
+ *
+ * @param props.issue Current non-ready translation result, or undefined to render nothing.
+ */
 export function TranslationNote({ issue }: { issue: TranslationResult | undefined }) {
   const t = useTranslations('translations');
   if (!issue) return null;
@@ -30,5 +65,15 @@ export function TranslationNote({ issue }: { issue: TranslationResult | undefine
         : issue.status === 'blocked'
           ? t('note.blocked')
           : t('note.failed');
-  return <span className="block text-xs text-muted-foreground">{text}</span>;
+  const hint = issue.status === 'pending' ? null : translationSettingsHint(issue.errorCode);
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+      <span>{text}</span>
+      {hint ? (
+        <Link href={hint.href} className="font-medium text-foreground underline underline-offset-2">
+          {t(hint.labelKey)}
+        </Link>
+      ) : null}
+    </span>
+  );
 }
