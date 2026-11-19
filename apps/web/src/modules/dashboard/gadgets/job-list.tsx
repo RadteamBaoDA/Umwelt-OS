@@ -14,7 +14,13 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
 import { parseJobPosting, type JobPosting, type JobPostingInput } from './job-posting';
-import { ItemTranslateButton, TranslationStatusBanner, useItemTranslation, type ItemTranslationController } from '@/modules/translations';
+import {
+  CollectionTranslationBar,
+  ItemTranslateButton,
+  TranslationStatusBanner,
+  useItemTranslation,
+  type ItemTranslationController,
+} from '@/modules/translations';
 
 /** Props for the job postings gadget. */
 export interface JobListGadgetProps {
@@ -168,6 +174,7 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
+          <CollectionTranslationBar controller={translation} />
           <TranslationStatusBanner issues={translation.issues} />
           {visible.length === 0 ? (
             <p role="status" className="text-sm text-muted-foreground">

@@ -4,7 +4,13 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { Bookmark, Play, Search, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
-import { ItemTranslateButton, TranslationStatusBanner, useItemTranslation, type ItemTranslationController } from '@/modules/translations';
+import {
+  CollectionTranslationBar,
+  ItemTranslateButton,
+  TranslationStatusBanner,
+  useItemTranslation,
+  type ItemTranslationController,
+} from '@/modules/translations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
@@ -221,6 +227,7 @@ function VideoPanelView({
         <FeedSourceTabs sourceIds={sourceIds} sourceNames={sources} value={activeSource} onChange={setActiveSource} />
       )}
       {sourceIds.length > 0 && <VideoSearch value={search} onChange={setSearch} label={t('video.search')} />}
+      {items.length > 0 ? <CollectionTranslationBar controller={translation} /> : null}
       <TranslationStatusBanner issues={translation.issues} />
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />}
       {firstPageFailed && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
