@@ -3,6 +3,7 @@
 import base64
 import binascii
 import json
+import logging
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import (
     Select,
     func,
@@ -58,6 +60,8 @@ from modules.knowledge.documents.schemas import (
 from modules.sources import public as sources
 from modules.sources.public import SourceReadProjection as Source
 
+_log = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class NewsChunkProjection:
@@ -105,6 +109,33 @@ class NewsProjectionStatus:
     incomplete_reasons: tuple[str, ...]
 
 
+def _hydrate_provider_record(
+    raw: Any, *, document_id: UUID, version_id: UUID
+) -> tuple[bool, ProviderRecordMetadata | None]:
+    """Validate a stored ``provider_record`` against the current ``ProviderRecordMetadata``.
+
+    Returns ``(True, metadata)`` (``metadata`` is ``None`` when no record is stored) or
+    ``(False, None)`` when the stored record violates the contract. Side effect: logs a
+    warning with the document/version ids and the error type only (no content).
+    """
+    if raw is None:
+        return True, None
+    try:
+        return True, ProviderRecordMetadata.model_validate(raw)
+    except ValidationError as exc:
+        # Legacy or hand-edited rows may predate the current contract. Treat them like
+        # ambiguous-provenance rows (not hydratable) rather than letting the ValueError
+        # surface as a 422 for the whole page.
+        _log.warning(
+            "News projection skipped: provider_record violates contract "
+            "(document_id=%s version_id=%s error=%s)",
+            document_id,
+            version_id,
+            type(exc).__name__,
+        )
+        return False, None
+
+
 async def get_news_document_projection(
     session: AsyncSession,
     document_id: UUID,
@@ -119,6 +150,9 @@ async def get_news_document_projection(
     This read excludes deleted, paused, replaced, or incomplete versions and caps
     chunks at 100. Legacy/manual documents remain readable with explicitly
     non-snapshot metadata provenance rather than inferred historical metadata.
+    A stored ``provider_record`` that violates the current ``ProviderRecordMetadata``
+    contract makes the row non-hydratable: it returns ``None`` (logged as a warning with
+    ids and the error type only) instead of raising, so one bad row cannot fail a page.
     """
     components = await _current_document_components(
         session,
@@ -141,6 +175,13 @@ async def get_news_document_projection(
         ).all()
     )
     if not chunk_rows:
+        return None
+    hydrated, provider_metadata = _hydrate_provider_record(
+        provenance.provenance_json.get("provider_record") if provenance else None,
+        document_id=document.id,
+        version_id=version.id,
+    )
+    if not hydrated:
         return None
     chunk_count = (
         len(chunk_rows)
@@ -189,11 +230,7 @@ async def get_news_document_projection(
         normalization_version=provenance.normalization_version if provenance else None,
         chunk_count=chunk_count,
         chunks_truncated=chunks_truncated,
-        provider_metadata=(
-            ProviderRecordMetadata.model_validate(provenance.provenance_json["provider_record"])
-            if provenance and provenance.provenance_json.get("provider_record") is not None
-            else None
-        ),
+        provider_metadata=provider_metadata,
     )
 
 

@@ -386,3 +386,53 @@ async def test_release_season_uses_enum_equality_not_like() -> None:
         await public.list_gadget_document_projections(
             _session(), source_ids=(uuid4(),), release_season="fa%", **KW
         )
+
+
+@pytest.mark.asyncio
+async def test_contract_invalid_provider_record_is_skipped_not_raised(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stored provider_record violating the current contract hydrates to None, not a 422."""
+    from modules.knowledge.documents import _news
+
+    doc = SimpleNamespace(id=uuid4(), external_id=None, canonical_url=None, title="t")
+    doc.published_at = doc.observed_at = None
+    version = SimpleNamespace(
+        id=uuid4(), version_number=1, content_hash="h", created_at=datetime.now(UTC)
+    )
+    version.observed_at = datetime.now(UTC)
+    source = SimpleNamespace(
+        id=uuid4(), generation=1, name="s", type="api", provider="p", local_only=False
+    )
+    provenance = SimpleNamespace(
+        provenance_json={
+            "provider_record": {
+                "provider": "tvmaze_schedule",
+                "identity": "x",
+                "timestamp_basis": "collection",
+                "coverage": "returned_snapshot",
+                "content_truncated": False,
+                "source_fields": {"release_date": "2026-02-30"},
+            }
+        },
+        canonical_url=None,
+        title="t",
+        published_at=None,
+        selection_observed_at=datetime.now(UTC),
+        accepted_record_hash="a",
+        normalization_version=1,
+    )
+    monkeypatch.setattr(
+        _news,
+        "_current_document_components",
+        AsyncMock(return_value=(doc, version, source, provenance)),
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        return_value=MagicMock(all=MagicMock(return_value=[(uuid4(), 0, "chunk")]))
+    )
+    with caplog.at_level("WARNING"):
+        result = await _news.get_news_document_projection(session, doc.id, **KW)
+    assert result is None
+    assert "ValidationError" in caplog.text and str(doc.id) in caplog.text
+    assert "2026-02-30" not in caplog.text

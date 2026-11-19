@@ -1,6 +1,6 @@
 # Technical Implementation Plan: Media Collectors & Dashboard Gadget Upgrades for Umwelt-OS
 
-**Status:** Implementation in progress; see `docs/superpowers/plans/EXECUTION.md`.
+**Status:** Implemented and reviewed (2026-11-19); see "Implementation notes and accepted deviations" at the end and `docs/superpowers/plans/EXECUTION.md`.
 **Target Repository:** `d:\Project\Umwelt-OS`
 **Prepared:** 2026-11-17
 
@@ -218,14 +218,14 @@ Implement new media providers in clean waves (**Wave 1** covering all 5 requeste
 
 | Canonical Genre (`MediaGenre`) | TMDB Movie ID | TMDB TV ID | Trakt Slug | AniList `genre_in` | MangaDex Tag UUID | MangaUpdates `genre` | Open Library `/subjects/` | Podcast Index `cat` ID | IGDB `genres` / `themes` | Steam `genres[].id` | Wikidata Film QID |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `action` | `28` | `10759` | `action` | `"Action"` | `391b0423-d847-456f-aff0-8b0cfc03066b` | `"Action"` | `action_adventure` | — | theme `1` | `1` (Action) | `Q41263` |
+| `action` | `28` | `10759` | `action` | `"Action"` | `391b0423-d847-456f-aff0-8b0cfc03066b` | `"Action"` | `action_adventure` | — | theme `1` | `1` (Action) | `Q188473` |
 | `adventure` | `12` | `10759` | `adventure` | `"Adventure"` | `87cc87cd-a395-47af-b27a-93258283bbc6` | `"Adventure"` | `adventure` | — | genre `31` | `25` (Adventure) | — |
 | `sci_fi` | `878` | `10765` | `science-fiction` | `"Sci-Fi"` | `256c8bd9-4904-4360-bf4f-508a76d67183` | `"Sci-fi"` | `science_fiction` | `26` (Fiction) / `67` | theme `18` | — | `Q471839` |
 | `fantasy` | `14` | `10765` | `fantasy` | `"Fantasy"` | `cdc58593-87dd-415e-bbc0-2ec27bf404cc` | `"Fantasy"` | `fantasy` | `26` (Fiction) | theme `17` | — | — |
 | `romance` | `10749` | — | `romance` | `"Romance"` | `423e2eae-a7a2-4a8b-ac03-a8351462d71d` | `"Romance"` | `romance` | — | — | — | — |
 | `thriller` | `53` | — | `thriller` | `"Thriller"` | `07251805-a27e-4d59-b488-f0bfbec15168` | `"Psychological"` | `thrillers` | — | theme `20` | — | `Q2484376` |
 | `horror` | `27` | — | `horror` | `"Horror"` | `cdad7e68-1419-41dd-bdce-27753074a640` | `"Horror"` | `horror` | — | theme `19` | — | `Q200092` |
-| `comedy` | `35` | `35` | `comedy` | `"Comedy"` | `4d32cc48-9f00-4cca-9b5a-a839f0764984` | `"Comedy"` | `humor` | `16` (Comedy) | — | — | `Q157444` |
+| `comedy` | `35` | `35` | `comedy` | `"Comedy"` | `4d32cc48-9f00-4cca-9b5a-a839f0764984` | `"Comedy"` | `humor` | `16` (Comedy) | — | — | `Q157443` |
 | `drama` | `18` | `18` | `drama` | `"Drama"` | `b9af3a63-f058-46de-a9a0-e0c13906197a` | `"Drama"` | `drama` | `27` (Drama) | — | — | `Q130232` |
 | `mystery` | `9648` | `9648` | `mystery` | `"Mystery"` | `ee653e07-d70f-4ec3-807b-38b78795154c` | `"Mystery"` | `mystery_and_detective_stories` | — | theme `43` | — | — |
 | `documentary` | `99` | `99` | `documentary` | — | — | — | `biography` / `history` | `79` (Documentary) | — | `81` | `Q93204` |
@@ -560,3 +560,19 @@ All checks below must pass without network reliance (using `httpx.MockTransport`
 | **Phase 2: Wave 1 Keyless Collectors + YouTube Upgrade** | `anilist_anime`, `anilist_manga`, `livechart_episodes`, `ann_news`, `mangaupdates_releases`, `mangadex_releases`, `openlibrary_books`, `gutendex_books`, `apple_books_rss`, `wikidata_movies`, `itunes_movies`, `letterboxd_rss`, `podcast_rss`, `tvmaze_schedule`, upgraded `youtube` (`SendGate` + `fetch_bounded` + `@handle`/`UULF`/`UUSH`), wired to upstream pushdown (`build_url`) + post-fetch `filter_records()` + normalized `_MEDIA_FIELDS` + doc inventory sync. | Phase 1 |
 | **Phase 3: Dashboard Gadgets, Filter UI, Editor Pickers & Source UI** | `FeedImage` aspect variants, `media_feed`, `media_calendar` (with `MediaFilterBar`, `Filter (N)` `Popover`, active chips, `Expand` preservation), `GadgetEditor` multi-dimensional pickers, `video_panel` upgrade, `FeedStream` 1-click Ask AI, `YoutubeScope` + `MediaFilterFields` + `EnumOption` `spec.labelled` fix, `en-us`/`vi-vi` locales (`as const` tables), Vitest + snapshot parity (`gadget-renderers.json`, `gadget-templates.json`). | Phase 1 & 2 |
 | **Phase 4: Optional API-Key Upgrades & Wave 2–3** | `tmdb_movies`, `tmdb_tv`, `trakt_media`, `omdb_lookup`, `mal_anime`, `mal_manga`, `hardcover_books`, `google_books`, `youtube_api`, `podcast_index`, plus Wave 2 (`listenbrainz_releases` + MusicBrainz WS/2) and Wave 3 (`steam_releases`, `igdb_games`), each wired into the canonical genre/country/language/rating filter matrix. | Phase 1–3 |
+
+---
+
+## Implementation notes and accepted deviations (2026-11-19)
+
+Recorded after the production-readiness review of all four phases.
+
+- **Wikidata film-genre QIDs.** The original §E table listed `Q41263` (action; that entity is "budget") and `Q157444` (comedy; nonexistent). The table now uses `Q188473` (action film) and `Q157443` (comedy film). The implementation also maps adventure `Q319221`, fantasy `Q157394`, romance `Q1054574`, mystery `Q1200678` and animation `Q202866`; all QIDs were checked against Wikidata labels on 2026-11-19.
+- **Provider modules and tests** are split into more, differently named files than §3.4/§3.5 list (for example `media_anime_manga_sources.py`, `media_movie_sources.py`, `media_keyed_catalogs.py`, `media_native.py`, `media_music.py`, `media_games.py`, plus `provider_options_media.py`, `provider_specs_media.py`, `_news_media.py`) to keep the 1500-line file and 100-line function ratchets green. Coverage of every listed test is equivalent.
+- **`ann_news`** is a scoped provider (mode, media type, category, edition) instead of a fixed built-in; it is a superset of the fixed preset.
+- **`tvmaze_schedule`** is scoped as in §3.1 A (`tvmaze_mode`, `media_country`, `tvmaze_global`, `tvmaze_show_ids`); sources enabled before the conversion keep their documents only if they set none of those fields.
+- **iTunes `genreId`** is not pushed down: §E defines no iTunes genre-ID mapping, so genres are filtered post-fetch from `primaryGenreName`.
+- **YouTube Atom rating.** `media:starRating@average × 20` feeds an optional `min_rating` filter; YouTube reports a near-constant average, so the filter is low-signal.
+- **Optional provenance GIN index** (§2.1.6) was not added; projection filters stay bounded by `source_id IN (...)`.
+- **AniList rate limiting** uses fixed 2.1 s spacing plus `X-RateLimit-Remaining` checkpointing (observed limit 30/min on 2026-11-19) and `Retry-After` deferral.
+

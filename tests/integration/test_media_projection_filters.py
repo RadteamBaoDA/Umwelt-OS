@@ -245,8 +245,9 @@ async def test_release_date_asc_tolerates_invalid_and_partial_dates(
             "content_truncated": False,
             "source_fields": {"release_date": "2026-02-30"},
         },
-        created_at=now - timedelta(days=60),
+        created_at=now,
     )
+    # The contract-invalid row is inside the window: the page must succeed without it.
     ids = await _ids(ready_owner_client, seeder, ("sort", "release_date_asc"))
     assert {full, date_only} <= ids
     assert (partial_year in ids) == _expected_in_default_window(year, now)
