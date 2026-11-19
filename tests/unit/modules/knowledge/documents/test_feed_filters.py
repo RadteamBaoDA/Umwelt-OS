@@ -436,3 +436,21 @@ async def test_contract_invalid_provider_record_is_skipped_not_raised(
     assert result is None
     assert "ValidationError" in caplog.text and str(doc.id) in caplog.text
     assert "2026-02-30" not in caplog.text
+
+
+def test_contract_skip_warning_is_logged_once_per_version(caplog: pytest.LogCaptureFixture) -> None:
+    from uuid import uuid4
+
+    from modules.knowledge.documents import _news
+
+    document_id, version_id = uuid4(), uuid4()
+    bad = {"not": "a provider record"}
+    with caplog.at_level("WARNING", logger=_news._log.name):
+        for _ in range(3):
+            assert _news._hydrate_provider_record(
+                bad, document_id=document_id, version_id=version_id
+            ) == (
+                False,
+                None,
+            )
+    assert sum("violates contract" in r.getMessage() for r in caplog.records) == 1

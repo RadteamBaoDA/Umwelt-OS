@@ -109,6 +109,11 @@ class NewsProjectionStatus:
     incomplete_reasons: tuple[str, ...]
 
 
+# ponytail: process-local, bounded dedupe of contract-skip warnings; clears when full.
+_CONTRACT_SKIP_WARNED: set[tuple[UUID, UUID]] = set()
+_CONTRACT_SKIP_WARNED_MAX = 4096
+
+
 def _hydrate_provider_record(
     raw: Any, *, document_id: UUID, version_id: UUID
 ) -> tuple[bool, ProviderRecordMetadata | None]:
@@ -116,7 +121,8 @@ def _hydrate_provider_record(
 
     Returns ``(True, metadata)`` (``metadata`` is ``None`` when no record is stored) or
     ``(False, None)`` when the stored record violates the contract. Side effect: logs a
-    warning with the document/version ids and the error type only (no content).
+    warning (once per document/version per process, bounded) with the ids and the
+    error type only (no content).
     """
     if raw is None:
         return True, None
@@ -125,7 +131,14 @@ def _hydrate_provider_record(
     except ValidationError as exc:
         # Legacy or hand-edited rows may predate the current contract. Treat them like
         # ambiguous-provenance rows (not hydratable) rather than letting the ValueError
-        # surface as a 422 for the whole page.
+        # surface as a 422 for the whole page. Warn once per version per process: the same
+        # row is re-read on every page and worker pass.
+        key = (document_id, version_id)
+        if key in _CONTRACT_SKIP_WARNED:
+            return False, None
+        if len(_CONTRACT_SKIP_WARNED) >= _CONTRACT_SKIP_WARNED_MAX:
+            _CONTRACT_SKIP_WARNED.clear()
+        _CONTRACT_SKIP_WARNED.add(key)
         _log.warning(
             "News projection skipped: provider_record violates contract "
             "(document_id=%s version_id=%s error=%s)",
