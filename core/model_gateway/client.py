@@ -544,6 +544,24 @@ class ModelGateway:
             self.timeout_seconds, connect=min(_CONNECT_TIMEOUT_SECONDS, self.timeout_seconds)
         )
 
+    def _sdk_client(
+        self, http: httpx.AsyncClient, base_url: str, api_key: str | None
+    ) -> AsyncOpenAI:
+        """Build the OpenAI SDK client over the gateway's pinned ``httpx`` client with SDK retries disabled.
+
+        openai 3 is built on ``httpx2`` but officially accepts a legacy ``httpx.AsyncClient``/``Timeout`` and maps
+        that client's timeout/request exceptions to ``APITimeoutError``/``APIConnectionError``
+        (``tests/unit/core/test_gateway_sdk_transport_errors.py``). Keeping ``httpx`` preserves the pinned
+        SSRF/DNS transport; ``cast`` only bridges the SDK's ``httpx2`` annotations. Retries stay gateway-owned.
+        """
+        return AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            timeout=cast(Any, self._timeout()),
+            max_retries=0,
+            http_client=cast(Any, http),
+        )
+
     @asynccontextmanager
     async def _lease(self, wait_seconds: float) -> AsyncIterator[None]:
         """Acquire one of the Redis-backed gateway leases (bounded wait), hold it with a refreshed TTL, release only our token.
@@ -855,13 +873,7 @@ class ModelGateway:
         breaker logic. The protocol-specific wire call is delegated to ``self.protocol``.
         """
         http = self._http_client(base_url)
-        async with AsyncOpenAI(
-            base_url=base_url,
-            api_key=self.api_key or "not-configured",
-            timeout=self._timeout(),
-            max_retries=0,
-            http_client=http,
-        ) as client:
+        async with self._sdk_client(http, base_url, self.api_key or "not-configured") as client:
             session = self._wire_session(http, client, base_url)
             for attempt in range(2):
                 try:
@@ -985,13 +997,7 @@ class ModelGateway:
             """Call the configured model-list endpoint and return valid model IDs; map SDK and network failures to the gateway error."""
             await self.before_send()
             http = self._http_client(base_url)
-            async with AsyncOpenAI(
-                base_url=base_url,
-                api_key=self.api_key,
-                timeout=self._timeout(),
-                max_retries=0,
-                http_client=http,
-            ) as client:
+            async with self._sdk_client(http, base_url, self.api_key) as client:
                 try:
                     return await self.protocol.list_models(
                         self._wire_session(http, client, base_url)
@@ -1027,12 +1033,8 @@ class ModelGateway:
         async def send() -> dict[str, Any]:
             """GET the filtered model list and map SDK/network failures to the gateway error."""
             await self.before_send()
-            async with AsyncOpenAI(
-                base_url=base_url,
-                api_key=self.api_key,
-                timeout=self._timeout(),
-                max_retries=0,
-                http_client=self._http_client(base_url),
+            async with self._sdk_client(
+                self._http_client(base_url), base_url, self.api_key
             ) as client:
                 try:
                     page = await client.get(
@@ -1400,13 +1402,7 @@ class ModelGateway:
                 cast("str", self.base_url)
             )  # non-None: guaranteed by _stream_preflight
             http = self._http_client(base_url)
-            async with AsyncOpenAI(
-                base_url=base_url,
-                api_key=self.api_key or "not-configured",
-                timeout=self._timeout(),
-                max_retries=0,
-                http_client=http,
-            ) as client:
+            async with self._sdk_client(http, base_url, self.api_key or "not-configured") as client:
                 session = self._wire_session(http, client, base_url)
                 splitters: dict[int, _ThinkSplitter] = {}
                 while True:  # bounded: at most 3 opens (effort drop, then clamp, then success; otherwise one retry)

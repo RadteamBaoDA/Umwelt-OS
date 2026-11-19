@@ -11,12 +11,15 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
 from core.model_gateway.transport import EndpointNetworkPolicyError
+
+# openai 3 annotates its exceptions with ``httpx2`` types but officially accepts the legacy ``httpx`` objects this
+# module sends through the pinned transport (they are only stored for diagnostics); ``cast`` bridges the stubs.
 
 # 2026-10-21 rejects temperature/top_p/top_k on every model (400), so the translation drops them.
 ANTHROPIC_VERSION = "2026-10-21"
@@ -511,7 +514,7 @@ def _status_error(response: httpx.Response) -> APIStatusError:
     error = body.get("error") if isinstance(body, dict) else None
     error = error if isinstance(error, dict) else {}
     message = f"{error.get('type') or 'error'}: {error.get('message') or ''}".strip()
-    return APIStatusError(message, response=response, body=body)
+    return APIStatusError(message, response=cast(Any, response), body=body)
 
 
 async def _send(http: httpx.AsyncClient, request: httpx.Request, *, stream: bool) -> httpx.Response:
@@ -523,9 +526,9 @@ async def _send(http: httpx.AsyncClient, request: httpx.Request, *, stream: bool
     try:
         response = await http.send(request, stream=stream)
     except httpx.TimeoutException as exc:
-        raise APITimeoutError(request=request) from exc
+        raise APITimeoutError(request=cast(Any, request)) from exc
     except (httpx.TransportError, EndpointNetworkPolicyError) as exc:
-        raise APIConnectionError(message="connection failed", request=request) from exc
+        raise APIConnectionError(message="connection failed", request=cast(Any, request)) from exc
     if response.status_code >= 400:
         try:
             await response.aread()
@@ -595,9 +598,11 @@ async def open_message_stream(
                     for chunk in translator.feed(event):
                         yield chunk
         except httpx.TimeoutException as exc:
-            raise APITimeoutError(request=request) from exc
+            raise APITimeoutError(request=cast(Any, request)) from exc
         except (httpx.TransportError, EndpointNetworkPolicyError) as exc:
-            raise APIConnectionError(message="connection failed", request=request) from exc
+            raise APIConnectionError(
+                message="connection failed", request=cast(Any, request)
+            ) from exc
         finally:
             await response.aclose()
 
