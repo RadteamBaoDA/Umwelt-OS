@@ -25,7 +25,7 @@ export type WorkspaceContextValue = {
 };
 
 const STORAGE_KEY = 'umwelt:workspace';
-const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
+export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 /** Returns the workspace selection, list and switch action. */
 export function useWorkspace(): WorkspaceContextValue {

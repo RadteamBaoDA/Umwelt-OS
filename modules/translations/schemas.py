@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from modules.settings.public import TranslationSettingsRead
 
-ResourceType = Literal["news_story", "daily_brief"]
+ResourceType = Literal["news_story", "daily_brief", "document"]
 TranslationStatus = Literal["pending", "ready", "unchanged", "blocked", "failed"]
 
 

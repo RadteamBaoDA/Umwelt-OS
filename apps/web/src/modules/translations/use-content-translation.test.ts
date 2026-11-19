@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
 }));
 const ws = vi.hoisted(() => ({ id: 'w1', generation: 1 }));
 vi.mock('./api', () => api);
-vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
+vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: ws.id } }) }));
 vi.mock('@/core/api', () => ({ workspaceGeneration: () => ws.generation }));
 
@@ -42,11 +42,18 @@ describe('useContentTranslation', () => {
     expect(chunk(ids(60)).map((g) => g.length)).toEqual([25, 25, 10]);
   });
 
-  it('requests only the supplied page ids, in chunks of at most 25', async () => {
+  it('does not auto-submit on mount and only translates when requested, in chunks of at most 25', async () => {
     api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) =>
       accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))),
     );
-    renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
+    await settle();
+    await settle();
+    expect(api.submitTranslationBatch).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.translate();
+    });
     await settle();
     await settle();
     const sizes = api.submitTranslationBatch.mock.calls.map((c: unknown[][]) => c[0].length).sort((a: number, b: number) => a - b);
@@ -58,6 +65,48 @@ describe('useContentTranslation', () => {
     ).toBe(true);
   });
 
+  it('hydrates DB cache hits (status=ready without payload) and cached blocked error codes immediately via readTranslationBatch', async () => {
+    api.submitTranslationBatch.mockResolvedValue(
+      accepted([
+        { resource_id: 's0', status: 'ready' },
+        { resource_id: 's1', status: 'blocked' },
+      ]),
+    );
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      target_language: 'vi',
+      items: [
+        {
+          resource_type: 'news_story',
+          resource_id: 's0',
+          status: 'ready',
+          translation: { title: 'Tieu de da dich' },
+          original_revision: 'r',
+          error_code: null,
+        },
+        {
+          resource_type: 'news_story',
+          resource_id: 's1',
+          status: 'blocked',
+          translation: null,
+          original_revision: 'r',
+          error_code: 'model_capability_missing',
+        },
+      ],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(api.readTranslationBatch).toHaveBeenCalledTimes(1);
+    expect(api.readTranslationBatch).toHaveBeenCalledWith('b1', expect.any(AbortSignal));
+    expect(result.current.results.get('s0')?.translation?.title).toBe('Tieu de da dich');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('model_capability_missing');
+  });
+
   it('drops a late result after a workspace switch', async () => {
     let resolve!: (value: unknown) => void;
     api.submitTranslationBatch.mockReturnValue(
@@ -67,6 +116,9 @@ describe('useContentTranslation', () => {
     );
     const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
     await settle();
+    act(() => {
+      result.current.translate();
+    });
     ws.generation = 2;
     await act(async () => {
       resolve({
@@ -84,7 +136,11 @@ describe('useContentTranslation', () => {
       batch_id: 'b1',
       items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
     });
-    renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
     await settle();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(MAX_POLL_MS + POLL_MS * 3);
@@ -108,6 +164,9 @@ describe('useContentTranslation', () => {
     });
     const first = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
     await settle();
+    act(() => {
+      first.result.current.translate();
+    });
     await settle();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);

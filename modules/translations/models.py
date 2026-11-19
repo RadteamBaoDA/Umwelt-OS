@@ -30,7 +30,7 @@ from core.ids import uuid7
 
 RETENTION_DAYS = 30
 STATUSES = ("pending", "ready", "unchanged", "blocked", "failed")
-RESOURCE_TYPES = ("news_story", "daily_brief")
+RESOURCE_TYPES = ("news_story", "daily_brief", "document")
 _STATUS_SQL = ", ".join(f"'{value}'" for value in STATUSES)
 _RESOURCE_SQL = ", ".join(f"'{value}'" for value in RESOURCE_TYPES)
 

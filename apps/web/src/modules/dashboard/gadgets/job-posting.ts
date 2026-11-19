@@ -1,6 +1,8 @@
 import { safeHttpUrl } from '@/core/safe-url';
 /** Normalized job posting row shown by the Jobs gadget; unknown fields are null. */
 export interface JobPosting {
+  documentId?: string;
+  documentVersionId?: string;
   title: string;
   company: string | null;
   location: string | null;
@@ -13,6 +15,8 @@ export interface JobPosting {
 
 /** Minimal projection fields `parseJobPosting` reads (structurally a subset of GadgetDocumentProjection). */
 export interface JobPostingInput {
+  document_id?: string;
+  document_version_id?: string;
   title: string;
   canonical_url: string | null;
   published_at: string | null;
@@ -74,6 +78,8 @@ export function parseJobPosting(item: JobPostingInput): JobPosting {
   const salary = clean(fields.get('salary'));
   const publisher = typeof sourceFields.publisher === 'string' ? clean(sourceFields.publisher) : null;
   return {
+    documentId: item.document_id,
+    documentVersionId: item.document_version_id,
     title,
     company,
     location: clean(fields.get('location')),

@@ -127,7 +127,11 @@ const renderPage = () =>
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <NextIntlClientProvider
         locale="en-US"
-        messages={{ dashboard: getCatalog('en-us', 'dashboard'), uiSweep: getCatalog('en-us', 'uiSweep') }}
+        messages={{
+          dashboard: getCatalog('en-us', 'dashboard'),
+          uiSweep: getCatalog('en-us', 'uiSweep'),
+          translations: getCatalog('en-us', 'translations'),
+        }}
       >
         <DashboardPage dashboardId="d1" />
       </NextIntlClientProvider>

@@ -1,5 +1,5 @@
 /** Wire contracts of /api/v1/translations and /api/v1/settings/translation. */
-export type ResourceType = 'news_story' | 'daily_brief';
+export type ResourceType = 'news_story' | 'daily_brief' | 'document';
 export type TranslationStatus = 'pending' | 'ready' | 'unchanged' | 'blocked' | 'failed';
 export type TranslationLanguage = 'vi' | 'en';
 

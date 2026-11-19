@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -8,6 +8,7 @@ import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { cleanExcerpt } from '@/modules/news';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
+import { CollectionTranslationBar, ItemTranslateButton, TranslationStatusBanner, useItemTranslation } from '@/modules/translations';
 
 /** Props for the TextPanel gadget component. */
 export interface TextPanelProps {
@@ -19,7 +20,8 @@ export interface TextPanelProps {
 
 /**
  * Standard Text Panel gadget template.
- * Displays formatted notes, intelligence memos, or document summaries with sanitized text rendering.
+ * Displays formatted notes, intelligence memos, or document summaries with sanitized text rendering
+ * and on-demand per-document / all-document translation controls.
  *
  * @param props Gadget instance configuration and optional text content.
  * @returns Accessible text panel component.
@@ -33,6 +35,9 @@ export function TextPanel({ instance, content }: TextPanelProps) {
     enabled: sourceIds.length > 0 && !content,
     queryFn: () => listGadgetDocumentProjections(sourceIds),
   });
+  const items = useMemo(() => (query.data?.items ?? []).slice(0, 5), [query.data]);
+  const targets = useMemo(() => items.map((item) => ({ id: item.document_id, revision: item.document_version_id })), [items]);
+  const translation = useItemTranslation('document', targets);
 
   // Revision 1 says nothing; an edited gadget reports its revision in the frame footer instead of an inner header.
   const newestObserved =
@@ -52,14 +57,26 @@ export function TextPanel({ instance, content }: TextPanelProps) {
         <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />
       ) : query.isError ? (
         <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />
-      ) : query.data?.items.length ? (
-        query.data.items.slice(0, 5).map((item, index) => (
-          <section key={item.document_version_id} className="max-w-prose space-y-1">
-            {/* The first document leads at 17px; the rest are plain 14px headings. */}
-            <h3 className={index === 0 ? 'text-[17px] font-semibold leading-snug' : 'text-sm font-semibold'}>{item.title}</h3>
-            <p className="whitespace-pre-wrap text-sm leading-[1.6] text-foreground">{cleanExcerpt(item.title, item.excerpt)}</p>
-          </section>
-        ))
+      ) : items.length ? (
+        <>
+          <CollectionTranslationBar controller={translation} />
+          <TranslationStatusBanner issues={translation.issues} />
+          {items.map((item, index) => {
+            const shown = translation.shown(item.document_id);
+            const title = shown?.title ?? item.title;
+            const excerpt = cleanExcerpt(title, shown?.excerpt ?? item.excerpt);
+            return (
+              <section key={item.document_version_id} className="max-w-prose space-y-1">
+                <div className="flex items-start justify-between gap-2">
+                  {/* The first document leads at 17px; the rest are plain 14px headings. */}
+                  <h3 className={index === 0 ? 'text-[17px] font-semibold leading-snug' : 'text-sm font-semibold'}>{title}</h3>
+                  <ItemTranslateButton controller={translation} target={{ id: item.document_id, revision: item.document_version_id }} />
+                </div>
+                <p className="whitespace-pre-wrap text-sm leading-[1.6] text-foreground">{excerpt}</p>
+              </section>
+            );
+          })}
+        </>
       ) : (
         <GadgetNotice kind="empty" className="p-0" message={t('gadget.dataEmpty')} />
       )}
