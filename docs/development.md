@@ -106,11 +106,11 @@ Ratchet procedure: when a change raises a measured value by 2 or more points, ra
 
 | Metric | Measured | Budget |
 | --- | --- | --- |
-| Largest route first-load JS (`/settings/global`) | 817.6 KB (825.2 after the media datasource review, before lazy-loading the automation rules) | 827 KB |
-| Chat (`/chat`) | 816.7 KB (745.2 after chat lazy-loading; 793.4 after the data-source work; 820.4 after the media datasource review, before the task-draft hand-off) | 822 KB |
+| Largest route first-load JS (`/settings/global`) | 819.4 KB (825.2 after the media datasource review, before lazy-loading the automation rules) | 827 KB |
+| Chat (`/chat`) | 818.5 KB (745.2 after chat lazy-loading; 793.4 after the data-source work; 820.4 after the media datasource review, before the task-draft hand-off) | 822 KB |
 | Landing page (`/`) | 230.4 KB | 245 KB |
 | Sign-in (`/login`) | 337.8 KB | 350 KB |
-| Total client JS | 2114.2 KB | 2313 KB |
+| Total client JS | 2115.4 KB | 2313 KB |
 
 Measured 2026-11-19 (landing and sign-in from 2026-11-18). Module indexes chain across modules (chat -> news -> sources -> dashboard -> settings), so a static import of a heavy component in any of them lands on every workspace route: the automation rule list in AI settings and the chat task-draft editor are lazy or handed off for that reason. The 2026-11-18 raise covers the terminal ("Developer") skin: about 10 KB gzip of terminal-only gadget, statusline and chat presentation on every workspace route. The 2026-11-19 raises (chat 820 → 822 KB, largest route 825 → 827 KB) cover media datasource message-catalog keys (key-unlock text, TVMaze scoped panel, new filter labels), which load with the full workspace catalog on every workspace route. Public routes carry per-route budgets in `routes`; the workspace providers and full message catalog load only under `app/(workspace)`.
 
