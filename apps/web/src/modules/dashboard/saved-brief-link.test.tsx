@@ -6,7 +6,7 @@ import { getCatalog } from '@locales';
 
 const api = vi.hoisted(() => ({ getBriefSlotOwner: vi.fn() }));
 const automations = vi.hoisted(() => ({ getRuleConversationId: vi.fn() }));
-vi.mock('@/modules/automations', () => automations);
+vi.mock('@/modules/automations/public-api', () => automations);
 vi.mock('./daily-api', () => ({ dailyKeys: { slotOwner: ['brief-slot-owner'] }, ...api }));
 vi.mock('./brief-text', () => ({ BriefText: () => null }));
 vi.mock('./brief-sharing', () => ({ BriefShareButton: () => null, SharedBriefs: () => null }));

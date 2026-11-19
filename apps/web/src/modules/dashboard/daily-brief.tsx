@@ -25,7 +25,7 @@ import { BriefShareButton, SharedBriefs } from './brief-sharing';
 import { BriefText } from './brief-text';
 import { briefCitationHref } from './brief-citation-href';
 import { useSession } from '@/core/session';
-import { getRuleConversationId } from '@/modules/automations';
+import { getRuleConversationId } from '@/modules/automations/public-api';
 import { FootBarSlot } from '@/components/gadget-title-slot';
 import { useReportGadgetFreshness } from './gadget-freshness';
 

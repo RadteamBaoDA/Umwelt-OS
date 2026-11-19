@@ -15,7 +15,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { dailyKeys } from '@/modules/dashboard/public-api';
 import { PickQrButton } from '@/modules/pick';
-import { ScheduleText, getAutomation, patchAutomation } from '@/modules/automations';
+import { getAutomation, patchAutomation } from '@/modules/automations/public-api';
+import { useScheduleLabel } from './schedule-label';
 
 export const profileTitleKeys: Record<
   string,
@@ -130,6 +131,7 @@ function TaskScheduleLine({ automationId, csrfToken }: { automationId: string; c
   const t = useTranslations('chat');
   const client = useQueryClient();
   const key = ['automation', automationId];
+  const scheduleLabel = useScheduleLabel();
   const rule = useQuery({ queryKey: key, queryFn: () => getAutomation(automationId) });
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => patchAutomation(automationId, rule.data!.revision, { enabled }, csrfToken),
@@ -146,7 +148,7 @@ function TaskScheduleLine({ automationId, csrfToken }: { automationId: string; c
   return (
     <>
       <span className="rounded bg-secondary px-2 py-0.5 font-semibold">
-        {rule.data && cron ? <ScheduleText cron={cron} /> : t('taskThread.badge')}
+        {rule.data && cron ? scheduleLabel(cron) : t('taskThread.badge')}
       </span>
       {rule.data && (
         <>

@@ -8,11 +8,15 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-session';
-import { BriefTaskEditor, ScheduleText } from '@/modules/automations';
+import dynamic from 'next/dynamic';
 import { briefCron, isLegacyBrief, listAutomations, scheduledTaskKind } from '@/modules/automations/public-api';
 import type { components } from '@/core/api-types.gen';
+import { useScheduleLabel } from './schedule-label';
 
 type ScheduledTaskDraft = components['schemas']['ScheduledTaskDraft'];
+
+// The editor (and the Scheduled tasks graph it imports) loads only when the owner opens it.
+const BriefTaskEditor = dynamic(() => import('@/modules/automations').then((m) => m.BriefTaskEditor));
 
 /** Literal catalog keys for the section labels (reuses the automations catalog). */
 const SECTION_KEYS = {
@@ -37,6 +41,7 @@ const SECTION_KEYS = {
 export function TaskDraftCard({ draft }: { draft: ScheduledTaskDraft }) {
   const t = useTranslations('chat');
   const ta = useTranslations('automations');
+  const scheduleLabel = useScheduleLabel();
   const { csrfToken } = useWorkspaceSession();
   const [editing, setEditing] = useState(false);
   const [created, setCreated] = useState(false);
@@ -54,9 +59,7 @@ export function TaskDraftCard({ draft }: { draft: ScheduledTaskDraft }) {
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         <p className="font-medium">{ta('scheduledTasks.briefName')}</p>
-        <p className="text-muted-foreground">
-          <ScheduleText cron={cron} />
-        </p>
+        <p className="text-muted-foreground">{scheduleLabel(cron)}</p>
         <p className="text-muted-foreground">{sections.map((section) => ta(SECTION_KEYS[section])).join(', ')}</p>
         {draft.extra_instruction ? <p className="text-muted-foreground">{draft.extra_instruction}</p> : null}
         {created || existing ? (
