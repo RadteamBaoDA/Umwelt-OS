@@ -367,9 +367,11 @@ async def test_release_date_asc_admits_single_provenance_versions_and_default_wi
     )
     compiled = session.execute.call_args.args[0].compile(dialect=postgresql.dialect())
     sql = str(compiled)
-    # One provenance row per version (no duplicate join rows) and a bounded default window.
-    assert "count(" in sql
-    assert 1 in compiled.params.values()
+    # One provenance row per version (NOT EXISTS of a sibling row, no per-row count) from a
+    # materialized candidate CTE, and a bounded default window.
+    assert "count(" not in sql
+    assert "MATERIALIZED" in sql and "release_candidates" in sql
+    assert "NOT (EXISTS" in sql or "NOT EXISTS" in sql
     assert sql.count(" >= ") >= 1 and sql.count(" <= ") >= 1
     assert any(isinstance(v, datetime) for v in compiled.params.values())
 

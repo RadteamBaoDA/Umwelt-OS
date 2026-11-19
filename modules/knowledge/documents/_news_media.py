@@ -9,6 +9,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal, get_args
+from uuid import UUID
 
 from sqlalchemy import DateTime, Numeric, Select, and_, case, func, or_, select
 from sqlalchemy import cast as sa_cast
@@ -117,8 +118,11 @@ def _validate_media_filter_params(
         raise ValueError("Invalid sort order")
 
 
-def _release_date_ts_expr(sf: Any) -> Any:
-    """Parse supported release dates safely, falling back to publication or creation time."""
+def _parsed_release_ts_expr(sf: Any) -> Any:
+    """Parse ``source_fields.release_date`` to a timestamptz, or SQL NULL when absent or invalid.
+
+    Reads only provenance columns, so it can be evaluated on the provenance side before any join.
+    """
     rd = sf["release_date"].astext
     # Legacy values may match the shape but still contain invalid calendar dates.
     normalized = case(
@@ -131,14 +135,78 @@ def _release_date_ts_expr(sf: Any) -> Any:
         (rd.op("~")(r"^\d{4}$"), rd + "-01-01T00:00:00Z"),
         else_=None,
     )
-    parsed_rd = case(
+    return case(
         (
             func.pg_input_is_valid(normalized, "timestamp with time zone"),
             sa_cast(normalized, DateTime(timezone=True)),
         ),
         else_=None,
     )
-    return func.coalesce(parsed_rd, Document.published_at, Document.created_at)
+
+
+def _coalesced_release_ts(parsed: Any) -> Any:
+    """Order timestamp: parsed release date, else the document's publication, else creation time."""
+    return func.coalesce(parsed, Document.published_at, Document.created_at)
+
+
+def _release_date_ts_expr(sf: Any) -> Any:
+    """Parse supported release dates safely, falling back to publication or creation time."""
+    return _coalesced_release_ts(_parsed_release_ts_expr(sf))
+
+
+def _release_window_bounds(
+    sort: Literal["created_at_desc", "release_date_asc"], release_window_days: int | None
+) -> tuple[datetime, datetime] | None:
+    """Return the inclusive ``(lower, upper)`` release window, or ``None`` when unbounded.
+
+    ``release_date_asc`` always has a window (caller's days or ``DEFAULT_CALENDAR_WINDOW_DAYS``) so the
+    ascending sort never scans a whole source; the lower edge looks back at most 7 days.
+    """
+    if sort == "release_date_asc" and release_window_days is None:
+        release_window_days = DEFAULT_CALENDAR_WINDOW_DAYS
+    if release_window_days is None:
+        return None
+    now = datetime.now(UTC)
+    return (
+        now - timedelta(days=min(release_window_days, 7)),
+        now + timedelta(days=release_window_days),
+    )
+
+
+def _release_candidates_cte(
+    sf: Any,
+    *,
+    source_ids: tuple[UUID, ...],
+    media_preds: list[Any],
+    window_bounds: tuple[datetime, datetime] | None,
+) -> Any:
+    """Materialize provenance rows that can possibly fall in the release window (a safe superset).
+
+    Why a MATERIALIZED CTE: the planner cannot estimate the regex/CASE date expression (it guesses one
+    row) and used to drive a nested loop of the whole provenance table per eligible source. Forcing
+    this set to be computed once, on the provenance side and bounded to the requested sources'
+    documents, lets the outer query probe documents/versions by key for only the in-window rows.
+
+    The window check here is only a prefilter: rows with an unparseable date (NULL) are kept because
+    their order timestamp falls back to ``Document`` columns the CTE cannot see; the exact window
+    predicate is re-applied on the coalesced timestamp in the outer statement. ``release_ts`` is the
+    parsed (non-coalesced) date.
+    """
+    stmt = select(
+        NormalizedVersionProvenance.id.label("provenance_id"),
+        NormalizedVersionProvenance.document_version_id.label("document_version_id"),
+        NormalizedVersionProvenance.source_generation.label("source_generation"),
+        _parsed_release_ts_expr(sf).label("release_ts"),
+    ).where(
+        NormalizedVersionProvenance.document_id.in_(
+            select(Document.id).where(Document.source_id.in_(source_ids))
+        ),
+        *media_preds,
+    )
+    if window_bounds is not None:
+        ts = _parsed_release_ts_expr(sf)
+        stmt = stmt.where(or_(ts.is_(None), and_(ts >= window_bounds[0], ts <= window_bounds[1])))
+    return stmt.cte("release_candidates").prefix_with("MATERIALIZED")
 
 
 def _media_provenance_predicates(
@@ -222,42 +290,36 @@ def _apply_media_statement_filters(
     sort: Literal["created_at_desc", "release_date_asc"],
     release_window_days: int | None,
     media_preds: list[Any],
+    candidates: Any = None,
 ) -> Select[Any]:
     """Attach Provenance JSONB predicates and release-date window bounds to ``statement``.
 
-    ``release_date_asc`` inner-joins provenance, so it only admits versions with exactly one
-    provenance row (ambiguous versions hydrate to ``None`` in the projection anyway); that keeps
-    one row and one order timestamp per document. It always applies a window: the caller's
-    ``release_window_days`` or ``DEFAULT_CALENDAR_WINDOW_DAYS`` so the sort never scans a whole source.
+    ``release_date_asc`` joins the ``candidates`` CTE (see ``_release_candidates_cte``; it already
+    carries ``media_preds``) and only admits versions with exactly one provenance row (ambiguous
+    versions hydrate to ``None`` in the projection anyway); that keeps one row and one order timestamp
+    per document. The guard is a NOT EXISTS probe of ``ix_normalized_version_provenance_version`` for a
+    second row, run only on the few window survivors, instead of a per-row ``count(*)``. The exact
+    window is applied on ``order_ts_expr`` (coalesced with document dates). The window is always set
+    for this sort: ``release_window_days`` or ``DEFAULT_CALENDAR_WINDOW_DAYS``.
     """
-    window_bounds: tuple[datetime, datetime] | None = None
-    if sort == "release_date_asc" and release_window_days is None:
-        # Bound the ascending scan; matches the calendar gadget's default 30-day window.
-        release_window_days = DEFAULT_CALENDAR_WINDOW_DAYS
-    if release_window_days is not None:
-        now = datetime.now(UTC)
-        window_bounds = (
-            now - timedelta(days=min(release_window_days, 7)),
-            now + timedelta(days=release_window_days),
-        )
+    window_bounds = _release_window_bounds(sort, release_window_days)
     if sort == "release_date_asc":
         statement = statement.join(
-            NormalizedVersionProvenance,
+            candidates,
             and_(
-                NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
-                NormalizedVersionProvenance.source_generation == Source.generation,
+                candidates.c.document_version_id == DocumentVersion.id,
+                candidates.c.source_generation == Source.generation,
             ),
         )
         sibling = aliased(NormalizedVersionProvenance)
         statement = statement.where(
-            select(func.count(sibling.id))
-            .where(sibling.document_version_id == DocumentVersion.id)
-            .correlate(DocumentVersion)
-            .scalar_subquery()
-            == 1
+            ~select(sibling.id)
+            .where(
+                sibling.document_version_id == candidates.c.document_version_id,
+                sibling.id != candidates.c.provenance_id,
+            )
+            .exists()
         )
-        if media_preds:
-            statement = statement.where(*media_preds)
         if window_bounds is not None:
             statement = statement.where(
                 order_ts_expr >= window_bounds[0], order_ts_expr <= window_bounds[1]

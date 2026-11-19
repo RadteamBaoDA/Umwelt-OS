@@ -32,8 +32,10 @@ from modules.knowledge.documents._news_media import (
 )
 from modules.knowledge.documents._news_media import (
     _apply_media_statement_filters,
+    _coalesced_release_ts,
     _media_provenance_predicates,
-    _release_date_ts_expr,
+    _release_candidates_cte,
+    _release_window_bounds,
     _validate_media_filter_params,
 )
 from modules.knowledge.documents._scope import _admit_document_scope, _document_scope
@@ -618,9 +620,32 @@ def _news_projection_statement(
 ) -> tuple[Select[Any], Any]:
     """Build the current-version projection statement and ordering timestamp expression."""
     sf = NormalizedVersionProvenance.provenance_json["provider_record"]["source_fields"]
-    order_ts_expr: Any = (
-        _release_date_ts_expr(sf) if sort == "release_date_asc" else Document.created_at
+    media_preds = _media_provenance_predicates(
+        countries=countries,
+        genres=genres,
+        languages=languages,
+        media_types=media_types,
+        formats=formats,
+        content_ratings=content_ratings,
+        release_statuses=release_statuses,
+        release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        release_season=release_season,
+        min_rating=min_rating,
     )
+    candidates: Any = None
+    order_ts_expr: Any = Document.created_at
+    if sort == "release_date_asc":
+        # Order by the CTE's already-parsed date so the date expression is evaluated once per
+        # provenance row (not per join row / sort comparison); see _release_candidates_cte.
+        candidates = _release_candidates_cte(
+            sf,
+            source_ids=source_ids,
+            media_preds=media_preds,
+            window_bounds=_release_window_bounds(sort, release_window_days),
+        )
+        order_ts_expr = _coalesced_release_ts(candidates.c.release_ts)
     statement: Select[Any] = (
         select(Document.id, order_ts_expr)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
@@ -658,20 +683,6 @@ def _news_projection_statement(
             )
             .exists(),
         )
-    media_preds = _media_provenance_predicates(
-        countries=countries,
-        genres=genres,
-        languages=languages,
-        media_types=media_types,
-        formats=formats,
-        content_ratings=content_ratings,
-        release_statuses=release_statuses,
-        release_year=release_year,
-        release_year_from=release_year_from,
-        release_year_to=release_year_to,
-        release_season=release_season,
-        min_rating=min_rating,
-    )
     statement = _apply_media_statement_filters(
         statement,
         order_ts_expr,
@@ -679,6 +690,7 @@ def _news_projection_statement(
         sort=sort,
         release_window_days=release_window_days,
         media_preds=media_preds,
+        candidates=candidates,
     )
     return statement, order_ts_expr
 
