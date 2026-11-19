@@ -84,14 +84,14 @@ function isResolvedCache(cached: TranslationResult | undefined): boolean {
  * True when an item returned by POST /batches needs a GET /batches/{id} read to fetch its payload or error code.
  * Ready items need a payload; blocked/failed items need an error code. An invalid item rejected by the batch
  * endpoint arrives already carrying `error_code` (resource_unavailable / stale_request), so it is settled from
- * the POST response and never re-read. A missing field (undefined) marks a cache hit that only GET returns.
+ * the POST response and never re-read. A missing or null code marks a cache hit whose reason only GET returns.
  *
  * @param item One item from the POST /batches response.
  * @returns True only when the item must be re-read before its outcome is known.
  */
 function itemNeedsHydration(item: Seen): boolean {
   if (item.status === 'ready') return !item.translation;
-  if (item.status === 'blocked' || item.status === 'failed') return item.error_code === undefined;
+  if (item.status === 'blocked' || item.status === 'failed') return item.error_code == null;
   return false;
 }
 

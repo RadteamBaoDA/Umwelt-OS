@@ -282,3 +282,13 @@ def test_schema_reserves_t3_columns_and_full_fingerprint():
         "config_hash",
         "prompt_version",
     } <= {c.name for c in unique.columns}
+
+
+def test_admitted_cached_failure_carries_stored_reason_but_pending_does_not():
+    item = TranslationItemRequest(
+        resource_type="news_story", resource_id=uuid4(), resource_revision="r1"
+    )
+    failed = SimpleNamespace(status="failed", error_code="input_too_large")
+    pending = SimpleNamespace(status="pending", error_code="stale_leftover")
+    assert public._admitted_status(item, failed).error_code == "input_too_large"
+    assert public._admitted_status(item, pending).error_code is None

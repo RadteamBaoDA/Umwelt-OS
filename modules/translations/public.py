@@ -49,6 +49,7 @@ from modules.translations.schemas import (
     TranslationBatchRead,
     TranslationBatchRequest,
     TranslationItemRead,
+    TranslationItemRequest,
     TranslationItemStatusRead,
     TranslationPayload,
 )
@@ -327,6 +328,23 @@ async def _authorize_items(
     return out
 
 
+def _admitted_status(
+    item: TranslationItemRequest, row: ContentTranslation
+) -> TranslationItemStatusRead:
+    """Status of one admitted item; a cached blocked/failed row carries its stored reason code.
+
+    Without the code a cache-hit failure would reach clients as settled with no explanation.
+    Pending/ready/unchanged rows report no code. Never carries translated content.
+    """
+    code = row.error_code if row.status in ("blocked", "failed") else None
+    return TranslationItemStatusRead(
+        resource_type=item.resource_type,
+        resource_id=item.resource_id,
+        status=row.status,
+        error_code=code,
+    )
+
+
 def _merge_items(
     request: TranslationBatchRequest,
     outcomes: list[ResourceAuthorization | str],
@@ -345,9 +363,7 @@ def _merge_items(
             error_code=o,
         )
         if isinstance(o, str)
-        else TranslationItemStatusRead(
-            resource_type=i.resource_type, resource_id=i.resource_id, status=next(admitted).status
-        )
+        else _admitted_status(i, next(admitted))
         for i, o in zip(request.items, outcomes, strict=True)
     ]
 
