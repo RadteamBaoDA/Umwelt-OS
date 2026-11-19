@@ -1,9 +1,8 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useContentTranslation } from '@/modules/translations';
-import { TranslatedBadge } from '@/modules/translations';
-import { TranslationNote } from '@/modules/translations';
+import { useTranslations } from 'next-intl';
+import { TranslateActionButton, TranslatedBadge, TranslationNote, useContentTranslation } from '@/modules/translations';
 import { useSkin } from '@/core/use-skin';
 import type { DailyBriefRevision } from './daily-api';
 import { parseBriefParagraphs } from './brief-paragraphs';
@@ -33,22 +32,51 @@ function TerminalBriefText({ text }: { text: string }) {
   );
 }
 
-/** Brief text with the automatic translation of this saved revision; the original is shown first. The terminal skin renders paragraphs with a bold lead and linked citations. */
+/**
+ * Brief text with on-demand translation of this saved revision. The original is always shown first;
+ * when workspace translation is enabled, a Translate button sits above the body so users can translate
+ * without scrolling to the bottom, and switches to a toggle back to the original once ready.
+ *
+ * @param props.brief Saved daily brief revision whose markdown content can be translated on demand.
+ */
 export function BriefText({ brief }: { brief: DailyBriefRevision }) {
+  const t = useTranslations('translations');
   const terminal = useSkin() === 'terminal';
   const [showOriginal, setShowOriginal] = useState(false);
   const targets = useMemo(() => [{ id: brief.id, revision: String(brief.revision) }], [brief.id, brief.revision]);
   const translation = useContentTranslation('daily_brief', targets);
   const translated = translation.results.get(brief.id)?.translation?.content;
+  const issue = translation.issues.get(brief.id);
+  const pending = translation.pendingIds.has(brief.id);
+  const languageLabel = translation.targetLanguage === 'vi' ? t('languageVi') : t('languageEn');
   return (
     <>
+      {translation.enabled ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {translated ? (
+            <TranslatedBadge
+              showOriginal={showOriginal}
+              targetLanguage={translation.targetLanguage}
+              onToggle={() => setShowOriginal((v) => !v)}
+            />
+          ) : (
+            <TranslateActionButton
+              label={t('translateTo', { language: languageLabel })}
+              pending={pending}
+              onClick={() => {
+                setShowOriginal(false);
+                translation.translate(targets);
+              }}
+            />
+          )}
+          {!translated && !pending ? <TranslationNote issue={issue} /> : null}
+        </div>
+      ) : null}
       {terminal ? (
         <TerminalBriefText text={translated && !showOriginal ? translated : brief.content} />
       ) : (
         <p className="whitespace-pre-wrap text-sm leading-relaxed">{translated && !showOriginal ? translated : brief.content}</p>
       )}
-      {!translated && <TranslationNote issue={translation.issues.get(brief.id)} />}
-      {translated && <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} />}
     </>
   );
 }

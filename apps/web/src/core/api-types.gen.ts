@@ -17283,7 +17283,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief";
+            resource_type: "news_story" | "daily_brief" | "document";
             /**
              * Status
              * @enum {string}
@@ -17312,7 +17312,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief";
+            resource_type: "news_story" | "daily_brief" | "document";
         };
         /**
          * TranslationItemStatusRead
@@ -17328,7 +17328,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief";
+            resource_type: "news_story" | "daily_brief" | "document";
             /**
              * Status
              * @enum {string}

@@ -190,6 +190,7 @@ Web search (Tavily or Brave) has its own policy and never uses `AI_ALLOWED_ENDPO
 - `WEB_SEARCH_DAILY_LIMIT` (default `50`): searches per owner per UTC day. Failed searches count, `0` disables web search, and a Redis outage also disables it (fails closed).
 - The owner consent toggle in AI settings is required, and the provider key is stored encrypted under the connector credential key.
 - The chat-attachments upload path shares `UPLOAD_MAX_BYTES`.
+- Topic watch scheduled tasks search through this same provider and count against `WEB_SEARCH_DAILY_LIMIT` (up to 4 searches per run). Configure a provider with a dependable quota before enabling Topic watch: Tavily or Brave with an API key, or a self-hosted SearXNG with engines that do not rate-limit the server (in testing, DuckDuckGo returned CAPTCHAs and Brave's keyless engine returned 429, while Google CSE answered). Without a provider, each run fails with `web_search_not_configured`, shown to the owner as "Web search is not set up" in the run history.
 
 `r15_document_dismissed` adds the owner "Not relevant" state (`document_interactions.dismissed_at`; hides items from dashboard feed gadgets and highlights only). Its structural downgrade deletes dismissed-only interaction rows (rows that also carry read or saved state keep that state and lose only `dismissed_at`), so hidden-item preferences are lost on downgrade; not an operational rollback.
 

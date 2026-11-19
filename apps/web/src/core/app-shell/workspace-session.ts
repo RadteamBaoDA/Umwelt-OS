@@ -9,6 +9,11 @@ import type { Session } from '@/core/app-shell/use-shell-session';
  */
 export const SessionContext = createContext<Session | null>(null);
 
+/** Returns the authenticated workspace session, or null when rendered outside the session provider (e.g. isolated gadget tests). */
+export function useOptionalWorkspaceSession(): Session | null {
+  return useContext(SessionContext);
+}
+
 /** Returns the authenticated workspace session, including its CSRF token; throws when used outside the session provider. */
 export function useWorkspaceSession() {
   const session = useContext(SessionContext);

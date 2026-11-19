@@ -183,9 +183,14 @@ async def test_grant_resource_revision_mismatch_is_409(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_revoke_bumps_share_only(monkeypatch):
+    import core.capabilities as caps
+
+    purge = AsyncMock(return_value=0)
+    monkeypatch.setattr(caps, "purge_resource_translations", purge)
     row = _row()
     ws, ms, session = _setup_grant(monkeypatch, [], row=row)
     await public.revoke_share_in_uow(session, WS, OWNER, "document", row.resource_id, MEMBER, 3)
+    purge.assert_awaited_once_with(session, WS, "document", (row.resource_id,))
     assert row.revoked_at is not None and row.revision == 2
     assert ws.configuration_revision == 7 and ms[MEMBER].revision == 3
     with pytest.raises(HTTPException) as exc:  # missing If-Match

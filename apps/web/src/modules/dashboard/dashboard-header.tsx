@@ -147,6 +147,8 @@ interface HeaderProps extends SwitcherProps {
   summary: string | null;
   /** Overview greeting strip rendered under the title (omitted on other tabs). */
   greeting?: ReactNode;
+  /** Optional workspace content-translation popover rendered next to the density toggle. */
+  translationControl?: ReactNode;
   isOwner: boolean;
   isEditMode: boolean;
   canEditLayout: boolean;
@@ -199,6 +201,7 @@ export function DashboardHeader(props: HeaderProps) {
         <StatuslineSummary summary={summary} />
       </div>
       <DensityToggle />
+      {props.translationControl}
       {!isAdminViewer && (
         <Button
           type="button"

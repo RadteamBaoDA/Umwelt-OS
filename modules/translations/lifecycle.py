@@ -1,5 +1,6 @@
 """Translation cache cleanup: immediate purge on revoke, expiry pages and orphan removal (derived data only)."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -15,18 +16,22 @@ async def purge_resource_translations(
     session: AsyncSession,
     workspace_id: UUID,
     resource_type: str,
-    resource_id: UUID,
+    resource_ids: Sequence[UUID],
 ) -> int:
-    """Delete every actor's cache rows for one resource (flush-only; batch items null their reference).
+    """Delete every actor's cache rows for a batch of resources of one type (flush-only).
 
-    A running worker's publish then updates 0 rows, so nothing is resurrected.
+    Batch items null their reference. Returns the removed row count (0 without a query when
+    ``resource_ids`` is empty). A running worker's publish then updates 0 rows, so nothing is
+    resurrected.
     """
+    if not resource_ids:
+        return 0
     result = await session.execute(
         delete(ContentTranslation)
         .where(
             ContentTranslation.workspace_id == workspace_id,
             ContentTranslation.resource_type == resource_type,
-            ContentTranslation.resource_id == resource_id,
+            ContentTranslation.resource_id.in_(tuple(resource_ids)),
         )
         .execution_options(synchronize_session=False)
     )

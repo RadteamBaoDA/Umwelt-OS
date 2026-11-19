@@ -14,6 +14,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
 import { parseJobPosting, type JobPosting, type JobPostingInput } from './job-posting';
+import { ItemTranslateButton, TranslationStatusBanner, useItemTranslation, type ItemTranslationController } from '@/modules/translations';
 
 /** Props for the job postings gadget. */
 export interface JobListGadgetProps {
@@ -47,7 +48,7 @@ function buildPostings(items: JobPostingInput[]): JobPosting[] {
  * @param p.more Show-more state over the current page's postings (first rows plus expansion).
  * @returns Table of postings; links open in a new tab with `noopener noreferrer`; missing fields show an en dash.
  */
-function JobTable({ more }: { more: ReturnType<typeof useShowMore<JobPosting>> }) {
+function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<JobPosting>>; translation: ItemTranslationController }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const dash = '–';
@@ -65,26 +66,38 @@ function JobTable({ more }: { more: ReturnType<typeof useShowMore<JobPosting>> }
           </TableRow>
         </TableHeader>
         <TableBody>
-          {more.visible.map((p, index) => (
-            <TableRow key={`${p.url ?? p.title}-${index}`}>
-              <TableCell className="max-w-64 whitespace-normal font-medium">
-                {p.url ? (
-                  <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent underline-offset-2 hover:underline">
-                    {p.title}
-                  </a>
-                ) : (
-                  p.title
-                )}
-              </TableCell>
-              <TableCell>{p.company ?? dash}</TableCell>
-              <TableCell>{p.location ?? dash}</TableCell>
-              <TableCell>{p.salary ?? dash}</TableCell>
-              <TableCell className="whitespace-nowrap tabular-nums">
-                {p.postedAt ? <time dateTime={p.postedAt}>{formatDateTime(p.postedAt, display.locale, display.timezone)}</time> : dash}
-              </TableCell>
-              <TableCell>{p.sourceLabel ?? dash}</TableCell>
-            </TableRow>
-          ))}
+          {more.visible.map((p, index) => {
+            const displayTitle = (p.documentId ? translation.shown(p.documentId)?.title : undefined) ?? p.title;
+            return (
+              <TableRow key={`${p.url ?? p.title}-${index}`}>
+                <TableCell className="max-w-64 whitespace-normal font-medium">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {p.url ? (
+                      <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent underline-offset-2 hover:underline">
+                        {displayTitle}
+                      </a>
+                    ) : (
+                      <span>{displayTitle}</span>
+                    )}
+                    {p.documentId && p.documentVersionId ? (
+                      <ItemTranslateButton
+                        controller={translation}
+                        target={{ id: p.documentId, revision: p.documentVersionId }}
+                        title={displayTitle}
+                      />
+                    ) : null}
+                  </div>
+                </TableCell>
+                <TableCell>{p.company ?? dash}</TableCell>
+                <TableCell>{p.location ?? dash}</TableCell>
+                <TableCell>{p.salary ?? dash}</TableCell>
+                <TableCell className="whitespace-nowrap tabular-nums">
+                  {p.postedAt ? <time dateTime={p.postedAt}>{formatDateTime(p.postedAt, display.locale, display.timezone)}</time> : dash}
+                </TableCell>
+                <TableCell>{p.sourceLabel ?? dash}</TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
       <div className="flex justify-center py-1">
@@ -117,6 +130,14 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
   const pager = usePagination(visible, 20);
   // First 5 rows of the current page; expanding happens inside the scroll area, and filter/page changes collapse it.
   const more = useShowMore(pager.pageItems, 5, `${filter}|${pager.page}|${pager.pageSize}`);
+  const translationTargets = useMemo(
+    () =>
+      more.visible
+        .filter((p): p is JobPosting & { documentId: string; documentVersionId: string } => Boolean(p.documentId && p.documentVersionId))
+        .map((p) => ({ id: p.documentId, revision: p.documentVersionId })),
+    [more.visible],
+  );
+  const translation = useItemTranslation('document', translationTargets);
 
   useReportGadgetFreshness(
     items.reduce<string | null>((max, r) => (r.observed_at && (!max || r.observed_at > max) ? r.observed_at : max), null),
@@ -147,12 +168,13 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
+          <TranslationStatusBanner issues={translation.issues} />
           {visible.length === 0 ? (
             <p role="status" className="text-sm text-muted-foreground">
               {t('jobs.noMatches')}
             </p>
           ) : (
-            <JobTable more={more} />
+            <JobTable more={more} translation={translation} />
           )}
           <TablePagination {...pager} />
         </>

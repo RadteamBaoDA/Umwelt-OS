@@ -20,14 +20,14 @@
   - Phase 1: brief `max_tokens` raised from 500 to 2048; driver UUID subclass in the lock-free support check; MissingGreenlet on pause; no-Markdown brief prompt.
   - Phase 2: topic watch now settles through the native leased path (ingestion refuses the generic batch path for native providers); the settle stays pending while the ingestion run is in flight; task-managed `topic_watch` gets a fixed provider scope (topic, keep rule, languages, site lists), so Feed and News show its items; dashboard deep-link params are stripped only once the dashboard is ready.
 - Validation:
-  - Gates on the merged `feature/more-datasource` tree: `pytest tests/unit` 7939 passed, 2 skipped; Vitest 1804 passed; ruff format/check, mypy (core, apps, modules), lint-imports, function-length, file-size and GenUI parity ratchets, web lint/typecheck and API types all pass. `tests/test_migrations.py` 16 passed.
-  - Docker integration suite: 173 passed, 3 skipped (opt-in benchmarks), 0 dead letters. Bundle budget OK (largest route 817.6 KB / 825, chat 816.7 KB / 820).
-  - E2E: Docker with real sources, a real model from `.env.e2e-real` and SearXNG via `E2E_REAL_SEARCH=1`. Final run 23/23: `scheduled-tasks-chat-real` 2/2, `scheduled-tasks-real` 6/6, `scheduled-tasks-topic-real` 5/5, `dashboard-ux` 8/8, bootstrap 2/2.
+  - Gates on the merged `feature/more-datasource` tree: `pytest tests/unit` 8000 passed, 2 skipped; Vitest 1825 passed; ruff format/check, mypy (core, apps, modules), lint-imports, function-length, file-size and GenUI parity ratchets, web lint/typecheck and API types all pass. `tests/test_migrations.py` 16 passed.
+  - Docker integration suite: 181 passed, 3 skipped (opt-in benchmarks), 0 dead letters. Bundle budget OK (largest route 819.4 KB / 827, chat 818.5 KB / 822).
+  - E2E: Docker with real sources, a real model from `.env.e2e-real` and SearXNG via `E2E_REAL_SEARCH=1`. Final run 23/23 (run 30, after the second merge of `feature/more-datasource`): `scheduled-tasks-chat-real` 2/2, `scheduled-tasks-real` 6/6, `scheduled-tasks-topic-real` 5/5, `dashboard-ux` 8/8, bootstrap 2/2.
   - Report: `reports/scheduled-tasks-phase1-report.html` (not committed).
 - Not delivered:
   - SearXNG engines vary: DuckDuckGo returns a CAPTCHA and Brave returns 429, so production needs a stable engine.
   - Telegram delivery is deferred.
-  - There is no per-story or per-source citation page, and hazards are global.
+  - Brief citations open the story (`/news?story=<id>`), the Timeline event or Sources; market, weather and hazard facts stay plain text because no page shows a single such fact. Hazards are global, not filtered by the owner's location.
 <!-- scheduled-tasks-phase1-status:end -->
 
 ## 2026-11-19 - Media datasource review complete

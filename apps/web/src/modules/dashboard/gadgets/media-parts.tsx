@@ -1,6 +1,7 @@
 'use client';
 
-import { useId, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
+import { ItemTranslateButton, TranslationStatusBanner, useItemTranslation, type ItemTranslationController } from '@/modules/translations';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
 import Link from 'next/link';
@@ -461,6 +462,8 @@ interface MediaCardProps {
   onInteract: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean }) => void;
   onHide: () => void;
   onAsk: () => void;
+  /** Optional on-demand document translation controller for this media collection. */
+  translation?: ItemTranslationController;
 }
 
 /** Owner-only actions reuse serialized moderation; external trailers remain safe HTTP links. */
@@ -471,11 +474,19 @@ function MediaActions({
   onInteract,
   onHide,
   onAsk,
-}: Pick<MediaCardProps, 'item' | 'canInteract' | 'pending' | 'onInteract' | 'onHide' | 'onAsk'>) {
+  translation,
+}: Pick<MediaCardProps, 'item' | 'canInteract' | 'pending' | 'onInteract' | 'onHide' | 'onAsk' | 'translation'>) {
   const t = useTranslations('dashboard');
   const trailer = safeHttpUrl(item.media?.trailer_url);
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap items-center gap-1">
+      {translation ? (
+        <ItemTranslateButton
+          controller={translation}
+          target={{ id: item.document_id, revision: item.document_version_id }}
+          title={item.title}
+        />
+      ) : null}
       {canInteract && (
         <>
           <Button type="button" variant="ghost" size="sm" onClick={onAsk}>
@@ -517,16 +528,79 @@ function MediaActions({
   );
 }
 
-/** Adaptive poster/cover/video card with bounded selection, immutable-version actions and safe outbound links. */
-export function MediaCard({ item, view, selected, onSelect, pending, onInteract, onHide, onAsk, canInteract }: MediaCardProps) {
+/** Title row of a media card with optional selection checkbox and external link. */
+function MediaCardHeader({
+  title,
+  read,
+  url,
+  canInteract,
+  selected,
+  onSelect,
+}: {
+  title: string;
+  read: boolean;
+  url: string | null | undefined;
+  canInteract: boolean;
+  selected: boolean;
+  onSelect: (checked: boolean) => void;
+}) {
   const t = useTranslations('dashboard');
-  const display = useDisplayPreferences();
-  const url = safeHttpUrl(item.canonical_url);
   return (
-    <article
-      className={`min-w-0 space-y-2 rounded-md border border-line bg-surface p-2 ${view === 'list' ? 'flex items-start gap-3' : ''}`}
-    >
-      <div className={view === 'list' ? 'w-16 shrink-0' : ''}>
+    <div className="flex items-start gap-2">
+      {canInteract && (
+        <Checkbox aria-label={t('selectRecord', { title })} checked={selected} onCheckedChange={(checked) => onSelect(checked === true)} />
+      )}
+      <h3 className={`text-sm ${read ? 'text-muted-foreground' : 'font-semibold'}`}>
+        {url ? (
+          <a href={url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+            {title}
+          </a>
+        ) : (
+          title
+        )}
+      </h3>
+    </div>
+  );
+}
+
+/** Creator, release date, metadata badges, and attribution rows of a media card. */
+function MediaCardSubmeta({ item, excerpt }: { item: GadgetDocumentProjection; excerpt: string | null | undefined }) {
+  const display = useDisplayPreferences();
+  return (
+    <>
+      {excerpt ? <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{excerpt}</p> : null}
+      {item.media?.creator && <p className="text-xs text-muted-foreground">{item.media.creator}</p>}
+      {item.media?.release_date && (
+        <time className="text-xs text-muted-foreground" dateTime={item.media.release_date}>
+          {formatDate(item.media.release_date, display.locale, releaseTimeZone(item.media.release_date, display.timezone))}
+        </time>
+      )}
+      <MediaMetadata item={item} />
+      {item.media?.attribution && <p className="text-xs text-muted-foreground">{item.media.attribution}</p>}
+    </>
+  );
+}
+
+/** Adaptive poster/cover/video card with bounded selection, immutable-version actions and safe outbound links. */
+export function MediaCard({
+  item,
+  view,
+  selected,
+  onSelect,
+  pending,
+  onInteract,
+  onHide,
+  onAsk,
+  canInteract,
+  translation,
+}: MediaCardProps) {
+  const url = safeHttpUrl(item.canonical_url);
+  const translated = translation?.shown(item.document_id);
+  const displayTitle = translated?.title ?? item.title;
+  const listLayout = view === 'list';
+  return (
+    <article className={`min-w-0 space-y-2 rounded-md border border-line bg-surface p-2 ${listLayout ? 'flex items-start gap-3' : ''}`}>
+      <div className={listLayout ? 'w-16 shrink-0' : ''}>
         <FeedImage
           key={item.image_url}
           src={item.image_url}
@@ -535,33 +609,24 @@ export function MediaCard({ item, view, selected, onSelect, pending, onInteract,
         />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
-        <div className="flex items-start gap-2">
-          {canInteract && (
-            <Checkbox
-              aria-label={t('selectRecord', { title: item.title })}
-              checked={selected}
-              onCheckedChange={(checked) => onSelect(checked === true)}
-            />
-          )}
-          <h3 className={`text-sm ${item.read_at ? 'text-muted-foreground' : 'font-semibold'}`}>
-            {url ? (
-              <a href={url} target="_blank" rel="noopener noreferrer" className="hover:underline">
-                {item.title}
-              </a>
-            ) : (
-              item.title
-            )}
-          </h3>
-        </div>
-        {item.media?.creator && <p className="text-xs text-muted-foreground">{item.media.creator}</p>}
-        {item.media?.release_date && (
-          <time className="text-xs text-muted-foreground" dateTime={item.media.release_date}>
-            {formatDate(item.media.release_date, display.locale, releaseTimeZone(item.media.release_date, display.timezone))}
-          </time>
-        )}
-        <MediaMetadata item={item} />
-        {item.media?.attribution && <p className="text-xs text-muted-foreground">{item.media.attribution}</p>}
-        <MediaActions item={item} canInteract={canInteract} pending={pending} onInteract={onInteract} onHide={onHide} onAsk={onAsk} />
+        <MediaCardHeader
+          title={displayTitle}
+          read={Boolean(item.read_at)}
+          url={url}
+          canInteract={canInteract}
+          selected={selected}
+          onSelect={onSelect}
+        />
+        <MediaCardSubmeta item={item} excerpt={translated?.excerpt} />
+        <MediaActions
+          item={item}
+          canInteract={canInteract}
+          pending={pending}
+          onInteract={onInteract}
+          onHide={onHide}
+          onAsk={onAsk}
+          translation={translation}
+        />
       </div>
     </article>
   );
@@ -735,6 +800,7 @@ function MediaGroups({
   setSelected,
   moderation,
   ask,
+  translation,
 }: {
   groups: MediaGroup[];
   calendar: boolean;
@@ -744,6 +810,7 @@ function MediaGroups({
   setSelected: React.Dispatch<React.SetStateAction<Record<string, SelectedTelegramIdentity>>>;
   moderation: ReturnType<typeof useFeedModeration>;
   ask: (identities: SelectedTelegramIdentity[]) => void;
+  translation: ItemTranslationController;
 }) {
   // Only currently visible records count toward the cap; selections hidden by later filters are pruned on the next tick.
   const visibleIds = new Set(groups.flatMap((group) => group.items.map((item) => item.document_version_id)));
@@ -772,6 +839,7 @@ function MediaGroups({
                 onInteract={(change) => moderation.interactionMutation.mutate(change)}
                 onHide={() => moderation.setHidden([mediaIdentity(item)], true)}
                 onAsk={() => ask([mediaIdentity(item)])}
+                translation={translation}
               />
             ))}
           </div>
@@ -889,6 +957,12 @@ function MediaSelectionBar({ count, onAsk, onClear }: { count: number; onAsk: ()
   );
 }
 
+/** Builds the on-demand document translation controller for loaded media records. */
+function useMediaTranslation(items: GadgetDocumentProjection[]) {
+  const targets = useMemo(() => items.map((item) => ({ id: item.document_id, revision: item.document_version_id })), [items]);
+  return useItemTranslation('document', targets);
+}
+
 /** Owns one definition revision's filters, source choice, selection and moderation inside the frame's stable host. */
 function MediaCollectionBody({ instance, calendar = false, groupItems, view, setView }: MediaCollectionBodyProps) {
   const t = useTranslations('dashboard');
@@ -905,6 +979,7 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
   const moderation = useFeedModeration(instance.id, { rootRef, undoRef });
   const { sourceIds, activeSources, typeConflict, query, documents, sources, privacy } = useMediaQuery(instance, state, calendar, isOwner);
   const items = filterMediaItems(documents, state, definition, moderation.hiddenIds);
+  const translation = useMediaTranslation(items);
   useMediaFreshness(documents);
   /** Chat receives only currently visible immutable identities; server resolves ownership, provenance and egress. */
   const ask = (identities: SelectedTelegramIdentity[]) =>
@@ -957,6 +1032,7 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
           {t('media.interactionFailed')}
         </p>
       )}
+      <TranslationStatusBanner issues={translation.issues} />
       <MediaResults
         sourceCount={sourceIds.length}
         query={query}
@@ -975,6 +1051,7 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
           setSelected={setSelected}
           moderation={moderation}
           ask={ask}
+          translation={translation}
         />
       </MediaResults>
     </div>

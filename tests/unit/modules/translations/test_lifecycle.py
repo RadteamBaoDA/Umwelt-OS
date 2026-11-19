@@ -1,4 +1,4 @@
-"""Mock-level lifecycle contracts: purge scope, running rows survive expiry, revoke hooks purge briefs only."""
+"""Mock-level lifecycle contracts: purge scope, running rows survive expiry, revoke hooks purge briefs and documents."""
 
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -20,7 +20,7 @@ def _sql(stmt) -> str:
 async def test_purge_is_workspace_scoped_with_no_actor_filter():
     result = MagicMock(rowcount=3)
     session = MagicMock(execute=AsyncMock(return_value=result), flush=AsyncMock())
-    assert await lifecycle.purge_resource_translations(session, WS, "daily_brief", RID) == 3
+    assert await lifecycle.purge_resource_translations(session, WS, "daily_brief", (RID,)) == 3
     sql = _sql(session.execute.await_args.args[0])
     assert sql.startswith("DELETE FROM content_translations")
     assert (
@@ -44,15 +44,21 @@ async def test_expiry_never_evicts_a_live_leased_running_row():
     assert "DELETE FROM translation_batches" in _sql(session.execute.await_args_list[1].args[0])
 
 
-async def test_brief_share_revoke_purges_but_document_does_not(monkeypatch):
+async def test_purge_with_no_ids_is_a_noop():
+    session = MagicMock(execute=AsyncMock())
+    assert await lifecycle.purge_resource_translations(session, WS, "document", ()) == 0
+    session.execute.assert_not_awaited()
+
+
+async def test_share_purge_batches_one_call_per_type(monkeypatch):
     purge = AsyncMock(return_value=1)
     monkeypatch.setattr(translations_public, "purge_resource_translations", purge)
     session = MagicMock()
-    await workspaces._purge_translations(session, WS, "document", (RID,))
-    purge.assert_not_awaited()
     other = uuid4()
-    await workspaces._purge_translations(session, WS, "brief", (RID, other))
+    await workspaces._purge_translations(session, WS, "document", (RID, other))
+    await workspaces._purge_translations(session, WS, "brief", (RID,))
+    await workspaces._purge_translations(session, WS, "brief", ())
     assert [c.args for c in purge.await_args_list] == [
-        (session, WS, "daily_brief", RID),
-        (session, WS, "daily_brief", other),
+        (session, WS, "document", (RID, other)),
+        (session, WS, "daily_brief", (RID,)),
     ]

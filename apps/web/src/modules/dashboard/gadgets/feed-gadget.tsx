@@ -35,6 +35,7 @@ import {
 import { ShowMoreButton, useShowMore } from './show-more';
 import { useLocalPref } from '@/core/use-local-pref';
 import { useAutoFetchWhenEmpty, useFeedFilters, useFeedModeration, useFeedQueries } from './use-feed-state';
+import { CollectionTranslationBar, TranslationStatusBanner, useItemTranslation } from '@/modules/translations';
 
 export type { FeedStreamItem } from './feed-model';
 
@@ -358,6 +359,32 @@ function useFeedSignals(feedItems: FeedStreamItem[], onUnreadCountChange: FeedGa
   return { unreadCount, volume };
 }
 
+/** Builds the on-demand document translation controller for the currently visible feed items. */
+function useFeedTranslation(items: FeedStreamItem[]) {
+  const targets = useMemo(
+    () =>
+      items
+        .filter((item): item is FeedStreamItem & { documentVersionId: string } => Boolean(item.documentVersionId))
+        .map((item) => ({ id: item.id, revision: item.documentVersionId })),
+    [items],
+  );
+  return useItemTranslation('document', targets);
+}
+
+/**
+ * Fetches once when the feed settles empty for the current server scope (sources, channels, language, window).
+ * Thin wrapper over `useAutoFetchWhenEmpty` that keeps `FeedStream` within the function-length limit.
+ */
+function useFeedAutoFetch(
+  docsQuery: Parameters<typeof useAutoFetchWhenEmpty>[0]['docsQuery'],
+  displayedCount: number,
+  filtering: boolean,
+  hasInitialItems: boolean,
+  scopeParts: string[],
+) {
+  useAutoFetchWhenEmpty({ docsQuery, displayedCount, filtering, hasInitialItems, serverScope: scopeParts.join('|') });
+}
+
 /** Renders the scrollable feed item stream with owner-aware Ask AI affordances and existing Telegram controls. */
 function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: FeedStreamProps) {
   const { openDrawer } = useChatController();
@@ -382,16 +409,11 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
   const more = useFeedShowMore(displayedItems, view, `${sourceFilter}|${needle}|${onlyUnread}|${language}|${timeWindow}`);
   // Search/language/time controls are noise on a settled empty feed with nothing active to clear.
   const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
-  const serverScope = `${sourceIds.join()}|${channelIds.join()}|${language}|${timeWindow}`;
-  useAutoFetchWhenEmpty({
-    docsQuery,
-    displayedCount: displayedItems.length,
-    filtering,
-    hasInitialItems: Boolean(initialItems?.length),
-    serverScope,
-  });
+  const scope = [sourceIds.join(), channelIds.join(), language, timeWindow];
+  useFeedAutoFetch(docsQuery, displayedItems.length, filtering, Boolean(initialItems?.length), scope);
 
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
+  const translation = useFeedTranslation(more.visible);
   const rowContext: FeedRowContext = {
     view,
     isTelegram: definition.renderer === 'telegram_feed',
@@ -402,6 +424,7 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
     interactionPending: moderation.interactionMutation.isPending,
     onInteract: (change) => moderation.interactionMutation.mutate(change),
     onAskAbout: askAbout,
+    translation,
   };
 
   return (
@@ -443,6 +466,8 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
         undoRef={undoRef}
         onAskAbout={askAbout}
       />
+      {more.visible.length > 0 ? <CollectionTranslationBar controller={translation} /> : null}
+      <TranslationStatusBanner issues={translation.issues} />
       <FeedStatus
         docsQuery={docsQuery}
         feedItemCount={feedItems.length}

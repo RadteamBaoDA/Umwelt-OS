@@ -19,6 +19,7 @@ import { safeHttpUrl } from '@/core/safe-url';
 import { useSkin } from '@/core/use-skin';
 import { FEED_LANGUAGES, languageLabel, type FeedStreamItem, type SelectedTelegramIdentity } from './feed-model';
 import { formatRelativeTime } from './relative-time';
+import { ItemTranslateButton, type ItemTranslationController } from '@/modules/translations';
 
 export { FEED_VIEWS, type FeedView };
 export { FeedSourceTabs };
@@ -36,6 +37,8 @@ export interface FeedRowContext {
   interactionPending: boolean;
   onInteract: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean }) => void;
   onAskAbout: (items: { sourceId: string; documentId: string; documentVersionId: string }[]) => void;
+  /** Optional on-demand document translation controller for the current feed stream. */
+  translation?: ItemTranslationController;
 }
 
 /** Per-item controls preserve Telegram Ask AI and gate the new ID-only action on owner status for other feeds. */
@@ -44,6 +47,9 @@ function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowCont
   const isRead = !!item.read;
   return (
     <div className="absolute right-0 top-0 flex flex-wrap items-center gap-1 bg-card pl-2 text-xs pointer-coarse:static pointer-coarse:w-full pointer-coarse:bg-transparent pointer-coarse:pl-0 pointer-coarse:opacity-100 text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
+      {ctx.translation && item.documentVersionId ? (
+        <ItemTranslateButton controller={ctx.translation} target={{ id: item.id, revision: item.documentVersionId }} title={item.title} />
+      ) : null}
       {item.documentVersionId && item.sourceId && (ctx.isTelegram || ctx.isOwner) && (
         <Button
           type="button"
@@ -200,6 +206,9 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
   const display = useDisplayPreferences();
   const metaParts = useMetaParts(ctx.isTelegram);
   const timeTitle = useTimeTitle(ctx.isTelegram);
+  const translated = ctx.translation?.shown(item.id);
+  const title = translated?.title ?? item.title;
+  const excerpt = translated?.excerpt ?? item.excerpt;
   return (
     <article
       data-testid="feed-lead"
@@ -216,11 +225,11 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
             href={`/knowledge/documents/${item.id}`}
             className="min-w-0 truncate hover:underline @[40rem]/gadget:line-clamp-2 @[40rem]/gadget:whitespace-normal"
           >
-            {item.title}
+            {title}
           </Link>
         </h3>
-        {item.excerpt && (
-          <p className="mt-2 hidden line-clamp-3 text-sm leading-relaxed text-muted-foreground @[40rem]/gadget:block">{item.excerpt}</p>
+        {excerpt && (
+          <p className="mt-2 hidden line-clamp-3 text-sm leading-relaxed text-muted-foreground @[40rem]/gadget:block">{excerpt}</p>
         )}
         <p className="shrink-0 text-xs text-muted-foreground @[40rem]/gadget:mt-2">
           {metaParts(item) ? `${metaParts(item)} · ` : ''}
@@ -265,7 +274,7 @@ function TerminalMessageRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowC
         {clock}
       </time>
       <Link href={`/knowledge/documents/${item.id}`} className="msg-body">
-        {item.title}
+        {ctx.translation?.shown(item.id)?.title ?? item.title}
       </Link>
       <FeedItemActions item={item} ctx={ctx} />
     </li>
@@ -286,7 +295,7 @@ function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
           href={`/knowledge/documents/${item.id}`}
           className={`block truncate text-[length:var(--gadget-font)] leading-snug hover:underline ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
         >
-          {item.title}
+          {ctx.translation?.shown(item.id)?.title ?? item.title}
         </Link>
         {ctx.isTelegram && metaParts(item) && <p className="truncate text-xs text-muted-foreground">{metaParts(item)}</p>}
         <MediaList item={item} isTelegram={ctx.isTelegram} />
@@ -304,6 +313,9 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
   const display = useDisplayPreferences();
   const metaParts = useMetaParts(ctx.isTelegram);
   const timeTitle = useTimeTitle(ctx.isTelegram);
+  const translated = ctx.translation?.shown(item.id);
+  const title = translated?.title ?? item.title;
+  const excerpt = translated?.excerpt ?? item.excerpt;
   return (
     <li className="group/item relative flex min-w-0 flex-col gap-2 rounded-lg border border-border p-[var(--gadget-pad)]">
       <FeedCheckbox item={item} ctx={ctx} />
@@ -313,10 +325,10 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
       >
         <UnreadDot item={item} />
         <Link href={`/knowledge/documents/${item.id}`} className="min-w-0 line-clamp-2 hover:underline">
-          {item.title}
+          {title}
         </Link>
       </h3>
-      {item.excerpt && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.excerpt}</p>}
+      {excerpt && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{excerpt}</p>}
       <p className="text-xs text-muted-foreground">
         {metaParts(item) ? `${metaParts(item)} · ` : ''}
         <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>

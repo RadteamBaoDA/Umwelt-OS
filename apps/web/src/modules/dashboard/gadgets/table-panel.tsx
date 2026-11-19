@@ -13,6 +13,13 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useSkin } from '@/core/use-skin';
 import { cleanExcerpt } from '@/modules/news';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
+import {
+  CollectionTranslationBar,
+  ItemTranslateButton,
+  TranslationStatusBanner,
+  useItemTranslation,
+  type ItemTranslationController,
+} from '@/modules/translations';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import type { FeedDocument } from './feed-model';
@@ -107,12 +114,71 @@ function TableHead() {
 }
 
 /** One stacked record row: optional selection checkbox, title with severity badge, distinct excerpt and date. */
+/** Checkbox toggling one document version in the bounded 32-item selection map. */
+function TableRowCheckbox({
+  record,
+  checked,
+  setSelectedRecords,
+}: {
+  record: FeedDocument;
+  checked: boolean;
+  setSelectedRecords: React.Dispatch<React.SetStateAction<Record<string, SelectedRecordIdentity>>>;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <Checkbox
+      aria-label={t('selectRecord', { title: record.title })}
+      checked={checked}
+      onCheckedChange={(next) =>
+        setSelectedRecords((current) => {
+          if (next !== true) {
+            const remaining = { ...current };
+            delete remaining[record.document_id];
+            return remaining;
+          }
+          if (Object.keys(current).length >= 32) return current;
+          return {
+            ...current,
+            [record.document_id]: {
+              sourceId: record.source_id,
+              documentId: record.document_id,
+              documentVersionId: record.document_version_id,
+              versionNumber: record.version_number,
+            },
+          };
+        })
+      }
+    />
+  );
+}
+
+/** Title, optional severity badge, and distinct excerpt column of a table row. */
+function TableRowTitle({ title, excerpt }: { title: string; excerpt: string | null }) {
+  const t = useTranslations('dashboard');
+  const shown = splitSeverity(title);
+  return (
+    <div className="min-w-0 flex-1 basis-48">
+      <p className="text-sm font-medium leading-snug">
+        {shown.title}
+        {shown.severity && (
+          <Badge variant="outline" className="ml-2 align-middle">
+            {t(SEVERITY_KEY[shown.severity])}
+          </Badge>
+        )}
+      </p>
+      {excerpt && <p className="tbl-excerpt mt-0.5 line-clamp-2 text-xs text-muted-foreground">{excerpt}</p>}
+    </div>
+  );
+}
+
+/** One stacked record row: optional checkbox, title/severity/excerpt, optional source, translate toggle and date. */
 function TableRecordRow({
   record,
   selectMode,
   checked,
   setSelectedRecords,
   toggle,
+  translation,
 }: {
   record: FeedDocument;
   selectMode: boolean;
@@ -120,64 +186,62 @@ function TableRecordRow({
   setSelectedRecords: React.Dispatch<React.SetStateAction<Record<string, SelectedRecordIdentity>>>;
   /** The select-mode toggle, rendered in the first row at rest. */
   toggle: React.ReactNode;
+  /** Shared on-demand document translation controller for this table. */
+  translation: ItemTranslationController;
 }) {
-  const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
   const terminal = useSkin() === 'terminal';
-  const shown = splitSeverity(record.title);
+  const translated = translation.shown(record.document_id);
+  const effectiveTitle = translated?.title ?? record.title;
   const sourceName = record.provider_metadata?.source_fields?.source;
-  const excerpt = distinctExcerpt(record.title, record.excerpt);
+  const excerpt = distinctExcerpt(effectiveTitle, translated?.excerpt ?? record.excerpt);
+  const stamp = record.published_at ?? record.observed_at;
   return (
     <li className="tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
-      {selectMode && (
-        <Checkbox
-          aria-label={t('selectRecord', { title: record.title })}
-          checked={checked}
-          onCheckedChange={(next) =>
-            setSelectedRecords((current) => {
-              if (next !== true) {
-                const remaining = { ...current };
-                delete remaining[record.document_id];
-                return remaining;
-              }
-              if (Object.keys(current).length >= 32) return current;
-              return {
-                ...current,
-                [record.document_id]: {
-                  sourceId: record.source_id,
-                  documentId: record.document_id,
-                  documentVersionId: record.document_version_id,
-                  versionNumber: record.version_number,
-                },
-              };
-            })
-          }
-        />
-      )}
-      <div className="min-w-0 flex-1 basis-48">
-        <p className="text-sm font-medium leading-snug">
-          {shown.title}
-          {shown.severity && (
-            <Badge variant="outline" className="ml-2 align-middle">
-              {t(SEVERITY_KEY[shown.severity])}
-            </Badge>
-          )}
-        </p>
-        {excerpt && <p className="tbl-excerpt mt-0.5 line-clamp-2 text-xs text-muted-foreground">{excerpt}</p>}
-      </div>
+      {selectMode && <TableRowCheckbox record={record} checked={checked} setSelectedRecords={setSelectedRecords} />}
+      <TableRowTitle title={effectiveTitle} excerpt={excerpt} />
       {terminal && <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>}
       <div className="tbl-date flex shrink-0 flex-col items-end gap-0.5">
         {terminal ? null : toggle}
-        <time
-          className="whitespace-nowrap text-xs tabular-nums text-muted-foreground"
-          dateTime={record.published_at ?? record.observed_at ?? undefined}
-        >
+        <ItemTranslateButton
+          controller={translation}
+          target={{ id: record.document_id, revision: record.document_version_id }}
+          title={effectiveTitle}
+        />
+        <time className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" dateTime={stamp ?? undefined}>
           {terminal
-            ? formatTerminalStamp(record.published_at ?? record.observed_at, display.locale, display.timezone)
-            : formatDateTime(record.published_at ?? record.observed_at, display.locale, display.timezone)}
+            ? formatTerminalStamp(stamp, display.locale, display.timezone)
+            : formatDateTime(stamp, display.locale, display.timezone)}
         </time>
       </div>
     </li>
+  );
+}
+
+/** Selection-mode Ask AI + Done action row for `TablePanel`. */
+function TableSelectionBar({
+  selected,
+  toggle,
+  onAsk,
+}: {
+  selected: SelectedRecordIdentity[];
+  toggle: React.ReactNode;
+  onAsk: () => void;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant={selected.length === 0 ? 'outline' : 'default'}
+        disabled={selected.length === 0}
+        onClick={onAsk}
+      >
+        {t('askAbout.selected', { count: selected.length })}
+      </Button>
+      {toggle}
+    </div>
   );
 }
 
@@ -198,6 +262,11 @@ export function TablePanel({ instance }: TablePanelProps) {
     queryFn: () => listGadgetDocumentProjections(sourceIds),
   });
   const records = useMemo(() => query.data?.items ?? [], [query.data]);
+  const translationTargets = useMemo(
+    () => records.map((record) => ({ id: record.document_id, revision: record.document_version_id })),
+    [records],
+  );
+  const translation = useItemTranslation('document', translationTargets);
   const selected = Object.values(selectedRecords);
   const selectedIds = new Set(Object.keys(selectedRecords));
   const currentRecords = new Map(records.map((record) => [record.document_id, record]));
@@ -223,38 +292,26 @@ export function TablePanel({ instance }: TablePanelProps) {
       {/* At rest the toggle rides in the first row (no row of its own); selection mode needs room for Ask AI + Done. */}
       <TableToolbar visible={records.length > 0 && !selectMode} toggle={toggle} />
       {records.length > 0 && selectMode && (
-        <div className="flex items-center justify-end gap-2">
-          {selectMode && (
-            <Button
-              type="button"
-              size="sm"
-              // Quiet outline at rest; primary only once rows are selected.
-              variant={selected.length === 0 ? 'outline' : 'default'}
-              disabled={selected.length === 0}
-              onClick={() =>
-                openDrawer({
-                  context: {
-                    kind: 'selection',
-                    items: selected.map(({ sourceId, documentId, documentVersionId }) => ({
-                      sourceId,
-                      documentId,
-                      documentVersionId,
-                    })),
-                  },
-                })
-              }
-            >
-              {t('askAbout.selected', { count: selected.length })}
-            </Button>
-          )}
-          {toggle}
-        </div>
+        <TableSelectionBar
+          selected={selected}
+          toggle={toggle}
+          onAsk={() =>
+            openDrawer({
+              context: {
+                kind: 'selection',
+                items: selected.map(({ sourceId, documentId, documentVersionId }) => ({ sourceId, documentId, documentVersionId })),
+              },
+            })
+          }
+        />
       )}
       {staleSelections.length > 0 && (
         <p role="status" className="text-xs text-muted-foreground">
           {t('selectionChanged', { count: staleSelections.length })}
         </p>
       )}
+      {records.length > 0 ? <CollectionTranslationBar controller={translation} /> : null}
+      <TranslationStatusBanner issues={translation.issues} />
       {sourceIds.length === 0 ? (
         <GadgetNotice
           kind="setup"
@@ -280,6 +337,7 @@ export function TablePanel({ instance }: TablePanelProps) {
               checked={selectedIds.has(record.document_id)}
               setSelectedRecords={setSelectedRecords}
               toggle={index === 0 && !selectMode ? toggle : null}
+              translation={translation}
             />
           ))}
         </ul>

@@ -17,6 +17,10 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
+    // Windows: Node resolves externalized jest-dom's `import 'vitest'` with the cwd drive-letter case; a lower-case
+    // `d:\` cwd then loads a second vitest/chai and every jest-dom matcher fails as "Invalid Chai property".
+    // Inlining jest-dom routes that import through Vite so it shares the test files' vitest instance.
+    server: { deps: { inline: ['@testing-library/jest-dom'] } },
     include: ['src/**/*.test.{ts,tsx}', 'locales/**/*.test.ts'],
     exclude: ['node_modules', '.next', '../../tests/**', '**/*.spec.{ts,tsx}'],
     // Coverage runs only via `npm run test:coverage` (CI). Floors in docs/development.md "Coverage floors".

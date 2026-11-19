@@ -1028,13 +1028,17 @@ async def _purge_translations(
     resource_type: ShareKind,
     resource_ids: tuple[UUID, ...],
 ) -> None:
-    """Drop every actor's derived translations of a brief whose share ended (documents have none)."""
-    if resource_type != "brief":
+    """Drop every actor's derived translations of briefs/documents whose share ended or that were deleted.
+
+    Maps the share kind to its translation resource type, then issues one flush-only batch purge
+    inside the caller's unit of work. Unmapped kinds or empty id sets are no-ops.
+    """
+    translation_type = {"brief": "daily_brief", "document": "document"}.get(resource_type)
+    if translation_type is None or not resource_ids:
         return
     from core.capabilities import purge_resource_translations
 
-    for resource_id in resource_ids:
-        await purge_resource_translations(session, workspace_id, "daily_brief", resource_id)
+    await purge_resource_translations(session, workspace_id, translation_type, resource_ids)
 
 
 async def revoke_resource_shares_in_uow(
