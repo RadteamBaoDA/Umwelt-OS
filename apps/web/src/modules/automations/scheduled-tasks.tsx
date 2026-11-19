@@ -44,7 +44,9 @@ import {
   describeSchedule,
   isLegacyBrief,
   scheduledTaskKind,
+  takeBriefDraft,
   topicOutcome,
+  type BriefDraft,
   type ScheduledTaskTemplate,
 } from './scheduled-task-model';
 import { TopicWatchDeleteDialog } from './topic-watch-delete-dialog';
@@ -59,7 +61,10 @@ const OUTCOME_KEYS = {
 } as const;
 
 type Editor =
-  { mode: 'new'; kind: 'daily_brief' | 'topic_watch' } | { mode: 'edit'; rule: Automation; consentStale?: boolean } | { mode: 'convert' };
+  | { mode: 'new'; kind: 'daily_brief' | 'topic_watch' }
+  | { mode: 'edit'; rule: Automation; consentStale?: boolean }
+  | { mode: 'convert' }
+  | { mode: 'draft'; initial: BriefDraft };
 type View = { kind: 'list' } | { kind: 'blank' } | { kind: 'runs'; ruleId: string };
 
 /**
@@ -429,6 +434,26 @@ function useDeepLink(
 }
 
 /**
+ * Opens the Daily brief editor pre-filled from a chat draft (`?draft=1`, payload in this tab's sessionStorage), once the
+ * rules have loaded. The draft is consumed on first read; when a Daily brief task (or legacy brief rule) already exists
+ * it is dropped, because a workspace has one brief slot and the existing task is edited instead.
+ */
+function useDraftHandoff(
+  params: ReturnType<typeof useSearchParams>,
+  loaded: boolean,
+  items: Automation[],
+  setEditor: (editor: Editor) => void,
+) {
+  const [applied, setApplied] = useState(false);
+  // Adjusting state during render once the rules arrive (same pattern as useDeepLink), so the list never flashes first.
+  if (applied || !loaded || params?.get('draft') !== '1') return;
+  setApplied(true);
+  const draft = takeBriefDraft();
+  const hasBrief = items.some((rule) => scheduledTaskKind(rule) === 'daily_brief' || isLegacyBrief(rule));
+  if (draft && !hasBrief) setEditor({ mode: 'draft', initial: draft });
+}
+
+/**
  * Modal layer of the workspace: the Topic watch editor or the Daily brief editor for the current `editor` state, and
  * the Topic watch delete dialog for `deleting`. Renders nothing while both are null.
  */
@@ -461,6 +486,7 @@ function TaskDialogs({
           rule={rule}
           legacyRule={legacy}
           convert={editor.mode === 'convert'}
+          initial={editor.mode === 'draft' ? editor.initial : undefined}
           csrfToken={csrfToken}
           onSaved={onSaved}
           onClose={onCloseEditor}
@@ -492,6 +518,7 @@ export function ScheduledTasksWorkspace() {
   useDeepLink(params, items, setEditor, setView);
   const tasks = items.filter((rule) => scheduledTaskKind(rule) !== null);
   const legacy = items.find(isLegacyBrief);
+  useDraftHandoff(params, rules.isSuccess, items, setEditor);
   const selected = view.kind === 'runs' ? items.find((rule) => rule.id === view.ruleId) : undefined;
   const newTaskMenu = <NewTaskMenu onTemplates={() => setTab('templates')} onBlank={() => setView({ kind: 'blank' })} />;
   const templates = (

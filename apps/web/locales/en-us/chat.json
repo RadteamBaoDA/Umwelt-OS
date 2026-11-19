@@ -490,6 +490,5 @@
   "taskDraft.notSaved": "Not saved yet",
   "taskDraft.review": "Review and create",
   "taskDraft.exists": "A Daily brief task already exists",
-  "taskDraft.open": "Open Scheduled tasks",
-  "taskDraft.created": "Created"
+  "taskDraft.open": "Open Scheduled tasks"
 }

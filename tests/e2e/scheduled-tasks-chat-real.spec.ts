@@ -108,35 +108,36 @@ test('asking in chat shows an unsaved Daily brief draft card from the real model
   expect((await page.content()).includes(KEY), 'API key never rendered').toBe(false);
 });
 
-test('Review and create opens the pre-filled editor; Save creates the task', async ({ page }) => {
+test('Review and create opens the pre-filled editor in Scheduled tasks; Save creates the task', async ({ page }) => {
   test.setTimeout(3 * 60_000);
   expect(conversationId, 'draft test recorded the conversation').toBeTruthy();
   await page.goto(`/chat/${conversationId}`);
   const card = page.getByTestId('task-draft-card');
   await card.getByRole('button', { name: 'Review and create' }).click();
+  // The draft travels in sessionStorage; only the flag is in the URL.
+  await expect(page).toHaveURL(/\/settings\/scheduled-tasks\?draft=1$/);
   const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel('Time')).toHaveValue('06:30');
+  await expect(dialog.getByLabel('Time')).toHaveValue('06:30', { timeout: 30_000 });
   await expect(dialog.getByRole('combobox', { name: 'Days' })).toHaveText(/Weekdays/);
+  expect(await briefRules(page), 'nothing saved before Save').toHaveLength(0);
   await shot(page, '02-chat-draft-editor');
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(dialog).toBeHidden({ timeout: 30_000 });
-  await expect(card.getByText('Created', { exact: true })).toBeVisible();
+  await expect(page.getByText('Weekdays at 06:30').first()).toBeVisible({ timeout: 30_000 });
 
   const rules = await briefRules(page);
   expect(rules, 'exactly one Daily brief task').toHaveLength(1);
   expect(JSON.stringify(rules[0].trigger)).toContain('30 6 * * 1-5');
   await shot(page, '03-chat-draft-created');
 
-  await page.getByRole('link', { name: 'Open Scheduled tasks' }).click();
-  // The link deep-opens the saved task's editor (`?edit=<id>`) with the drafted schedule.
+  // Back in chat the card reflects the saved task and links to it.
+  await page.goto(`/chat/${conversationId}`);
+  await expect(card.getByText('A Daily brief task already exists')).toBeVisible({ timeout: 30_000 });
+  await expect(card.getByRole('button', { name: 'Review and create' })).toHaveCount(0);
+  await card.getByRole('link', { name: 'Open Scheduled tasks' }).click();
   await expect(page).toHaveURL(/\/settings\/scheduled-tasks\?edit=/);
-  const editor = page.getByRole('dialog');
-  await expect(editor.getByLabel('Time')).toHaveValue('06:30', { timeout: 30_000 });
-  await expect(editor.getByRole('combobox', { name: 'Days' })).toHaveText(/Weekdays/);
+  await expect(page.getByRole('dialog').getByLabel('Time')).toHaveValue('06:30', { timeout: 30_000 });
   await shot(page, '04-chat-draft-in-scheduled-tasks');
-  await editor.getByRole('button', { name: 'Cancel' }).click();
-  await expect(page.getByText('Weekdays at', { exact: false }).first()).toBeVisible({ timeout: 30_000 });
 });
 
 // Free the one-per-workspace slot for the template-based Daily brief spec, even when a test above failed.

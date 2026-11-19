@@ -112,6 +112,40 @@ describe('scheduled tasks workspace', () => {
     window.history.pushState({}, '', '/');
   });
 
+  it('?draft=1 opens the editor pre-filled from the chat draft and consumes it', async () => {
+    const draft = { time: '06:30', days: 'weekdays', sections: ['stories', 'weather'], extraInstruction: 'Short', modelRole: 'brief' };
+    window.sessionStorage.setItem('umwelt:brief-draft', JSON.stringify(draft));
+    window.history.pushState({}, '', '/settings/scheduled-tasks?draft=1');
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [] });
+    render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByDisplayValue('06:30')).toBeTruthy();
+    expect(screen.getByDisplayValue('Short')).toBeTruthy();
+    expect(window.sessionStorage.getItem('umwelt:brief-draft')).toBeNull();
+    window.history.pushState({}, '', '/');
+  });
+
+  it('?draft=1 is dropped when a Daily brief task already exists, and a malformed draft is ignored', async () => {
+    window.sessionStorage.setItem(
+      'umwelt:brief-draft',
+      JSON.stringify({ time: '06:30', days: 'weekdays', sections: [], extraInstruction: null, modelRole: 'brief' }),
+    );
+    window.history.pushState({}, '', '/settings/scheduled-tasks?draft=1');
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [task] });
+    const { unmount } = render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByText('Every day at 07:00')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    unmount();
+    window.sessionStorage.setItem(
+      'umwelt:brief-draft',
+      JSON.stringify({ time: '25:00', days: 'weekdays', sections: [], extraInstruction: null, modelRole: 'brief' }),
+    );
+    vi.mocked(api.listAutomations).mockResolvedValue({ items: [] });
+    render(view(<ScheduledTasksWorkspace />));
+    expect(await screen.findByText('No scheduled tasks yet')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    window.history.pushState({}, '', '/');
+  });
+
   it('?run opens the daily brief run history; an unknown ?edit id is a no-op', async () => {
     vi.mocked(api.listAutomations).mockResolvedValue({ items: [task] });
     window.history.pushState({}, '', '/settings/scheduled-tasks?edit=missing');

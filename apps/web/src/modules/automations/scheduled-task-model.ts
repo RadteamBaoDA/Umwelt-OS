@@ -1,4 +1,4 @@
-import type { Automation, BriefSection } from './api';
+import type { Automation, BriefModelRole, BriefSection } from './api';
 
 /** Brief sections in display order; mirrors the backend `ALL_BRIEF_SECTIONS`. */
 export const ALL_BRIEF_SECTIONS: readonly BriefSection[] = ['stories', 'markets', 'weather', 'hazards', 'agenda', 'source_health'];
@@ -99,4 +99,67 @@ export function parseBriefCron(cron: string): { time: string; days: BriefDays } 
 export function describeSchedule(cron: string): { days: BriefDays; time: string } | null {
   const parsed = parseBriefCron(cron);
   return parsed && { days: parsed.days, time: parsed.time };
+}
+
+/** A Daily brief proposed in chat, handed to the Scheduled tasks page to pre-fill the editor (never saved by itself). */
+export interface BriefDraft {
+  time: string;
+  days: BriefDays;
+  sections: BriefSection[];
+  extraInstruction: string | null;
+  modelRole: BriefModelRole;
+}
+
+// sessionStorage keeps the owner's instruction out of the URL (history, logs, referrers); it lives for this tab only.
+const BRIEF_DRAFT_KEY = 'umwelt:brief-draft';
+const ROLES: readonly BriefModelRole[] = ['brief', 'chat', 'background'];
+
+/**
+ * Stores a chat draft for the Scheduled tasks page in this tab's sessionStorage. Storage failures (private mode, quota)
+ * are ignored: the page then opens without a pre-filled editor.
+ */
+export function stashBriefDraft(draft: BriefDraft): void {
+  try {
+    window.sessionStorage.setItem(BRIEF_DRAFT_KEY, JSON.stringify(draft));
+  } catch {
+    // Best effort only; nothing is saved without the owner's Save anyway.
+  }
+}
+
+/**
+ * Reads and removes the stashed chat draft, so a reload never reopens it. Returns null when absent or when the stored
+ * value does not have the exact draft shape (it is page-writable storage, so it is validated like any input).
+ */
+export function takeBriefDraft(): BriefDraft | null {
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(BRIEF_DRAFT_KEY);
+    window.sessionStorage.removeItem(BRIEF_DRAFT_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return isBriefDraft(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Exact-shape check of a stored draft: the same bounds the server applies to `ScheduledTaskDraft`. */
+function isBriefDraft(input: unknown): input is BriefDraft {
+  const value = (input ?? {}) as Partial<BriefDraft>;
+  const sections = Array.isArray(value.sections) ? value.sections : null;
+  const instruction = value.extraInstruction;
+  return (
+    typeof value.time === 'string' &&
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) &&
+    (value.days === 'daily' || value.days === 'weekdays') &&
+    sections !== null &&
+    sections.every((section) => ALL_BRIEF_SECTIONS.includes(section)) &&
+    new Set(sections).size === sections.length &&
+    (instruction === null || (typeof instruction === 'string' && instruction.length <= 500)) &&
+    ROLES.includes(value.modelRole as BriefModelRole)
+  );
 }

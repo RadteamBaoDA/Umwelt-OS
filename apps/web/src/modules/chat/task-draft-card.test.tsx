@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,8 @@ import { TaskDraftCard } from './task-draft-card';
 let locale: 'en-us' | 'vi-vi' = 'en-us';
 vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale, timezone: 'UTC' }) }));
+const push = vi.fn();
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
 vi.mock('@/modules/automations/api', async (original) => ({
   ...(await original<typeof import('@/modules/automations/api')>()),
   listAutomations: vi.fn(),
@@ -40,44 +42,27 @@ function view() {
 beforeEach(() => {
   locale = 'en-us';
   vi.clearAllMocks();
+  window.sessionStorage.clear();
   vi.mocked(api.listAutomations).mockResolvedValue({ items: [] });
 });
 
 describe('TaskDraftCard', () => {
-  it('shows the unsaved summary and creates only after Save in the pre-filled editor', async () => {
+  it('shows the unsaved summary and hands the draft to Scheduled tasks without saving anything', async () => {
     render(view());
     expect(screen.getByText('Not saved yet')).toBeTruthy();
     expect(screen.getByText('Daily brief')).toBeTruthy();
+    expect(screen.getByText('Weekdays at 07:00')).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Review and create' }));
-    const time = (await screen.findByDisplayValue('07:00')) as HTMLInputElement;
-    expect(time.value).toBe('07:00');
-    expect(screen.getByDisplayValue('Reply in Vietnamese')).toBeTruthy();
-    // Checkboxes reflect the draft sections before Save.
-    for (const [label, on] of [
-      ['stories', true],
-      ['weather', true],
-      ['markets', false],
-      ['agenda', false],
-    ] as const) {
-      const box = screen.getByRole('checkbox', { name: new RegExp(label.replace('_', ' '), 'i') });
-      expect(box.getAttribute('aria-checked')).toBe(String(on));
-    }
-    expect(api.createScheduledTask).not.toHaveBeenCalled();
-    await waitFor(() => expect((screen.getByRole('button', { name: /save/i }) as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.click(screen.getByRole('button', { name: /save/i }));
-    await waitFor(() => expect(api.createScheduledTask).toHaveBeenCalledTimes(1));
-    const rule = vi.mocked(api.createScheduledTask).mock.calls[0][1] as unknown as {
-      trigger: { cron: string };
-      actions: Record<string, unknown>[];
-    };
-    expect(rule.trigger.cron).toBe('0 7 * * 1-5');
-    expect(rule.actions[0]).toMatchObject({
-      model_role: 'brief',
-      deliver_chat: true,
+    expect(push).toHaveBeenCalledWith('/settings/scheduled-tasks?draft=1');
+    // The draft travels in sessionStorage (never the URL) and nothing was created from chat.
+    expect(JSON.parse(window.sessionStorage.getItem('umwelt:brief-draft') ?? 'null')).toEqual({
+      time: '07:00',
+      days: 'weekdays',
       sections: ['stories', 'weather'],
-      extra_instruction: 'Reply in Vietnamese',
+      extraInstruction: 'Reply in Vietnamese',
+      modelRole: 'brief',
     });
-    expect(await screen.findByText('Created')).toBeTruthy();
+    expect(api.createScheduledTask).not.toHaveBeenCalled();
   });
 
   it('shows the already-exists state without a create button', async () => {
