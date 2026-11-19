@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import WorkspaceContext
+from modules.knowledge.documents._scope import _admit_document_scope, _document_scope
 from modules.knowledge.documents.models import Document, DocumentVersion
 from modules.sources.public import SourceReadProjection as Source
 from modules.translations.public import TranslationInput
@@ -25,11 +26,15 @@ async def read_document_translation_input(
 ) -> TranslationInput | None:
     """Return the authorized title and bounded excerpt of a ready document, or None when unreadable.
 
-    Enforces workspace scoping, ready extraction status, and member share grants. The visibility hash
-    binds document, version, source generation, share revision, membership revision, and ``local_only``
-    so any permission or source-policy change invalidates cached translations.
+    Uses the same admission and root predicates as member-visible document reads: real
+    membership/rollout revalidation, workspace scope, purge-lineage Source fence, and (for any
+    non-owner) an active share grant inside the SQL predicate, so access fails closed. The
+    visibility hash binds document, version, source generation, share revision, membership
+    revision, and ``local_only`` so any permission or source-policy change invalidates caches.
     """
-    del multi_workspace_enabled
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True
+    )
     row = (
         await session.execute(
             select(Document, DocumentVersion, Source)
@@ -44,8 +49,8 @@ async def read_document_translation_input(
             )
             .where(
                 Document.id == document_id,
-                Document.workspace_id == scope.workspace_id,
                 Document.extraction_status == "ready",
+                *_document_scope(scope, allow_member=True),
             )
         )
     ).first()
@@ -53,7 +58,8 @@ async def read_document_translation_input(
         return None
     doc, version, source = row
     grant_revision = 0
-    if scope.role == "member":
+    # Fail closed: every non-owner needs a live grant (also enforced in the SQL predicate above).
+    if scope.role != "owner":
         grants = await workspaces.read_resource_grants(
             session,
             scope=scope,
