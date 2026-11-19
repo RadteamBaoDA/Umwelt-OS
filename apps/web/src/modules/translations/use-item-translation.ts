@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useContentTranslation, type ContentTranslation, type TranslationTarget } from './use-content-translation';
+import { nextUntranslatedBatch, useContentTranslation, type ContentTranslation, type TranslationTarget } from './use-content-translation';
 import type { ResourceType, TranslationPayload } from './types';
 
 /** State and handlers for on-demand collection/per-item translation with global and per-item Original toggles. */
@@ -20,7 +20,7 @@ export type ItemTranslationController = ContentTranslation & {
   shown: (id: string) => TranslationPayload | undefined;
   /** Requests on-demand translation for one item and ensures its translation is shown once ready. */
   translateOne: (target: TranslationTarget) => void;
-  /** Requests on-demand translation for all currently loaded targets and switches the view to translated. */
+  /** Requests on-demand translation for the next untranslated slice (at most 25) and switches the view to translated. */
   translateAll: () => void;
 };
 
@@ -63,10 +63,11 @@ export function useItemTranslation(type: ResourceType, targets: TranslationTarge
     translation.translate([target]);
   };
 
+  // Each click submits at most one chunk (25); repeated clicks walk the rest of the list.
   const translateAll = () => {
     setShowOriginal(false);
     setPerItemOriginal(new Set());
-    translation.translate(targets);
+    translation.translate(nextUntranslatedBatch(targets, translation));
   };
 
   return {

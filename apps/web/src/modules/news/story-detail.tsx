@@ -118,6 +118,7 @@ function StoryDetailStatus({ vm }: { vm: StoryDetailVm }) {
 /** Translation button, badge, or failure note for the currently opened story detail. */
 function StoryDetailTranslation({ vm, story }: { vm: StoryDetailVm; story: NonNullable<StoryDetailVm['story']> }) {
   const { translation, showOriginal, setShowOriginal, translateLabel } = vm;
+  const tTrans = useTranslations('translations');
   if (translation.results.has(story.id)) {
     return (
       <TranslatedBadge
@@ -128,6 +129,9 @@ function StoryDetailTranslation({ vm, story }: { vm: StoryDetailVm; story: NonNu
     );
   }
   if (!translation.enabled || !story.translation_revision) return null;
+  if (translation.unchanged.has(story.id)) {
+    return <span className="text-xs text-muted-foreground">{tTrans('note.unchanged')}</span>;
+  }
   const pending = translation.pendingIds.has(story.id);
   return (
     <div className="flex flex-wrap items-center gap-2">

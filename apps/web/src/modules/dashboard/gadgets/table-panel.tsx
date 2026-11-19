@@ -203,7 +203,11 @@ function TableRecordRow({
       {terminal && <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>}
       <div className="tbl-date flex shrink-0 flex-col items-end gap-0.5">
         {terminal ? null : toggle}
-        <ItemTranslateButton controller={translation} target={{ id: record.document_id, revision: record.document_version_id }} />
+        <ItemTranslateButton
+          controller={translation}
+          target={{ id: record.document_id, revision: record.document_version_id }}
+          title={effectiveTitle}
+        />
         <time className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" dateTime={stamp ?? undefined}>
           {terminal
             ? formatTerminalStamp(stamp, display.locale, display.timezone)

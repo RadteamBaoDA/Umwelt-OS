@@ -20,10 +20,12 @@ import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import {
   isWorkspaceTranslationBlocker,
+  nextUntranslatedBatch,
   TranslateActionButton,
   TranslatedBadge,
   TranslationNote,
   TranslationStatusBanner,
+  untranslatedTargets,
   useContentTranslation,
 } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
@@ -125,11 +127,15 @@ function StoryTranslateControl({ vm, story }: { vm: StoryListVm; story: Story })
         variant="ghost"
         size="sm"
         className="h-6 px-1.5 text-xs font-normal text-muted-foreground hover:text-foreground"
+        aria-pressed={!isShowingOriginal(story.id)}
         onClick={() => toggleItemOriginal(story.id)}
       >
         {showingOriginal ? tTrans('translationShort') : tTrans('originalShort')}
       </Button>
     );
+  }
+  if (translation.unchanged.has(story.id)) {
+    return <span className="text-xs text-muted-foreground">{tTrans('note.unchanged')}</span>;
   }
   return (
     <TranslateActionButton
@@ -597,6 +603,8 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   // Only the stories currently loaded are eligible for on-demand translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
+  // Mirrors useItemTranslation: each "Translate all" click submits at most one chunk of untranslated stories.
+  const nextBatchTranslateAll = () => translation.translate?.(nextUntranslatedBatch(targets, translation));
   // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
   useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
@@ -631,7 +639,7 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const translateAll = () => {
     setShowOriginal(false);
     setPerItemOriginal(new Set());
-    translation.translate?.(targets);
+    nextBatchTranslateAll();
   };
 
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
@@ -686,7 +694,8 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
 
 /** Builds the refresh button, on-demand translation toolbar action, and page action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
-  const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } = p;
+  const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } =
+    p;
   const refreshButton = (
     <Button
       variant="ghost"
@@ -703,7 +712,7 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
   );
 
   const pendingCount = translation.pendingIds?.size ?? 0;
-  const untranslatedCount = targets.filter((item) => !translation.results.has(item.id)).length;
+  const untranslatedCount = untranslatedTargets(targets, translation).length;
   const translationToolbarAction: ReactNode = (
     <>
       {translation.results.size ? (
@@ -713,7 +722,7 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
           onToggle={() => setShowOriginal((v) => !v)}
         />
       ) : null}
-      {translation.enabled && untranslatedCount > 0 ? (
+      {translation.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
         <TranslateActionButton
           compact
           label={pendingCount > 0 ? tTrans('translatingCount', { count: pendingCount }) : tTrans('translateAll')}

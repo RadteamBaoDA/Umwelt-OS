@@ -392,7 +392,11 @@ function VideoRow({
           {duration != null ? ` · ${t('video.duration', { duration: Math.max(1, Math.ceil(duration / 60)) })}` : ''}
         </p>
         <div className="mt-1 flex flex-wrap items-center gap-1">
-          <ItemTranslateButton controller={translation} target={{ id: item.document_id, revision: item.document_version_id }} />
+          <ItemTranslateButton
+            controller={translation}
+            target={{ id: item.document_id, revision: item.document_version_id }}
+            title={item.title}
+          />
           {isOwner && (
             <>
               <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={ask}>

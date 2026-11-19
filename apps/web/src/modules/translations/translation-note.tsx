@@ -15,6 +15,8 @@ const REASON_KEYS = {
   resource_unavailable: 'reason.resourceUnavailable',
   stale_request: 'reason.staleRequest',
   translation_disabled: 'reason.translationDisabled',
+  rate_limited: 'reason.rateLimited',
+  request_failed: 'reason.requestFailed',
 } as const;
 const CODES = Object.keys(REASON_KEYS) as (keyof typeof REASON_KEYS)[];
 

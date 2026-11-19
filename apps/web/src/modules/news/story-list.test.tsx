@@ -11,12 +11,14 @@ vi.mock('./story-api', () => ({
   fetchNewsTrends: vi.fn(async () => ({ items: [], incomplete_reasons: [] })),
 }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-US', timezone: 'UTC' }) }));
-vi.mock('@/modules/translations/use-content-translation', () => ({
+vi.mock('@/modules/translations/use-content-translation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/modules/translations/use-content-translation')>()),
   useContentTranslation: () => ({
     enabled: false,
     targetLanguage: 'vi',
     results: new Map(),
     issues: new Map(),
+    unchanged: new Set(),
     pendingIds: new Set(),
     translate: vi.fn(),
   }),

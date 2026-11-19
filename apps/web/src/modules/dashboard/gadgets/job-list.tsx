@@ -80,7 +80,11 @@ function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<J
                       <span>{displayTitle}</span>
                     )}
                     {p.documentId && p.documentVersionId ? (
-                      <ItemTranslateButton controller={translation} target={{ id: p.documentId, revision: p.documentVersionId }} />
+                      <ItemTranslateButton
+                        controller={translation}
+                        target={{ id: p.documentId, revision: p.documentVersionId }}
+                        title={displayTitle}
+                      />
                     ) : null}
                   </div>
                 </TableCell>

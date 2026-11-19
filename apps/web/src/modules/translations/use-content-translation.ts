@@ -1,13 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { useWorkspaceSession as readWorkspaceSession } from '@/core/app-shell/workspace-session';
-import { workspaceGeneration } from '@/core/api';
+import { ApiError, workspaceGeneration } from '@/core/api';
 import { workspaceKeys } from '@/core/query-keys';
 import { useWorkspace as readWorkspace } from '@/core/workspace-context';
 import { fetchTranslationSettings, readTranslationBatch, submitTranslationBatch } from './api';
-import type { ResourceType, TranslationItemRequest, TranslationResult } from './types';
+import type { ResourceType, TranslationItemRequest, TranslationResult, TranslationSettings } from './types';
 
 /** Reads the workspace session (calling its single `useContext` hook), returning null when rendered outside a provider in unit tests. */
 function readSafeWorkspaceSession(): { csrfToken: string } | null {
@@ -41,6 +41,8 @@ export type ContentTranslation = {
   issues: ReadonlyMap<string, TranslationResult>;
   /** Resource ids currently being submitted or polled. */
   pendingIds: ReadonlySet<string>;
+  /** Resource ids the server reported as already in the target language: render a note, not a Translate button. */
+  unchanged: ReadonlySet<string>;
   /** Requests on-demand translation for the given subset (or all current `targets` when omitted). */
   translate: (subset?: TranslationTarget[]) => void;
 };
@@ -106,7 +108,11 @@ async function pollBatchUntilSettled(params: {
   }
 }
 
-/** Submits one chunk of at most 25 targets, immediately hydrates cache hits, and polls pending items until `deadline`. */
+/**
+ * Submits one chunk of at most 25 targets, immediately hydrates cache hits, and polls pending items until `deadline`.
+ * On a successful POST the server's current settings are pushed into the settings cache so a stale toggle
+ * or language in the header is corrected as soon as any translation request is accepted.
+ */
 async function runTranslationGroup(params: {
   type: ResourceType;
   group: TranslationTarget[];
@@ -115,8 +121,9 @@ async function runTranslationGroup(params: {
   deadline: number;
   valid: () => boolean;
   take: (items: Seen[]) => void;
+  onSettings: (settings: TranslationSettings) => void;
 }): Promise<void> {
-  const { type, group, csrfToken, signal, deadline, valid, take } = params;
+  const { type, group, csrfToken, signal, deadline, valid, take, onSettings } = params;
   const requests: TranslationItemRequest[] = group.map((t) => ({
     resource_type: type,
     resource_id: t.id,
@@ -124,6 +131,7 @@ async function runTranslationGroup(params: {
   }));
   const accepted = await submitTranslationBatch(requests, csrfToken, signal);
   if (!valid()) return;
+  onSettings(accepted.settings);
   const seenAccepted = accepted.items as Seen[];
   const needsHydration = Boolean(accepted.batch_id) && seenAccepted.some(itemNeedsHydration);
   take(needsHydration ? seenAccepted.filter((item) => item.status === 'pending' || item.status === 'unchanged') : seenAccepted);
@@ -141,7 +149,67 @@ async function runTranslationGroup(params: {
   }
 }
 
-/** Deduplicates requested targets, skipping items already resolved in cache or currently in flight. */
+/**
+ * Maps a failed submit or poll to the reason code shown in the UI. Only ApiError carries an HTTP status;
+ * any other error (network failure, parse error) is a generic request failure.
+ *
+ * @param error The rejection reason caught from `runTranslationGroup`.
+ * @returns `rate_limited` (429), `stale_request` (409), `resource_unavailable` (404) or `request_failed`.
+ */
+export function requestFailureCode(error: unknown): string {
+  if (!(error instanceof ApiError)) return 'request_failed';
+  if (error.status === 429) return 'rate_limited';
+  if (error.status === 409) return 'stale_request';
+  if (error.status === 404) return 'resource_unavailable';
+  return 'request_failed';
+}
+
+/**
+ * Marks every target of a failed group as `failed` with `code`. Entries that already hold a settled outcome
+ * (ready, unchanged, blocked, failed) are kept, so a poll error after partial success does not overwrite
+ * translations that already arrived.
+ *
+ * @param queryClient Shared react-query client holding the translation cache.
+ * @param group Targets submitted in the failed chunk.
+ * @param keyFor Builds the cache key of one target for the run's workspace generation.
+ * @param code Reason code to store in `errorCode`.
+ */
+function failGroup(
+  queryClient: QueryClient,
+  group: TranslationTarget[],
+  keyFor: (item: TranslationTarget) => QueryKey,
+  code: string,
+): void {
+  for (const item of group) {
+    const cached = queryClient.getQueryData<TranslationResult>(keyFor(item));
+    if (cached && cached.status !== 'pending') continue;
+    queryClient.setQueryData<TranslationResult>(keyFor(item), { status: 'failed', translation: null, errorCode: code });
+  }
+}
+
+/**
+ * Removes cache entries still reading `pending` after a run ends (deadline reached, aborted, or failed).
+ * Without this, the entry (staleTime Infinity) would keep the button disabled until a reload.
+ *
+ * @param queryClient Shared react-query client holding the translation cache.
+ * @param todo Targets this run was responsible for.
+ * @param keyFor Builds the cache key of one target for the run's workspace generation.
+ */
+function dropStalePending(queryClient: QueryClient, todo: TranslationTarget[], keyFor: (item: TranslationTarget) => QueryKey): void {
+  for (const item of todo) {
+    if (queryClient.getQueryData<TranslationResult>(keyFor(item))?.status !== 'pending') continue;
+    queryClient.removeQueries({ queryKey: keyFor(item), exact: true });
+  }
+}
+
+/**
+ * Deduplicates requested targets, skipping items already resolved in cache or currently in flight.
+ *
+ * @param requested Targets asked for by the caller.
+ * @param inFlight Resource ids a live run is already submitting or polling.
+ * @param getCached Reads the cached outcome of one target.
+ * @returns Unique targets that still need a submission.
+ */
 function selectTodoTargets(
   requested: TranslationTarget[],
   inFlight: ReadonlySet<string>,
@@ -156,12 +224,44 @@ function selectTodoTargets(
 }
 
 /**
+ * Targets with no cached outcome at all: not ready, not unchanged, and not already in an issue state.
+ * Excluding issue states is what lets repeated "Translate all" clicks walk past blocked or failed items
+ * instead of resubmitting the same first 25 forever; those items keep their per-item Translate button.
+ *
+ * @param targets Currently loaded targets, in display order.
+ * @param translation Current derived state of the hook (results, issues, unchanged).
+ * @returns Every target still awaiting a first attempt, in display order.
+ */
+export function untranslatedTargets(
+  targets: readonly TranslationTarget[],
+  translation: Pick<ContentTranslation, 'results' | 'issues' | 'unchanged'>,
+): TranslationTarget[] {
+  return targets.filter((t) => !translation.results.has(t.id) && !translation.unchanged.has(t.id) && !translation.issues.has(t.id));
+}
+
+/**
+ * The slice one "Translate all" click submits: at most CHUNK_SIZE of `untranslatedTargets`.
+ *
+ * @param targets Currently loaded targets, in display order.
+ * @param translation Current derived state of the hook (results, issues, unchanged).
+ * @returns Up to CHUNK_SIZE targets for the next submission.
+ */
+export function nextUntranslatedBatch(
+  targets: TranslationTarget[],
+  translation: Pick<ContentTranslation, 'results' | 'issues' | 'unchanged'>,
+): TranslationTarget[] {
+  return untranslatedTargets(targets, translation).slice(0, CHUNK_SIZE);
+}
+
+/**
  * On-demand content translation for the given resources. Nothing is submitted on mount: callers invoke
  * `translate()` (for all targets) or `translate([target])` (for one item) when the user explicitly clicks
  * a Translate button. Results live in the shared react-query cache (one entry per resource revision), so
  * list cards and detail dialogs share them immediately. Cached DB hits returned by POST /batches without
  * a payload are hydrated immediately via GET /batches/{id}; pending items poll every 2 s while visible
  * for at most 60 s. Everything in flight is aborted on unmount, workspace switch, or settings change.
+ * Request failures (429, 409, 404, others) are stored per target as `failed` with a reason code, and
+ * entries left `pending` when a run ends are removed so the Translate button recovers.
  *
  * @param type Resource type supported by the translation API.
  * @param targets Currently loaded resource references (id and revision).
@@ -234,6 +334,7 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
       const expected = new Map(todo.map((t) => [t.id, t.revision]));
       const valid = () => !controller.signal.aborted && workspaceGeneration() === generation;
       const deadline = Date.now() + MAX_POLL_MS;
+      const keyFor = (item: TranslationTarget) => keyOf(item, generation);
       const take = (items: Seen[]) => {
         for (const item of items) {
           const revision = expected.get(item.resource_id);
@@ -246,13 +347,19 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
           });
         }
       };
+      const onSettings = (next: TranslationSettings) => queryClient.setQueryData(['translation-settings', workspaceId], next);
 
-      // Errors are swallowed on purpose: the original stays visible.
+      // Aborts are silent (valid() is false); any other failure becomes a per-target reason instead of a silent gap.
       void Promise.all(
         chunk(todo).map((group) =>
-          runTranslationGroup({ type, group, csrfToken, signal: controller.signal, deadline, valid, take }).catch(() => undefined),
+          runTranslationGroup({ type, group, csrfToken, signal: controller.signal, deadline, valid, take, onSettings }).catch(
+            (error: unknown) => {
+              if (valid()) failGroup(queryClient, group, keyFor, requestFailureCode(error));
+            },
+          ),
         ),
       ).finally(() => {
+        dropStalePending(queryClient, todo, keyFor);
         controllersRef.current.delete(controller);
         for (const item of todo) inFlightIdsRef.current.delete(item.id);
         setSubmittingIds(new Set(inFlightIdsRef.current));
@@ -261,20 +368,42 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
     [enabled, workspaceId, targets, queryClient, keyOf, type, csrfToken],
   );
 
-  // Cheap to derive every render; entries are observers of the shared cache.
+  return { enabled, targetLanguage, ...deriveTranslationState({ targets, entries, enabled, submittingIds }), translate };
+}
+
+/**
+ * Derives the per-target display state from the cache observers on every render (cheap, no side effects).
+ * A cached `pending` entry counts toward `pendingIds` only while a live run is submitting that id, so an
+ * orphaned pending entry cannot disable a Translate button.
+ *
+ * @param params.targets Currently loaded resource references, in display order.
+ * @param params.entries One react-query observer result per target, in the same order as `targets`.
+ * @param params.enabled Whether workspace translation is on; when false, every map is empty.
+ * @param params.submittingIds Ids of targets with a live submit or poll run.
+ * @returns Ready results, issue states, unchanged ids and pending ids.
+ */
+function deriveTranslationState(params: {
+  targets: TranslationTarget[];
+  entries: ReadonlyArray<{ data?: unknown }>;
+  enabled: boolean;
+  submittingIds: ReadonlySet<string>;
+}): Pick<ContentTranslation, 'results' | 'issues' | 'pendingIds' | 'unchanged'> {
+  const { targets, entries, enabled, submittingIds } = params;
   const results = new Map<string, TranslationResult>();
   const issues = new Map<string, TranslationResult>();
+  const unchanged = new Set<string>();
   const pendingIds = new Set<string>(submittingIds);
   if (enabled) {
     targets.forEach((t, i) => {
       const data = entries[i]?.data as TranslationResult | undefined;
       if (!data) return;
+      if (data.status === 'unchanged') unchanged.add(t.id);
       if (data.status === 'ready' && data.translation) results.set(t.id, data);
       else if (data.status === 'pending' || data.status === 'blocked' || data.status === 'failed') {
         issues.set(t.id, data);
-        if (data.status === 'pending') pendingIds.add(t.id);
+        if (data.status === 'pending' && submittingIds.has(t.id)) pendingIds.add(t.id);
       }
     });
   }
-  return { enabled, targetLanguage, results, issues, pendingIds, translate };
+  return { results, issues, pendingIds, unchanged };
 }

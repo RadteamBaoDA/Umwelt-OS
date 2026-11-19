@@ -35,6 +35,9 @@ function DocumentDetailTranslation({
     return <TranslatedBadge showOriginal={showOriginal} targetLanguage={translation.targetLanguage} onToggle={onToggleOriginal} />;
   }
   if (!translation.enabled || !versionId) return null;
+  if (translation.unchanged.has(documentId)) {
+    return <span className="text-xs text-muted-foreground">{tTrans('note.unchanged')}</span>;
+  }
   const pending = translation.pendingIds.has(documentId);
   const languageLabel = translation.targetLanguage === 'vi' ? tTrans('languageVi') : tTrans('languageEn');
   return (

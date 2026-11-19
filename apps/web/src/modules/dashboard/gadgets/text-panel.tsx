@@ -70,7 +70,11 @@ export function TextPanel({ instance, content }: TextPanelProps) {
                 <div className="flex items-start justify-between gap-2">
                   {/* The first document leads at 17px; the rest are plain 14px headings. */}
                   <h3 className={index === 0 ? 'text-[17px] font-semibold leading-snug' : 'text-sm font-semibold'}>{title}</h3>
-                  <ItemTranslateButton controller={translation} target={{ id: item.document_id, revision: item.document_version_id }} />
+                  <ItemTranslateButton
+                    controller={translation}
+                    target={{ id: item.document_id, revision: item.document_version_id }}
+                    title={title}
+                  />
                 </div>
                 <p className="whitespace-pre-wrap text-sm leading-[1.6] text-foreground">{excerpt}</p>
               </section>

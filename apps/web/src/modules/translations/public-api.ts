@@ -2,5 +2,5 @@
 // so value imports do not evaluate the module's React component graph; components stay on the module index.
 export { fetchTranslationSettings, saveTranslationSettings } from './api';
 export { type TranslationLanguage } from './types';
-export { useContentTranslation } from './use-content-translation';
+export { nextUntranslatedBatch, untranslatedTargets, useContentTranslation } from './use-content-translation';
 export { useItemTranslation, type ItemTranslationController } from './use-item-translation';

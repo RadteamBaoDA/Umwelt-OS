@@ -481,7 +481,11 @@ function MediaActions({
   return (
     <div className="flex flex-wrap items-center gap-1">
       {translation ? (
-        <ItemTranslateButton controller={translation} target={{ id: item.document_id, revision: item.document_version_id }} />
+        <ItemTranslateButton
+          controller={translation}
+          target={{ id: item.document_id, revision: item.document_version_id }}
+          title={item.title}
+        />
       ) : null}
       {canInteract && (
         <>

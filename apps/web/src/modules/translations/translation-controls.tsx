@@ -17,7 +17,7 @@ import { TranslatedBadge } from './translated-badge';
 import { isWorkspaceTranslationBlocker, TranslationNote } from './translation-note';
 import type { TranslationLanguage, TranslationResult } from './types';
 import type { ItemTranslationController } from './use-item-translation';
-import type { TranslationTarget } from './use-content-translation';
+import { untranslatedTargets, type TranslationTarget } from './use-content-translation';
 
 /**
  * Reusable on-demand Translate button for gadgets, rows, and detail views.
@@ -63,17 +63,22 @@ export function TranslateActionButton({
 
 /**
  * Per-item on-demand Translate button or Original/Translation flip control for list rows and cards.
- * Renders nothing when workspace translation is disabled or the item lacks a revision.
+ * Renders nothing when workspace translation is disabled or the item lacks a revision. An item the server
+ * reported as already in the target language shows a note instead of a dead button. A per-item reason
+ * (rate limit, stale, failed) is shown under the button; workspace-wide blockers are left to the banner.
  *
  * @param props.controller Shared collection translation controller from `useItemTranslation`.
  * @param props.target Resource id and revision for this item.
+ * @param props.title Item title; when given, the Translate button's accessible name includes it.
  */
 export function ItemTranslateButton({
   controller,
   target,
+  title,
 }: {
   controller: ItemTranslationController;
   target: TranslationTarget | null | undefined;
+  title?: string;
 }) {
   const t = useTranslations('translations');
   if (!controller.enabled || !target?.id || !target.revision) return null;
@@ -84,6 +89,7 @@ export function ItemTranslateButton({
         type="button"
         variant="ghost"
         size="sm"
+        aria-pressed={!showingOriginal}
         className="h-6 px-1.5 text-xs font-normal text-muted-foreground hover:text-foreground"
         onClick={() => controller.toggleItemOriginal(target.id)}
       >
@@ -91,13 +97,21 @@ export function ItemTranslateButton({
       </Button>
     );
   }
+  if (controller.unchanged.has(target.id)) {
+    return <span className="text-xs text-muted-foreground">{t('note.unchanged')}</span>;
+  }
+  const issue = controller.issues.get(target.id);
   return (
-    <TranslateActionButton
-      compact
-      label={t('translate')}
-      pending={controller.pendingIds.has(target.id)}
-      onClick={() => controller.translateOne(target)}
-    />
+    <>
+      <TranslateActionButton
+        compact
+        label={t('translate')}
+        ariaLabel={title ? t('translateItem', { title }) : undefined}
+        pending={controller.pendingIds.has(target.id)}
+        onClick={() => controller.translateOne(target)}
+      />
+      {issue && issue.status !== 'pending' && !isWorkspaceTranslationBlocker(issue) ? <TranslationNote issue={issue} /> : null}
+    </>
   );
 }
 
@@ -110,9 +124,9 @@ export function ItemTranslateButton({
 export function CollectionTranslationBar({ controller }: { controller: ItemTranslationController }) {
   const t = useTranslations('translations');
   const pendingCount = controller.pendingIds.size;
-  const untranslatedCount = controller.targets.filter((item) => !controller.results.has(item.id)).length;
+  const untranslatedCount = untranslatedTargets(controller.targets, controller).length;
   if (!controller.enabled && controller.results.size === 0) return null;
-  if (controller.results.size === 0 && untranslatedCount === 0) return null;
+  if (controller.results.size === 0 && untranslatedCount === 0 && pendingCount === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {controller.results.size > 0 ? (
@@ -122,7 +136,7 @@ export function CollectionTranslationBar({ controller }: { controller: ItemTrans
           onToggle={controller.toggleAllOriginal}
         />
       ) : null}
-      {controller.enabled && untranslatedCount > 0 ? (
+      {controller.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
         <TranslateActionButton
           compact
           label={pendingCount > 0 ? t('translatingCount', { count: pendingCount }) : t('translateAll')}

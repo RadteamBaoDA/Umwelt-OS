@@ -48,7 +48,7 @@ function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowCont
   return (
     <div className="absolute right-0 top-0 flex flex-wrap items-center gap-1 bg-card pl-2 text-xs pointer-coarse:static pointer-coarse:w-full pointer-coarse:bg-transparent pointer-coarse:pl-0 pointer-coarse:opacity-100 text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
       {ctx.translation && item.documentVersionId ? (
-        <ItemTranslateButton controller={ctx.translation} target={{ id: item.id, revision: item.documentVersionId }} />
+        <ItemTranslateButton controller={ctx.translation} target={{ id: item.id, revision: item.documentVersionId }} title={item.title} />
       ) : null}
       {item.documentVersionId && item.sourceId && (ctx.isTelegram || ctx.isOwner) && (
         <Button

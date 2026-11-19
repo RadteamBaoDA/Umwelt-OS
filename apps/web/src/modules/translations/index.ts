@@ -2,6 +2,7 @@
 export * from './public-api';
 export { TranslatedBadge } from './translated-badge';
 export { isWorkspaceTranslationBlocker, TranslationNote } from './translation-note';
+export { nextUntranslatedBatch, untranslatedTargets } from './use-content-translation';
 export {
   CollectionTranslationBar,
   DashboardTranslationControl,
