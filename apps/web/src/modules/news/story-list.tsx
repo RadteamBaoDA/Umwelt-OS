@@ -141,6 +141,8 @@ function StoryTranslateControl({ vm, story }: { vm: StoryListVm; story: Story })
     <TranslateActionButton
       compact
       label={tTrans('translate')}
+      // Rows repeat the same visible label, so the accessible name carries the story title.
+      ariaLabel={tTrans('translateItem', { title: story.title })}
       pending={translation.pendingIds?.has(story.id) ?? false}
       onClick={() => translateStory(story)}
     />
@@ -193,7 +195,8 @@ const NEW_STORY_MINUTES = 15;
  * Terminal-skin log row of an embedded story: `HH:MM  LEVEL  title  #publisher` (developer-theme `.log li`).
  * The title button opens the story detail exactly like the default row; the tag links to the publisher's article when
  * the evidence URL is a safe http(s) URL (licence text stays in the link title). LEVEL is NEW for stories observed in
- * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal.
+ * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal. A line under the title holds
+ * the per-story Translate / flip control and its item note.
  *
  * @param props.vm Story list view model (selection callback, translation and display preferences).
  * @param props.story Story shown by this row.
@@ -229,6 +232,11 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
       ) : tag ? (
         <span className="story-log-tag">{tag}</span>
       ) : null}
+      {/* Own line under the title (outside the title button), so on-demand translation stays reachable in the terminal log. */}
+      <span className="story-log-actions">
+        <StoryTranslateControl vm={vm} story={story} />
+        <StoryRowIssue vm={vm} storyId={story.id} />
+      </span>
     </li>
   );
 }
@@ -301,7 +309,7 @@ function Attribution({ story }: { story: Story }) {
 
 type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 
-/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow terminal panes the embedded List | Cards toggle and refresh move from the title bar into this row (CSS picks the copy), so no control is lost. */
+/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow terminal panes CSS hides the whole title-bar slot, so the translation toolbar, List | Cards toggle and refresh are repeated in this row (CSS picks the copy) and no control is lost. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
   const terminal = useSkin() === 'terminal';
   const { embedded, actionsHost, incompleteNotice, refreshButton, pageActions, translationToolbarAction } = vm;
@@ -324,6 +332,7 @@ function StoryListChrome({ vm }: { vm: StoryListVm }) {
           copy, shown only when narrow, keeps both reachable. */}
       {terminal && (
         <div className="feed-view-narrow ml-auto gap-1">
+          {translationToolbarAction}
           <FeedViewToggle view={vm.view} setView={vm.setView} />
           {refreshButton}
         </div>

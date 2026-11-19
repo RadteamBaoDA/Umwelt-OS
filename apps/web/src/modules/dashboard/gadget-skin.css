@@ -231,9 +231,21 @@ html[data-skin='terminal'] .story-log {
 html[data-skin='terminal'] .story-log-row {
   display: grid;
   grid-template-columns: 9ch 6ch minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: 2px 12px;
   align-items: baseline;
   padding: 4px 6px;
+}
+/* Translate / flip control and its note sit on their own line under the title (title + tag columns), so narrow panes
+   keep the title width instead of squeezing it into a fifth column. Empty when translation is off. */
+html[data-skin='terminal'] .story-log-actions {
+  grid-column: 3 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+html[data-skin='terminal'] .story-log-actions:empty {
+  display: none;
 }
 html[data-skin='terminal'] .story-log-row:hover {
   background: var(--active);

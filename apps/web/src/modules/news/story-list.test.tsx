@@ -11,10 +11,11 @@ vi.mock('./story-api', () => ({
   fetchNewsTrends: vi.fn(async () => ({ items: [], incomplete_reasons: [] })),
 }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-US', timezone: 'UTC' }) }));
+const translationState = vi.hoisted(() => ({ enabled: false }));
 vi.mock('@/modules/translations/use-content-translation', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/modules/translations/use-content-translation')>()),
   useContentTranslation: () => ({
-    enabled: false,
+    enabled: translationState.enabled,
     targetLanguage: 'vi',
     results: new Map(),
     issues: new Map(),
@@ -165,5 +166,46 @@ describe('story list embedded feed features', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Beta' }));
     await waitFor(() => expect(vi.mocked(fetchStories).mock.calls.at(-1)?.[0]).toEqual(['b']));
     window.localStorage.clear();
+  });
+});
+
+describe('story list terminal log translation', () => {
+  it('keeps per-story Translate and Translate all reachable in the terminal log view', async () => {
+    translationState.enabled = true;
+    document.documentElement.dataset.skin = 'terminal';
+    try {
+      vi.mocked(fetchStories).mockResolvedValue({
+        items: [
+          {
+            id: 's-1',
+            title: 'Log story',
+            excerpt: '',
+            source_count: 1,
+            evidence_count: 1,
+            observed_at: '2026-11-03T10:00:00Z',
+            relevance: null,
+            incomplete_reasons: [],
+            evidence: [],
+            translation_revision: 'r1',
+          },
+        ],
+        next_cursor: null,
+        incomplete_reasons: [],
+      } as never);
+      render(
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+            <StoryList sourceIds={['s1']} embedded onSelectStory={() => undefined} />
+          </QueryClientProvider>
+        </NextIntlClientProvider>,
+      );
+      const row = await screen.findByTestId('news-log-row');
+      expect(row.querySelector('button[aria-label="Translate “Log story”"]')).toBeTruthy();
+      expect(document.querySelector('.feed-view-narrow')?.textContent).toContain('Translate all');
+    } finally {
+      translationState.enabled = false;
+      delete document.documentElement.dataset.skin;
+      window.localStorage.clear();
+    }
   });
 });
