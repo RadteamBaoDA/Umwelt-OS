@@ -20,7 +20,8 @@ import {
   type Source,
 } from './api';
 import { isStale, periodKind } from './freshness';
-import { guideStepKeys } from './guide-keys';
+import { AttributionBadge, hasAttributionBadge } from './attribution-badges';
+import { guideStepKeys, keyAccessKeys } from './guide-keys';
 
 /** One term/definition row of the guide's description list. */
 function GuideRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -36,6 +37,7 @@ function GuideRow({ label, children }: { label: string; children: React.ReactNod
 function GuideAttribution({ entry }: { entry: ConnectorCatalogEntry }) {
   const t = useTranslations('sources');
   const isTmdb = entry.provider_id === 'tmdb_movies' || entry.provider_id === 'tmdb_tv';
+  const badge = isTmdb ? null : <AttributionBadge providerId={entry.provider_id} />;
   if (isTmdb) {
     return (
       <div className="grid justify-items-start gap-1">
@@ -48,6 +50,7 @@ function GuideAttribution({ entry }: { entry: ConnectorCatalogEntry }) {
         >
           <Image src="/brand/tmdb-logo.svg" alt={t('tmdb.logoAlt')} width={160} height={12} className="h-3 w-auto" />
         </a>
+        <AttributionBadge providerId={entry.provider_id} link={false} />
         <span>{entry.attribution}</span>
         <span className="font-medium">{t('tmdb.attributionNotice')}</span>
         {entry.terms_url ? (
@@ -65,6 +68,8 @@ function GuideAttribution({ entry }: { entry: ConnectorCatalogEntry }) {
   }
   return (
     <>
+      {badge}
+      {hasAttributionBadge(entry.provider_id) && !isTmdb ? ' ' : null}
       {entry.attribution}
       {entry.terms_url ? (
         <>
@@ -122,6 +127,7 @@ function GuideCatalogRows({ entry, quotas, keyed }: { entry: ConnectorCatalogEnt
   const t = useTranslations('sources');
   const interval = entry.default_interval_minutes ?? null;
   const period = periodKind(entry.provider_id);
+  const access = keyAccessKeys(entry.provider_id);
   return (
     <>
       <GuideRow label={t('guide.data')}>{[...(entry.hosts ?? []), ...(entry.endpoints ?? [])].join(' · ') || t('guide.none')}</GuideRow>
@@ -129,6 +135,12 @@ function GuideCatalogRows({ entry, quotas, keyed }: { entry: ConnectorCatalogEnt
         <GuideRow label={t('guide.period')}>{t(period === 'referenceDate' ? 'guide.referenceDate' : 'guide.annualPeriod')}</GuideRow>
       )}
       <GuideRow label={t('guide.key')}>{keyed ? t('guide.keyRequired') : t('guide.keyNone')}</GuideRow>
+      {access && (
+        <>
+          <GuideRow label={t('guide.keyless')}>{t(access.keyless)}</GuideRow>
+          <GuideRow label={t('guide.withKey')}>{t(access.keyed)}</GuideRow>
+        </>
+      )}
       {interval !== null && <GuideRow label={t('guide.cadence')}>{t('every.minutes', { minutes: interval })}</GuideRow>}
       {quotas.length > 0 && <GuideRow label={t('guide.quotaLabel')}>{quotas.join('; ')}</GuideRow>}
       {entry.attribution && (

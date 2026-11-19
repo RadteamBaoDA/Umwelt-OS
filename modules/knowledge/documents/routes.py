@@ -20,6 +20,7 @@ from core.workspaces.dependencies import (
 )
 from core.workspaces.public import lock_access_fence, read_access_fence, read_resource_grants
 from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
+from modules.connectors.public import AnimeSeason
 from modules.knowledge.documents import public
 from modules.knowledge.documents.models import Document
 from modules.knowledge.documents.schemas import (
@@ -267,7 +268,7 @@ async def list_dashboard_projections(
     release_year: Annotated[int | None, Query(ge=1800, le=2100)] = None,
     release_year_from: Annotated[int | None, Query(ge=1800, le=2100)] = None,
     release_year_to: Annotated[int | None, Query(ge=1800, le=2100)] = None,
-    release_season: Annotated[str | None, Query(min_length=1, max_length=32)] = None,
+    release_season: Annotated[AnimeSeason | None, Query()] = None,
     min_rating: Annotated[float | None, Query(ge=0.0, le=100.0)] = None,
     release_window_days: Annotated[int | None, Query(ge=1, le=90)] = None,
     sort: Annotated[Literal["created_at_desc", "release_date_asc"], Query()] = "created_at_desc",

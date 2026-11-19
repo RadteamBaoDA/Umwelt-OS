@@ -304,14 +304,16 @@ _PROVIDER_GENRE_IDS: dict[str, dict[str, tuple[str, ...]]] = {
         "25": ("adventure",),
         "81": ("documentary",),
         "18": ("sports",),
-        "54": ("non_fiction",),
+        "54": ("non_fiction", "programming"),
         "3": ("rpg",),
         "2": ("strategy",),
+        # Spec section E: Steam software/utility genre ids 50-60 map to programming.
+        **{str(genre_id): ("programming",) for genre_id in range(50, 61) if genre_id != 54},
     },
     "podcast_index": {
         "16": ("comedy",),
         "20": ("non_fiction",),
-        "26": ("sci_fi",),
+        "26": ("sci_fi", "fantasy"),
         "27": ("drama",),
         "28": ("history",),
         "53": ("music",),
@@ -386,7 +388,15 @@ def media_user_agent(provider: str | None = None, contact: str | None = None) ->
 
 
 class MediaRatePacer:
-    """Cooperative async per-key/host rate pacer using monotonic clocks and ``asyncio.sleep``."""
+    """Cooperative async per-key/host rate pacer using monotonic clocks and ``asyncio.sleep``.
+
+    Smoothing only, and per process: arq runs several worker processes (main, cron, replicas under the
+    PgBouncer overlay) and ``max_jobs`` > 1 slots each, so this cannot enforce per-IP upstream terms
+    (MusicBrainz 1/s, MangaDex 5/s, ANN 1/s, MangaUpdates 1/s) by itself. The cross-process guarantee is
+    the durable ``second`` quota window each of those providers declares in ``provider_specs`` and the
+    SendGate debits per request: an over-limit call is deferred, never sent. The pacer keeps one process
+    from tripping that window on every call.
+    """
 
     def __init__(self) -> None:
         """Initialize per-key lock and last-dispatch monotonic timestamp tables."""
@@ -416,45 +426,6 @@ class MediaRatePacer:
             self._last_dispatch.clear()
         else:
             self._last_dispatch.pop(key, None)
-
-
-def rate_limit_delay_from_headers(headers: Mapping[str, str]) -> float | None:
-    """Inspect ``Retry-After`` and ``X-RateLimit-*`` headers to compute a bounded wait in seconds.
-
-    Returns ``None`` when no throttling signal is present; values are clamped to ``[0.0, 3600.0]``.
-    """
-    lowered = {k.lower(): v.strip() for k, v in headers.items()}
-    retry_after = lowered.get("retry-after")
-    if retry_after:
-        try:
-            return min(max(0.0, float(retry_after)), 3600.0)
-        except ValueError:
-            try:
-                target = parsedate_to_datetime(retry_after)
-                if target.tzinfo is None:
-                    target = target.replace(tzinfo=UTC)
-                delta = (target.astimezone(UTC) - datetime.now(UTC)).total_seconds()
-                return min(max(0.0, delta), 3600.0)
-            except (ValueError, TypeError, OverflowError):
-                return 60.0
-    remaining = lowered.get("x-ratelimit-remaining")
-    if remaining is not None:
-        try:
-            rem_val = int(remaining)
-        except ValueError:
-            rem_val = 1
-        if rem_val <= 0:
-            reset_raw = lowered.get("x-ratelimit-reset")
-            if reset_raw:
-                try:
-                    reset_num = float(reset_raw)
-                    # Epoch timestamps (>1e9) convert to delta from wall clock; small numbers are deltas.
-                    delay = reset_num - time.time() if reset_num > 1_000_000_000 else reset_num
-                    return min(max(0.0, delay), 3600.0)
-                except ValueError:
-                    return 60.0
-            return 60.0
-    return None
 
 
 def parse_media_xml(body: object, *, max_bytes: int = 2 * 1024 * 1024) -> ET.Element:

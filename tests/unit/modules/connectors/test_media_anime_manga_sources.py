@@ -330,3 +330,14 @@ async def test_ann_encyclopedia_uses_bounded_cursor_transport() -> None:
     assert len(page.records) == 1 and page.cursor is None
     assert "nskip=100" in fetch.await_args.args[0]
     assert fetch.await_args.kwargs["max_bytes"] > len(xml)
+
+
+def test_mangadex_default_content_rating_excludes_adult() -> None:
+    manga_id = "123e4567-e89b-12d3-a456-426614174000"
+    for url in (
+        build_mangadex_manga_url({}),
+        build_mangadex_chapters_url({}, {manga_id: {"title": "S", "attrs": {}}}),
+    ):
+        assert "contentRating%5B%5D=safe" in url
+        assert "contentRating%5B%5D=suggestive" in url
+        assert "erotica" not in url and "pornographic" not in url

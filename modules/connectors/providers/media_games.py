@@ -19,7 +19,6 @@ from modules.connectors.providers import rest
 from modules.connectors.providers._media_common import (
     MediaRatePacer,
     build_external_ids,
-    normalize_content_rating,
     normalize_country,
     normalize_cover_url,
     normalize_genres,
@@ -68,17 +67,39 @@ _IGDB_THEMES = {
     "horror": 19,
     "mystery": 43,
 }
+# IGDB v4 ``age_ratings[].rating_category.rating`` strings (lower-cased) -> canonical ContentRating.
+# Tokens shared across organizations (twelve/sixteen/eighteen) agree on severity, so no org key is
+# needed except ACB "M" (15+) which differs from ESRB "M" (17+); see ``_igdb_age_rating``.
 _AGE_RATINGS = {
-    "3": "safe",
+    "ec": "safe",
+    "e": "safe",
     "everyone": "safe",
-    "everyone 10+": "pg",
-    "7": "pg",
-    "12": "pg_13",
-    "teen": "pg_13",
-    "16": "r",
-    "mature 17+": "r",
-    "18": "mature",
-    "adults only 18+": "explicit",
+    "three": "safe",
+    "zero": "safe",
+    "all": "safe",
+    "l": "safe",
+    "g": "safe",
+    "a": "safe",
+    "e10+": "pg",
+    "seven": "pg",
+    "six": "pg",
+    "ten": "pg",
+    "pg": "pg",
+    "b": "pg_13",
+    "t": "pg_13",
+    "twelve": "pg_13",
+    "fourteen": "pg_13",
+    "c": "r",
+    "fifteen": "r",
+    "ma15": "r",
+    "sixteen": "r",
+    "d": "mature",
+    "m": "mature",
+    "z": "mature",
+    "eighteen": "mature",
+    "r18": "mature",
+    "ao": "explicit",
+    "rc": "explicit",
 }
 _PACER = MediaRatePacer()
 
@@ -318,11 +339,21 @@ def _igdb_apicalypse(config: Mapping[str, Any]) -> str:
     where = " & ".join(clauses)
     return (
         "fields name,summary,url,cover.url,first_release_date,genres.id,genres.name,themes.id,themes.name,"
-        "game_type.id,game_type.name,rating,age_ratings.rating.name,age_ratings.category.name,"
-        "external_games.uid,external_games.category,platforms.name; "
+        "game_type.id,game_type.name,rating,age_ratings.rating_category.rating,age_ratings.organization.name,"
+        "external_games.uid,external_games.external_game_source,platforms.name; "
         + (f"where {where}; " if where else "")
         + f"sort first_release_date desc; limit {_MAX_IGDB};"
     )
+
+
+def _igdb_age_rating(item: object) -> str | None:
+    """Map one IGDB v4 age_rating row (rating_category.rating + organization.name) to a canonical
+    ContentRating, or None when the token is unknown."""
+    row = _object(item)
+    code = str(_object(row.get("rating_category")).get("rating") or "").strip().casefold()
+    if code == "m" and str(_object(row.get("organization")).get("name") or "").upper() == "ACB":
+        return "pg_13"
+    return _AGE_RATINGS.get(code)
 
 
 def _igdb_game(row: Mapping[str, Any], config: Mapping[str, Any], now: datetime) -> IngestionRecord:
@@ -358,7 +389,7 @@ def _igdb_game(row: Mapping[str, Any], config: Mapping[str, Any], now: datetime)
         (
             str(_object(item).get("uid"))
             for item in external_games[:32]
-            if _object(item).get("category") == 1 and _object(item).get("uid")
+            if _object(item).get("external_game_source") == 1 and _object(item).get("uid")
         ),
         None,
     )
@@ -386,13 +417,7 @@ def _igdb_game(row: Mapping[str, Any], config: Mapping[str, Any], now: datetime)
         fields["rating"] = float(rating)
     age_rows = row.get("age_ratings")
     age_rows = age_rows if isinstance(age_rows, list) else []
-    age_names = [
-        str(_object(_object(item).get("rating")).get("name") or "").casefold()
-        for item in age_rows[:16]
-    ]
-    ratings = [
-        normalize_content_rating(_AGE_RATINGS[name]) for name in age_names if name in _AGE_RATINGS
-    ]
+    ratings = [value for item in age_rows[:16] if (value := _igdb_age_rating(item))]
     if ratings:
         fields["content_rating"] = max(
             ratings, key=("safe", "pg", "pg_13", "r", "mature", "explicit").index

@@ -57,7 +57,7 @@ describe('media source scope', () => {
         </NextIntlClientProvider>,
       );
       const required = [...container.querySelectorAll('[required]')].map((node) => node.id);
-      expect(required).toEqual(provider === 'youtube_api' ? ['source-scope-youtube_channel_id'] : []);
+      expect(required).toEqual(provider === 'youtube_api' || provider === 'youtube' ? [`source-scope-youtube_channel_id`] : []);
       expect(screen.queryByLabelText('Telegram channel IDs')).not.toBeInTheDocument();
       unmount();
     },
@@ -235,6 +235,39 @@ describe('media source scope', () => {
     expect(onChange).toHaveBeenCalledWith('media_countries', null);
   });
 
+  it('offers a YouTube most-popular mode without targets and an optional region and category', async () => {
+    const user = userEvent.setup();
+    const { onChange, unmount } = view('youtube_api', { youtube_channel_id: 'UCabcdefghijABCDEFGHIJ12' });
+    await user.click(screen.getByLabelText('Source'));
+    await user.click(screen.getByRole('option', { name: 'Most popular videos' }));
+    expect(onChange).toHaveBeenCalledWith('youtube_api_mode', 'most_popular');
+    expect(onChange).toHaveBeenCalledWith('youtube_channel_id', null);
+    expect(onChange).toHaveBeenCalledWith('youtube_playlist_ids', null);
+    unmount();
+    const popular = view('youtube_api', { youtube_api_mode: 'most_popular' }, 'vi-vi');
+    expect(screen.queryByLabelText('YouTube targets')).toBeNull();
+    expect(screen.getByLabelText('ID danh mục video (tùy chọn)')).not.toBeRequired();
+    fireEvent.change(screen.getByLabelText('ID danh mục video (tùy chọn)'), { target: { value: '10' } });
+    expect(popular.onChange).toHaveBeenCalledWith('youtube_video_category_id', '10');
+    expect(scopeGate('youtube_api', { youtube_api_mode: 'most_popular' })).toBe(true);
+    expect(scopeGate('youtube_api', { youtube_api_mode: 'uploads' })).toBe(false);
+  });
+
+  it('clears region and category when returning to YouTube uploads', async () => {
+    const user = userEvent.setup();
+    const { onChange } = view('youtube_api', { youtube_api_mode: 'most_popular', media_country: 'US', youtube_video_category_id: '10' });
+    await user.click(screen.getByLabelText('Source'));
+    await user.click(screen.getByRole('option', { name: 'Channel uploads' }));
+    expect(onChange).toHaveBeenCalledWith('youtube_api_mode', null);
+    expect(onChange).toHaveBeenCalledWith('youtube_video_category_id', null);
+    expect(onChange).toHaveBeenCalledWith('media_country', null);
+  });
+
+  it('shows the minimum rating filter for the YouTube feed', () => {
+    view('youtube', { youtube_channel_id: 'UCabcdefghijABCDEFGHIJ12' });
+    expect(screen.getByLabelText('Minimum rating (0–100)')).toBeInTheDocument();
+  });
+
   it('shows Podcast Index scope fields for the selected endpoint', () => {
     const { rerender, onChange } = view('podcast_index');
     expect(screen.getByLabelText('Recent feeds since (Unix seconds)')).toBeInTheDocument();
@@ -395,5 +428,54 @@ describe('media Configure serialization', () => {
     await user.click(screen.getByLabelText('Anime season'));
     await user.click(screen.getByRole('option', { name: 'Default' }));
     expect(changeConfiguration).toHaveBeenCalledWith('anime_season', null);
+  });
+});
+
+describe('TVMaze scoped panel', () => {
+  it('shows the show ID list and hides the country only in followed-shows mode', () => {
+    const { unmount } = view('tvmaze_schedule', { tvmaze_mode: 'schedule_country', media_country: 'US' });
+    expect(screen.queryByLabelText('TVMaze show IDs')).toBeNull();
+    expect(screen.getByLabelText('Country')).toBeTruthy();
+    unmount();
+    view('tvmaze_schedule', { tvmaze_mode: 'followed_shows', tvmaze_show_ids: [1] });
+    expect(screen.getByLabelText('TVMaze show IDs')).toBeTruthy();
+    expect(screen.queryByLabelText('Country')).toBeNull();
+    expect(screen.queryByLabelText('Global web channels')).toBeNull();
+  });
+  it('offers global channels only for the web schedule and clears the country when toggled on', async () => {
+    const { unmount, onChange } = view('tvmaze_schedule', { tvmaze_mode: 'schedule_web', media_country: 'US' });
+    expect(screen.getByLabelText('Global web channels')).not.toBeDisabled();
+    await userEvent.click(screen.getByLabelText('Global web channels'));
+    await userEvent.click(screen.getByRole('option', { name: 'Yes' }));
+    expect(onChange).toHaveBeenCalledWith('tvmaze_global', true);
+    expect(onChange).toHaveBeenCalledWith('media_country', null);
+    unmount();
+    view('tvmaze_schedule', { tvmaze_mode: 'schedule_web' });
+    expect(screen.getByLabelText('Global web channels')).not.toBeDisabled();
+  });
+  it('clears dependent fields when the mode changes', async () => {
+    const user = userEvent.setup();
+    const { onChange } = view('tvmaze_schedule', { tvmaze_mode: 'followed_shows', tvmaze_show_ids: [1] });
+    await user.click(screen.getByLabelText('TVMaze schedule'));
+    await user.click(screen.getByRole('option', { name: 'Web schedule' }));
+    expect(onChange).toHaveBeenCalledWith('tvmaze_mode', 'schedule_web');
+    expect(onChange).toHaveBeenCalledWith('tvmaze_show_ids', null);
+    expect(onChange).toHaveBeenCalledWith('tvmaze_global', null);
+  });
+  it('mirrors the server mode rules in the scope gate', () => {
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'followed_shows' })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'followed_shows', tvmaze_show_ids: [1, 2] })).toBe(true);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_web', tvmaze_show_ids: [1] })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_country', tvmaze_global: true })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_web', tvmaze_global: true, media_country: 'US' })).toBe(false);
+    expect(scopeGate('tvmaze_schedule', { tvmaze_mode: 'schedule_web', tvmaze_global: true })).toBe(true);
+  });
+  it('exposes the new round-3 filters on the media providers', () => {
+    const fields = MEDIA_PROVIDER_FIELDS as Record<string, readonly string[]>;
+    expect(fields.itunes_movies).toEqual(expect.arrayContaining(['release_year', 'min_rating']));
+    expect(fields.letterboxd_rss).toContain('min_rating');
+    expect(fields.apple_books_rss).toEqual(expect.arrayContaining(['content_ratings', 'release_year']));
+    expect(fields.podcast_rss).toEqual(expect.arrayContaining(['content_ratings', 'media_formats']));
+    expect(fields.openlibrary_books).toEqual(expect.arrayContaining(['release_year', 'media_genres']));
   });
 });

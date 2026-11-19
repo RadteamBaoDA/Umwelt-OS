@@ -25,6 +25,7 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 PAGE_SIZE = 25
 MAX_PAGES = 2
 _MAX_BOOK_ID = 2_147_483_647
+_BEARER_PREFIX = re.compile(r"^bearer\s+", re.IGNORECASE)
 _QUERY = """
 query HardcoverBooks($where: books_bool_exp!, $limit: Int!) {
   books(where: $where, limit: $limit, order_by: {id: asc}) {
@@ -46,7 +47,11 @@ def cursor_id(cursor: str | None) -> int:
 def build_request(
     secret: str, config: Mapping[str, Any], collected_at: datetime, after: int
 ) -> ProviderRequest:
-    """Build one fixed-host, read-only POST. Encode scope and cursor only as GraphQL variables."""
+    """Build one fixed-host, read-only POST. Encode scope and cursor only as GraphQL variables.
+
+    Hardcover's account page shows the token already prefixed with ``Bearer``; a pasted prefix is
+    stripped so the header is never ``Bearer Bearer <token>`` (which Hardcover answers with 401).
+    """
     where: dict[str, dict[str, Any]] = {"id": {"_gt": after}}
     mode = config.get("hardcover_mode")
     if mode not in ("catalog", "upcoming"):
@@ -61,7 +66,10 @@ def build_request(
     return ProviderRequest(
         "POST",
         GRAPHQL_URL,
-        {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+        {
+            "Authorization": "Bearer " + _BEARER_PREFIX.sub("", secret.strip()),
+            "Content-Type": "application/json",
+        },
         body,
     )
 

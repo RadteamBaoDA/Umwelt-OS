@@ -30,6 +30,7 @@ import { WizardShell } from './source-wizard';
 import type { SourceAiOptions } from './api';
 import { useBuiltinTest, type TestState } from './use-builtin-test';
 import { BareButton } from '@/components/bare-button';
+import { AttributionBadge } from './attribution-badges';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'media'];
 const CATEGORY_KEY = {
@@ -191,7 +192,7 @@ export function BuiltinTermsFields({
       <h3 className="m-0 text-base font-semibold">{t('builtin.dialogTitle', { name: builtin.label })}</h3>
       <p className="text-muted-foreground">{t('builtin.termsHint')}</p>
       <p>
-        <strong>{t('guide.attribution')}:</strong> {builtin.attribution}
+        <strong>{t('guide.attribution')}:</strong> <AttributionBadge providerId={builtin.id} /> {builtin.attribution}
       </p>
       <p>
         <a
@@ -246,7 +247,7 @@ export function BuiltinTermsFields({
  * Builds the enable-body fields for the options this built-in accepts (`applicable_options`); anything the owner left
  * empty is omitted so the server default applies. Returns nothing for servers that predate the option list.
  */
-function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionValues): Record<string, unknown> {
+export function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionValues): Record<string, unknown> {
   const allowed = new Set(builtin.applicable_options ?? []);
   const payload: Record<string, unknown> = {};
   const name = (values.name ?? builtin.label).trim();
@@ -258,11 +259,23 @@ function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionVa
     if (allowed.has(key) && values[key]?.length) payload[key] = values[key];
   }
   // Per-type options: undefined, empty text and empty multi-selects are omitted so the server default applies.
+  const selected = values as Record<string, unknown>;
   for (const spec of OPTION_SPECS) {
-    const value = (values as Record<string, unknown>)[spec.key];
-    if (allowed.has(spec.key) && !isEmptyOptionValue(value)) payload[spec.key] = value;
+    if (sendsTypedOption(spec.key, allowed, selected)) payload[spec.key] = selected[spec.key];
   }
   return payload;
+}
+
+/**
+ * Whether one per-type option goes into the enable body: the built-in accepts it and
+ * the value is not empty.
+ *
+ * @param key Option spec key.
+ * @param allowed Option keys the built-in lists in `applicable_options`.
+ * @param selected Current option values keyed by option name.
+ */
+function sendsTypedOption(key: string, allowed: ReadonlySet<string>, selected: Record<string, unknown>): boolean {
+  return allowed.has(key) && !isEmptyOptionValue(selected[key]);
 }
 
 /** True when a per-type option value is "empty" (unset, blank text or an empty multi-select) and must be omitted from the body. */
@@ -327,7 +340,10 @@ function BuiltinPickRow({ row, selected, onPick }: { row: BuiltinSource; selecte
           {row.execution === 'experimental' && <Badge variant="outline">{t('builtin.experimental')}</Badge>}
           {row.eligibility === 'review' && <Badge variant="secondary">{t('builtin.reviewClass')}</Badge>}
         </span>
-        <span className="block text-sm text-muted-foreground">{row.attribution}</span>
+        <span className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <AttributionBadge providerId={row.id} link={false} />
+          {row.attribution}
+        </span>
       </span>
     </BareButton>
   );

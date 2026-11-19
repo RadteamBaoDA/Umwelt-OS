@@ -1,6 +1,5 @@
 {
   "core/model_gateway/client.py": 1634,
-  "modules/connectors/provider_specs.py": 1504,
   "modules/connectors/routes.py": 1668,
   "modules/connectors/service/github_hints.py": 1561
 }

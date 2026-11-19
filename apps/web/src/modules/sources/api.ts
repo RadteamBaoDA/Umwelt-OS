@@ -89,6 +89,10 @@ export type ConnectorConfig = {
   youtube_handles?: string[];
   youtube_playlist_ids?: string[];
   youtube_filter?: 'all' | 'long_form' | 'shorts';
+  /** YouTube Data API source mode; absent or null means channel uploads. */
+  youtube_api_mode?: 'uploads' | 'most_popular' | null;
+  /** Numeric video category id (1-4 digits) for the most-popular chart. */
+  youtube_video_category_id?: string | null;
   bluesky_actor?: string;
   mastodon_instance_url?: string;
   mastodon_account?: string;
@@ -228,7 +232,9 @@ export type BuiltinTypeOptions = {
   country_of_origin?: 'JP' | 'KR' | 'CN' | 'TW' | 'ALL';
   media_tags?: string[];
   media_statuses?: ('finished' | 'releasing' | 'not_yet_released' | 'cancelled' | 'hiatus')[];
-  tvmaze_mode?: 'schedule_country' | 'schedule_web';
+  tvmaze_mode?: 'schedule_country' | 'schedule_web' | 'followed_shows';
+  /** Show IDs watched in `followed_shows` mode only (1-20 positive IDs); the server rejects them in other modes. */
+  tvmaze_show_ids?: number[] | null;
   tvmaze_global?: boolean;
   ann_mode?: 'news' | 'encyclopedia';
   ann_media_type?: 'anime' | 'manga';

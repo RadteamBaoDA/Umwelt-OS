@@ -13,7 +13,7 @@ import {
   type Source,
 } from './api';
 import { getConnectorActivation } from './api';
-import { providerCredentialRequired, errorText, usesProviderCredential } from './connector-editor-model';
+import { PAIRED_CREDENTIAL_PROVIDERS, providerCredentialRequired, errorText, usesProviderCredential } from './connector-editor-model';
 import { failureCodeOf, publishFailure, type EditorContext } from './connector-editor-context';
 import { refreshOwnerState, saveConfiguration } from './connector-persistence';
 import type { AuthGenerations, RequestToken } from './use-connector-requests';
@@ -72,7 +72,7 @@ function applyActivationResult(
   ctx.activation.setActivationError(result.error_code);
   ctx.draft.setProviderCredentialConfigured(credentialConfigured);
   if (replacementAccepted) {
-    ctx.draft.setSecret('');
+    ctx.draft.clearSecrets();
     ctx.draft.setTelegramSecretAction('keep');
   }
 }
@@ -120,7 +120,7 @@ async function storeReplacementKeys(
 ) {
   const signal = token.controller.signal;
   if (keys.native) {
-    const credential = ['podcast_index', 'igdb_games'].includes(ctx.draft.provider) ? { apiKey: secret, apiSecret } : secret;
+    const credential = PAIRED_CREDENTIAL_PROVIDERS.has(ctx.draft.provider) ? { apiKey: secret, apiSecret } : secret;
     await saveNativeRestCredential(id, nextRevision, credential, ctx.csrfToken, signal);
   }
   if (keys.world) await saveWorldProviderCredential(id, ctx.draft.sourceGenerationRef.current, nextRevision, secret, ctx.csrfToken, signal);
@@ -221,7 +221,7 @@ async function runSaveAndEnable(
   progress: { actionSourceId: string | null; nextRevision: number },
 ): Promise<EnableOutcome | null> {
   const { draft, requests } = ctx;
-  if (['podcast_index', 'igdb_games'].includes(draft.provider) && Boolean(activationDraft.secret) !== Boolean(activationDraft.apiSecret)) {
+  if (PAIRED_CREDENTIAL_PROVIDERS.has(draft.provider) && Boolean(activationDraft.secret) !== Boolean(activationDraft.apiSecret)) {
     draft.setError(draft.provider === 'igdb_games' ? 'igdb.pairRequired' : 'podcastIndex.pairRequired');
     return null;
   }
@@ -306,7 +306,7 @@ async function runRetryActivation(ctx: EditorContext, token: RequestToken, id: s
   const { draft } = ctx;
   const requestedSecret = draft.secret;
   const replacingNativeKey = usesProviderCredential(ctx.currentEntry) && Boolean(requestedSecret);
-  if (['podcast_index', 'igdb_games'].includes(draft.provider) && Boolean(requestedSecret) !== Boolean(draft.apiSecret)) {
+  if (PAIRED_CREDENTIAL_PROVIDERS.has(draft.provider) && Boolean(requestedSecret) !== Boolean(draft.apiSecret)) {
     draft.setError(draft.provider === 'igdb_games' ? 'igdb.pairRequired' : 'podcastIndex.pairRequired');
     return;
   }

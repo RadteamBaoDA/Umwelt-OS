@@ -31,6 +31,17 @@ import {
   type GadgetProjectionFilters,
 } from '@/modules/knowledge/public-api';
 import { dashboardKeys, listGadgetSources, type GadgetDefinition, type GadgetInstance } from '../api';
+import {
+  ANIMESEASON,
+  CONTENTRATING,
+  GADGETRELEASESTATUSFILTER,
+  MEDIAFORMAT,
+  MEDIAGENRE,
+  MEDIALANGUAGE,
+  MEDIACOUNTRY,
+  MEDIATYPE,
+  MEDIA_VALUE_KEY,
+} from '@/core/media-options';
 import { MEDIA_SELECTOR_LIMITS } from '../gadget-editor-model';
 import { MediaMultiChipPicker } from '../gadget-editor-pickers';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -39,178 +50,6 @@ import type { SelectedTelegramIdentity } from './feed-model';
 import { useFeedModeration } from './use-feed-state';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
-const CANTONESE_LANGUAGE = 'zh-hk';
-const MEDIA_VALUE_KEY = {
-  movie: 'media.values.movie',
-  anime: 'media.values.anime',
-  manga: 'media.values.manga',
-  manhwa: 'media.values.manhwa',
-  manhua: 'media.values.manhua',
-  light_novel: 'media.values.light_novel',
-  book: 'media.values.book',
-  audiobook: 'media.values.audiobook',
-  youtube: 'media.values.youtube',
-  tv: 'media.values.tv',
-  podcast: 'media.values.podcast',
-  music: 'media.values.music',
-  game: 'media.values.game',
-  action: 'media.values.action',
-  adventure: 'media.values.adventure',
-  sci_fi: 'media.values.sci_fi',
-  fantasy: 'media.values.fantasy',
-  romance: 'media.values.romance',
-  thriller: 'media.values.thriller',
-  horror: 'media.values.horror',
-  comedy: 'media.values.comedy',
-  drama: 'media.values.drama',
-  mystery: 'media.values.mystery',
-  documentary: 'media.values.documentary',
-  animation: 'media.values.animation',
-  slice_of_life: 'media.values.slice_of_life',
-  history: 'media.values.history',
-  sports: 'media.values.sports',
-  non_fiction: 'media.values.non_fiction',
-  programming: 'media.values.programming',
-  rpg: 'media.values.rpg',
-  strategy: 'media.values.strategy',
-  en: 'media.values.en',
-  vi: 'media.values.vi',
-  ja: 'media.values.ja',
-  ko: 'media.values.ko',
-  zh: 'media.values.zh',
-  [CANTONESE_LANGUAGE]: 'media.values.zh-hk',
-  fr: 'media.values.fr',
-  de: 'media.values.de',
-  es: 'media.values.es',
-  pt: 'media.values.pt',
-  it: 'media.values.it',
-  ru: 'media.values.ru',
-  id: 'media.values.id',
-  th: 'media.values.th',
-  tv_short: 'media.values.tv_short',
-  special: 'media.values.special',
-  ova: 'media.values.ova',
-  ona: 'media.values.ona',
-  novel: 'media.values.novel',
-  one_shot: 'media.values.one_shot',
-  ebook: 'media.values.ebook',
-  magazine: 'media.values.magazine',
-  scripted: 'media.values.scripted',
-  reality: 'media.values.reality',
-  talk_show: 'media.values.talk_show',
-  album: 'media.values.album',
-  single: 'media.values.single',
-  ep: 'media.values.ep',
-  episodic: 'media.values.episodic',
-  serial: 'media.values.serial',
-  main_game: 'media.values.main_game',
-  dlc: 'media.values.dlc',
-  expansion: 'media.values.expansion',
-  remake: 'media.values.remake',
-  remaster: 'media.values.remaster',
-  safe: 'media.values.safe',
-  pg: 'media.values.pg',
-  pg_13: 'media.values.pg_13',
-  r: 'media.values.r',
-  suggestive: 'media.values.suggestive',
-  mature: 'media.values.mature',
-  explicit: 'media.values.explicit',
-  clean: 'media.values.clean',
-  winter: 'media.values.winter',
-  spring: 'media.values.spring',
-  summer: 'media.values.summer',
-  fall: 'media.values.fall',
-  all: 'media.values.all',
-  upcoming: 'media.values.upcoming',
-  airing: 'media.values.airing',
-  released: 'media.values.released',
-  completed: 'media.values.completed',
-  hiatus: 'media.values.hiatus',
-  none: 'media.values.none',
-  date: 'media.values.date',
-  media_type: 'media.values.media_type',
-  source: 'media.values.source',
-} as const;
-/** Canonical MediaType options from the dashboard contract. */
-const MEDIATYPE = [
-  'movie',
-  'anime',
-  'manga',
-  'manhwa',
-  'manhua',
-  'light_novel',
-  'book',
-  'audiobook',
-  'youtube',
-  'tv',
-  'podcast',
-  'music',
-  'game',
-] as const;
-/** Canonical MediaGenre options from the dashboard contract. */
-const MEDIAGENRE = [
-  'action',
-  'adventure',
-  'sci_fi',
-  'fantasy',
-  'romance',
-  'thriller',
-  'horror',
-  'comedy',
-  'drama',
-  'mystery',
-  'documentary',
-  'animation',
-  'slice_of_life',
-  'history',
-  'music',
-  'sports',
-  'non_fiction',
-  'programming',
-  'rpg',
-  'strategy',
-] as const;
-/** Canonical MediaLanguage options from the dashboard contract. */
-const MEDIALANGUAGE = ['en', 'vi', 'ja', 'ko', 'zh', 'zh-hk', 'fr', 'de', 'es', 'pt', 'it', 'ru', 'id', 'th'] as const;
-/** Canonical MediaFormat options from the dashboard contract. */
-const MEDIAFORMAT = [
-  'tv',
-  'tv_short',
-  'movie',
-  'special',
-  'ova',
-  'ona',
-  'music',
-  'manga',
-  'manhwa',
-  'manhua',
-  'novel',
-  'one_shot',
-  'ebook',
-  'audiobook',
-  'magazine',
-  'scripted',
-  'animation',
-  'reality',
-  'talk_show',
-  'documentary',
-  'album',
-  'single',
-  'ep',
-  'episodic',
-  'serial',
-  'main_game',
-  'dlc',
-  'expansion',
-  'remake',
-  'remaster',
-] as const;
-/** Canonical ContentRating options from the dashboard contract. */
-const CONTENTRATING = ['safe', 'pg', 'pg_13', 'r', 'suggestive', 'mature', 'explicit', 'clean'] as const;
-/** Canonical AnimeSeason options from the dashboard contract. */
-const ANIMESEASON = ['winter', 'spring', 'summer', 'fall'] as const;
-/** Canonical GadgetReleaseStatusFilter options from the dashboard contract. */
-const GADGETRELEASESTATUSFILTER = ['all', 'upcoming', 'airing', 'released', 'completed', 'hiatus'] as const;
 /** Literal labels for persisted media fields. */
 const MEDIA_FIELD_KEY = {
   media_types: 'media.media_types',
@@ -283,7 +122,7 @@ export interface MediaFilterState {
 /** Labels canonical enum values using literal catalog keys; provider values remain visible without translation. */
 function useMediaLabel() {
   const t = useTranslations('gadgetSettings');
-  return (value: string) => (value in MEDIA_VALUE_KEY ? t(MEDIA_VALUE_KEY[value as keyof typeof MEDIA_VALUE_KEY]) : value);
+  return (value: string) => (Object.hasOwn(MEDIA_VALUE_KEY, value) ? t(MEDIA_VALUE_KEY[value as keyof typeof MEDIA_VALUE_KEY]) : value);
 }
 
 /** Counts/removes effective server selectors as well as interactive quick filters without restoring hidden defaults. */
@@ -322,7 +161,7 @@ function MediaSelectorFields({ state, setState }: MediaFilterControls) {
   const label = useMediaLabel();
   const lists = [
     ['media_types', MEDIATYPE],
-    ['countries', ['JP', 'KR', 'CN', 'TW', 'HK', 'VN', 'US', 'GB', 'FR', 'DE', 'CA', 'AU', 'IN', 'IT', 'ES', 'BR', 'TH', 'ID']],
+    ['countries', MEDIACOUNTRY],
     ['genres', MEDIAGENRE],
     ['languages', MEDIALANGUAGE],
     ['formats', MEDIAFORMAT],
@@ -717,7 +556,7 @@ export function MediaCard({ item, view, selected, onSelect, pending, onInteract,
         {item.media?.creator && <p className="text-xs text-muted-foreground">{item.media.creator}</p>}
         {item.media?.release_date && (
           <time className="text-xs text-muted-foreground" dateTime={item.media.release_date}>
-            {formatDate(item.media.release_date, display.locale, display.timezone)}
+            {formatDate(item.media.release_date, display.locale, releaseTimeZone(item.media.release_date, display.timezone))}
           </time>
         )}
         <MediaMetadata item={item} />
@@ -819,13 +658,38 @@ function filterMediaItems(
     .slice(0, definition.filters.limit ?? 200);
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Timezone in which a provider release date must be read: date-only values (YYYY-MM-DD) are calendar dates without a
+ * zone, so they are read as UTC to avoid shifting a day in negative-offset display timezones; instants use the display zone.
+ */
+export function releaseTimeZone(releaseDate: string, displayTimezone: string): string {
+  return DATE_ONLY.test(releaseDate) ? 'UTC' : displayTimezone;
+}
+
 /** Builds a stable display-local date key from calendar fields instead of the provider's offset or UTC prefix. */
 function mediaDateKey(item: GadgetDocumentProjection, timezone: string): string {
   if (!item.media?.release_date || !Number.isFinite(Date.parse(item.media.release_date))) return '';
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(
-    new Date(item.media.release_date),
-  );
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: releaseTimeZone(item.media.release_date, timezone),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(item.media.release_date));
   return ['year', 'month', 'day'].map((type) => parts.find((part) => part.type === type)?.value).join('-');
+}
+
+/** Insertion-ordered Map grouping (replaces ES2024 `Object.groupBy`, absent in Safari < 17.4 / Chrome < 117). */
+function groupByKey<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyOf(item);
+    const rows = groups.get(key);
+    if (rows) rows.push(item);
+    else groups.set(key, [item]);
+  }
+  return groups;
 }
 
 /** Groups the loaded shelf using display-local dates and localized headings, or delegates to calendar buckets. */
@@ -841,22 +705,25 @@ function groupMediaItems(
   return groupItems
     ? groupItems(items, timezone)
     : groupBy && groupBy !== 'none'
-      ? Object.entries(
-          Object.groupBy(items, (item) =>
+      ? [
+          ...groupByKey(items, (item) =>
             groupBy === 'source' ? item.source_id : groupBy === 'media_type' ? item.media!.media_type : mediaDateKey(item, timezone),
           ),
-        ).map(([key, rows]) => ({
+        ].map(([key, rows]) => ({
           key,
           label:
             groupBy === 'source'
               ? (sources.find((source) => source.id === key)?.name ?? key)
               : groupBy === 'date' && key && rows?.[0]?.media?.release_date
-                ? formatDate(rows[0].media.release_date, locale, timezone)
+                ? formatDate(rows[0].media.release_date, locale, releaseTimeZone(rows[0].media.release_date, timezone))
                 : label(key),
           items: rows ?? [],
         }))
       : [{ key: 'all', label: '', items }];
 }
+
+/** Maximum immutable versions one selection may carry to chat. */
+const MEDIA_SELECTION_LIMIT = 32;
 
 /** Renders shared cards while keeping selection capped at 32 immutable versions and writes serialized. */
 function MediaGroups({
@@ -878,6 +745,8 @@ function MediaGroups({
   moderation: ReturnType<typeof useFeedModeration>;
   ask: (identities: SelectedTelegramIdentity[]) => void;
 }) {
+  // Only currently visible records count toward the cap; selections hidden by later filters are pruned on the next tick.
+  const visibleIds = new Set(groups.flatMap((group) => group.items.map((item) => item.document_version_id)));
   return (
     <>
       {groups.map((group) => (
@@ -893,9 +762,9 @@ function MediaGroups({
                 selected={!!selected[item.document_version_id]}
                 onSelect={(checked) =>
                   setSelected((current) => {
-                    const next = { ...current };
+                    const next = Object.fromEntries(Object.entries(current).filter(([id]) => visibleIds.has(id)));
                     if (!checked) delete next[item.document_version_id];
-                    else if (Object.keys(next).length < 32) next[item.document_version_id] = mediaIdentity(item);
+                    else if (Object.keys(next).length < MEDIA_SELECTION_LIMIT) next[item.document_version_id] = mediaIdentity(item);
                     return next;
                   })
                 }
@@ -929,6 +798,7 @@ function MediaResults({
   sourceCount,
   query,
   itemCount,
+  shownCount,
   limit,
   children,
   paginationAllowed,
@@ -937,6 +807,8 @@ function MediaResults({
   sourceCount: number;
   query: ReturnType<typeof useMediaQuery>['query'];
   itemCount: number;
+  /** Records actually rendered after grouping (calendar grouping omits records without a valid release date). */
+  shownCount: number;
   limit: number;
   children: React.ReactNode;
   paginationAllowed: boolean;
@@ -956,7 +828,7 @@ function MediaResults({
       {!sourceCount && <GadgetNotice kind="setup" message={t('media.sourcesRequired')} />}
       {!!sourceCount && query.isLoading && <GadgetSkeleton variant="list" label={t('gadget.dataLoading')} />}
       {query.isError && <GadgetNotice kind="error" message={t('gadget.dataLoadFailed')} />}
-      {!!sourceCount && !query.isLoading && !query.isError && !itemCount && <GadgetNotice kind="empty" message={t('media.empty')} />}
+      {!!sourceCount && !query.isLoading && !query.isError && !shownCount && <GadgetNotice kind="empty" message={t('media.empty')} />}
       {children}
       {paginationAllowed && (
         <>
@@ -994,6 +866,27 @@ export function MediaCollection(props: MediaCollectionProps) {
   const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.mediaView.${props.instance.id}`, 'cards', FEED_VIEWS);
   const definition = props.instance.definition;
   return <MediaCollectionBody key={`${definition.id}:${definition.revision}`} {...props} view={view} setView={setView} />;
+}
+
+/** Bulk-action bar for the visible selection; shows the cap hint once the 32-item limit is reached. Renders nothing when empty. */
+function MediaSelectionBar({ count, onAsk, onClear }: { count: number; onAsk: () => void; onClear: () => void }) {
+  const t = useTranslations('dashboard');
+  if (!count) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {count >= MEDIA_SELECTION_LIMIT && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('media.selectionLimit', { count: MEDIA_SELECTION_LIMIT })}
+        </p>
+      )}
+      <Button type="button" variant="outline" size="sm" onClick={onAsk}>
+        {t('askAbout.selected', { count })}
+      </Button>
+      <Button type="button" variant="ghost" size="sm" onClick={onClear}>
+        {t('feed.clear')}
+      </Button>
+    </div>
+  );
 }
 
 /** Owns one definition revision's filters, source choice, selection and moderation inside the frame's stable host. */
@@ -1049,16 +942,7 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
         value={state.source}
         onChange={(source) => setState({ ...state, source })}
       />
-      {activeSelected.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => ask(activeSelected)}>
-            {t('askAbout.selected', { count: activeSelected.length })}
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setSelected({})}>
-            {t('feed.clear')}
-          </Button>
-        </div>
-      )}
+      <MediaSelectionBar count={activeSelected.length} onAsk={() => ask(activeSelected)} onClear={() => setSelected({})} />
       <FeedUndoBar
         lastHidden={moderation.lastHidden}
         undoFailed={moderation.undoFailed}
@@ -1067,7 +951,8 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
         undoRef={undoRef}
         onUndo={() => moderation.setHidden(moderation.lastHidden, false)}
       />
-      {moderation.interactionMutation.isError && (
+      {/* Hide/undo failures are announced by FeedUndoBar; only read/bookmark failures use this alert. */}
+      {moderation.interactionMutation.isError && moderation.interactionMutation.variables?.dismissed === undefined && (
         <p role="alert" className="text-xs text-destructive">
           {t('media.interactionFailed')}
         </p>
@@ -1076,6 +961,7 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
         sourceCount={sourceIds.length}
         query={query}
         itemCount={items.length}
+        shownCount={groups.reduce((sum, group) => sum + group.items.length, 0)}
         limit={definition.filters.limit ?? 200}
         paginationAllowed={activeSources.length > 0 && !typeConflict}
         remoteMediaDisabled={privacy.data?.privacy.allow_widget_remote_media === false}

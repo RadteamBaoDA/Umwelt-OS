@@ -7831,7 +7831,9 @@ export interface components {
             /** Tvmaze Global */
             tvmaze_global?: boolean | null;
             /** Tvmaze Mode */
-            tvmaze_mode?: ("schedule_country" | "schedule_web") | null;
+            tvmaze_mode?: ("schedule_country" | "schedule_web" | "followed_shows") | null;
+            /** Tvmaze Show Ids */
+            tvmaze_show_ids?: number[] | null;
             /** Updated At Since */
             updated_at_since?: string | null;
             /** Usgs Min Magnitude */
@@ -9006,7 +9008,9 @@ export interface components {
             /** Tvmaze Global */
             tvmaze_global?: boolean | null;
             /** Tvmaze Mode */
-            tvmaze_mode?: ("schedule_country" | "schedule_web") | null;
+            tvmaze_mode?: ("schedule_country" | "schedule_web" | "followed_shows") | null;
+            /** Tvmaze Show Ids */
+            tvmaze_show_ids?: number[] | null;
             /** Updated At Since */
             updated_at_since?: string | null;
             /** Updated Field */
@@ -9037,6 +9041,8 @@ export interface components {
             x_account?: string | null;
             /** X Query */
             x_query?: string | null;
+            /** Youtube Api Mode */
+            youtube_api_mode?: ("uploads" | "most_popular") | null;
             /** Youtube Channel Id */
             youtube_channel_id?: string | null;
             /** Youtube Channels */
@@ -9047,6 +9053,8 @@ export interface components {
             youtube_handles?: string[] | null;
             /** Youtube Playlist Ids */
             youtube_playlist_ids?: string[] | null;
+            /** Youtube Video Category Id */
+            youtube_video_category_id?: string | null;
         };
         /**
          * ConnectorConfigurationRead
@@ -23197,7 +23205,7 @@ export interface operations {
                 release_year?: number | null;
                 release_year_from?: number | null;
                 release_year_to?: number | null;
-                release_season?: string | null;
+                release_season?: ("winter" | "spring" | "summer" | "fall") | null;
                 min_rating?: number | null;
                 release_window_days?: number | null;
                 sort?: "created_at_desc" | "release_date_asc";

@@ -1,8 +1,6 @@
-"""Keyed media provider specs (TMDB, Trakt, OMDb, MAL, Google Books, Hardcover, YouTube, Podcast Index,
-ListenBrainz, Steam, IGDB) split out of ``provider_specs`` to keep it under the file-size ratchet.
+"""Keyed media-provider catalog entries split out of ``provider_specs`` (pure data, no I/O).
 
-Pure data, no I/O. ``provider_specs`` appends ``MEDIA_SPECS_RAW`` to its raw spec tuple, so ordering and the
-public catalog are unchanged.
+``provider_specs`` appends ``MEDIA_KEYED_SPECS`` to its raw catalog, preserving the original order.
 """
 
 from modules.connectors.provider_specs_tables import (
@@ -12,7 +10,7 @@ from modules.connectors.provider_specs_tables import (
     _unknown,
 )
 
-MEDIA_SPECS_RAW: tuple[FreeProviderSpec, ...] = (
+MEDIA_KEYED_SPECS: tuple[FreeProviderSpec, ...] = (
     _spec(
         "tmdb_movies",
         "TMDB movies",
@@ -242,7 +240,12 @@ MEDIA_SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         "https://listenbrainz.org/terms/",
         "review",
         "Data via ListenBrainz / MusicBrainz (CC0 1.0).",
-        ("/1/explore/fresh-releases/", "/ws/2/release-group", "/release-group/"),
+        (
+            "/1/explore/fresh-releases/",
+            "/1/user/{user_name}/fresh_releases",
+            "/ws/2/release-group",
+            "/release-group/",
+        ),
         (
             QuotaWindowPolicy(
                 "musicbrainz_one_request_per_second", "provider", "second", "http_calls", 1

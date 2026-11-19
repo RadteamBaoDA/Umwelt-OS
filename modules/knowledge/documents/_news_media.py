@@ -1,12 +1,18 @@
-"""Media filter validation and JSONB predicate builders for news projections."""
+"""Media filter validation, JSONB provenance predicates and release-window SQL for news projections.
+
+Split out of ``_news`` (pure SQL assembly plus validation; no I/O). ``_news`` imports these names and
+re-exports ``DEFAULT_CALENDAR_WINDOW_DAYS``.
+"""
 
 import math
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from decimal import Decimal
+from typing import Any, Literal, get_args
 
 from sqlalchemy import DateTime, Numeric, Select, and_, case, func, or_, select
 from sqlalchemy import cast as sa_cast
+from sqlalchemy.orm import aliased
 
 from modules.knowledge.documents.models import (
     Document,
@@ -18,7 +24,10 @@ from modules.sources.public import SourceReadProjection as Source
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 _SLUG_RE = re.compile(r"^[a-z0-9_]+$")
 _LANG_TAG_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$")
-_ARTWORK_ASPECTS = frozenset({"poster", "square", "video", "landscape"})
+
+
+# Default release window (days) for sort=release_date_asc; mirrors the media calendar gadget default.
+DEFAULT_CALENDAR_WINDOW_DAYS = 30
 
 
 def _validate_token_tuple(
@@ -88,9 +97,10 @@ def _validate_media_filter_params(
         and release_year_from > release_year_to
     ):
         raise ValueError("release_year_from must not exceed release_year_to")
-    if release_season is not None and (
-        not isinstance(release_season, str) or not 1 <= len(release_season.strip()) <= 32
-    ):
+    # Late import: connectors.public -> provider_specs imports documents.public, which loads this module.
+    from modules.connectors.public import AnimeSeason
+
+    if release_season is not None and release_season not in get_args(AnimeSeason):
         raise ValueError("Invalid release_season filter")
     if min_rating is not None and (
         isinstance(min_rating, bool)
@@ -176,9 +186,8 @@ def _media_provenance_predicates(
         )
         preds.append(media_type.in_(media_types))
     if release_season:
-        preds.append(
-            func.lower(sf["release_season"].astext).like(f"{release_season.strip().lower()}%")
-        )
+        # Spec: IN over the AnimeSeason enum (no LIKE, so no wildcard injection).
+        preds.append(func.lower(sf["release_season"].astext).in_([release_season]))
     if genres:
         # Use @> containment OR instead of ?| to avoid asyncpg bind-placeholder conflicts.
         preds.append(or_(*(sf["genres"].contains([g]) for g in genres)))
@@ -199,7 +208,9 @@ def _media_provenance_predicates(
             (func.jsonb_typeof(rating_col) == "number", sa_cast(rating_col.astext, Numeric)),
             else_=None,
         )
-        preds.append(rating_num >= float(min_rating))
+        preds.append(
+            rating_num >= Decimal(str(min_rating))
+        )  # str() avoids float->Decimal binary expansion
     return preds
 
 
@@ -212,8 +223,17 @@ def _apply_media_statement_filters(
     release_window_days: int | None,
     media_preds: list[Any],
 ) -> Select[Any]:
-    """Attach Provenance JSONB predicates and release-date window bounds to ``statement``."""
+    """Attach Provenance JSONB predicates and release-date window bounds to ``statement``.
+
+    ``release_date_asc`` inner-joins provenance, so it only admits versions with exactly one
+    provenance row (ambiguous versions hydrate to ``None`` in the projection anyway); that keeps
+    one row and one order timestamp per document. It always applies a window: the caller's
+    ``release_window_days`` or ``DEFAULT_CALENDAR_WINDOW_DAYS`` so the sort never scans a whole source.
+    """
     window_bounds: tuple[datetime, datetime] | None = None
+    if sort == "release_date_asc" and release_window_days is None:
+        # Bound the ascending scan; matches the calendar gadget's default 30-day window.
+        release_window_days = DEFAULT_CALENDAR_WINDOW_DAYS
     if release_window_days is not None:
         now = datetime.now(UTC)
         window_bounds = (
@@ -227,6 +247,14 @@ def _apply_media_statement_filters(
                 NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
                 NormalizedVersionProvenance.source_generation == Source.generation,
             ),
+        )
+        sibling = aliased(NormalizedVersionProvenance)
+        statement = statement.where(
+            select(func.count(sibling.id))
+            .where(sibling.document_version_id == DocumentVersion.id)
+            .correlate(DocumentVersion)
+            .scalar_subquery()
+            == 1
         )
         if media_preds:
             statement = statement.where(*media_preds)

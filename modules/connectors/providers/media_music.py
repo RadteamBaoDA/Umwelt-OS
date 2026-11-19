@@ -26,6 +26,7 @@ from modules.connectors.providers.media_anime_manga_sources import _record
 from modules.ingestion.public import IngestionRecord
 
 LISTENBRAINZ_BASE = "https://api.listenbrainz.org/1/explore/fresh-releases/"
+LISTENBRAINZ_USER_BASE = "https://api.listenbrainz.org/1/user"
 MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
 CAA_BASE = "https://coverartarchive.org/release-group"
 MAX_RELEASES = 20
@@ -91,16 +92,26 @@ def _json_object(response: rest.Fetched, code: str) -> Mapping[str, Any]:
 def build_listenbrainz_url(config: Mapping[str, Any]) -> str:
     """Build the fixed-host fresh-release request using only ListenBrainz-supported options.
 
-    Country, genre, language and format filters belong to MusicBrainz enrichment and are never
-    sent to the ListenBrainz endpoint.
+    Without a username this is the sitewide explore endpoint (``days``/``sort``). With a validated
+    ``listenbrainz_username`` it is the per-user ``/1/user/{name}/fresh_releases`` endpoint, which
+    returns the same ``payload.releases`` envelope for that user's artists and accepts only
+    ``past``/``future`` (so ``days``/``sort`` do not apply). The sitewide endpoint ignores
+    ``user_name``, so it must never be sent there. Country, genre, language and format filters belong
+    to MusicBrainz enrichment and are never sent to ListenBrainz.
+
+    Raises:
+        ValueError: ``listenbrainz_username_invalid`` when the name is not ``[A-Za-z0-9_-]{1,30}``.
     """
+    username = config.get("listenbrainz_username")
+    if username:
+        if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,30}", username):
+            raise ValueError("listenbrainz_username_invalid")
+        query = urlencode({"past": "true", "future": "true"})
+        return f"{LISTENBRAINZ_USER_BASE}/{username}/fresh_releases?{query}"
     params: dict[str, str | int] = {
         "days": config.get("listenbrainz_days") or 14,
         "sort": config.get("listenbrainz_sort") or "release_date",
     }
-    username = config.get("listenbrainz_username")
-    if username:
-        params["user_name"] = username
     return f"{LISTENBRAINZ_BASE}?{urlencode(params)}"
 
 
@@ -191,15 +202,25 @@ def _cursor_state(cursor: str | None, fingerprint: str) -> dict[str, str]:
     }
 
 
-def _candidate_rows(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    """Validate the ListenBrainz fresh-release envelope and stop before a partial snapshot is used."""
+def _candidate_rows(payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], bool]:
+    """Validate the ListenBrainz fresh-release envelope and bound it to ``MAX_RELEASES`` rows.
+
+    The real endpoint returns thousands of rows, so an oversized page is not an error: the newest rows
+    (``release_date`` descending, then release-group MBID ascending for a deterministic tie-break) are kept
+    and the flag reports that the snapshot was truncated. A malformed envelope raises ``RestSchemaChanged``.
+
+    Returns:
+        ``(rows, truncated)``.
+    """
     nested = _object(payload.get("payload"))
     rows = nested.get("releases")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise rest.RestSchemaChanged("listenbrainz_response_invalid")
-    if len(rows) > MAX_RELEASES:
-        raise rest.CollectionIncomplete
-    return rows
+    if len(rows) <= MAX_RELEASES:
+        return rows, False
+    by_id = sorted(rows, key=lambda row: str(row.get("release_group_mbid") or ""))
+    newest = sorted(by_id, key=lambda row: str(row.get("release_date") or ""), reverse=True)
+    return newest[:MAX_RELEASES], True
 
 
 def _release_group(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -332,7 +353,10 @@ async def _cover_url(group_id: str, user_agent: str, fetch_bytes: FetchBytes) ->
             return None
         raise
     final_url = response.final_url or f"{CAA_BASE}/{group_id}/front-500.jpg"
-    if (urlsplit(final_url).hostname or "").lower() not in {"coverartarchive.org", "archive.org"}:
+    host = (urlsplit(final_url).hostname or "").lower()
+    # CAA answers 307 to an Internet Archive storage node (e.g. ia800000.us.archive.org), never to the bare
+    # apex, so accept the exact fixed hosts or any ``*.archive.org`` subdomain (dot-anchored, no suffix tricks).
+    if host not in {"coverartarchive.org", "archive.org"} and not host.endswith(".archive.org"):
         return None
     return normalize_cover_url(final_url)
 
@@ -344,7 +368,7 @@ async def collect_listenbrainz_releases(
     collected_at: datetime,
     fetch_bytes: FetchBytes,
 ) -> MusicReleasePage:
-    """Fetch a complete bounded ListenBrainz snapshot and enrich each item before returning a receiptable page.
+    """Fetch a bounded ListenBrainz snapshot (newest ``MAX_RELEASES`` rows, coverage ``truncated`` beyond) and enrich each item before returning a receiptable page.
 
     Every MusicBrainz request is spaced by the process-wide one-second pacer and carries a descriptive
     User-Agent. The caller supplies SendGate-backed transport. A failed request aborts the
@@ -362,7 +386,7 @@ async def collect_listenbrainz_releases(
     response = await fetch_bytes(
         build_listenbrainz_url(config), headers=headers, max_bytes=MAX_RESPONSE_BYTES
     )
-    candidates = _candidate_rows(_json_object(response, "listenbrainz_response_invalid"))
+    candidates, truncated = _candidate_rows(_json_object(response, "listenbrainz_response_invalid"))
     records: list[IngestionRecord] = []
     processed_groups: set[str] = set()
     enriched_in_snapshot: dict[str, str] = {}
@@ -404,4 +428,6 @@ async def collect_listenbrainz_releases(
     )
     if len(cursor_after) > 4096:
         raise rest.CollectionIncomplete
-    return MusicReleasePage(tuple(filtered), cursor_after, "returned_snapshot")
+    return MusicReleasePage(
+        tuple(filtered), cursor_after, "truncated" if truncated else "returned_snapshot"
+    )

@@ -14,12 +14,14 @@ from modules.connectors.providers.keyed import KEYED
 from modules.connectors.providers.media_movies_tv import (
     build_omdb_request,
     build_trakt_request,
+    collect_tvmaze_followed_shows,
     collect_tvmaze_schedule,
     map_omdb,
     map_tmdb,
     map_trakt,
     map_tvmaze_schedule,
     tvmaze_schedule_url,
+    tvmaze_show_url,
 )
 from modules.connectors.providers.rest import Fetched, ProviderHttpError
 
@@ -116,7 +118,10 @@ async def test_runner_bounds_validators_to_url_and_clears_them_for_backlog(
     from modules.connectors._collection import providers
 
     url = tvmaze_schedule_url(country="GB", date=datetime.now(UTC).date().isoformat())
-    fingerprint = sha256(url.encode()).hexdigest()
+    fingerprint = (
+        f"{sha256(url.encode()).hexdigest()}:"
+        f"{providers._media_scope_fingerprint('tvmaze_schedule', {'media_country': 'GB'})}"
+    )
     state = SimpleNamespace(
         continuation_state=fingerprint, validators_revision=3, etag='"old"', last_modified=None
     )
@@ -567,3 +572,129 @@ def test_tmdb_discover_retains_abbreviated_country_matches_without_synthesizing_
     (record,) = records
     assert record.provider_id == "tmdb:1"
     assert "country" not in record.metadata["provider_record"]["source_fields"]
+
+
+def _followed_body(show_id: int, prev: str | None, nxt: str | None) -> bytes:
+    """Fixture: TVMaze show with embedded previous/next episodes (airstamps given or absent)."""
+    embedded = {}
+    if prev:
+        embedded["previousepisode"] = {"id": show_id * 10, "name": "Prev", "airstamp": prev}
+    if nxt:
+        embedded["nextepisode"] = {"id": show_id * 10 + 1, "name": "Next", "airstamp": nxt}
+    return json.dumps({"id": show_id, "name": f"Show {show_id}", "_embedded": embedded}).encode()
+
+
+@pytest.mark.asyncio
+async def test_tvmaze_followed_shows_one_gated_call_each_window_and_404_skip() -> None:
+    now = datetime(2026, 11, 18, tzinfo=UTC)
+    bodies = {
+        1: _followed_body(1, "2026-11-10T20:00:00+00:00", "2026-11-25T20:00:00+00:00"),
+        2: _followed_body(2, "2026-01-01T20:00:00+00:00", "2027-06-01T20:00:00+00:00"),
+    }
+
+    async def fetch(url: str, **_: object) -> Fetched:
+        show_id = int(urlsplit(url).path.rsplit("/", 1)[1])
+        if show_id == 3:
+            raise ProviderHttpError(404)
+        return Fetched(body=bodies[show_id])
+
+    gate = AsyncMock(side_effect=fetch)
+    records = await collect_tvmaze_followed_shows(
+        gate, show_ids=(2, 1, 3, 1), config={}, collected_at=now
+    )
+    assert gate.await_count == 3  # duplicates collapse; every distinct id is one gated call
+    assert sorted(r.provider_id for r in records) == ["tvmaze:10", "tvmaze:11"]
+    assert (
+        next(r for r in records if r.provider_id == "tvmaze:11").metadata["provider_record"][
+            "source_fields"
+        ]["release_status"]
+        == "upcoming"
+    )
+    gate.side_effect = ProviderHttpError(429)
+    with pytest.raises(ProviderHttpError):
+        await collect_tvmaze_followed_shows(gate, show_ids=(1,), config={}, collected_at=now)
+    with pytest.raises(ValueError):
+        await collect_tvmaze_followed_shows(
+            gate, show_ids=tuple(range(1, 22)), config={}, collected_at=now
+        )
+    assert "shows/7?" in tvmaze_show_url(7)
+    with pytest.raises(ValueError):
+        tvmaze_show_url(0)
+
+
+def test_tvmaze_followed_mode_validation() -> None:
+    validate_options(
+        "tvmaze_schedule", {"tvmaze_mode": "followed_shows", "tvmaze_show_ids": (1, 2)}
+    )
+    for config in (
+        {"tvmaze_mode": "followed_shows"},
+        {"tvmaze_mode": "schedule_web", "tvmaze_show_ids": (1,)},
+        {"tvmaze_mode": "followed_shows", "tvmaze_show_ids": (1,), "tvmaze_global": True},
+    ):
+        with pytest.raises(ValueError):
+            validate_options("tvmaze_schedule", config)
+
+
+@pytest.mark.asyncio
+async def test_runner_followed_shows_accepts_union_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors._collection import providers
+
+    soon = (datetime.now(UTC) + timedelta(days=3)).isoformat()
+    fetch = AsyncMock(return_value=Fetched(body=_followed_body(5, None, soon)))
+    cfg = {"tvmaze_mode": "followed_shows", "tvmaze_show_ids": [5]}
+    run = SimpleNamespace(
+        attempt=SimpleNamespace(source=SimpleNamespace(configuration=cfg), connector_revision=1),
+        gate=SimpleNamespace(fetch_bytes=fetch),
+        extras={},
+    )
+    accept = AsyncMock()
+    monkeypatch.setattr(providers, "_lease", AsyncMock(return_value=object()))
+    monkeypatch.setattr(providers, "_accept_native", accept)
+    monkeypatch.setattr(
+        providers, "_select", AsyncMock(side_effect=lambda r, lease, recs, now: (list(recs), None))
+    )
+    await providers._run_tvmaze(run)
+    assert fetch.await_count == 1 and len(accept.await_args.args[2]) == 1
+    assert run.extras["native_fp"].startswith("media-v1:")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["tvmaze_schedule", "livechart_episodes"])
+async def test_runner_filter_change_never_replays_old_validators(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    """Same URL, changed filter: the stored fingerprint no longer matches, so no If-None-Match is sent."""
+    from modules.connectors._collection import providers
+
+    runner = providers._run_tvmaze if provider == "tvmaze_schedule" else providers._run_livechart
+    fetch = AsyncMock(
+        return_value=Fetched(body=b"[]" if provider == "tvmaze_schedule" else b"<rss/>")
+    )
+
+    def make_run(cfg: dict[str, object]) -> SimpleNamespace:
+        return SimpleNamespace(
+            attempt=SimpleNamespace(
+                source=SimpleNamespace(configuration=cfg), connector_revision=1
+            ),
+            gate=SimpleNamespace(fetch_bytes=fetch),
+            extras={},
+        )
+
+    state = SimpleNamespace(
+        continuation_state=None, validators_revision=1, etag='"old"', last_modified=None
+    )
+    monkeypatch.setattr(providers, "_state", AsyncMock(return_value=state))
+    monkeypatch.setattr(providers, "_lease", AsyncMock(return_value=object()))
+    monkeypatch.setattr(providers, "_accept_native", AsyncMock())
+    monkeypatch.setattr(
+        providers, "_select", AsyncMock(side_effect=lambda r, lease, recs, now: (list(recs), None))
+    )
+    first = make_run({"media_genres": ["drama"]})
+    await runner(first)
+    state.continuation_state = first.extras["native_fp"]
+    await runner(make_run({"media_genres": ["drama"]}))
+    assert fetch.await_args.kwargs["headers"]["If-None-Match"] == '"old"'
+    await runner(make_run({"media_genres": ["comedy"]}))
+    assert "If-None-Match" not in (fetch.await_args.kwargs.get("headers") or {})

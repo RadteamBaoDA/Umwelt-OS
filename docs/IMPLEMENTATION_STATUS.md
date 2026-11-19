@@ -30,6 +30,10 @@
   - There is no per-story or per-source citation page, and hazards are global.
 <!-- scheduled-tasks-phase1-status:end -->
 
+## 2026-11-19 - Media datasource review complete
+
+All four phases of `specs/new-datasource-v2.md` are implemented and reviewed, with unit, type, lint, build and bundle gates green. Remaining acceptance work needs owner approval: PostgreSQL integration coverage for the media projection SQL, Docker/E2E, live provider checks (including the corrected Wikidata genre QIDs) and authenticated browser acceptance. See `docs/superpowers/plans/EXECUTION.md`.
+
 ## 2026-11-18 - Media datasource Phase 4 complete
 
 - All Phase 4 tasks have implementation, focused validation and independent review evidence in `docs/superpowers/plans/EXECUTION.md` and the Phase 4 handoffs.

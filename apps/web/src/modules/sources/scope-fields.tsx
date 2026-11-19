@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError } from '@/core/api';
-import { MEDIA_FILTER_SPECS } from './builtin-option-specs';
+import { MEDIA_FILTER_SPECS, type OptionSpec } from './builtin-option-specs';
 import { TypedOption } from './builtin-options';
 import type { ScopeSectionProps } from './provider-scope';
 import { scopeHintKey } from './guide-keys';
@@ -240,6 +240,16 @@ export function LocationButton({ disabled, onLocate }: { disabled: boolean; onLo
 }
 
 /**
+ * Narrows a shared media filter to what one provider accepts: Open Library takes a single language and podcast
+ * feeds only classify as episodic or serial. Returns the spec unchanged for every other provider and key.
+ */
+function filterSpecFor(provider: string, spec: OptionSpec): OptionSpec {
+  if (provider === 'openlibrary_books' && spec.key === 'media_languages') return { ...spec, max: 1 };
+  if (provider === 'podcast_rss' && spec.key === 'media_formats') return { ...spec, values: ['episodic', 'serial'] };
+  return spec;
+}
+
+/**
  * Renders only accepted optional media filters using the shared bounded option controls.
  * Empty values emit explicit null so editing a saved source clears its prior filter. No field is required.
  */
@@ -256,7 +266,7 @@ export function MediaFilterFields({
       {MEDIA_FILTER_SPECS.filter((spec) => fields.includes(spec.key)).map((spec) => (
         <TypedOption
           key={`${resetEpoch}-${spec.key}`}
-          spec={provider === 'openlibrary_books' && spec.key === 'media_languages' ? { ...spec, max: 1 } : spec}
+          spec={filterSpecFor(provider, spec)}
           value={configuration[spec.key]}
           disabled={disabled}
           onValue={(next) => onChange(spec.key, (next === undefined || (Array.isArray(next) && next.length === 0) ? null : next) as never)}

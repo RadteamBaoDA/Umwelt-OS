@@ -549,12 +549,15 @@ async def _run_openalex(run: Run) -> None:
 
 
 async def _run_tvmaze(run: Run) -> None:
-    """Collect one TVMaze schedule through the send gate with URL-bound validators.
+    """Collect one TVMaze schedule, or the followed shows' episodes, through the send gate.
+
+    Schedule modes use URL-bound validators; ``followed_shows`` issues one gated call per show id.
 
     A new date or scope never replays another URL's validators. A 304 retains existing
     records; accepted records, validator state, and the dedup-only selection commit together.
     """
     from modules.connectors.providers.media_movies_tv import (
+        collect_tvmaze_followed_shows,
         collect_tvmaze_schedule,
         tvmaze_schedule_url,
     )
@@ -562,6 +565,23 @@ async def _run_tvmaze(run: Run) -> None:
     source = run.attempt.source
     cfg: dict[str, Any] = source.configuration or {}
     now = datetime.now(UTC)
+    if cfg.get("tvmaze_mode") == "followed_shows":
+        # One gated call per followed show; no conditional validators (many URLs), so every run
+        # replaces the snapshot and the ids/window are part of the fingerprint.
+        fingerprint = _media_scope_fingerprint("tvmaze_schedule", cfg)
+        lease = await _lease(run)
+        followed = await collect_tvmaze_followed_shows(
+            run.gate.fetch_bytes,
+            show_ids=tuple(cfg.get("tvmaze_show_ids") or ()),
+            config=cfg,
+            collected_at=now,
+        )
+        run.extras["native_fp"] = fingerprint
+        records, cursor_after = await _select(run, lease, followed, now)
+        await _accept_native(
+            run, lease, records, _coverage(records), now, cursor_after=cursor_after
+        )
+        return
     web = cfg.get("tvmaze_mode") == "schedule_web"
     country = (
         ("" if cfg.get("tvmaze_global") else cfg.get("media_country"))
@@ -570,7 +590,9 @@ async def _run_tvmaze(run: Run) -> None:
     )
     date = now.date().isoformat()
     url = tvmaze_schedule_url(country=country, date=date, web=web)
-    fingerprint = sha256(url.encode("utf-8")).hexdigest()
+    # URL alone is not enough: media filters live outside the scope, and replaying an old ETag after a filter
+    # change would 304 into the stale filtered snapshot.
+    fingerprint = f"{sha256(url.encode('utf-8')).hexdigest()}:{_media_scope_fingerprint('tvmaze_schedule', cfg)}"
     state = await _state(run)
     headers = (
         _conditional(state, run.attempt.connector_revision)
@@ -611,7 +633,11 @@ async def _run_livechart(run: Run) -> None:
 
     now = datetime.now(UTC)
     cfg = run.attempt.source.configuration or {}
-    fingerprint = sha256(LIVECHART_URL.encode("utf-8")).hexdigest()
+    # Filters are outside the scope: fold them in so a changed filter never replays the old ETag (304).
+    fingerprint = (
+        f"{sha256(LIVECHART_URL.encode('utf-8')).hexdigest()}:"
+        f"{_media_scope_fingerprint('livechart_episodes', cfg)}"
+    )
     state = await _state(run)
     headers = (
         _conditional(state, run.attempt.connector_revision)
@@ -692,6 +718,9 @@ async def _run_anilist(run: Run) -> None:
         cursor_after = f"{page_number + 1}:{watermark}"
         if not result.has_next_page or result.row_count < MAX_RESULTS:
             cursor_after = "1:0"
+            break
+        if result.rate_limit_remaining == 0:
+            # Budget exhausted: stop here with the next page as the checkpoint so the next run resumes.
             break
         page_number += 1
     run.extras["native_fp"] = fingerprint

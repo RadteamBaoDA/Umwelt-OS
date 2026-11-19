@@ -870,3 +870,94 @@ async def collect_tvmaze_schedule(
         _header_value(fetched.etag),
         _header_value(fetched.last_modified),
     )
+
+
+TVMAZE_FOLLOWED_LOOKBACK = timedelta(days=14)
+TVMAZE_FOLLOWED_LOOKAHEAD = timedelta(days=60)
+
+
+def tvmaze_show_url(show_id: int) -> str:
+    """Build the fixed TVMaze show URL embedding only its previous and next episodes (one small call).
+
+    Raises:
+        ValueError: ``tvmaze_show_id_invalid`` unless ``show_id`` is a positive integer.
+    """
+    if type(show_id) is not int or show_id <= 0:
+        raise ValueError("tvmaze_show_id_invalid")
+    return f"https://api.tvmaze.com/shows/{show_id}?embed%5B%5D=previousepisode&embed%5B%5D=nextepisode"
+
+
+def map_tvmaze_followed_show(
+    payload: object, *, collected_at: datetime, config: Mapping[str, Any]
+) -> list[IngestionRecord]:
+    """Map one show's embedded previous/next episodes inside the recent/upcoming window.
+
+    Episodes older than 14 days or later than 60 days after ``collected_at`` are dropped so the
+    followed-show snapshot stays a bounded calendar. Source filters apply as for schedules.
+
+    Raises:
+        ValueError: ``tvmaze_response_invalid`` when ``payload`` is not a show object.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("tvmaze_response_invalid")
+    embedded = payload.get("_embedded")
+    show = {key: value for key, value in payload.items() if key != "_embedded"}
+    rows: list[dict[str, Any]] = []
+    for key in ("previousepisode", "nextepisode"):
+        episode = embedded.get(key) if isinstance(embedded, Mapping) else None
+        if isinstance(episode, Mapping):
+            rows.append({**episode, "show": show})
+    records: list[IngestionRecord] = []
+    for row in rows:
+        record = _tvmaze_record(row, collected_at)
+        air = normalize_partial_date(row.get("airstamp") or row.get("airdate"))[2]
+        if (
+            record is not None
+            and air is not None
+            and collected_at - TVMAZE_FOLLOWED_LOOKBACK
+            <= air
+            <= collected_at + TVMAZE_FOLLOWED_LOOKAHEAD
+        ):
+            records.append(record)
+    return filter_media_records(config, records)
+
+
+async def collect_tvmaze_followed_shows(
+    fetch_bytes: Callable[..., Awaitable[Fetched]],
+    *,
+    show_ids: tuple[int, ...],
+    config: Mapping[str, Any],
+    collected_at: datetime,
+) -> tuple[IngestionRecord, ...]:
+    """Fetch each followed show sequentially (one gated call per id, at most 20) and merge episodes.
+
+    Every call goes through the injected gated transport so quota is debited per request. A 404
+    (show removed upstream) is skipped; any other HTTP, quota or parse error propagates so the run
+    accepts nothing rather than a partial snapshot. Records dedupe by episode id.
+
+    Raises:
+        ValueError: more than 20 ids, or a malformed payload.
+    """
+    if len(show_ids) > 20:
+        raise ValueError("tvmaze_show_ids_too_many")
+    records: dict[str, IngestionRecord] = {}
+    for show_id in sorted(set(show_ids)):
+        try:
+            fetched = await fetch_bytes(
+                tvmaze_show_url(show_id),
+                headers={"Accept": "application/json"},
+                max_bytes=512 * 1024,
+            )
+        except ProviderHttpError as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        if fetched.body is None:
+            continue
+        try:
+            payload = json.loads(fetched.body)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ValueError("tvmaze_response_invalid") from exc
+        for record in map_tvmaze_followed_show(payload, collected_at=collected_at, config=config):
+            records.setdefault(record.provider_id, record)
+    return tuple(records.values())

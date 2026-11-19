@@ -33,7 +33,6 @@ def test_media_provider_scopes_are_registered(provider: str, source_type: str) -
     assert provider in GATED_EXECUTOR_PROVIDERS
     assert provider not in FIXED_SCOPE_PROVIDERS
     assert PROVIDER_SCOPE_FIELDS[provider]
-    assert provider in OPTIONAL_SCOPE_FIELDS
 
 
 def test_media_provider_config_accepts_bounded_values() -> None:
@@ -120,4 +119,75 @@ def test_ann_builtin_accepts_atom_scope_options() -> None:
 def test_scoped_media_providers_require_their_identity_fields(
     provider: str, required: set[str]
 ) -> None:
-    assert required <= PROVIDER_SCOPE_FIELDS[provider] - OPTIONAL_SCOPE_FIELDS[provider]
+    assert required <= PROVIDER_SCOPE_FIELDS[provider] - OPTIONAL_SCOPE_FIELDS.get(
+        provider, frozenset()
+    )
+
+
+def test_tvmaze_is_scoped_with_optional_identity_and_filter_options() -> None:
+    from modules.connectors.provider_options import OPTION_FIELDS
+    from modules.connectors.provider_specs import BUILTIN_PROVIDERS
+    from modules.connectors.service.scope import _scope_values
+
+    assert "tvmaze_schedule" not in FIXED_SCOPE_PROVIDERS | BUILTIN_PROVIDERS
+    assert "tvmaze_schedule" in GATED_EXECUTOR_PROVIDERS
+    identity = PROVIDER_SCOPE_FIELDS["tvmaze_schedule"]
+    assert identity == {"tvmaze_mode", "media_country", "tvmaze_global", "tvmaze_show_ids"}
+    assert identity == OPTIONAL_SCOPE_FIELDS["tvmaze_schedule"]
+    assert {"media_genres", "media_languages", "media_formats", "min_rating"} <= set(
+        OPTION_FIELDS["tvmaze_schedule"]
+    )
+    # Legacy built-in sources (no scope fields) hash exactly like the old fixed scope: an empty value map.
+    legacy = _scope_values("tvmaze_schedule", sorted(identity), {"media_genres": ["drama"]})
+    assert legacy == {}
+    follow = {"tvmaze_mode": "followed_shows", "tvmaze_show_ids": [1, 2]}
+    other = {"tvmaze_mode": "followed_shows", "tvmaze_show_ids": [3]}
+    assert _scope_values("tvmaze_schedule", sorted(identity), follow) != _scope_values(
+        "tvmaze_schedule", sorted(identity), other
+    )
+    # Filters are outside the identity, so changing them keeps the same scope.
+    assert _scope_values(
+        "tvmaze_schedule", sorted(identity), {**follow, "media_genres": ["drama"]}
+    ) == _scope_values("tvmaze_schedule", sorted(identity), follow)
+
+
+def test_igdb_game_types_is_a_filter_not_identity() -> None:
+    from modules.connectors.provider_options import OPTION_FIELDS, native_fingerprint
+
+    assert "igdb_game_types" not in PROVIDER_SCOPE_FIELDS["igdb_games"]
+    assert "igdb_game_types" in OPTION_FIELDS["igdb_games"]
+    base = {"igdb_region": "europe"}
+    assert native_fingerprint("igdb_games", base) != native_fingerprint(
+        "igdb_games", {**base, "igdb_game_types": ["main_game"]}
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "added"),
+    (
+        ("itunes_movies", {"release_year", "min_rating"}),
+        ("letterboxd_rss", {"min_rating"}),
+        ("apple_books_rss", {"content_ratings", "release_year"}),
+        ("podcast_rss", {"content_ratings", "media_formats"}),
+        ("openlibrary_books", {"release_year", "media_genres"}),
+    ),
+)
+def test_spec_d_filter_dimensions_are_registered_options(provider: str, added: set[str]) -> None:
+    from modules.connectors.provider_options import OPTION_FIELDS
+
+    assert added <= set(OPTION_FIELDS[provider])
+    config = ConnectorConfig.model_validate(
+        {"release_year": 2024, "min_rating": 60.0, "content_ratings": ["clean"]}
+    )
+    validate_options(
+        provider, config.model_dump(mode="json", exclude_none=True) | _target(provider)
+    )
+
+
+def _target(provider: str) -> dict[str, object]:
+    """Minimum scope each provider's validator requires."""
+    return {
+        "itunes_movies": {"search_terms": "alien"},
+        "podcast_rss": {"feed_url": "https://example.org/feed.xml"},
+        "openlibrary_books": {"openlibrary_mode": "subject", "openlibrary_subject": "history"},
+    }.get(provider, {})

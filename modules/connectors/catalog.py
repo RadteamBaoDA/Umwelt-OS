@@ -471,6 +471,7 @@ _ENTRIES = (
             "youtube_handles",
             "youtube_playlist_ids",
             "youtube_filter",
+            "min_rating",
             "history_mode",
             "timezone",
             "schedule_interval_minutes",
@@ -993,6 +994,7 @@ _SCOPED_EXAMPLES: dict[str, dict[str, Any]] = {
     "podcast_index": {"podcast_index_languages": ["en"]},
     "listenbrainz_releases": {"listenbrainz_days": 14},
     "omdb_lookup": {"omdb_mode": "title", "omdb_title": "Example movie"},
+    "tvmaze_schedule": {"tvmaze_mode": "schedule_country", "media_country": "US"},
     "google_news": {
         "news_query": "Vietnam economy",
         "news_site": "reuters.com",

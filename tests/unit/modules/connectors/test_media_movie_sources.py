@@ -23,16 +23,89 @@ NOW = datetime(2026, 11, 17, 12, tzinfo=UTC)
 
 def test_wikidata_url_has_validated_pushdown_and_bounded_dates() -> None:
     url = wikidata_query_url(
-        {"genre_qids": ["Q130232", "Q157444"], "language": "EN", "lookback_days": 30}, NOW
+        {"genre_qids": ["Q130232", "Q157443"], "language": "EN", "lookback_days": 30}, NOW
     )
     query = parse_qs(urlsplit(url).query)["query"][0]
     assert '"2026-10-18T00:00:00Z"' in query
     assert '"2027-05-16T23:59:59Z"' in query
-    assert "VALUES ?genre { wd:Q130232 wd:Q157444 }" in query
-    assert 'FILTER(?languageCode = "en")' in query
+    assert "VALUES ?genre { wd:Q130232 wd:Q157443 }" in query
+    assert 'VALUES ?languageCode { "en" }' in query
+    assert "?item wdt:P364/wdt:P218 ?languageCode." in query
+    assert "OPTIONAL { ?item wdt:P364" not in query
     assert "LIMIT 100" in query
     with pytest.raises(ValueError, match="wikidata_scope_invalid"):
         wikidata_query_url({"genre_qids": ["Q1) } SERVICE <https://attacker>"]}, NOW)
+
+
+def _query(config: dict[str, object]) -> str:
+    return parse_qs(urlsplit(wikidata_query_url(config, NOW)).query)["query"][0]
+
+
+def test_wikidata_pushes_down_spec_genre_qids_country_and_language() -> None:
+    query = _query(
+        {
+            "media_genres": ["horror", "action", "documentary", "non_fiction"],
+            "media_countries": ["JP", "US"],
+            "media_languages": ["ja", "zh-hk", "en"],
+        }
+    )
+    assert "VALUES ?genre { wd:Q188473 wd:Q200092 wd:Q93204 }" in query
+    assert 'VALUES ?countryCode { "JP" "US" }' in query
+    assert "?item wdt:P495/wdt:P297 ?countryCode." in query
+    assert "OPTIONAL { ?item wdt:P495" not in query
+    # zh-hk is not an ISO 639-1 code, so it can never match P218 and is dropped from the join.
+    assert 'VALUES ?languageCode { "ja" "en" }' in query
+
+
+def test_wikidata_partial_genre_mapping_and_unset_dimensions_stay_optional() -> None:
+    query = _query({"media_genres": ["drama", "history"]})
+    assert "OPTIONAL { ?item wdt:P136 ?genre. }" in query
+    assert "VALUES ?genre" not in query
+    assert "OPTIONAL { ?item wdt:P495/wdt:P297 ?countryCode. }" in query
+    assert "OPTIONAL { ?item wdt:P364/wdt:P218 ?languageCode. }" in query
+    explicit = _query({"genre_qids": ["Q11424"], "media_genres": ["drama"]})
+    assert "VALUES ?genre { wd:Q11424 }" in explicit
+
+
+def test_wikidata_country_selectors_intersect_and_reject_unsafe_codes() -> None:
+    both = _query({"media_countries": ["US", "GB"], "media_country": "GB"})
+    assert 'VALUES ?countryCode { "GB" }' in both
+    with pytest.raises(ValueError, match="wikidata_scope_invalid"):
+        _query({"media_countries": ['US" } SERVICE <https://attacker> { "']})
+
+
+def test_wikidata_genre_qids_are_the_corrected_film_genre_items() -> None:
+    from modules.connectors.providers.media_movie_sources import _GENRE_QIDS
+
+    assert _GENRE_QIDS["action"] == "Q188473"
+    assert _GENRE_QIDS["comedy"] == "Q157443"
+    assert _GENRE_QIDS["animation"] == "Q202866"
+    # Slugs that are not film genres stay unmapped (post-fetch filter only).
+    assert not {"history", "music", "sports", "programming", "rpg", "strategy"} & _GENRE_QIDS.keys()
+
+
+def test_wikidata_languages_are_lowercased_before_intersecting() -> None:
+    query = _query({"media_languages": ["en", "ja"], "language": "EN"})
+    assert 'VALUES ?languageCode { "en" }' in query
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"media_countries": ["US"], "media_country": "GB"},
+        {"media_languages": ["en"], "language": "ja"},
+        {"media_languages": ["zh-hk"]},
+    ],
+)
+def test_wikidata_empty_selector_intersection_is_rejected_not_rendered(
+    options: dict[str, object],
+) -> None:
+    from modules.connectors.provider_options import validate_options
+
+    with pytest.raises(ValueError, match="wikidata_scope_invalid"):
+        validate_options("wikidata_movies", options)
+    with pytest.raises(ValueError, match="wikidata_scope_invalid"):
+        _query(options)
 
 
 def test_wikidata_maps_deduplicated_genres_country_language_and_ids() -> None:

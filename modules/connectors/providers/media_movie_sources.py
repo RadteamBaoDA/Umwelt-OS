@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 from xml.etree import ElementTree
 
 from modules.connectors.provider_options import filter_media_records
+from modules.connectors.provider_options_media import wikidata_selector_sets
 from modules.connectors.providers._media_common import (
     MEDIA_ATTRIBUTIONS,
     media_user_agent,
@@ -45,8 +46,73 @@ class LetterboxdPage:
     last_modified: str | None
 
 
+# Spec 3.1 E: canonical MediaGenre -> Wikidata film-genre QID. Only genres with a QID can be pushed down.
+# The spec table's QIDs were corrected to the well-known Wikidata film-genre items (action film Q188473,
+# comedy film Q157443, ...); live verification of these values is pending owner approval (no live calls).
+# Film genres with no MediaGenre slug (crime Q959790, war Q369747, musical Q842256, western Q172980,
+# family Q1361932) stay unmapped, as do non-film slugs, so those selections are only post-filtered.
+_GENRE_QIDS = {
+    "action": "Q188473",
+    "adventure": "Q319221",
+    "sci_fi": "Q471839",
+    "fantasy": "Q157394",
+    "romance": "Q1054574",
+    "thriller": "Q2484376",
+    "horror": "Q200092",
+    "comedy": "Q157443",
+    "drama": "Q130232",
+    "mystery": "Q1200678",
+    "documentary": "Q93204",
+    "non_fiction": "Q93204",
+    "animation": "Q202866",
+}
+
+
+def _wikidata_pushdown(
+    config: Mapping[str, object], genres: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...] | None, tuple[str, ...] | None]:
+    """Resolve the genre QIDs, required country codes and required language codes of one query.
+
+    Genres: explicit ``genre_qids`` win; otherwise ``media_genres`` is pushed down only when every selected
+    genre has a spec 3.1 E QID (a partial push-down would drop genres the owner also selected; the post-fetch
+    filter still enforces the rest). Countries and languages are ``None`` when unrestricted, else the
+    intersection of every configured selector (matching the AND semantics of ``filter_media_records``),
+    with languages lowercased first. Every value is re-validated, so nothing unvalidated reaches the SPARQL text.
+
+    Raises:
+        ValueError: ``wikidata_scope_invalid`` when a selector is not an ISO code / QID, or a selected
+        country/language dimension is empty after intersection (never an empty ``VALUES`` clause).
+    """
+    raw_genres = config.get("media_genres")
+    media_genres = (
+        (raw_genres,)
+        if isinstance(raw_genres, str)
+        else tuple(g for g in raw_genres if isinstance(g, str))
+        if isinstance(raw_genres, (list, tuple))
+        else ()
+    )
+    if not genres and media_genres and all(g in _GENRE_QIDS for g in media_genres):
+        genres = tuple(sorted({_GENRE_QIDS[g] for g in media_genres}))
+    countries, languages = wikidata_selector_sets(config)
+    if countries is not None and any(not _ISO2.fullmatch(code) for code in countries):
+        raise ValueError("wikidata_scope_invalid")
+    return genres, countries, languages
+
+
+def _values_clause(variable: str, values: tuple[str, ...] | None, template: str) -> str | None:
+    """Render a required ``VALUES`` binding, or ``None`` when the dimension is unrestricted."""
+    if values is None:
+        return None
+    return f"VALUES ?{variable} {{ " + " ".join(template.format(v=v) for v in values) + " }"
+
+
 def wikidata_query_url(config: Mapping[str, object], now: datetime) -> str:
-    """Build a bounded Wikidata SPARQL query from validated date, genre and language scope."""
+    """Build a bounded Wikidata SPARQL query from validated date, genre, country and language scope.
+
+    ``media_genres`` (spec 3.1 E QIDs), ``media_countries`` / ``media_country`` (P495 -> P297) and
+    ``media_languages`` / ``language`` (P364 -> P218) are pushed down as required ``VALUES`` joins so the
+    100-row cap is spent on matching films; unset dimensions stay ``OPTIONAL`` display fields.
+    """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("collected_at must include a timezone")
     raw_days = config.get("lookback_days", 365)
@@ -62,6 +128,7 @@ def wikidata_query_url(config: Mapping[str, object], now: datetime) -> str:
     language = config.get("language")
     if language is not None and (not isinstance(language, str) or not _LANG2.fullmatch(language)):
         raise ValueError("wikidata_scope_invalid")
+    genres, countries, languages = _wikidata_pushdown(config, tuple(genres))
 
     today = now.astimezone(UTC).date()
     start = (today - timedelta(days=raw_days)).isoformat()
@@ -72,15 +139,25 @@ def wikidata_query_url(config: Mapping[str, object], now: datetime) -> str:
         if genres
         else "OPTIONAL { ?item wdt:P136 ?genre. }\n"
     )
-    language_clause = f'FILTER(?languageCode = "{language.lower()}")\n' if language else ""
+    country_values = _values_clause("countryCode", countries, '"{v}"')
+    country_clause = (
+        f"{country_values}\n  ?item wdt:P495/wdt:P297 ?countryCode.\n"
+        if country_values
+        else "OPTIONAL { ?item wdt:P495/wdt:P297 ?countryCode. }\n"
+    )
+    language_values = _values_clause("languageCode", languages, '"{v}"')
+    language_clause = (
+        f"{language_values}\n  ?item wdt:P364/wdt:P218 ?languageCode.\n"
+        if language_values
+        else "OPTIONAL { ?item wdt:P364/wdt:P218 ?languageCode. }\n"
+    )
     query = f"""
 SELECT ?item ?itemLabel ?description ?date ?genreLabel ?countryCode ?languageCode ?imdb ?tmdb ?image WHERE {{
   ?item wdt:P31 wd:Q11424; wdt:P577 ?date.
   FILTER(?date >= "{start}T00:00:00Z"^^xsd:dateTime && ?date <= "{end}T23:59:59Z"^^xsd:dateTime)
   {genre_clause}
   OPTIONAL {{ ?genre rdfs:label ?genreLabel. FILTER(LANG(?genreLabel) = "en") }}
-  OPTIONAL {{ ?item wdt:P495/wdt:P297 ?countryCode. }}
-  OPTIONAL {{ ?item wdt:P364/wdt:P218 ?languageCode. }}
+  {country_clause}
   {language_clause}
   OPTIONAL {{ ?item wdt:P345 ?imdb. }}
   OPTIONAL {{ ?item wdt:P4947 ?tmdb. }}

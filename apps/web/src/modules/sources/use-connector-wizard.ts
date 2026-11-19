@@ -9,6 +9,7 @@ import {
   msUntil,
   providerKey,
   REQUIRED_SCOPE,
+  PAIRED_CREDENTIAL_PROVIDERS,
   requiresHeaderCredential,
   scopeFilled,
   scopeIssues,
@@ -57,7 +58,7 @@ function needsKey(provider: string, entry: ConnectorCatalogEntry | undefined, ba
 export function connectGate(input: ConnectGateInput): boolean {
   const { provider, entry, credentialConfigured } = input;
   const hasKey = Boolean(input.secret) || credentialConfigured;
-  if (provider === 'podcast_index' || provider === 'igdb_games') return podcastIndexCredentialReady(input);
+  if (PAIRED_CREDENTIAL_PROVIDERS.has(provider)) return podcastIndexCredentialReady(input);
   if (provider === 'reddit') return input.redditReady;
   if (isGoogleProvider(provider)) return input.googleReady && credentialConfigured;
   if (provider === 'telegram') return (input.telegramSecretAction === 'replace' && Boolean(input.secret)) || credentialConfigured;
@@ -73,6 +74,8 @@ function alternativeScopeComplete(provider: string, configuration: ConnectorConf
   if (provider === 'mastodon') return scopeFilled(configuration.mastodon_account) !== scopeFilled(configuration.mastodon_hashtag);
   if (provider === 'podcast_rss') return scopeFilled(configuration.feed_url) !== scopeFilled(configuration.itunes_podcast_id);
   if (provider === 'youtube' || provider === 'youtube_api') {
+    // The most-popular chart takes no channel, handle or playlist target; region and category are optional.
+    if (provider === 'youtube_api' && configuration.youtube_api_mode === 'most_popular') return true;
     return (
       [
         configuration.youtube_channel_id,
@@ -93,6 +96,7 @@ function alternativeScopeComplete(provider: string, configuration: ConnectorConf
 function modeSelectedScopeComplete(provider: string, configuration: ConnectorConfig): boolean {
   if (provider === 'steam_releases' || provider === 'igdb_games') return gameScopeComplete(provider, configuration);
   if (provider === 'openlibrary_books' || provider === 'google_books') return bookScopeComplete(provider, configuration);
+  if (provider === 'tvmaze_schedule') return tvmazeScopeComplete(configuration);
   if (provider === 'mal_anime' && configuration.mal_mode === 'season') {
     return scopeFilled(configuration.mal_season_year) && scopeFilled(configuration.mal_season);
   }
@@ -101,6 +105,14 @@ function modeSelectedScopeComplete(provider: string, configuration: ConnectorCon
   return scopeFilled(
     omdbMode === 'imdb_id' ? configuration.omdb_imdb_id : omdbMode === 'search' ? configuration.omdb_search : configuration.omdb_title,
   );
+}
+
+/** Mirrors the server's TVMaze rule: followed shows need show IDs, schedules take none, and global channels need the country-less web schedule. */
+function tvmazeScopeComplete(configuration: ConnectorConfig): boolean {
+  const mode = configuration.tvmaze_mode ?? 'schedule_country';
+  const hasIds = Boolean(configuration.tvmaze_show_ids?.length);
+  if (mode === 'followed_shows') return hasIds && !configuration.tvmaze_global;
+  return !hasIds && (!configuration.tvmaze_global || (mode === 'schedule_web' && !scopeFilled(configuration.media_country)));
 }
 
 /** Requires the selected Open Library target or at least one Google Books query. */

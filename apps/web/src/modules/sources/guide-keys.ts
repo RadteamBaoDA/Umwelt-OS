@@ -1,3 +1,15 @@
+/** Literal `sources` keys of the guide's keyless vs API-key rows per provider id; a table keeps every key type-checked. */
+export const KEY_ACCESS_KEYS = {
+  wikidata_movies: { keyless: 'guideAccess.wikidata.keyless', keyed: 'guideAccess.wikidata.keyed' },
+  tmdb_movies: { keyless: 'guideAccess.tmdbMovies.keyless', keyed: 'guideAccess.tmdbMovies.keyed' },
+  tmdb_tv: { keyless: 'guideAccess.tmdbTv.keyless', keyed: 'guideAccess.tmdbTv.keyed' },
+} as const;
+
+/** Literal keys of the guide's "Keyless" vs "With an API key" rows for one provider; undefined when it has none. */
+export function keyAccessKeys(providerId: string) {
+  return Object.hasOwn(KEY_ACCESS_KEYS, providerId) ? KEY_ACCESS_KEYS[providerId as keyof typeof KEY_ACCESS_KEYS] : undefined;
+}
+
 /**
  * Literal `sources` catalog keys of the setup-guide steps per provider id (`generic` and `genericKeyed` are the
  * fallbacks). Tables instead of runtime key building keep every key type-checked; add a row with each new guide.
@@ -73,6 +85,7 @@ export const SCOPE_HINT_KEY = {
   youtube_channels: 'scopeHint.youtube_channels',
   youtube_handles: 'scopeHint.youtube_handles',
   youtube_playlist_ids: 'scopeHint.youtube_playlist_ids',
+  youtube_video_category_id: 'scopeHint.youtube_video_category_id',
   letterboxd_username: 'scopeHint.letterboxd_username',
   search_terms: 'scopeHint.search_terms',
   openlibrary_subject: 'scopeHint.openlibrary_subject',

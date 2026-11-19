@@ -76,6 +76,8 @@ class Fetched:
     """One bounded response body; ``body is None`` means HTTP 304.
 
     ``final_url`` is the URL that produced the body after redirects; ``None`` means the request URL.
+    ``rate_limit_remaining`` is the provider's ``X-RateLimit-Remaining`` as a bounded non-negative
+    integer, or ``None`` when absent or malformed.
     """
 
     body: bytes | None
@@ -83,6 +85,13 @@ class Fetched:
     last_modified: str | None = None
     content_type: str | None = None
     final_url: str | None = None
+    rate_limit_remaining: int | None = None
+
+
+def _rate_limit_remaining(headers: httpx.Headers) -> int | None:
+    """Parse ``X-RateLimit-Remaining`` as a plain integer of at most six digits, else ``None``."""
+    raw = headers.get("x-ratelimit-remaining", "").strip()
+    return int(raw) if raw.isascii() and raw.isdigit() and len(raw) <= 6 else None
 
 
 async def resolve_public(host: str, port: int) -> list[str]:
@@ -191,6 +200,21 @@ async def _resolve_hop(current: str, resolve: Resolver) -> tuple[SplitResult, li
     return parts, addresses
 
 
+def _redirect_target(current: str, scheme: str, location: str | None, *, followable: bool) -> str:
+    """Return the absolute redirect target for one hop, or raise ``UnsafeDestination("redirect_blocked")``.
+
+    ``followable`` is False when redirects are disabled, the request carried a body (POST bodies are never
+    replayed; only GET redirects are followed) or the hop budget is spent. A missing ``Location`` and an
+    https->http downgrade are also refused. The caller re-resolves and re-pins the returned URL.
+    """
+    if not followable or not location:
+        raise UnsafeDestination("redirect_blocked")
+    target = urljoin(current, location)
+    if scheme == "https" and urlsplit(target).scheme != "https":
+        raise UnsafeDestination("redirect_blocked")
+    return target
+
+
 async def fetch_bounded(
     url: str,
     *,
@@ -267,8 +291,8 @@ async def fetch_bounded(
                 if 300 <= status < 400:
                     current = _redirect_target(
                         current,
-                        response.headers.get("location"),
                         parts.scheme,
+                        response.headers.get("location"),
                         followable=allow_redirects and post_body is None and hop < MAX_REDIRECTS,
                     )
                     continue
@@ -284,6 +308,7 @@ async def fetch_bounded(
                     response.headers.get("last-modified"),
                     response.headers.get("content-type"),
                     current if current != url else None,
+                    _rate_limit_remaining(response.headers),
                 )
     raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
 
@@ -298,20 +323,6 @@ def _default_headers(headers: dict[str, str] | None) -> dict[str, str]:
     if not any(name.lower() == "user-agent" for name in merged):
         merged["User-Agent"] = DEFAULT_USER_AGENT
     return merged
-
-
-def _redirect_target(current: str, location: str | None, scheme: str, *, followable: bool) -> str:
-    """Return the absolute next-hop URL of a redirect, or raise ``UnsafeDestination``.
-
-    ``followable`` is False when redirects are disabled, the request carried a body (POST bodies are never
-    replayed) or the hop budget is spent. An https page may never redirect to plain http.
-    """
-    if not followable or not location:
-        raise UnsafeDestination("redirect_blocked")
-    target = urljoin(current, location)
-    if scheme == "https" and urlsplit(target).scheme != "https":
-        raise UnsafeDestination("redirect_blocked")
-    return target
 
 
 async def _raise_http_error(

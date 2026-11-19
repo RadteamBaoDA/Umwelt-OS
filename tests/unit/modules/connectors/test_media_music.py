@@ -31,8 +31,30 @@ def test_listenbrainz_url_only_uses_its_documented_scope_filters():
             "media_languages": ("en",),
         }
     )
-    query = parse_qs(urlsplit(url).query)
-    assert query == {"days": ["45"], "sort": ["release_date"], "user_name": ["owner"]}
+    parts = urlsplit(url)
+    # Per-user endpoint: user_name must never reach the sitewide explore endpoint.
+    assert parts.path == "/1/user/owner/fresh_releases"
+    assert parse_qs(parts.query) == {"past": ["true"], "future": ["true"]}
+    sitewide = urlsplit(build_listenbrainz_url({"listenbrainz_days": 45}))
+    assert sitewide.path == "/1/explore/fresh-releases/"
+    assert parse_qs(sitewide.query) == {"days": ["45"], "sort": ["release_date"]}
+    with pytest.raises(ValueError):
+        build_listenbrainz_url({"listenbrainz_username": "../x"})
+
+
+@pytest.mark.asyncio
+async def test_cover_url_accepts_archive_subdomains_and_rejects_lookalikes():
+    from modules.connectors.providers.media_music import _cover_url
+
+    async def final(url: str):
+        async def fetch(*_a, **_k) -> Fetched:
+            return Fetched(b"x", final_url=url)
+
+        return await _cover_url("f3a5b6b7-62ec-4be7-bfc8-62ac2c2ea3d9", "ua", fetch)
+
+    assert await final("https://ia800000.us.archive.org/1/items/mbid/front-500.jpg")
+    assert await final("https://evilarchive.org/x.jpg") is None
+    assert await final("https://archive.org.evil.example/x.jpg") is None
 
 
 def test_listenbrainz_filter_changes_reset_query_fingerprint_without_changing_target_scope():
@@ -298,3 +320,42 @@ async def test_updated_discovery_for_the_same_group_is_enriched_again(monkeypatc
     )
     assert not repeat.records
     assert enrichment == ["2025-03-11", "2025-03-09"]
+
+
+@pytest.mark.asyncio
+async def test_oversized_fresh_release_page_keeps_newest_rows_and_reports_truncated(monkeypatch):
+    """The real endpoint returns thousands of rows: keep the newest MAX_RELEASES and flag truncation."""
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(media_music.PACER, "pace", AsyncMock())
+    total = media_music.MAX_RELEASES + 5
+    ids = [f"00000000-0000-4000-8000-{index:012d}" for index in range(total)]
+    # Row i has date 2025-01-(i+1), so the newest rows are the highest indexes.
+    rows = [
+        {
+            "release_group_mbid": group,
+            "release_name": "Album",
+            "release_date": f"2025-01-{index + 1:02d}",
+        }
+        for index, group in enumerate(ids)
+    ]
+    fetched: list[str] = []
+
+    async def fetch(url: str, **kwargs) -> Fetched:
+        if "listenbrainz.org" in url:
+            return Fetched(json.dumps({"payload": {"releases": rows}}).encode())
+        if "musicbrainz.org" in url:
+            group = next(group for group in ids if group in url)
+            fetched.append(group)
+            return Fetched(
+                json.dumps({"release-groups": [{"id": group, "title": "Album"}]}).encode()
+            )
+        raise ProviderHttpError(404)
+
+    page = await collect_listenbrainz_releases(
+        {}, cursor=None, collected_at=datetime(2025, 2, 1, tzinfo=UTC), fetch_bytes=fetch
+    )
+    assert page.coverage == "truncated"
+    assert fetched == ids[:4:-1]  # the 20 newest, newest first
+    assert len(page.records) == media_music.MAX_RELEASES
+    assert len(page.cursor_after) <= 4096

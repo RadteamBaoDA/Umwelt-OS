@@ -449,6 +449,30 @@ def map_mangaupdates_releases(
     return filter_media_records(config, list(records.values()))
 
 
+def _mangadex_content_ratings(config: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """Return validated ``contentRating[]`` params; unset config defaults to safe+suggestive.
+
+    MangaDex returns erotica/pornographic titles when the parameter is omitted, so adult content
+    is only requested when the owner explicitly lists it.
+    """
+    ratings = (
+        config.get("content_rating")
+        or config.get("content_ratings")
+        or (
+            "safe",
+            "suggestive",
+        )
+    )
+    if isinstance(ratings, str):
+        ratings = (ratings,)
+    out: list[tuple[str, str]] = []
+    for rating in ratings:
+        if rating not in {"safe", "suggestive", "erotica", "pornographic"}:
+            raise ValueError("mangadex_rating_invalid")
+        out.append(("contentRating[]", str(rating)))
+    return out
+
+
 def build_mangadex_manga_url(config: Mapping[str, Any], *, offset: int = 0) -> str:  # noqa: C901, PLR0912
     """Build one bounded MangaDex manga metadata query with validated URL parameters."""
     if type(offset) is not int or not 0 <= offset <= 1_000_000:
@@ -480,13 +504,7 @@ def build_mangadex_manga_url(config: Mapping[str, Any], *, offset: int = 0) -> s
         if language not in {"en", "ja", "ko", "zh", "zh-hk", "vi", "fr", "de", "es"}:
             raise ValueError("mangadex_translation_language_invalid")
         query.append(("availableTranslatedLanguage[]", str(language)))
-    content_ratings = config.get("content_rating") or config.get("content_ratings") or ()
-    if isinstance(content_ratings, str):
-        content_ratings = (content_ratings,)
-    for rating in content_ratings:
-        if rating not in {"safe", "suggestive", "erotica", "pornographic"}:
-            raise ValueError("mangadex_rating_invalid")
-        query.append(("contentRating[]", str(rating)))
+    query.extend(_mangadex_content_ratings(config))
     for status in config.get("mangadex_statuses") or ():
         if status not in {"ongoing", "completed", "hiatus", "cancelled"}:
             raise ValueError("mangadex_status_invalid")
@@ -609,6 +627,7 @@ def build_mangadex_chapters_url(
     except (ValueError, TypeError, AttributeError) as exc:
         raise ValueError("mangadex_excluded_tags_invalid") from exc
     query.extend(("excludedTags[]", value) for value in excluded_ids)
+    query.extend(_mangadex_content_ratings(config))
     for language in (
         config.get("available_translated_languages") or config.get("media_languages") or ()
     ):

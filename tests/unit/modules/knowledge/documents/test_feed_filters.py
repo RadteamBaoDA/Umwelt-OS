@@ -232,6 +232,20 @@ async def test_media_filters_compile_jsonb_predicates_and_release_date_sort() ->
 
 
 @pytest.mark.asyncio
+async def test_min_rating_binds_exact_decimal_not_float_expansion() -> None:
+    from decimal import Decimal
+
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), min_rating=7.7, **KW
+    )
+    stmt = session.execute.await_args.args[0]
+    params = stmt.compile().params
+    assert Decimal("7.7") in params.values()
+    assert not any(isinstance(v, float) and v == 7.7 for v in params.values())
+
+
+@pytest.mark.asyncio
 async def test_media_type_filter_includes_legacy_youtube_provider_fallback() -> None:
     session = _session()
     await public.list_gadget_document_projections(
@@ -343,3 +357,32 @@ def test_as_gadget_document_projection_populates_media_and_youtube() -> None:
 
     news_dto = public._as_gadget_document_projection(item("bbc_world", {"title": "News"}))
     assert news_dto.media is None
+
+
+@pytest.mark.asyncio
+async def test_release_date_asc_admits_single_provenance_versions_and_default_window() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), sort="release_date_asc", **KW
+    )
+    compiled = session.execute.call_args.args[0].compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    # One provenance row per version (no duplicate join rows) and a bounded default window.
+    assert "count(" in sql
+    assert 1 in compiled.params.values()
+    assert sql.count(" >= ") >= 1 and sql.count(" <= ") >= 1
+    assert any(isinstance(v, datetime) for v in compiled.params.values())
+
+
+@pytest.mark.asyncio
+async def test_release_season_uses_enum_equality_not_like() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), release_season="fall", **KW
+    )
+    sql = _sql(session)
+    assert "LIKE" not in sql.upper().replace("ILIKE", "")
+    with pytest.raises(ValueError):
+        await public.list_gadget_document_projections(
+            _session(), source_ids=(uuid4(),), release_season="fa%", **KW
+        )

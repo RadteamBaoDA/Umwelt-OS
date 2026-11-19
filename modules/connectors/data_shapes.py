@@ -36,6 +36,7 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         "tvmaze_schedule": frozenset({"media"}),
         "livechart_episodes": frozenset({"media"}),
         "gutendex_books": frozenset({"media"}),
+        "openlibrary_books": frozenset({"media"}),
         "ann_news": frozenset({"media"}),
         "mangaupdates_releases": frozenset({"media"}),
         "mangadex_releases": frozenset({"media"}),
@@ -46,6 +47,23 @@ _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         "letterboxd_rss": frozenset({"media"}),
         "anilist_anime": frozenset({"media"}),
         "anilist_manga": frozenset({"media"}),
+        # Keyed/native media providers are media-only (spec 3.1): no `event` shape, so they do not
+        # offer themselves to news/timeline gadgets.
+        **dict.fromkeys(
+            (
+                "tmdb_movies",
+                "tmdb_tv",
+                "trakt_media",
+                "omdb_lookup",
+                "mal_anime",
+                "mal_manga",
+                "hardcover_books",
+                "google_books",
+                "steam_releases",
+                "igdb_games",
+            ),
+            frozenset({"media"}),
+        ),
         "github": frozenset({"project_activity"}),
         "topic_watch": frozenset({"news"}),  # kept pages are feed-style summaries
         "open_meteo": frozenset(
@@ -68,21 +86,6 @@ _EXTRA: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
         "vietnamworks_jobs": frozenset({"job"}),
         "itviec_jobs": frozenset({"job"}),
         "wwr_jobs": frozenset({"job"}),
-        **dict.fromkeys(
-            (
-                "tmdb_movies",
-                "tmdb_tv",
-                "trakt_media",
-                "omdb_lookup",
-                "mal_anime",
-                "mal_manga",
-                "hardcover_books",
-                "google_books",
-                "steam_releases",
-                "igdb_games",
-            ),
-            frozenset({"media"}),
-        ),
     }
 )
 

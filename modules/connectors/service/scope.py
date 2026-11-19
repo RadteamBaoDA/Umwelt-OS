@@ -30,6 +30,8 @@ from modules.connectors.backends import (
     LISTENBRAINZ_SCOPE_FIELDS,
     PODCAST_INDEX_SCOPE_FIELDS,
     STEAM_SCOPE_FIELDS,
+    TVMAZE_SCOPE_FIELDS,
+    YOUTUBE_API_SCOPE_FIELDS,
     YOUTUBE_SCOPE_FIELDS,
     YOUTUBE_TARGET_FIELDS,
 )
@@ -61,7 +63,9 @@ def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
 
 # Providers whose scope needs at least one target field. Provider validation enforces any mutual exclusion.
 _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
-    **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_TARGET_FIELDS),
+    "youtube": YOUTUBE_TARGET_FIELDS,
+    # most_popular needs no channel target; the mode itself is the alternative that completes scope.
+    "youtube_api": YOUTUBE_TARGET_FIELDS | {"youtube_api_mode"},
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
     "google_books": frozenset({"google_books_query", "google_books_subject"}),
@@ -75,7 +79,8 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "listenbrainz_releases": LISTENBRAINZ_SCOPE_FIELDS,
     "steam_releases": STEAM_SCOPE_FIELDS,
     "igdb_games": IGDB_SCOPE_FIELDS,
-    **dict.fromkeys(("youtube", "youtube_api"), YOUTUBE_SCOPE_FIELDS),
+    "youtube": YOUTUBE_SCOPE_FIELDS,
+    "youtube_api": YOUTUBE_API_SCOPE_FIELDS,
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
@@ -97,95 +102,16 @@ OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
     "omdb_lookup": frozenset({"omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search"}),
     "anilist_anime": frozenset({"media_ids"}),
     "openlibrary_books": frozenset(
-        {
-            "openlibrary_mode",
-            "openlibrary_subject",
-            "openlibrary_query",
-            "ebooks_only",
-            "media_languages",
-        }
+        {"openlibrary_mode", "openlibrary_subject", "openlibrary_query"}
     ),
-    "gutendex_books": frozenset(
-        {
-            "media_languages",
-            "gutendex_topic",
-            "gutendex_search",
-            "gutendex_copyright",
-            "gutendex_mime_type",
-            "gutendex_author_year_start",
-            "gutendex_author_year_end",
-            "media_genres",
-        }
-    ),
+    "gutendex_books": frozenset({"gutendex_topic", "gutendex_search"}),
     "anilist_manga": frozenset({"media_ids"}),
-    "ann_news": frozenset(
-        {
-            "ann_mode",
-            "ann_media_type",
-            "ann_category",
-            "ann_edition",
-            "media_country",
-            "media_countries",
-            "media_genres",
-            "media_languages",
-            "media_formats",
-            "release_year",
-            "min_rating",
-        }
-    ),
-    "mangaupdates_releases": frozenset(
-        {
-            "mangaupdates_types",
-            "licensed_only",
-            "exclude_genre",
-            "series_ids",
-            "release_year",
-            "media_genres",
-        }
-    ),
-    "mangadex_releases": frozenset(
-        {
-            "manga_ids",
-            "original_languages",
-            "available_translated_languages",
-            "mangadex_content_ratings",
-            "mangadex_statuses",
-            "publication_demographic",
-            "release_year",
-            "updated_at_since",
-            "media_genres",
-            "excluded_tags",
-        }
-    ),
-    "apple_books_rss": frozenset({"media_country", "media_genres", "media_languages"}),
-    "podcast_rss": frozenset(
-        {"feed_url", "itunes_podcast_id", "media_country", "media_genres", "media_languages"}
-    ),
-    "wikidata_movies": frozenset(
-        {
-            "lookback_days",
-            "genre_qids",
-            "language",
-            "media_country",
-            "media_countries",
-            "media_genres",
-            "media_languages",
-            "release_year",
-        }
-    ),
-    "itunes_movies": frozenset(
-        {"media_country", "media_genres", "media_languages", "release_year", "min_rating"}
-    ),
-    "letterboxd_rss": frozenset(
-        {
-            "media_country",
-            "media_countries",
-            "media_genres",
-            "media_languages",
-            "release_year",
-            "min_rating",
-        }
-    ),
+    "ann_news": frozenset({"ann_mode", "ann_media_type", "ann_category", "ann_edition"}),
+    "mangaupdates_releases": frozenset({"series_ids"}),
+    "mangadex_releases": frozenset({"manga_ids"}),
+    "tvmaze_schedule": TVMAZE_SCOPE_FIELDS,
+    "podcast_rss": frozenset({"feed_url", "itunes_podcast_id"}),
+    "wikidata_movies": frozenset({"lookback_days", "language"}),
 }
 
 

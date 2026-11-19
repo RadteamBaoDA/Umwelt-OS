@@ -199,6 +199,8 @@ def _validate_media_provider_options(provider: str, cfg: Mapping[str, Any]) -> N
         validate_mal_target(provider, cfg)
     elif provider == "google_books":
         validate_google_books_target(cfg)
+    elif provider == "wikidata_movies":
+        wikidata_selector_sets(cfg)
 
 
 def _validate_rss_movie_options(provider: str, cfg: Mapping[str, Any]) -> None:
@@ -215,8 +217,81 @@ def _validate_rss_movie_options(provider: str, cfg: Mapping[str, Any]) -> None:
             raise ValueError("iTunes movie search terms are required")
 
 
+def _selector_values(value: object) -> tuple[str, ...]:
+    """Coerce a stored list/tuple/scalar selector to a tuple of strings (invalid shapes become empty)."""
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
+
+
+def wikidata_selector_sets(
+    cfg: Mapping[str, Any],
+) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
+    """Return the required Wikidata country and language codes, or ``None`` per unrestricted dimension.
+
+    Country selectors (``media_countries`` and ``media_country``) and language selectors (``media_languages``
+    and ``language``) are ANDed like the post-fetch filter. Languages are lowercased before intersecting and
+    reduced to ISO 639-1 (Wikidata P218 cannot hold regional tags such as ``zh-hk``). Pure; shared by option
+    validation and SPARQL building so both agree.
+
+    Raises:
+        ValueError: ``wikidata_scope_invalid`` when a selected dimension resolves to no code at all (an empty
+        intersection, or only regional languages), which would otherwise render an invalid empty ``VALUES``.
+    """
+
+    def combine(
+        first: tuple[str, ...] | None, second: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if first is None or second is None:
+            return first if second is None else second
+        return tuple(value for value in first if value in second)
+
+    countries = combine(
+        _selector_values(cfg.get("media_countries")) if cfg.get("media_countries") else None,
+        _selector_values(cfg.get("media_country")) if cfg.get("media_country") else None,
+    )
+    languages = combine(
+        tuple(v.lower() for v in _selector_values(cfg.get("media_languages")))
+        if cfg.get("media_languages")
+        else None,
+        tuple(v.lower() for v in _selector_values(cfg.get("language")))
+        if cfg.get("language")
+        else None,
+    )
+    if languages is not None:
+        languages = tuple(code for code in languages if re.fullmatch(r"[a-z]{2}", code))
+    if countries == () or languages == ():
+        raise ValueError("wikidata_scope_invalid")
+    return countries, languages
+
+
 def validate_youtube_api_options(cfg: Mapping[str, Any]) -> None:
-    """Prevent filters that depend on channel metadata in direct playlist scope."""
+    """Validate the YouTube API mode against its target, filter and region fields.
+
+    ``uploads`` (the default) keeps the channel/handle/playlist rules and rejects the chart-only
+    ``youtube_video_category_id`` and ``media_country``. ``most_popular`` needs no target, so any
+    channel/handle/playlist, ``youtube_filter`` or ``media_countries`` is rejected: the chart carries no
+    channel metadata to filter on and ``media_country`` is the request region, not a record filter.
+
+    Raises:
+        ValueError: on any mode-incompatible combination.
+    """
+    if cfg.get("youtube_api_mode") == "most_popular":
+        targets = (
+            "youtube_channel_id",
+            "youtube_channels",
+            "youtube_handles",
+            "youtube_playlist_ids",
+        )
+        if any(cfg.get(key) for key in targets):
+            raise ValueError("YouTube most popular mode does not take channel or playlist targets")
+        if cfg.get("youtube_filter") not in (None, "all") or cfg.get("media_countries"):
+            raise ValueError("YouTube most popular mode does not support format or country filters")
+        return
+    if cfg.get("youtube_video_category_id") or cfg.get("media_country"):
+        raise ValueError("YouTube video category and region apply only to most popular mode")
     if cfg.get("youtube_playlist_ids") and (
         cfg.get("youtube_filter") not in (None, "all") or cfg.get("media_countries")
     ):

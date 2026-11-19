@@ -268,7 +268,10 @@ class BuiltinEnableRequest(BaseModel):
         default=None, ge=0.0, le=100.0, allow_inf_nan=False, strict=True
     )
     exclude_adult: StrictBool | None = None
-    tvmaze_mode: Literal["schedule_country", "schedule_web"] | None = None
+    tvmaze_mode: Literal["schedule_country", "schedule_web", "followed_shows"] | None = None
+    tvmaze_show_ids: tuple[PositiveSeriesId, ...] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
     ann_mode: Literal["news", "encyclopedia"] | None = None
     ann_media_type: Literal["anime", "manga"] | None = None
     ann_category: (
@@ -315,8 +318,7 @@ class BuiltinEnableRequest(BaseModel):
     letterboxd_username: str | None = Field(
         default=None, min_length=1, max_length=30, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,29}$"
     )
-    # Keyed media catalog options (mirrored from ConnectorConfig: Google Books, IGDB, MAL, OMDb, Podcast Index,
-    # Steam, TMDB, Trakt). ``_desired_configuration`` reads every name in ``ALL_OPTION_NAMES`` from this request.
+    # Phase-4 media options (mirrored from ConnectorConfig; guarded by test_builtin_enable_request_options).
     google_books_filter: Literal["ebooks", "free-ebooks", "paid-ebooks"] | None = None
     google_books_print_type: Literal["all", "books", "magazines"] | None = None
     google_books_query: str | None = Field(default=None, min_length=1, max_length=160, strict=True)

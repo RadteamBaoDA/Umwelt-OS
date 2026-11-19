@@ -16,232 +16,36 @@ from pydantic import (
     model_validator,
 )
 
-from modules.knowledge.documents._source_field_validation import (
+from modules.knowledge.documents._provider_fields import (
+    _PROVIDER_SOURCE_FIELD_ALLOWLIST as _PROVIDER_SOURCE_FIELD_ALLOWLIST,
+)
+from modules.knowledge.documents._provider_fields import (
+    BUILTIN_FEED_PROVIDER_IDS as BUILTIN_FEED_PROVIDER_IDS,
+)
+from modules.knowledge.documents._provider_fields import (
+    KEYED_FEED_PROVIDER_IDS as KEYED_FEED_PROVIDER_IDS,
+)
+from modules.knowledge.documents._provider_fields import (
+    MEASUREMENT_PROVIDER_FIELDS as MEASUREMENT_PROVIDER_FIELDS,
+)
+from modules.knowledge.documents._provider_fields import (
+    MEASUREMENT_PROVIDER_IDS as MEASUREMENT_PROVIDER_IDS,
+)
+from modules.knowledge.documents._provider_fields import (
+    MEDIA_PROVIDER_IDS as MEDIA_PROVIDER_IDS,
+)
+from modules.knowledge.documents._provider_fields import (
+    NEWS_PROVIDER_IDS as NEWS_PROVIDER_IDS,
+)
+from modules.knowledge.documents._provider_fields import (
+    PROVIDER_IDS as PROVIDER_IDS,
+)
+from modules.knowledge.documents._provider_fields import (
     _validate_source_field as _validate_source_field,
 )
 
 MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
-# Built-in feed-class presets (RSS/Atom and JSON event/list feeds): news-shaped records, no typed measurement.
-BUILTIN_FEED_PROVIDER_IDS = (
-    "aljazeera_world",
-    "npr_news",
-    "fed_press",
-    "gdacs_rss",
-    "lobsters",
-    "github_trending",
-    "wwr_jobs",
-    "vietnamworks_jobs",
-    "itviec_jobs",
-    "us_travel_advisories",
-    "noaa_tsunami",
-    "jma_eqvol",
-    "gdacs_events",
-    "nws_alerts",
-    "emsc_quakes",
-    "launch_library",
-    "wikipedia_mostread",
-    "wikipedia_top_views",
-    "bmkg_quakes",
-    "satnogs_observations",
-)
-# Keyed news-shaped presets (providers/keyed.py).
-KEYED_FEED_PROVIDER_IDS = ("finnhub_news", "newsapi")
-NEWS_PROVIDER_IDS = (
-    *BUILTIN_FEED_PROVIDER_IDS,
-    *KEYED_FEED_PROVIDER_IDS,
-    "bbc_world",
-    "vnexpress_business",
-    "dantri_news",
-    "thanhnien_news",
-    "tuoitre_news",
-    "hn_top",
-    "gdelt_economy",
-    "google_news",
-    "openalex",
-    "sec_edgar",
-    "topic_watch",
-)
-MEASUREMENT_PROVIDER_IDS = (
-    "alpha_vantage",
-    "open_meteo",
-    "world_bank",
-    "frankfurter",
-    "ecb",
-    "binance",
-    "vn_stock",
-    "alternative_me",
-    "usgs",
-    "coinpaprika",
-    "coingecko",
-    "cisa_kev",
-    "nasa_eonet",
-    "fred",
-    "openweathermap",
-    "openaq",
-    "nasa_firms",
-    "noaa_kp",
-    "open_er_api",
-    "oecd_cli",
-    "iss_position",
-    "disease_sh",
-    "ioda",
-    "nvd",
-)
-MEDIA_PROVIDER_IDS = (
-    "wikidata_movies",
-    "itunes_movies",
-    "letterboxd_rss",
-    "anilist_anime",
-    "livechart_episodes",
-    "ann_news",
-    "anilist_manga",
-    "mangaupdates_releases",
-    "mangadex_releases",
-    "openlibrary_books",
-    "gutendex_books",
-    "apple_books_rss",
-    "podcast_rss",
-    "tvmaze_schedule",
-    "listenbrainz_releases",
-    "steam_releases",
-    "tmdb_movies",
-    "tmdb_tv",
-    "trakt_media",
-    "omdb_lookup",
-    "mal_anime",
-    "mal_manga",
-    "google_books",
-    "hardcover_books",
-    "youtube_api",
-    "podcast_index",
-    "igdb_games",
-)
-PROVIDER_IDS = (
-    "youtube",
-    "arxiv",
-    "huggingface",
-    "bluesky",
-    "reddit",
-    "mastodon",
-    "x",
-    "github_releases",
-    "github",
-    "telegram",
-    "notion",
-    "slack",
-    "google_mail",
-    "google_calendar",
-    "google_drive",
-    "health",
-    "home_assistant",
-    *MEASUREMENT_PROVIDER_IDS,
-    *NEWS_PROVIDER_IDS,
-    *MEDIA_PROVIDER_IDS,
-)
-# Bounded per-provider evidence keys retained beside the typed measurement (no arbitrary response mirroring).
-MEASUREMENT_PROVIDER_FIELDS = {
-    "alpha_vantage": {"date", "symbol", "open", "high", "low", "close", "volume"},
-    "open_meteo": {"time", "timezone", "utc_offset_seconds", "latitude", "longitude"},
-    "world_bank": {"country", "indicator", "period", "unit", "decimal_value"},
-    "frankfurter": {"date", "base", "quote", "decimal_value", "providers"},
-    "ecb": {"date", "base", "quote", "decimal_value"},
-    "binance": {"symbol", "base", "quote", "decimal_value"},
-    "vn_stock": {
-        "symbol",
-        "date",
-        "kind",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "decimal_value",
-    },
-    "alternative_me": {"timestamp", "value_classification", "decimal_value"},
-    "usgs": {
-        "place",
-        "type",
-        "status",
-        "magType",
-        "depth_km",
-        "latitude",
-        "longitude",
-        "decimal_mag",
-        "event_time",
-        "updated",
-    },
-    "cisa_kev": {
-        "cveID",
-        "vendorProject",
-        "product",
-        "dateAdded",
-        "dueDate",
-        "knownRansomwareCampaignUse",
-    },
-    "coinpaprika": {"id", "symbol", "last_updated", "quote", "decimal_value"},
-    "coingecko": {"coin_id", "quote", "decimal_value", "last_updated_at"},
-    "nasa_eonet": {
-        "categories",
-        "closed",
-        "latitude",
-        "longitude",
-        "event_time",
-        "magnitude_unit",
-        "decimal_value",
-    },
-    "fred": {"series_id", "date", "decimal_value", "units"},
-    "openweathermap": {"dt", "place", "decimal_value"},
-    "openaq": {"location_id", "sensor_id", "datetime", "decimal_value"},
-    "nasa_firms": {"acq", "confidence", "satellite", "daynight", "decimal_value"},
-    "noaa_kp": {"time_tag", "a_running", "station_count", "decimal_value"},
-    "open_er_api": {"date", "base", "quote", "decimal_value"},
-    "oecd_cli": {"area", "period", "decimal_value"},
-    "iss_position": {"velocity_kmh", "timestamp", "visibility", "decimal_value"},
-    "disease_sh": {"updated", "decimal_value"},
-    "ioda": {"location", "datasource", "start", "duration_s", "method"},
-    "nvd": {"cveID", "status", "published", "lastModified", "severity", "decimal_value"},
-}
-
-
-_FEED_FIELDS = {
-    "title",
-    "summary",
-    "canonical_url",
-    "guid",
-    "published_at",
-    "provider_updated_at",
-    "publisher",
-    "image_url",
-}
-_MEDIA_FIELDS = _FEED_FIELDS | {
-    "media_type",
-    "artwork_aspect",
-    "country",
-    "language",
-    "genres",
-    "format",
-    "content_rating",
-    "release_status",
-    "release_date",
-    "release_year",
-    "release_season",
-    "rating",
-    "creator",
-    "tags",
-    "season",
-    "episode",
-    "chapter",
-    "volume",
-    "duration_seconds",
-    "page_count",
-    "external_ids",
-    "trailer_url",
-    "attribution",
-    "final_price",
-    "price_currency",
-    "release_date_text",
-}
 
 
 class WorldDataMeasurement(BaseModel):
@@ -366,98 +170,6 @@ class ProviderTelegramMetadata(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Telegram timestamps must include a timezone")
         return value.astimezone(UTC)
-
-
-# Per-provider allowlist of retained source keys: the trust boundary for provider-controlled
-# metadata. Adding a provider requires an explicit bounded field contract here.
-_PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
-    "youtube": {
-        "author",
-        "summary",
-        "title",
-        "tags",
-        "published_at",
-        "provider_updated_at",
-        "image_url",
-    },
-    "arxiv": {
-        "author",
-        "authors",
-        "categories",
-        "tags",
-        "summary",
-        "title",
-        "published_at",
-        "provider_updated_at",
-    },
-    "huggingface": {"author", "tags", "pipeline_tag", "created_at", "last_modified"},
-    "bluesky": {"author", "canonical_url", "created_at"},
-    "reddit": {"title", "subreddit", "author", "canonical_url", "created_at"},
-    "mastodon": {"author", "canonical_url", "created_at"},
-    "x": {"author_id", "canonical_url", "created_at", "language"},
-    "google_mail": {"thread_id", "history_id", "subject", "from", "to", "date_header"},
-    "google_calendar": {
-        "calendar_id",
-        "event_id",
-        "status",
-        "start",
-        "end",
-        "start_timezone",
-        "end_timezone",
-        "recurrence",
-        "html_link",
-    },
-    "google_drive": {"name", "mime_type", "modified_time", "web_view_link", "md5_checksum"},
-    "notion": {"title", "canonical_url"},
-    "slack": {"channel_id", "message_ts", "thread_ts", "user_id"},
-    "health": {"patient_id", "observation_id", "value", "unit", "observed_at_source"},
-    "home_assistant": {
-        "entity_id",
-        "state",
-        "observed_at_source",
-        "unit_of_measurement",
-        "friendly_name",
-        "latitude",
-        "longitude",
-    },
-    "github_releases": {
-        "node_id",
-        "name",
-        "body",
-        "html_url",
-        "tag_name",
-        "draft",
-        "prerelease",
-        "author",
-        "created_at",
-        "published_at",
-    },
-    "github": {"record_type", "node_id", "html_url"},
-    "telegram": set(),
-    **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
-    **dict.fromkeys((*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS), _FEED_FIELDS),
-    **dict.fromkeys(MEDIA_PROVIDER_IDS, _MEDIA_FIELDS),
-    "bbc_world": _FEED_FIELDS,
-    "vnexpress_business": _FEED_FIELDS,
-    "tuoitre_news": _FEED_FIELDS,
-    "thanhnien_news": _FEED_FIELDS,
-    "dantri_news": _FEED_FIELDS,
-    "google_news": _FEED_FIELDS,
-    "sec_edgar": _FEED_FIELDS | {"form", "cik"},
-    "openalex": {
-        "title",
-        "summary",
-        "canonical_url",
-        "published_at",
-        "authors",
-        "doi",
-        "source",
-        "cited_by_count",
-    },
-    "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
-    "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
-    "topic_watch": set(),  # first-party search-and-summarise watch: envelope carries no source fields
-}
 
 
 class ProviderRecordMetadata(BaseModel):

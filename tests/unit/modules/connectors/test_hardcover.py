@@ -79,7 +79,7 @@ def test_source_scope_and_proof_policy():
     row = get_catalog_entry(PROVIDER)
     assert row is not None and row.code_available and not row.runtime_verified
     assert row.scope_fields == ("hardcover_mode",)
-    assert set(row.data_shapes) == {"event", "media"}
+    assert set(row.data_shapes) == {"media"}
     assert row.min_interval_minutes == 360
     assert {policy.window: policy.limit_units for policy in get_quota_policies(PROVIDER)} == {
         "second": 10,
@@ -212,3 +212,15 @@ async def test_missing_or_unbound_token_never_sends(monkeypatch, credential):
 
     run.gate.fetch_bytes.assert_not_awaited()
     accept.assert_not_awaited()
+
+
+def test_build_request_strips_a_pasted_bearer_prefix() -> None:
+    """A token copied with its ``Bearer`` prefix must not produce ``Bearer Bearer``."""
+    from datetime import UTC, datetime
+
+    from modules.connectors.providers import hardcover
+
+    request = hardcover.build_request(
+        "Bearer abc.def", {"hardcover_mode": "catalog"}, datetime(2026, 1, 1, tzinfo=UTC), 0
+    )
+    assert request.headers["Authorization"] == "Bearer abc.def"

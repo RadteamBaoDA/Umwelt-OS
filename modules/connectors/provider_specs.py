@@ -7,12 +7,19 @@ caps are recorded as ``limit_units=None`` (never unlimited).
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from typing import Literal
 
+from modules.connectors.provider_eligibility import DEPLOYMENT_USES as DEPLOYMENT_USES
+from modules.connectors.provider_eligibility import OperatorReview as OperatorReview
+from modules.connectors.provider_eligibility import TermsDecision as TermsDecision
+from modules.connectors.provider_eligibility import (
+    deployment_use_matches as deployment_use_matches,
+)
+from modules.connectors.provider_eligibility import evaluate_terms as evaluate_terms
 from modules.connectors.provider_options import option_fields
-from modules.connectors.provider_specs_media import MEDIA_SPECS_RAW
+from modules.connectors.provider_specs_media import MEDIA_KEYED_SPECS
 from modules.connectors.provider_specs_tables import (
     _EXPANSION_IDS,
     _LONG_RETENTION_IDS,
@@ -40,9 +47,7 @@ from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 QUOTA_POLICY_REVISION = 1
 
 DeploymentUse = Literal["personal", "noncommercial", "commercial", "unknown"]
-DEPLOYMENT_USES: tuple[str, ...] = ("personal", "noncommercial", "commercial", "unknown")
 Eligibility = Literal["open", "personal", "noncommercial", "review"]
-_USE_RANK = {"personal": 0, "noncommercial": 1, "commercial": 2}
 
 TERMS_INELIGIBLE = "provider_terms_ineligible"
 
@@ -136,10 +141,11 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             "https://www.tvmaze.com/api#licensing",
             "review",
             "TVMaze (CC BY-SA 4.0); link the original TVMaze episode and disclose processing.",
-            ("/schedule", "/schedule/web"),
+            ("/schedule", "/schedule/web", "/shows"),
             (
-                _day(48),
-                QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 1),
+                # Followed shows cost one call per show id (max 20) per sync; TVMaze allows 20 calls/10 s.
+                _day(600),
+                QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 20),
                 _unknown(),
             ),
         ),
@@ -344,7 +350,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             "media",
             ("letterboxd.com",),
             "event",
-            360,
+            60,
             "https://letterboxd.com/legal/terms-of-use/",
             "review",
             "Data via Letterboxd; link the original film entry.",
@@ -1269,7 +1275,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         key=True,
         secret="path",  # noqa: S106  # label/URL/enum value, not a credential
     ),
-) + MEDIA_SPECS_RAW
+    *MEDIA_KEYED_SPECS,
+)
 
 # The built-in expansion (RSS, JSON, bespoke and keyed presets) was checked later than the original 21 presets;
 # the date doubles as the terms version the owner acknowledges, so it must not claim the older check.
@@ -1382,65 +1389,6 @@ def get_quota_policies(provider_id: str | None) -> tuple[QuotaWindowPolicy, ...]
     if spec is not None:
         return spec.quota
     return _NON_FREE_QUOTA_POLICIES.get(provider_id, ())
-
-
-def deployment_use_matches(eligibility: str, deployment_use: str) -> bool:
-    """Whether a catalog eligibility class admits the declared deployment use.
-
-    open admits any declared use (attribution duties remain); personal admits only personal;
-    noncommercial admits personal or noncommercial; review (and anything unrecognised) is always
-    False here because it needs a separate persisted operator review.
-    """
-    if eligibility == "open":
-        return True
-    if eligibility == "personal":
-        return deployment_use == "personal"
-    if eligibility == "noncommercial":
-        return deployment_use in {"personal", "noncommercial"}
-    return False
-
-
-@dataclass(frozen=True)
-class OperatorReview:
-    """Operator-recorded review evidence; never derived from an owner tick."""
-
-    state: Literal["pending", "approved", "rejected"]
-    allowed_use: str | None = None
-    evidence_ref: str | None = None
-    reviewed_terms_version: str | None = None
-
-
-@dataclass(frozen=True)
-class TermsDecision:
-    """Eligibility outcome; ``code`` is a stable machine reason."""
-
-    allowed: bool
-    code: Literal["ok", "terms_not_acknowledged", "use_incompatible", "operator_review_required"]
-
-
-def evaluate_terms(
-    spec: FreeProviderSpec,
-    *,
-    declared_use: str | None,
-    acknowledged_terms_version: str | None,
-    review: OperatorReview | None = None,
-) -> TermsDecision:
-    """Deny by default. The single check shared by catalog readiness and source activation."""
-    if not acknowledged_terms_version or declared_use not in DEPLOYMENT_USES:
-        return TermsDecision(False, "terms_not_acknowledged")
-    if spec.eligibility != "review":
-        ok = deployment_use_matches(spec.eligibility, declared_use)
-        return TermsDecision(ok, "ok" if ok else "use_incompatible")
-    if (
-        review is None
-        or review.state != "approved"
-        or not review.evidence_ref
-        or review.reviewed_terms_version != acknowledged_terms_version
-        or review.allowed_use not in _USE_RANK
-    ):
-        return TermsDecision(False, "operator_review_required")
-    ok = declared_use in _USE_RANK and _USE_RANK[declared_use] <= _USE_RANK[review.allowed_use]
-    return TermsDecision(ok, "ok" if ok else "use_incompatible")
 
 
 # Presets the owner can switch on with one toggle: fixed endpoint (no owner scope), no API key, and an

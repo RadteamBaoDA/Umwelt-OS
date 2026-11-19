@@ -1,7 +1,7 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bookmark, Search, Sparkles } from 'lucide-react';
+import { Bookmark, Play, Search, Sparkles } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -77,7 +77,7 @@ function TerminalVideoFrame({ video }: { video: VideoItem }) {
         <img src={video.imageUrl} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className="video-frame-img" />
       )}
       <span className="video-frame-play" aria-hidden="true">
-        ▶
+        <Play aria-hidden="true" className="size-4 fill-current" />
       </span>
       <span className="video-frame-cap" aria-hidden="true">
         <span>{video.title}</span>
@@ -85,26 +85,6 @@ function TerminalVideoFrame({ video }: { video: VideoItem }) {
       </span>
     </a>
   );
-}
-
-/**
- * Lead video for the terminal skin: the first YouTube record whose canonical URL is a safe youtube.com/youtu.be link.
- *
- * @param items Loaded, search-filtered records.
- * @returns The lead player props, or undefined when no record qualifies.
- */
-function terminalLead(items: VideoRecord[]) {
-  const item = items.find((candidate) => candidate.provider_metadata?.provider === 'youtube');
-  const videoUrl = safeHttpUrl(item?.canonical_url);
-  if (!item || !videoUrl || !new URL(videoUrl).hostname.match(/^(www\.)?(youtube\.com|youtu\.be)$/)) return undefined;
-  return {
-    id: item.document_version_id,
-    title: item.title,
-    channel: creatorOf(item) ?? '',
-    videoUrl,
-    imageUrl: item.image_url ?? null,
-    durationSeconds: item.media?.duration_seconds ?? null,
-  };
 }
 
 /**
@@ -154,7 +134,8 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     `${item.title} ${item.excerpt} ${item.media?.creator ?? ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
   );
   const more = useShowMore(items, 5, `${selectedSources.join(',')}:${search}`);
-  const first = useSkin() === 'terminal' ? terminalLead(items) : undefined;
+  const terminal = useSkin() === 'terminal';
+  const first = terminal ? terminalFirstVideo(items) : undefined;
   useReportGadgetFreshness(null, items.length ? daily('streamCount', { count: items.length }) : null);
 
   return (
@@ -224,6 +205,9 @@ function VideoPanelView({
   ask: (item: VideoRecord) => void;
 }) {
   const t = useTranslations('dashboard');
+  // TanStack sets isError after a failed next-page fetch too, while earlier pages stay in `data`. The generic
+  // failure notice is only for a first-page failure (no loaded data); a later failure shows the load-more alert.
+  const firstPageFailed = query.isError && query.data === undefined;
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={t('video.sourcesRequired')} />}
@@ -232,8 +216,8 @@ function VideoPanelView({
       )}
       {sourceIds.length > 0 && <VideoSearch value={search} onChange={setSearch} label={t('video.search')} />}
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />}
-      {query.isError && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
-      {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && (
+      {firstPageFailed && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
+      {sourceIds.length > 0 && !query.isPending && !firstPageFailed && items.length === 0 && (
         <GadgetNotice
           kind="empty"
           className="p-0"
@@ -269,13 +253,51 @@ function VideoPanelView({
           ))}
       </ul>
       <ShowMoreButton state={more} />
-      {query.hasNextPage && (
-        <Button type="button" variant="outline" size="sm" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
-          {query.isFetchingNextPage ? t('gadget.dataLoading') : t('video.loadMore')}
-        </Button>
-      )}
+      <VideoLoadMore query={query} />
     </div>
   );
+}
+
+/** Cursor "Load more" control with a failure alert; the server cursor is forwarded unchanged by the infinite query. */
+function VideoLoadMore({ query }: { query: ReturnType<typeof useInfiniteQuery> }) {
+  const t = useTranslations('dashboard');
+  return (
+    <>
+      {query.isFetchNextPageError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('feed.loadMoreError')}
+        </p>
+      )}
+      {query.hasNextPage && (
+        <Button type="button" variant="outline" size="sm" disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>
+          {query.isFetchingNextPage ? t('feed.loadingMore') : t('video.loadMore')}
+        </Button>
+      )}
+    </>
+  );
+}
+
+/**
+ * Picks the terminal-skin hero video: the first loaded item of any video-shaped source that has a safe
+ * http(s) canonical URL. Items without one are skipped; no provider or host is special-cased.
+ *
+ * @param items Loaded projection items in display order.
+ * @returns The hero video fields, or undefined when no item has a safe URL.
+ */
+function terminalFirstVideo(items: VideoRecord[]): VideoItem | undefined {
+  for (const item of items) {
+    const videoUrl = safeHttpUrl(item.canonical_url);
+    if (!videoUrl) continue;
+    return {
+      id: item.document_version_id,
+      title: item.title,
+      channel: creatorOf(item) ?? '',
+      videoUrl,
+      imageUrl: item.image_url ?? null,
+      durationSeconds: item.media?.duration_seconds ?? null,
+    };
+  }
+  return undefined;
 }
 
 /** Search box that filters the loaded projections client-side. */
@@ -356,7 +378,7 @@ function VideoRow({
             {dateLabel}
           </time>
           {creator ? ` · ${creator}` : ''}
-          {duration != null ? ` · ${t('video.duration', { duration: Math.round(duration / 60) })}` : ''}
+          {duration != null ? ` · ${t('video.duration', { duration: Math.max(1, Math.ceil(duration / 60)) })}` : ''}
         </p>
         {isOwner && (
           <div className="mt-1 flex flex-wrap gap-1">

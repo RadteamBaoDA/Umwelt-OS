@@ -158,7 +158,7 @@ export function useConnectorServerSync({ source, draft, requests, activation, qu
     setScopeResetEpoch((current) => current + 1);
     dirtyRef.current = false;
     draft.setDirty(false);
-    draft.setSecret('');
+    draft.clearSecrets();
     resetDraftToBaseline(draft, activation, source);
     // The bundles are rebuilt each render but only stable setters and refs are read, so the first render's copies stay valid.
     // eslint-disable-next-line react-hooks/exhaustive-deps

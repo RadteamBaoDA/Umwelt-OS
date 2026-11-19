@@ -174,3 +174,24 @@ export const ANIMESEASON = ['winter', 'spring', 'summer', 'fall'] as const;
 export const GADGETRELEASESTATUSFILTER = ['all', 'upcoming', 'airing', 'released', 'completed', 'hiatus'] as const;
 /** Canonical GadgetGroupBy options from the dashboard contract. */
 export const GADGETGROUPBY = ['none', 'date', 'media_type', 'source'] as const;
+/** ISO-3166 country codes offered by the media country pickers. */
+export const MEDIACOUNTRY = [
+  'JP',
+  'KR',
+  'CN',
+  'TW',
+  'HK',
+  'VN',
+  'US',
+  'GB',
+  'FR',
+  'DE',
+  'CA',
+  'AU',
+  'IN',
+  'IT',
+  'ES',
+  'BR',
+  'TH',
+  'ID',
+] as const;

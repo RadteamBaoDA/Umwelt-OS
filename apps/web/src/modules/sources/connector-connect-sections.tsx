@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { keyNeeded, usesApiKey, usesProviderCredential } from './connector-editor-model';
+import { PAIRED_CREDENTIAL_PROVIDERS, keyNeeded, usesApiKey, usesProviderCredential } from './connector-editor-model';
 import type { ConnectorEditorModel } from './connector-editor-types';
 
 /** Google OAuth connect/disconnect controls and grant status. */
@@ -268,7 +268,7 @@ export function ApiKeyField({ m }: { m: ConnectorEditorModel }) {
               markCredentialChanged();
             }}
           />
-          {(provider === 'podcast_index' || provider === 'igdb_games') && (
+          {PAIRED_CREDENTIAL_PROVIDERS.has(provider) && (
             <div className="field">
               <Label htmlFor="source-paired-provider-secret">
                 {t(provider === 'podcast_index' ? 'podcastIndex.secret' : 'igdb.clientSecret')}

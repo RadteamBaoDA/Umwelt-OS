@@ -26,19 +26,13 @@ from core.workspaces.schemas import (
 )
 from modules.knowledge.documents._language import FEED_LANGUAGES
 from modules.knowledge.documents._news_media import (
-    _ARTWORK_ASPECTS as _ARTWORK_ASPECTS,
+    DEFAULT_CALENDAR_WINDOW_DAYS as DEFAULT_CALENDAR_WINDOW_DAYS,
 )
 from modules.knowledge.documents._news_media import (
-    _apply_media_statement_filters as _apply_media_statement_filters,
-)
-from modules.knowledge.documents._news_media import (
-    _media_provenance_predicates as _media_provenance_predicates,
-)
-from modules.knowledge.documents._news_media import (
-    _release_date_ts_expr as _release_date_ts_expr,
-)
-from modules.knowledge.documents._news_media import (
-    _validate_media_filter_params as _validate_media_filter_params,
+    _apply_media_statement_filters,
+    _media_provenance_predicates,
+    _release_date_ts_expr,
+    _validate_media_filter_params,
 )
 from modules.knowledge.documents._scope import _admit_document_scope, _document_scope
 from modules.knowledge.documents.models import (
@@ -547,6 +541,9 @@ async def news_current_scope_status(
     return NewsProjectionStatus(incomplete_reasons=tuple(sorted(reasons)))
 
 
+_ARTWORK_ASPECTS = frozenset({"poster", "square", "video", "landscape"})
+
+
 def _news_projection_statement(
     scope: Scope,
     source_ids: tuple[UUID, ...],
@@ -594,6 +591,9 @@ def _news_projection_statement(
             func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since
         )
     if language is not None:
+        # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
+        # Stored normalized (primary subtag, lowercase) so this equality can use
+        # ix_documents_workspace_language_created_at_id.
         statement = statement.where(Document.language == language)
     if channel_ids is not None:
         statement = statement.where(
@@ -661,8 +661,14 @@ async def _load_filtered_news_projections(
     return projections
 
 
-def _validate_news_scope_filters(language: str | None, channel_ids: tuple[str, ...] | None) -> None:
-    """Raise ``ValueError`` unless the language is allowlisted and channels are <= 32 unique numeric ids."""
+def _validate_language_and_channels(
+    language: str | None, channel_ids: tuple[str, ...] | None
+) -> None:
+    """Reject a non-allowlisted ``language`` or a channel scope that is oversized, duplicated or non-numeric.
+
+    Raises:
+        ValueError: language outside ``FEED_LANGUAGES``, or more than 32 / non-unique / non-numeric channel ids.
+    """
     if language is not None and language not in FEED_LANGUAGES:
         raise ValueError("Language filter must be an allowlisted code")
     if channel_ids is not None and (
@@ -710,7 +716,7 @@ async def list_news_document_projections(
     access_fence = await _admit_document_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-    _validate_news_scope_filters(language, channel_ids)
+    _validate_language_and_channels(language, channel_ids)
     media_kw: dict[str, Any] = {
         "countries": countries,
         "genres": genres,

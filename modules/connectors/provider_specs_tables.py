@@ -152,7 +152,6 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
             "ioda",
             "open_meteo",
             "github_releases",
-            "youtube",
             "huggingface",
             "openweathermap",
             "openaq",
@@ -161,15 +160,10 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
             # Keyless media catalogs and release feeds: small community APIs and strict free tiers.
             "anilist_manga",
             "ann_news",
-            "apple_books_rss",
-            "gutendex_books",
-            "itunes_movies",
             "letterboxd_rss",
             "mangadex_releases",
             "mangaupdates_releases",
-            "openlibrary_books",
             "podcast_rss",
-            "wikidata_movies",
         ),
         60,
     ),
@@ -197,6 +191,11 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
         ),
         30,
     ),
+    # Spec 3.1 table A floors: slow catalogs poll at most every 6 h (Gutendex daily).
+    **dict.fromkeys(
+        ("apple_books_rss", "itunes_movies", "openlibrary_books", "wikidata_movies"), 360
+    ),
+    "gutendex_books": 1440,
     "tmdb_movies": 360,
     "tmdb_tv": 360,
     "trakt_media": 360,
@@ -207,8 +206,8 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
     "hardcover_books": 360,
     "youtube_api": 30,
     "podcast_index": 60,
+    "listenbrainz_releases": 360,
     "steam_releases": 360,
-    "listenbrainz_releases": 360,  # MusicBrainz asks for low request rates; releases change daily
     "igdb_games": 360,
 }
 

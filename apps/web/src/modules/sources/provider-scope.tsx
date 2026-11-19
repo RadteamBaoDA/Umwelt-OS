@@ -262,6 +262,19 @@ function NasaFirmsScope({ configuration, disabled, onChange }: ScopeSectionProps
   );
 }
 
+/** Raw-text length bound of each bounded YouTube target list input. */
+const YOUTUBE_LIST_MAX_LENGTH = { youtube_channels: 208, youtube_handles: 264, youtube_playlist_ids: 528 } as const;
+
+/** Selects the YouTube target family present in a draft; legacy single-channel configurations are the fallback. */
+function youtubeTargetMode(
+  configuration: ConnectorConfig,
+): 'youtube_channels' | 'youtube_handles' | 'youtube_playlist_ids' | 'youtube_channel_id' {
+  if (configuration.youtube_channels != null) return 'youtube_channels';
+  if (configuration.youtube_handles != null) return 'youtube_handles';
+  if (configuration.youtube_playlist_ids != null) return 'youtube_playlist_ids';
+  return 'youtube_channel_id';
+}
+
 /**
  * Preserves legacy channel scopes and selects exactly one bounded target list (IDs, handles, or playlists).
  * Target-mode changes clear other identifiers explicitly; filter selection leaves target identity untouched.
@@ -269,16 +282,10 @@ function NasaFirmsScope({ configuration, disabled, onChange }: ScopeSectionProps
 function YoutubeScope(props: ScopeSectionProps) {
   const { provider, configuration, disabled, resetEpoch, onChange } = props;
   const t = useTranslations('sources');
-  const mode =
-    configuration.youtube_channels != null
-      ? 'youtube_channels'
-      : configuration.youtube_handles != null
-        ? 'youtube_handles'
-        : configuration.youtube_playlist_ids != null
-          ? 'youtube_playlist_ids'
-          : 'youtube_channel_id';
+  const mode = youtubeTargetMode(configuration);
   const channels = useIdListText(configuration.youtube_channels ?? [], resetEpoch);
   const handles = useIdListText(configuration.youtube_handles ?? [], resetEpoch);
+  const popular = provider === 'youtube_api' && configuration.youtube_api_mode === 'most_popular';
   const playlists = useIdListText(configuration.youtube_playlist_ids ?? [], resetEpoch);
   const lists = { youtube_channels: channels, youtube_handles: handles, youtube_playlist_ids: playlists };
   const targetLabels = {
@@ -287,8 +294,10 @@ function YoutubeScope(props: ScopeSectionProps) {
     youtube_handles: 'youtube.handles',
     youtube_playlist_ids: 'youtube.playlists',
   } as const;
+  if (popular) return <YoutubePopularScope {...props} />;
   return (
     <>
+      {provider === 'youtube_api' && <YoutubeApiModeSelect {...props} mode="uploads" />}
       <div className="field">
         <Label htmlFor="youtube-target-mode">{t('youtube.targetMode')}</Label>
         <Select
@@ -333,7 +342,7 @@ function YoutubeScope(props: ScopeSectionProps) {
           label={t(targetLabels[mode])}
           value={lists[mode].value}
           disabled={disabled}
-          maxLength={mode === 'youtube_channels' ? 208 : mode === 'youtube_handles' ? 264 : 528}
+          maxLength={YOUTUBE_LIST_MAX_LENGTH[mode]}
           onValue={(value) => onChange(mode, lists[mode].edit(value))}
         />
       )}
@@ -360,6 +369,85 @@ function YoutubeScope(props: ScopeSectionProps) {
           fields={MEDIA_PROVIDER_FIELDS.youtube_api.filter((key) => mode !== 'youtube_playlist_ids' || key !== 'media_countries')}
         />
       )}
+      {provider === 'youtube' && <MediaFilterFields {...props} fields={MEDIA_PROVIDER_FIELDS.youtube} />}
+    </>
+  );
+}
+
+/**
+ * YouTube Data API mode select (channel uploads vs most-popular chart). Switching clears the fields of the other
+ * mode (targets and filter for the chart; region and category for uploads) because the server rejects stale ones;
+ * "uploads" is stored as null, the server default.
+ */
+function YoutubeApiModeSelect({ mode, disabled, onChange }: ScopeSectionProps & { mode: 'uploads' | 'most_popular' }) {
+  const t = useTranslations('sources');
+  return (
+    <div className="field">
+      <Label htmlFor="youtube-api-mode">{t('youtube.apiMode')}</Label>
+      <Select
+        value={mode}
+        disabled={disabled}
+        onValueChange={(next) => {
+          if (next === 'most_popular') {
+            onChange('youtube_api_mode', 'most_popular');
+            // The server rejects channel targets and the channel-country filter in chart mode.
+            for (const key of [
+              'youtube_channel_id',
+              'youtube_channels',
+              'youtube_handles',
+              'youtube_playlist_ids',
+              'media_countries',
+            ] as const) {
+              onChange(key, null as never);
+            }
+            onChange('youtube_filter', 'all');
+            return;
+          }
+          onChange('youtube_api_mode', null as never);
+          onChange('youtube_channel_id', '');
+          onChange('youtube_video_category_id', null as never);
+          onChange('media_country', null as never);
+        }}
+      >
+        <SelectTrigger id="youtube-api-mode">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="uploads">{t('youtube.modeUploads')}</SelectItem>
+          <SelectItem value="most_popular">{t('youtube.modePopular')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** Most-popular chart scope: optional region (ISO 3166-1 alpha-2) and numeric video category id; no channel target. */
+function YoutubePopularScope(props: ScopeSectionProps) {
+  const { configuration, disabled, resetEpoch, onChange } = props;
+  const t = useTranslations('sources');
+  const region = MEDIA_FILTER_SPECS.find((spec) => spec.key === 'media_country')!;
+  return (
+    <>
+      <YoutubeApiModeSelect {...props} mode="most_popular" />
+      <TypedOption
+        key={`${resetEpoch}-media_country`}
+        spec={region}
+        value={configuration.media_country}
+        disabled={disabled}
+        onValue={(next) => onChange('media_country', (next === undefined ? null : next) as never)}
+      />
+      <ScopeField
+        name="youtube_video_category_id"
+        label={t('youtube.categoryId')}
+        value={configuration.youtube_video_category_id ?? ''}
+        onValue={(value) => onChange('youtube_video_category_id', (value || null) as never)}
+        disabled={disabled}
+        maxLength={4}
+        pattern="[0-9]{1,4}"
+        required={false}
+      />
+      {/* The server still applies these post-fetch filters to the chart, so keep them visible and clearable. */}
+      <MediaFilterFields {...props} fields={MEDIA_PROVIDER_FIELDS.youtube_api.filter((field) => field !== 'media_countries')} />
     </>
   );
 }
@@ -401,7 +489,11 @@ function acceptsProviderModeField(provider: NativeProvider, key: string, configu
   if (key === 'mal_ranking_type') return configuration.mal_mode !== 'season';
   if (key === 'ann_media_type') return configuration.ann_mode === 'encyclopedia';
   if (key === 'tvmaze_global') return configuration.tvmaze_mode === 'schedule_web';
-  if (provider === 'tvmaze_schedule' && (key === 'media_country' || key === 'media_countries')) return !configuration.tvmaze_global;
+  if (key === 'tvmaze_show_ids') return configuration.tvmaze_mode === 'followed_shows';
+  // Followed shows ignore the schedule country; global channels exclude it (server rule), so the country hides.
+  if (provider === 'tvmaze_schedule' && key === 'media_country') {
+    return configuration.tvmaze_mode !== 'followed_shows' && !configuration.tvmaze_global;
+  }
   const traktField = acceptsTraktField(key, configuration);
   if (traktField !== undefined) return traktField;
   const omdbField = acceptsOmdbField(key, configuration);
@@ -437,11 +529,7 @@ function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeCh
     onChange('ebooks_only', null as never);
   }
   if (key === 'ann_mode' && next !== 'encyclopedia') onChange('ann_media_type', null as never);
-  if (key === 'tvmaze_mode') onChange('tvmaze_global', null as never);
-  if (key === 'tvmaze_global' && next === true) {
-    onChange('media_country', null as never);
-    onChange('media_countries', null as never);
-  }
+  clearTvmazeFields(key, next, onChange);
   if (key === 'trakt_mode') {
     if (typeof next !== 'string' || !next.endsWith('_search')) onChange('trakt_query', null as never);
     if (typeof next !== 'string' || !next.endsWith('_calendar')) onChange('trakt_calendar_days', null as never);
@@ -452,6 +540,23 @@ function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeCh
     onChange('omdb_imdb_id', null as never);
     onChange('omdb_title', null as never);
     onChange('omdb_search', null as never);
+  }
+}
+
+/**
+ * Clears TVMaze fields a changed mode or toggle makes invalid, because the server rejects stale ones (422): global
+ * channels reset on any mode change, show IDs outside followed shows, the country in followed shows, and the country
+ * when global channels turn on.
+ */
+function clearTvmazeFields(key: string, next: unknown, onChange: ScopeChange): void {
+  if (key === 'tvmaze_mode') {
+    onChange('tvmaze_global', null as never);
+    if (next !== 'followed_shows') onChange('tvmaze_show_ids', null as never);
+    else onChange('media_country', null as never);
+  }
+  if (key === 'tvmaze_global' && next === true) {
+    onChange('media_country', null as never);
+    onChange('media_countries', null as never);
   }
 }
 
