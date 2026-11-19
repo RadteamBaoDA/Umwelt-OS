@@ -132,7 +132,7 @@ To apply migrations separately, run `./scripts/dev.ps1 migrate` or `make migrate
 
 Clean install, Phase 0 upgrade, protected proxy paths, module enable/disable procedures are listed in the [release checklist](release-checklist.md#release-procedures-documented-not-executed); acceptance remains pending (`functional_acceptance`, `live_integrations`, `target_capacity` pending).
 
-Expected Alembic head: `0022_dashboard_panels` (the former 87-revision chain, including the `p12_*`/`p14_*`/`r*` revisions named below, was squashed into `0001_init`; the chain is `0001_init` → … → `0022_dashboard_panels` in `infrastructure/postgres/migrations/versions/`). Sections below that name older revisions describe behavior now contained in `0001_init`.
+Expected Alembic head: `0027_brief_evidence_kinds` (the former 87-revision chain, including the `p12_*`/`p14_*`/`r*` revisions named below, was squashed into `0001_init`; the chain is `0001_init` → … → `0027_brief_evidence_kinds` in `infrastructure/postgres/migrations/versions/`). Sections below that name older revisions describe behavior now contained in `0001_init`.
 
 - **Protected proxy paths:** besides `/api/v1/realtime/events`, apply the same no-buffering, no-cache, long-read-timeout and `Last-Event-ID` settings to the Chat response stream `/api/v1/responses/{response_id}/events`. The proxy must forward cookies and the CSRF header unchanged for all owner routes, including `/api/v1/system/*` and `/api/v1/settings/*`.
 - **Upgrade:** keep existing `.env` secrets, snapshot the Postgres, `app-data`, `n8n-data`, graph-data and (with the `s3` profile) `rustfs-data` volumes with your cloud provider first, then `migrate`. Quiesce old API/worker processes before the additive P12 cleanup migrations described below.
@@ -216,7 +216,7 @@ n8n hardening: `docker-compose.connectors.yml` requires `N8N_ENCRYPTION_KEY` (co
 - [ ] `SETUP_TOKEN` used once to create the owner account; owner login works; then rotate/remove it if desired.
 - [ ] `AUTH_TRUST_FORWARDED_FOR=true` (Caddy overlay, which overwrites `X-Forwarded-For`) or `AUTH_CLIENT_IP_HEADER=CF-Connecting-IP` (Cloudflare Tunnel) is set; startup fails without one.
 - [ ] SSE paths stream without buffering through the proxy; request body limit is set.
-- [ ] `make migrate` reached head `0022_dashboard_panels`; `/api/v1/system/ready` is healthy.
+- [ ] `make migrate` reached head `0027_brief_evidence_kinds`; `/api/v1/system/ready` is healthy.
 - [ ] Provider volume snapshots configured (Postgres, `app-data`, `n8n-data`, graph-data, `rustfs-data` when the `s3` profile is used) and a restore was rehearsed by the operator.
 - [ ] `AI_ALLOWED_ENDPOINT_*` lists are as narrow as intended; optional graph profile and connectors stay off unless needed.
 

@@ -1,8 +1,10 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { MoreHorizontalIcon, PlusIcon } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -11,7 +13,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { dailyKeys } from '@/modules/dashboard/public-api';
 import { PickQrButton } from '@/modules/pick';
+import { getAutomation, patchAutomation } from '@/modules/automations/public-api';
+import { useScheduleLabel } from './schedule-label';
 
 export const profileTitleKeys: Record<
   string,
@@ -52,6 +57,10 @@ export interface ChatSessionHeaderProps {
   onSetArchived?: (archived: boolean) => void;
   /** Localized failure of the last pin/archive request for this conversation; shown here because the history rail may be collapsed. */
   actionError?: string | null;
+  /** Settings link that edits the scheduled task owning this thread; its presence marks a task thread (badge + edit link). */
+  taskEditHref?: string;
+  /** Automation id of the scheduled task owning this thread; enables the schedule sentence and Pause/Resume. */
+  taskAutomationId?: string;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
 }
@@ -110,6 +119,55 @@ function MoreMenu({
 }
 
 /**
+ * Schedule sentence and Pause/Resume control of a scheduled-task thread. Reads the automation (`GET /automations/{id}`)
+ * and PATCHes `enabled` fenced by the loaded revision; the result replaces the cached automation, success also refreshes the
+ * Settings list and daily-brief slot owner, and failure (e.g. 409) refetches the automation. While the read is
+ * pending or failed it shows the static task badge, so the header never blocks on or breaks over this lookup.
+ *
+ * @param props.automationId - Automation owning the thread.
+ * @param props.csrfToken - Session CSRF token for the PATCH.
+ */
+function TaskScheduleLine({ automationId, csrfToken }: { automationId: string; csrfToken: string }) {
+  const t = useTranslations('chat');
+  const client = useQueryClient();
+  const key = ['automation', automationId];
+  const scheduleLabel = useScheduleLabel();
+  const rule = useQuery({ queryKey: key, queryFn: () => getAutomation(automationId) });
+  const toggle = useMutation({
+    mutationFn: (enabled: boolean) => patchAutomation(automationId, rule.data!.revision, { enabled }, csrfToken),
+    onSuccess: (next) => {
+      client.setQueryData(key, next);
+      // Pausing changes the Settings list and who owns the daily-brief slot.
+      void client.invalidateQueries({ queryKey: ['automations'] });
+      void client.invalidateQueries({ queryKey: dailyKeys.slotOwner });
+    },
+    // A 409 means the revision moved: refetch it so the next click uses the current one.
+    onError: () => void client.invalidateQueries({ queryKey: key }),
+  });
+  const cron = rule.data?.trigger.cron;
+  return (
+    <>
+      <span className="rounded bg-secondary px-2 py-0.5 font-semibold">
+        {rule.data && cron ? scheduleLabel(cron) : t('taskThread.badge')}
+      </span>
+      {rule.data && (
+        <>
+          {!rule.data.enabled && <span>{t('taskThread.paused')}</span>}
+          <Button type="button" variant="outline" size="sm" disabled={toggle.isPending} onClick={() => toggle.mutate(!rule.data!.enabled)}>
+            {t(rule.data.enabled ? 'taskThread.pause' : 'taskThread.resume')}
+          </Button>
+        </>
+      )}
+      {toggle.isError && (
+        <span role="alert" className="text-destructive">
+          {t('taskThread.toggleFailed')}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * Session header shared by the quick drawer and the /chat route: title, QR pick, one "More" menu (rename, export, pin, archive, delete), new chat (the agent picker lives in the composer).
  *
  * @param props - See {@link ChatSessionHeaderProps}.
@@ -130,6 +188,8 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
     onSetPinned,
     onSetArchived,
     actionError,
+    taskEditHref,
+    taskAutomationId,
     onSendPrompt,
     onNewChat,
   } = props;
@@ -165,6 +225,18 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
         </Button>
         {full && headerTrailing}
       </div>
+      {full && taskEditHref && (
+        <p className="flex w-full items-center gap-2 text-xs text-muted-foreground">
+          {taskAutomationId ? (
+            <TaskScheduleLine automationId={taskAutomationId} csrfToken={csrfToken} />
+          ) : (
+            <span className="rounded bg-secondary px-2 py-0.5 font-semibold">{t('taskThread.badge')}</span>
+          )}
+          <Link href={taskEditHref} className="underline">
+            {t('taskThread.edit')}
+          </Link>
+        </p>
+      )}
       {full && actionError && (
         <p role="alert" className="w-full text-xs text-destructive">
           {actionError}

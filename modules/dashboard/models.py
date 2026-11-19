@@ -350,7 +350,9 @@ class DailyBriefEvidence(Base):
     """Capture every prompted fact's exact document supports without canonical FKs.
 
     One row per support and one null-support marker for a truly independent fact
-    preserve full prompt lineage after canonical Document cascades.
+    preserve full prompt lineage after canonical Document cascades. Observation marker kinds
+    (markets, weather, hazards, source_health) also store their single ``source_id`` with null
+    document ids so every prompted observation source is re-gated, cited or not.
     """
 
     __tablename__ = "daily_brief_evidence"
@@ -360,13 +362,15 @@ class DailyBriefEvidence(Base):
             "support_index BETWEEN 0 AND 99", name="ck_daily_brief_evidence_support_index"
         ),
         CheckConstraint(
-            "fact_kind IN ('tasks','goals','stories','events')",
+            "fact_kind IN ('tasks','goals','stories','events','markets','weather','hazards','source_health')",
             name="ck_daily_brief_evidence_fact_kind",
         ),
         CheckConstraint("fact_hash ~ '^[0-9a-f]{64}$'", name="ck_daily_brief_evidence_fact_hash"),
         CheckConstraint(
             "(document_id IS NULL AND document_version_id IS NULL AND chunk_id IS NULL AND source_id IS NULL) OR "
-            "(document_id IS NOT NULL AND document_version_id IS NOT NULL AND chunk_id IS NOT NULL AND source_id IS NOT NULL)",
+            "(document_id IS NOT NULL AND document_version_id IS NOT NULL AND chunk_id IS NOT NULL AND source_id IS NOT NULL) OR "
+            "(document_id IS NULL AND document_version_id IS NULL AND chunk_id IS NULL AND source_id IS NOT NULL "
+            "AND fact_kind IN ('markets','weather','hazards','source_health'))",
             name="ck_daily_brief_evidence_document_tuple",
         ),
         UniqueConstraint(

@@ -886,6 +886,7 @@ async def put_configuration(
     source = await _source(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )
+    connector_owner.refuse_managed_source(source.provider)
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     # Local-service providers fetch private addresses; only the instance operator's LAN is in scope.

@@ -532,6 +532,47 @@ class TestQueryContracts:
         assert scope.provider_id == "rss"
         assert len(scope.discriminator) == 64  # SHA-256 hex digest
 
+    @pytest.mark.asyncio
+    async def test_topic_watch_scope_tracks_topic_not_run_tuning(self) -> None:
+        """A task-managed Topic watch source has a scope (else the Feed hides its items); budget edits keep it."""
+        source_id = uuid4()
+        fence = SourceFence(
+            id=source_id, workspace_id=WORKSPACE_ID, status="active", generation=1, local_only=False
+        )
+        base = {
+            "topic_watch_topic": "solid-state batteries",
+            "topic_watch_max_items": 5,
+            "topic_watch_token_budget": 23400,
+        }
+
+        async def scope_for(config: dict[str, object]) -> ProviderScopeSnapshot | None:
+            source = ConnectorSource(
+                workspace_id=WORKSPACE_ID,
+                local_only=False,
+                id=source_id,
+                type="web",
+                provider="topic_watch",
+                status="active",
+                generation=1,
+                configuration=config,
+            )
+            with (
+                patch("modules.sources.public.get_source_fence", return_value=fence),
+                patch("modules.sources.public.get_connector_source", return_value=source),
+            ):
+                return await get_current_provider_scope(
+                    AsyncMock(), source_id, 1, scope=SCOPE, multi_workspace_enabled=False
+                )
+
+        first = await scope_for(base)
+        assert first is not None and first.provider_id == "topic_watch"
+        tuned = await scope_for(
+            {**base, "topic_watch_max_items": 9, "topic_watch_token_budget": 40000}
+        )
+        assert tuned is not None and tuned.discriminator == first.discriminator
+        moved = await scope_for({**base, "topic_watch_topic": "sodium-ion batteries"})
+        assert moved is not None and moved.discriminator != first.discriminator
+
     def test_default_schedule_interval_minutes(self) -> None:
         """default_schedule_interval_minutes returns correct defaults by source type."""
         assert default_schedule_interval_minutes("rss") == 15

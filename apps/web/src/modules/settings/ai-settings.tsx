@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Check, Minus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -12,7 +13,6 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentSettingsWorkspace } from '@/modules/agents';
 import { CheckboxField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
-import { AutomationSettings } from '@/modules/automations';
 import type { BrowseOpenRouter, OpenRouterBrowseResult } from './openrouter-model-browser';
 import {
   carryMaxTokens,
@@ -35,6 +35,10 @@ import {
   type ProviderRead,
   type ProviderSecret,
 } from './provider-editor';
+
+// Automation rules render inside a collapsed section; loading them lazily keeps the automations module (and the
+// Scheduled tasks editors it exports) out of every route that reaches this file through module indexes.
+const AutomationSettings = dynamic(() => import('@/modules/automations').then((m) => m.AutomationSettings));
 
 type Privacy = {
   allow_remote_reasoning: boolean;

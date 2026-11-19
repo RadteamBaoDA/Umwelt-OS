@@ -127,6 +127,7 @@ class _TurnInputs:
     req_params: dict[str, Any]
     day_scope: tuple[str, str] | None
     answer_request: AnswerContextRequest
+    task_brief: str | None = None
     answer_context: AnswerContext | None = None
     web_run: _WebSearchRun | None = None
 

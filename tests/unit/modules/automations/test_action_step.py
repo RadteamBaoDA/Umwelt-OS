@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,7 +12,7 @@ from modules.automations import execution
 from tests.unit.split_patching import patch_split
 
 RUN_ID = uuid4()
-SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1)
+SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1, user_id=1)
 
 
 class FakeSession:
@@ -320,3 +320,748 @@ async def test_approved_webhook_clears_digest_and_sends(monkeypatch: pytest.Monk
     assert await _step(ctx) == "hook-done"
     assert row.approved_session_hash is None and row.status == "in_flight"
     assert events == ["admit", "commit", "send_webhook:rev-1"]
+
+
+# ---------------------------------------------------------------- daily brief scheduled task
+class _BriefFactory:
+    """Session factory whose sessions only answer the run lookup."""
+
+    def __call__(self) -> Self:
+        """Return a session scope."""
+        return self
+
+    async def __aenter__(self) -> Self:
+        """Enter the session scope."""
+        return self
+
+    async def __aexit__(self, *_a: object) -> None:
+        """Leave the session scope."""
+
+    async def scalar(self, _statement: Any) -> Any:
+        """Serve the run row."""
+        return SimpleNamespace(id=RUN_ID)
+
+    async def rollback(self) -> None:
+        """No-op rollback."""
+
+
+def _brief_harness(  # noqa: C901  # one fixture wiring every patched collaborator
+    monkeypatch: pytest.MonkeyPatch,
+    briefs: list[str],
+    *,
+    fail_first_mark: bool = False,
+    fence_current: bool = True,
+    fail_first_post: bool = False,
+) -> tuple[dict[str, Any], list[Any], list[tuple[Any, ...]]]:
+    """Patch ``_generate_brief`` collaborators; return (message store, calls, marks)."""
+    from modules.automations._execution import actions
+
+    store: dict[str, Any] = {}
+    appended: list[Any] = []
+    marks: list[tuple[Any, ...]] = []
+    state = {"failed": False, "post_failed": False}
+
+    async def admit(*_a: Any, **_k: Any) -> str:
+        return "fence"
+
+    async def true(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    async def commit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    async def mark(
+        _f: Any, _run: Any, _ord: Any, status: str, code: Any, ref: Any = None, **_k: Any
+    ) -> None:
+        if fail_first_mark and status == "succeeded" and not state["failed"]:
+            # The post already committed; recording the outcome is what crashes.
+            state["failed"] = True
+            raise RuntimeError("boom after post commit")
+        # A succeeded action may carry a reason code (e.g. ``no_new_data``) as a third element.
+        extra = (code,) if status == "succeeded" and code else ()
+        marks.append((status, code if status == "skipped" else ref, *extra))
+
+    async def locked_run(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(id=RUN_ID, document_evidence_revoked=False, status="running")
+
+    async def fence(*_a: Any, **_k: Any) -> bool:
+        return fence_current
+
+    async def transient(*_a: Any, **_k: Any) -> str:
+        return "retry"
+
+    async def read_schedule(*_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(timezone="UTC")
+
+    async def generate(*_a: Any, **kwargs: Any) -> Any:
+        appended.append(("generate", kwargs.get("sections"), kwargs.get("extra_instruction")))
+        appended.append(("role", kwargs.get("model_role")))
+        if not briefs:
+            raise actions.dashboard.BriefEmpty()
+        return SimpleNamespace(
+            id=briefs[0], revision=1, content="Hi", citations=[{"ref": "f1", "source_ids": []}]
+        )
+
+    async def get_brief(_s: Any, brief_id: Any, **_k: Any) -> Any:
+        appended.append(("get_brief", brief_id))
+        return SimpleNamespace(
+            id=brief_id,
+            revision=1,
+            content="Hi",
+            citations=[{"ref": "f1", "source_ids": []}],
+            status="current",
+        )
+
+    async def ensure(*_a: Any, **_k: Any) -> Any:
+        return "conv"
+
+    async def append(_s: Any, _c: Any, *, dedupe_key: str, **kwargs: Any) -> tuple[Any, bool]:
+        appended.append(("append", dedupe_key, kwargs["metadata"]))
+        if fail_first_post and not state["post_failed"]:
+            state["post_failed"] = True
+            raise RuntimeError("chat unavailable")
+        created = dedupe_key not in store
+        store.setdefault(dedupe_key, kwargs["content"])
+        return uuid4(), created
+
+    for name, fn in [
+        ("_admit", admit),
+        ("_action_modules_enabled", true),
+        ("_run_evidence_current", true),
+        ("_commit", commit),
+        ("_mark", mark),
+        ("_transient", transient),
+        ("_locked_run", locked_run),
+        ("_fence_current", fence),
+    ]:
+        monkeypatch.setattr(actions, name, fn)
+    monkeypatch.setattr(actions.dashboard, "read_schedule", read_schedule)
+    monkeypatch.setattr(actions.dashboard, "generate_brief", generate)
+    monkeypatch.setattr(actions.dashboard, "get_brief", get_brief)
+    monkeypatch.setattr(actions.chat, "ensure_automation_conversation", ensure)
+    monkeypatch.setattr(actions.chat, "append_task_message", append)
+    return store, appended, marks
+
+
+def _brief_rev(**spec: Any) -> Any:
+    """A schedule rule revision with one delivering brief action."""
+    action = {"type": "generate_brief", "deliver_chat": True, **spec}
+    trigger = {"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"}
+    return SimpleNamespace(name="Morning", trigger=trigger, actions=[action])
+
+
+async def _run_brief(rev: Any, reference: str | None = None) -> str:
+    """Run ``_generate_brief`` for action 1 of the shared run (``reference`` = row's saved ref)."""
+    from modules.automations._execution import actions
+
+    ctx = {"session_factory": _BriefFactory(), "settings": object(), "redis": object()}
+    run = SimpleNamespace(id=RUN_ID, automation_id=uuid4())
+    row = SimpleNamespace(ordinal=1, action_type="generate_brief", result_reference=reference)
+    return await actions._generate_brief(
+        ctx,  # type: ignore[arg-type]
+        run,  # type: ignore[arg-type]
+        row,  # type: ignore[arg-type]
+        rev,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_brief_task_posts_to_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, calls, marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev(sections=["stories"], extra_instruction="x")) == "succeeded"
+    assert list(store) == ["brief:B"]
+    assert ("generate", ["stories"], "x") in calls
+    meta = next(c[2] for c in calls if c[0] == "append")
+    assert meta["brief_id"] == "B" and meta["task_kind"] == "daily_brief"
+    assert marks == [("pending", "brief_pending:B"), ("succeeded", "brief:B")]
+
+
+@pytest.mark.asyncio
+async def test_brief_task_passes_model_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    _store, calls, _marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev(model_role="background")) == "succeeded"
+    assert ("role", "background") in calls
+    _store, calls, _marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev()) == "succeeded"
+    assert ("role", "brief") in calls
+
+
+@pytest.mark.asyncio
+async def test_old_spec_without_deliver_chat_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev(deliver_chat=False)) == "succeeded"
+    assert store == {} and marks == [("succeeded", "brief:B")]
+
+
+@pytest.mark.asyncio
+async def test_retry_posts_brief_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    bid = str(uuid4())
+    store, calls, marks = _brief_harness(monkeypatch, [bid], fail_first_mark=True)
+    # Attempt 1 posts and commits, then recording the outcome crashes (-> transient retry).
+    assert await _run_brief(_brief_rev()) == "retry"
+    assert list(store) == [f"brief:{bid}"]
+    # The retry re-appends under the same dedupe key: nothing new is stored, outcome recorded.
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert list(store) == [f"brief:{bid}"] and marks[-1] == ("succeeded", f"brief:{bid}")
+    assert sum(1 for c in calls if c[0] == "append") == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_post_retry_does_not_regenerate(monkeypatch: pytest.MonkeyPatch) -> None:
+    bid = str(uuid4())
+    store, calls, marks = _brief_harness(monkeypatch, [bid], fail_first_post=True)
+    assert await _run_brief(_brief_rev()) == "retry"
+    # The brief id was recorded on the action row before the post was attempted.
+    assert marks == [("pending", f"brief_pending:{bid}")] and store == {}
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert sum(1 for c in calls if c[0] == "generate") == 1  # no second paid generation
+    assert ("get_brief", UUID(bid)) in calls
+    assert list(store) == [f"brief:{bid}"] and marks[-1] == ("succeeded", f"brief:{bid}")
+
+
+@pytest.mark.asyncio
+async def test_reused_brief_records_no_new_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, ["B"])
+    store["brief:B"] = "Hi"  # an earlier run already posted this exact brief
+    assert await _run_brief(_brief_rev()) == "succeeded"
+    assert marks[-1] == ("succeeded", "brief:B", "no_new_data")
+
+
+@pytest.mark.asyncio
+async def test_resumed_post_is_not_no_new_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    bid = str(uuid4())
+    store, _calls, marks = _brief_harness(monkeypatch, [bid])
+    store[f"brief:{bid}"] = "Hi"  # this run's own earlier post committed before the crash
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert marks[-1] == ("succeeded", f"brief:{bid}")
+
+
+@pytest.mark.asyncio
+async def test_stale_fence_posts_nothing_and_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, calls, marks = _brief_harness(monkeypatch, ["B"], fence_current=False)
+    assert await _run_brief(_brief_rev()) == "dropped"
+    assert store == {} and not any(c[0] == "append" for c in calls)
+    assert marks[-1] == ("skipped", "stale_revision")
+
+
+@pytest.mark.asyncio
+async def test_non_schedule_rule_never_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, ["B"])
+    rev = _brief_rev()
+    rev.trigger = {"type": "manual"}
+    assert await _run_brief(rev) == "succeeded"
+    assert store == {} and marks == [("succeeded", "brief:B")]
+
+
+@pytest.mark.asyncio
+async def test_reused_brief_posts_nothing_new(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, ["B"])
+    await _run_brief(_brief_rev())
+    await _run_brief(_brief_rev())
+    assert list(store) == ["brief:B"] and sum(m[0] == "succeeded" for m in marks) == 2
+
+
+@pytest.mark.asyncio
+async def test_brief_empty_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, _calls, marks = _brief_harness(monkeypatch, [])
+    assert await _run_brief(_brief_rev()) == "succeeded"
+    assert store == {} and marks == [("succeeded", "brief:empty")]
+
+
+@pytest.mark.asyncio
+async def test_second_brief_task_refused_maps_to_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second enabled brief rule: BriefSlotOwned -> AutomationConflict -> HTTP 409 brief_slot_owned."""
+    from fastapi import HTTPException
+
+    from modules.automations import public, routes
+
+    async def owned(*_a: Any, **_k: Any) -> None:
+        raise public.dashboard.BriefSlotOwned()
+
+    monkeypatch.setattr(public.dashboard, "claim_brief_slot", owned)
+    head = SimpleNamespace(id=uuid4(), enabled=True)
+    parts = ({"type": "schedule"}, [], [{"type": "generate_brief"}])
+    with pytest.raises(public.AutomationConflict) as caught:
+        await public._sync_brief_slot(
+            None,  # type: ignore[arg-type]
+            head,  # type: ignore[arg-type]
+            parts,
+            explicit_enable=True,
+            was_owner_candidate=False,
+            scope=SCOPE,  # type: ignore[arg-type]
+            multi_workspace_enabled=False,
+        )
+
+    async def raising() -> None:
+        raise caught.value
+
+    with pytest.raises(HTTPException) as http:
+        await routes._call(raising())
+    assert http.value.status_code == 409
+    assert http.value.detail["code"] == "brief_slot_owned"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_next_run_at_in_read() -> None:
+    from datetime import UTC, datetime
+
+    from modules.automations import public
+
+    slot = datetime(2030, 1, 1, 7, tzinfo=UTC)
+
+    class Sess:
+        async def scalar(self, _s: Any) -> Any:
+            return slot
+
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    head = SimpleNamespace(
+        id=uuid4(), name="n", enabled=True, revision=2, created_at=now, updated_at=now
+    )
+    rev = SimpleNamespace(
+        trigger={"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
+        conditions=[],
+        actions=[],
+    )
+    assert (await public._read(Sess(), head, rev)).next_run_at == slot  # type: ignore[arg-type]
+    head.enabled = False
+    assert (await public._read(Sess(), head, rev)).next_run_at is None  # type: ignore[arg-type]
+    head.enabled = True
+    rev.trigger = {"type": "webhook"}
+    assert (await public._read(Sess(), head, rev)).next_run_at is None  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_delete_brief_task_deletes_thread_releases_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.automations import public
+
+    events: list[str] = []
+    head = SimpleNamespace(id=uuid4(), revision=1, enabled=True, deleted_at=None)
+    cur = SimpleNamespace(
+        trigger={"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
+        conditions=[],
+        actions=[{"type": "generate_brief", "deliver_chat": True}],
+    )
+
+    async def admit(*_a: Any, **_k: Any) -> str:
+        return "fence"
+
+    async def owned(*_a: Any, **_k: Any) -> Any:
+        return head
+
+    async def current(*_a: Any, **_k: Any) -> Any:
+        return cur
+
+    async def release(*_a: Any, **_k: Any) -> None:
+        events.append("release")
+
+    async def delete(_s: Any, automation_id: Any, *, scope: Any) -> int:
+        events.append(f"delete:{automation_id == head.id}:{scope is SCOPE}")
+        return 1
+
+    async def commit(*_a: Any, **_k: Any) -> None:
+        events.append("commit")
+
+    monkeypatch.setattr(public, "_admit", admit)
+    monkeypatch.setattr(public, "_owned_head", owned)
+    monkeypatch.setattr(public, "_current_revision", current)
+    monkeypatch.setattr(public, "_append_revision", lambda *_a: None)
+    monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
+    monkeypatch.setattr(public.chat, "delete_automation_conversation", delete)
+    monkeypatch.setattr(public, "commit_with_replay", commit)
+    await public.delete_automation(
+        None,  # type: ignore[arg-type]
+        head.id,
+        1,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert events == ["release", "delete:True:True", "commit"]
+
+
+@pytest.mark.parametrize("deliver_chat", [True, False])
+@pytest.mark.asyncio
+async def test_sync_slot_release_disables_internal_cron_only_for_tasks(
+    monkeypatch: pytest.MonkeyPatch, deliver_chat: bool
+) -> None:
+    """Pausing a Daily brief task must not revive the internal cron; a legacy rule keeps it."""
+    from modules.automations import public
+
+    seen: list[Any] = []
+
+    async def release(*_a: Any, **kwargs: Any) -> None:
+        seen.append(kwargs["disable_internal"])
+
+    monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
+    parts = (
+        {"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
+        [],
+        [{"type": "generate_brief", "deliver_chat": deliver_chat}],
+    )
+    await public._sync_brief_slot(
+        None,  # type: ignore[arg-type]
+        SimpleNamespace(id=uuid4(), enabled=False),  # type: ignore[arg-type]
+        parts,
+        explicit_enable=False,
+        was_owner_candidate=True,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert seen == [deliver_chat]
+
+
+@pytest.mark.parametrize("deliver_chat", [True, False])
+@pytest.mark.asyncio
+async def test_delete_releases_slot_with_internal_disabled_only_for_tasks(
+    monkeypatch: pytest.MonkeyPatch, deliver_chat: bool
+) -> None:
+    from modules.automations import public
+
+    seen: list[Any] = []
+    head = SimpleNamespace(id=uuid4(), revision=1, enabled=True, deleted_at=None)
+    cur = SimpleNamespace(
+        trigger={"type": "schedule", "cron": "0 7 * * *", "timezone": "UTC"},
+        conditions=[],
+        actions=[{"type": "generate_brief", "deliver_chat": deliver_chat}],
+    )
+
+    async def noop(*_a: Any, **_k: Any) -> Any:
+        return None
+
+    async def owned(*_a: Any, **_k: Any) -> Any:
+        return head
+
+    async def current(*_a: Any, **_k: Any) -> Any:
+        return cur
+
+    async def release(*_a: Any, **kwargs: Any) -> None:
+        seen.append(kwargs["disable_internal"])
+
+    monkeypatch.setattr(public, "_admit", noop)
+    monkeypatch.setattr(public, "_owned_head", owned)
+    monkeypatch.setattr(public, "_current_revision", current)
+    monkeypatch.setattr(public, "_append_revision", lambda *_a: None)
+    monkeypatch.setattr(public.dashboard, "release_brief_slot", release)
+    monkeypatch.setattr(public.chat, "delete_automation_conversation", noop)
+    monkeypatch.setattr(public, "commit_with_replay", noop)
+    await public.delete_automation(
+        None,  # type: ignore[arg-type]
+        head.id,
+        1,
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    assert seen == [deliver_chat]
+
+
+@pytest.mark.parametrize("disable_internal", [True, False])
+@pytest.mark.asyncio
+async def test_release_brief_slot_internal_schedule_enabled_state(
+    monkeypatch: pytest.MonkeyPatch, disable_internal: bool
+) -> None:
+    """The internal schedule row ends disabled after a task release; unchanged otherwise."""
+    from modules.dashboard import briefs
+
+    automation_id = uuid4()
+    row = SimpleNamespace(schedule_owner="automation", automation_id=automation_id, enabled=True)
+    other = SimpleNamespace(schedule_owner="automation", automation_id=uuid4(), enabled=True)
+
+    class Sess:
+        def __init__(self, found: Any) -> None:
+            self.found = found
+
+        async def scalar(self, _s: Any) -> Any:
+            return self.found
+
+        async def execute(self, *_a: Any) -> None:
+            return None
+
+    async def admit(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(briefs, "_admit", admit)
+    for found, expected_owner, expected_enabled in (
+        (row, "internal_brief", not disable_internal),
+        (other, "automation", True),  # not the holder: nothing changes
+    ):
+        await briefs.release_brief_slot(
+            Sess(found),  # type: ignore[arg-type]
+            automation_id,
+            scope=SCOPE,  # type: ignore[arg-type]
+            multi_workspace_enabled=False,
+            disable_internal=disable_internal,
+        )
+        assert found.schedule_owner == expected_owner and found.enabled is expected_enabled
+
+
+async def _post(
+    monkeypatch: pytest.MonkeyPatch, current: Any, *, fence_current: bool = True
+) -> tuple[str | None, list[str]]:
+    """Run ``_post_brief`` with a locked-run stub; return (skip code, chat calls)."""
+    from modules.automations._execution import actions
+
+    calls: list[str] = []
+
+    async def noop(*_a: Any, **_k: Any) -> Any:
+        return "fence"
+
+    async def locked(*_a: Any, **_k: Any) -> Any:
+        return current
+
+    async def fence(*_a: Any, **_k: Any) -> bool:
+        return fence_current
+
+    async def ensure(*_a: Any, **_k: Any) -> Any:
+        calls.append("ensure")
+        return uuid4()
+
+    async def append(*_a: Any, **_k: Any) -> Any:
+        calls.append("append")
+        return uuid4(), True
+
+    monkeypatch.setattr(actions, "_admit", noop)
+    monkeypatch.setattr(actions, "_locked_run", locked)
+    monkeypatch.setattr(actions, "_fence_current", fence)
+    monkeypatch.setattr(actions, "_commit", noop)
+    monkeypatch.setattr(actions.chat, "ensure_automation_conversation", ensure)
+    monkeypatch.setattr(actions.chat, "append_task_message", append)
+    brief = SimpleNamespace(id=uuid4(), revision=1, content="x", citations=[])
+    skipped = await actions._post_brief(
+        _BriefFactory(),  # type: ignore[arg-type]
+        SimpleNamespace(id=RUN_ID, automation_id=uuid4()),  # type: ignore[arg-type]
+        brief,
+        _brief_rev(),
+        scope=SCOPE,  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+    )
+    return skipped, calls
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        None,
+        SimpleNamespace(document_evidence_revoked=True, status="running"),
+        SimpleNamespace(document_evidence_revoked=False, status="requires_review"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_brief_revoked_or_review_run_posts_nothing(
+    monkeypatch: pytest.MonkeyPatch, current: Any
+) -> None:
+    skipped, calls = await _post(monkeypatch, current)
+    assert skipped == ("document_evidence_unavailable", False) and calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_brief_stale_revision_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    current = SimpleNamespace(document_evidence_revoked=False, status="running")
+    skipped, calls = await _post(monkeypatch, current, fence_current=False)
+    assert skipped == ("stale_revision", False) and calls == []
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_stale_brief_regenerates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pending brief that is no longer current is not posted; a fresh one is generated."""
+    bid = str(uuid4())
+    fresh = str(uuid4())
+    store, calls, marks = _brief_harness(monkeypatch, [fresh])
+    from modules.automations._execution import actions
+
+    async def stale(_s: Any, brief_id: Any, **_k: Any) -> Any:
+        calls.append(("get_brief", brief_id))
+        return SimpleNamespace(id=brief_id, status="stale", content="", citations=[])
+
+    monkeypatch.setattr(actions.dashboard, "get_brief", stale)
+    assert await _run_brief(_brief_rev(), reference=f"brief_pending:{bid}") == "succeeded"
+    assert ("get_brief", UUID(bid)) in calls and sum(1 for c in calls if c[0] == "generate") == 1
+    assert list(store) == [f"brief:{fresh}"]
+
+
+@pytest.mark.asyncio
+async def test_non_uuid_pending_marker_generates(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, calls, _marks = _brief_harness(monkeypatch, ["B"])
+    assert await _run_brief(_brief_rev(), reference="brief_pending:daily") == "succeeded"
+    assert not any(c[0] == "get_brief" for c in calls) and list(store) == ["brief:B"]
+
+
+@pytest.mark.asyncio
+async def test_read_refreshes_expired_head_before_sync_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a commit expires ``updated_at``, ``_read`` must refresh with an awaited query first."""
+    from datetime import UTC, datetime
+
+    from modules.automations import public
+
+    now = datetime(2030, 1, 1, tzinfo=UTC)
+    head = SimpleNamespace(
+        id=uuid4(), name="n", enabled=False, revision=1, created_at=now, updated_at=now
+    )
+    rev = SimpleNamespace(trigger={"type": "webhook"}, conditions=[], actions=[])
+    refreshed: list[Any] = []
+
+    class Sess:
+        async def refresh(self, obj: Any) -> None:
+            refreshed.append(obj)
+
+    monkeypatch.setattr(
+        public,
+        "sa_inspect",
+        lambda obj, raiseerr=True: SimpleNamespace(expired_attributes={"updated_at"}),
+    )
+    read = await public._read(Sess(), head, rev)  # type: ignore[arg-type]
+    assert refreshed == [head]
+    assert read.updated_at == now
+
+
+# ---------------------------------------------------------------- topic watch (collect_source)
+def _watch_rev(*, consent_for: dict[str, Any] | None = None, **over: Any) -> Any:
+    """Build a revision whose single ``collect_source`` action carries consent for ``consent_for``."""
+    from modules.automations.schemas import topic_consent_hash
+
+    trigger = {"type": "schedule", "cron": "0 8 * * *", "timezone": "UTC"}
+    watch = {"topic": "ai chips", "max_items": 5}
+    spec: dict[str, Any] = {
+        "type": "collect_source",
+        "watch": watch,
+        "model_role": "background",
+        "source_id": str(SOURCE_ID),
+        **over,
+    }
+    basis = consent_for or {"watch": watch, "trigger": trigger}
+    spec["consent"] = {
+        "hash": topic_consent_hash(basis["watch"], basis["trigger"], "background", "default/m1@"),
+        "granted_at": "2026-11-18T00:00:00+00:00",
+        "est_tokens": 15600,
+    }
+    return SimpleNamespace(actions=[spec], trigger=trigger, name="Watch")
+
+
+SOURCE_ID = uuid4()
+
+
+async def _run_collect(
+    monkeypatch: pytest.MonkeyPatch,
+    rev: Any,
+    *,
+    error: Exception | None = None,
+    model_id: str = "default/m1@",
+) -> tuple[str, list[Any]]:
+    """Run ``_collect_source`` with a spy factory, ``_mark`` and the connectors request command."""
+    from modules.automations._execution import collect_source as module
+
+    calls: list[Any] = []
+    request_id = uuid4()
+
+    async def mark(
+        _f: Any, run_id: Any, ordinal: int, status: str, code: Any, ref: Any, **_k: Any
+    ) -> None:
+        calls.append(("mark", ordinal, status, code, ref))
+
+    async def request(_session: Any, source_id: Any, **kwargs: Any) -> Any:
+        calls.append(("request", source_id, kwargs["scope"] is SCOPE))
+        if error is not None:
+            raise error
+        return request_id
+
+    async def role_model(*_a: Any, **_k: Any) -> str:
+        return model_id
+
+    monkeypatch.setattr(module, "role_model_id", role_model)
+    monkeypatch.setattr(module, "_mark", mark)
+    monkeypatch.setattr(module.connectors, "request_topic_watch_collection", request)
+    monkeypatch.setattr(
+        module, "worker_session_factory", lambda _ctx: lambda: FakeSession(None, None)
+    )
+    run = SimpleNamespace(id=RUN_ID)
+    row = SimpleNamespace(ordinal=1)
+    outcome = await module._collect_source(
+        {"settings": None},
+        run,
+        row,
+        rev,
+        scope=SCOPE,
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
+    )
+    calls.append(("request_id", request_id))
+    return outcome, calls
+
+
+@pytest.mark.asyncio
+async def test_collect_source_without_consent_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No stored consent: the unattended run is skipped and nothing is requested."""
+    rev = _watch_rev()
+    del rev.actions[0]["consent"]
+    outcome, calls = await _run_collect(monkeypatch, rev)
+    assert outcome == "dropped"
+    assert calls[0] == ("mark", 1, "skipped", "consent_required", None)
+    assert not any(c[0] == "request" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_requests_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valid consent: one collection request for the stored Source, referenced on the action row."""
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev())
+    request_id = calls[-1][1]
+    assert outcome == "succeeded"
+    assert calls[0] == ("request", SOURCE_ID, True)
+    assert calls[1] == ("mark", 1, "succeeded", None, f"collection:{request_id}")
+
+
+@pytest.mark.asyncio
+async def test_collect_source_after_edit_requires_consent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Consent granted for another topic or schedule no longer matches: skipped, nothing requested."""
+    trigger = {"type": "schedule", "cron": "0 8 * * *", "timezone": "UTC"}
+    stale = {"watch": {"topic": "old topic", "max_items": 5}, "trigger": trigger}
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(consent_for=stale))
+    assert outcome == "dropped" and calls[0][2:4] == ("skipped", "consent_required")
+    moved = {
+        "watch": {"topic": "ai chips", "max_items": 5},
+        "trigger": {**trigger, "cron": "0 9 * * *"},
+    }
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(consent_for=moved))
+    assert outcome == "dropped" and not any(c[0] == "request" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_requires_consent_again_when_the_role_model_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner ruling: the role now maps to another model than the one consented to."""
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(), model_id="default/m2@")
+    assert outcome == "dropped" and calls[0][2:4] == ("skipped", "consent_required")
+    assert not any(c[0] == "request" for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_conflict_fails_the_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A source that is not collectable is a permanent action failure, not a retry loop."""
+    from core.errors import ConflictError
+
+    outcome, calls = await _run_collect(monkeypatch, _watch_rev(), error=ConflictError("inactive"))
+    assert outcome == "failed" and calls[1] == ("mark", 1, "failed", "collection_rejected", None)
+
+
+@pytest.mark.asyncio
+async def test_collect_source_commits_before_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Dispatch releases the locks first (the request command commits) and counts an attempt."""
+    row, events, _f, ctx = _setup(monkeypatch, kind="collect_source")
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_collect_source",
+        lambda *_a, **_k: _spy_event(events, "collect", "collected"),
+        facade="execution",
+    )
+    assert await _step(ctx) == "collected"
+    assert row.attempts == 1 and events == ["admit", "commit", "collect"]
+
+
+async def _spy_event(events: list[str], name: str, result: Any) -> Any:
+    """Record an awaited collaborator and return its canned result."""
+    events.append(name)
+    return result

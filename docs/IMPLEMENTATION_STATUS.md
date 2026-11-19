@@ -1,3 +1,34 @@
+<!-- scheduled-tasks-phase1-status:start -->
+## Scheduled tasks - Daily brief, Topic watch, create from chat - 2026-11-18, branch claude/ai-datasource-scheduling-chat-0a33cb
+
+- Phase 1 (Daily brief), delivered:
+  - A Scheduled tasks settings page with the Daily brief template: schedule, section selection, extra instruction, per-task model role, enable/pause/delete.
+  - Each task posts its brief into a dedicated chat thread as a scheduled-task message. The brief slot stays single-owner (internal cron or one task).
+  - The brief can include market, weather, hazard and source-health facts. Migration `0027_brief_evidence_kinds` widens the `daily_brief_evidence.fact_kind` CHECK to these kinds.
+  - Every observation source used in the prompt is re-checked for eligibility on every read, and withheld briefs are scrubbed on read and export and excluded from Memory.
+  - Retry reuses a saved brief. The thread header shows the schedule with Pause/Resume. The gadget opens the task thread, and story citations link to /news.
+- Phase 2 (Topic watch), delivered:
+  - The owner enters a topic. A first-party `topic_watch` source plans queries, searches through `chat.search_web_for_collection` (SearXNG), fetches pages with the SSRF-safe bounded fetch, de-duplicates, reviews and summarises with the role-bound model, and settles one native page.
+  - One-time consent covers the server token estimate and the mapped model id. The token cap and a 240 s deadline apply.
+  - A settle sweep posts one message per run into the task thread with stats, items and the partial reason.
+  - "Show on dashboard" deep-links Add gadget with the Feed template and the task source.
+  - Delete asks whether to keep items (default keep; the source is archived).
+  - Generic connector routes refuse task-managed sources with `managed_by_scheduled_task`.
+- Phase 3 (create from chat), delivered: the `draft_scheduled_task` chat tool attaches an unsaved task card that opens the pre-filled Daily brief editor.
+- Real-e2e fixes:
+  - Phase 1: brief `max_tokens` raised from 500 to 2048; driver UUID subclass in the lock-free support check; MissingGreenlet on pause; no-Markdown brief prompt.
+  - Phase 2: topic watch now settles through the native leased path (ingestion refuses the generic batch path for native providers); the settle stays pending while the ingestion run is in flight; task-managed `topic_watch` gets a fixed provider scope (topic, keep rule, languages, site lists), so Feed and News show its items; dashboard deep-link params are stripped only once the dashboard is ready.
+- Validation:
+  - Unit tests: `pytest tests/unit/modules/{connectors,automations,ingestion,news,knowledge/documents}` 3230 passed, 2 skipped. ruff, mypy (connectors and automations) and lint-imports pass.
+  - E2E: Docker with real sources, a real model from `.env.e2e-real` and SearXNG via `E2E_REAL_SEARCH=1`. Final run 23/23: `scheduled-tasks-chat-real` 2/2, `scheduled-tasks-real` 6/6, `scheduled-tasks-topic-real` 5/5, `dashboard-ux` 8/8, bootstrap 2/2.
+  - Report: `reports/scheduled-tasks-phase1-report.html` (not committed).
+- Not delivered:
+  - SearXNG engines vary: DuckDuckGo returns a CAPTCHA and Brave returns 429, so production needs a stable engine.
+  - Telegram delivery is deferred.
+  - There is no per-story or per-source citation page, and hazards are global.
+  - `/chat` bundle size is not measured, and the Docker integration suite and `tests/test_migrations.py` were not run.
+<!-- scheduled-tasks-phase1-status:end -->
+
 ## 2026-11-19 - Media datasource review complete
 
 All four phases of `specs/new-datasource-v2.md` are implemented and reviewed, with unit, type, lint, build and bundle gates green. Remaining acceptance work needs owner approval: PostgreSQL integration coverage for the media projection SQL, Docker/E2E, live provider checks (including the corrected Wikidata genre QIDs) and authenticated browser acceptance. See `docs/superpowers/plans/EXECUTION.md`.

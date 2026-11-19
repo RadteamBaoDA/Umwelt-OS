@@ -214,18 +214,7 @@ function VideoPanelView({
       {sourceIds.length > 1 && (
         <FeedSourceTabs sourceIds={sourceIds} sourceNames={sources} value={activeSource} onChange={setActiveSource} />
       )}
-      {sourceIds.length > 0 && (
-        <label className="relative block">
-          <Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={t('video.search')}
-            aria-label={t('video.search')}
-            className="pl-9"
-          />
-        </label>
-      )}
+      {sourceIds.length > 0 && <VideoSearch value={search} onChange={setSearch} label={t('video.search')} />}
       {sourceIds.length > 0 && query.isPending && <GadgetSkeleton variant="list" className="p-0" label={t('gadget.dataLoading')} />}
       {firstPageFailed && <GadgetNotice kind="error" className="p-0" message={t('gadget.dataLoadFailed')} />}
       {sourceIds.length > 0 && !query.isPending && !firstPageFailed && items.length === 0 && (
@@ -309,6 +298,16 @@ function terminalFirstVideo(items: VideoRecord[]): VideoItem | undefined {
     };
   }
   return undefined;
+}
+
+/** Search box that filters the loaded projections client-side. */
+function VideoSearch({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
+  return (
+    <label className="relative block">
+      <Search aria-hidden="true" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input value={value} onChange={(event) => onChange(event.target.value)} placeholder={label} aria-label={label} className="pl-9" />
+    </label>
+  );
 }
 
 /** Uses typed media creator metadata, falling back to legacy provider author only when available. */

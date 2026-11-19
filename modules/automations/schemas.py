@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from modules.automations.conditions import Operator, check_condition, validate_sample
 from modules.automations.scheduler import validate_schedule
+from modules.dashboard.public import ALL_BRIEF_SECTIONS, BriefSection
 from modules.notifications.public import NotificationEmit
 
 MAX_CONDITIONS = 20
@@ -19,6 +30,14 @@ MAX_ACTIONS = 10  # bounds fan-out per firing
 MAX_REVISION = 9_007_199_254_740_991
 _CRON_TOKEN = re.compile(r"^[0-9*/,\-]{1,40}$")
 _STRICT = ConfigDict(extra="forbid")
+_SiteHost = Annotated[
+    str,
+    BeforeValidator(lambda v: v.strip().lower() if isinstance(v, str) else v),  # pattern runs after
+    StringConstraints(
+        strip_whitespace=True, to_lower=True, min_length=1, max_length=253, pattern=r"^[a-z0-9.-]+$"
+    ),
+]
+_Language = Annotated[str, StringConstraints(pattern=r"^[a-z]{2}$")]
 
 
 class _Trigger(BaseModel):
@@ -173,6 +192,22 @@ class GenerateBriefAction(_Action):
 
     type: Literal["generate_brief"]
     scope: Literal["daily"] = "daily"
+    sections: list[BriefSection] = Field(
+        default_factory=lambda: list(ALL_BRIEF_SECTIONS), min_length=1, max_length=6
+    )
+    extra_instruction: str | None = Field(default=None, max_length=500)
+    # Default False so rules saved before scheduled tasks existed keep their behaviour.
+    deliver_chat: bool = False
+    # The configured model role (Settings > Models) that runs the brief; never a free model string.
+    model_role: Literal["brief", "chat", "background"] = "brief"
+
+    @field_validator("sections")
+    @classmethod
+    def unique_sections(cls, value: list[BriefSection]) -> list[BriefSection]:
+        """Reject a section listed twice so the stored spec is canonical."""
+        if len(set(value)) != len(value):
+            raise ValueError("sections must not repeat")
+        return value
 
 
 class CallWebhookAction(_Action):
@@ -183,12 +218,52 @@ class CallWebhookAction(_Action):
     event: str = Field(min_length=1, max_length=100)
 
 
+class TopicWatchSpec(BaseModel):
+    """What a Topic watch looks for: the topic, an optional keep rule, languages, sites and item cap."""
+
+    model_config = _STRICT
+
+    topic: str = Field(min_length=1, max_length=500)
+    keep_rule: str | None = Field(default=None, max_length=500)
+    languages: list[_Language] = Field(default_factory=lambda: ["en"], min_length=1, max_length=4)
+    include_sites: list[_SiteHost] = Field(default_factory=list, max_length=10)
+    exclude_sites: list[_SiteHost] = Field(default_factory=list, max_length=10)
+    max_items: int = Field(default=5, ge=1, le=10)
+
+
+class TopicConsent(BaseModel):
+    """One-time owner consent bound to a definition hash; written only by the server."""
+
+    model_config = _STRICT
+
+    hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    granted_at: datetime
+    est_tokens: int = Field(ge=1)
+
+
+class CollectSourceAction(_Action):
+    """Run the rule's Topic watch collection (web search, bounded fetch, summary) into its own Source.
+
+    ``source_id`` and ``consent`` are server-assigned on save (client values are discarded);
+    ``grant_consent_est_tokens`` is request-only: the owner accepts that per-run token estimate and it
+    is never stored.
+    """
+
+    type: Literal["collect_source"]
+    watch: TopicWatchSpec
+    model_role: Literal["background", "chat", "brief"] = "background"
+    source_id: UUID | None = None
+    consent: TopicConsent | None = None
+    grant_consent_est_tokens: int | None = Field(default=None, ge=1)
+
+
 Action = Annotated[
     RunAgentAction
     | CreateTaskAction
     | CreateNotificationAction
     | GenerateBriefAction
-    | CallWebhookAction,
+    | CallWebhookAction
+    | CollectSourceAction,
     Field(discriminator="type"),
 ]
 
@@ -206,16 +281,24 @@ class AutomationDefinition(BaseModel):
     def conditions_match_trigger(self) -> AutomationDefinition:
         """Check every condition against the declared fields and, for schedules, the interval floor.
 
-        A schedule faster than every five minutes is refused when any action is ``run_agent``
-        (model spend); otherwise the floor is one minute.
+        A schedule faster than every five minutes is refused when any action is ``run_agent`` or
+        ``collect_source`` (model spend); otherwise the floor is one minute. A rule holds at most one
+        ``collect_source`` action (one Topic watch per Source), and that action must be the rule's
+        only action on a schedule trigger: consent binds the cron, and a Topic watch is classified,
+        retired and listed only in that shape.
         """
+        watches = sum(a.type == "collect_source" for a in self.actions)
+        if watches > 1:
+            raise ValueError("a rule may hold only one collect_source action")
+        if watches and (self.trigger.type != "schedule" or len(self.actions) != 1):
+            raise ValueError("collect_source must be the only action of a schedule rule")
         for cond in self.conditions:
             check_condition(self.trigger.type, cond.field, cond.operator, cond.value)
         if self.trigger.type == "schedule":
             validate_schedule(
                 self.trigger.cron,
                 self.trigger.timezone,
-                spends_model=any(a.type == "run_agent" for a in self.actions),
+                spends_model=any(a.type in ("run_agent", "collect_source") for a in self.actions),
             )
         return self
 
@@ -240,6 +323,47 @@ class AutomationUpdate(BaseModel):
     actions: list[Action] | None = Field(default=None, min_length=1, max_length=MAX_ACTIONS)
 
 
+def scheduled_task_kind(
+    trigger: dict[str, Any], actions: list[dict[str, Any]]
+) -> Literal["daily_brief", "topic_watch"] | None:
+    """Classify a stored rule: ``"daily_brief"`` iff a schedule trigger has exactly one
+    ``generate_brief`` action with ``deliver_chat`` true, ``"topic_watch"`` iff a schedule trigger has
+    exactly one ``collect_source`` action, else ``None``. The single classifier; the web editor mirrors it.
+    """
+    if trigger.get("type") != "schedule" or len(actions) != 1:
+        return None
+    action = actions[0]
+    if action.get("type") == "generate_brief" and action.get("deliver_chat") is True:
+        return "daily_brief"
+    if action.get("type") == "collect_source":
+        return "topic_watch"
+    return None
+
+
+def topic_consent_hash(
+    watch: dict[str, Any], trigger: dict[str, Any], model_role: str, model_id: str = ""
+) -> str:
+    """Return the sha256 hex of the consent-bound definition: watch spec, cron, timezone, role and model.
+
+    ``model_id`` is the model the role maps to when the hash is made (``""`` when unmapped), so
+    re-pointing the role at a different model requires new consent. Pure and stable (sorted keys,
+    compact separators). Consent is valid only while the stored hash equals the hash of the current
+    definition, so editing any of these fields requires consent again.
+    """
+    blob = json.dumps(
+        {
+            "watch": watch,
+            "cron": trigger["cron"],
+            "tz": trigger["timezone"],
+            "role": model_role,
+            "model": model_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
 class AutomationRead(BaseModel):
     """Public projection of a rule at its current revision."""
 
@@ -252,6 +376,8 @@ class AutomationRead(BaseModel):
     actions: list[dict[str, Any]]
     created_at: datetime
     updated_at: datetime
+    # Next scheduled firing for an enabled schedule rule; None otherwise.
+    next_run_at: datetime | None = None
 
 
 class AutomationPage(BaseModel):

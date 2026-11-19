@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { ConversationActions } from './conversation-actions';
 import { chatKeys, getConversation, listConversations, type Conversation } from './api';
+import { scheduledTaskThread } from './task-brief-message';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime, normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 
@@ -51,9 +52,10 @@ export interface ChatHistoryProps {
     Partial<Pick<ConversationActions, 'flagError' | 'clearFlagError'>>;
 }
 
-type GroupKey = 'pinned' | 'today' | 'yesterday' | 'last7' | 'last30' | 'older';
-const GROUP_ORDER: GroupKey[] = ['pinned', 'today', 'yesterday', 'last7', 'last30', 'older'];
+type GroupKey = 'tasks' | 'pinned' | 'today' | 'yesterday' | 'last7' | 'last30' | 'older';
+const GROUP_ORDER: GroupKey[] = ['tasks', 'pinned', 'today', 'yesterday', 'last7', 'last30', 'older'];
 const GROUP_LABEL = {
+  tasks: 'conversationList.tasks',
   pinned: 'conversationList.pinned',
   today: 'conversationList.today',
   yesterday: 'conversationList.yesterday',
@@ -63,7 +65,7 @@ const GROUP_LABEL = {
 } as const;
 
 /**
- * Splits conversations into Pinned plus calendar-day buckets (Today, Yesterday, Previous 7 days, Previous 30 days,
+ * Splits conversations into a Tasks group (scheduled-task threads, first), Pinned plus calendar-day buckets (Today, Yesterday, Previous 7 days, Previous 30 days,
  * Older) measured in the owner's preference timezone (not the browser's). The server order (pinned first, then newest
  * first) is kept inside each group.
  *
@@ -83,20 +85,22 @@ export function groupConversationsByDay(
     return Date.UTC(y, m - 1, d) / 86_400_000;
   };
   const today = dayNumber(now);
-  const groups: Record<GroupKey, Conversation[]> = { pinned: [], today: [], yesterday: [], last7: [], last30: [], older: [] };
+  const groups: Record<GroupKey, Conversation[]> = { tasks: [], pinned: [], today: [], yesterday: [], last7: [], last30: [], older: [] };
   for (const conv of conversations) {
     const age = today - dayNumber(new Date(conv.updated_at));
-    const key: GroupKey = conv.pinned
-      ? 'pinned'
-      : age <= 0
-        ? 'today'
-        : age === 1
-          ? 'yesterday'
-          : age <= 7
-            ? 'last7'
-            : age <= 30
-              ? 'last30'
-              : 'older';
+    const key: GroupKey = scheduledTaskThread(conv)
+      ? 'tasks'
+      : conv.pinned
+        ? 'pinned'
+        : age <= 0
+          ? 'today'
+          : age === 1
+            ? 'yesterday'
+            : age <= 7
+              ? 'last7'
+              : age <= 30
+                ? 'last30'
+                : 'older';
     groups[key].push(conv);
   }
   return GROUP_ORDER.filter((key) => groups[key].length).map((key) => ({ key, items: groups[key] }));

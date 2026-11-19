@@ -278,8 +278,10 @@ async def _check_activation_preconditions(
 
     Read-only (no lock, no commit). Order matters for the reported detail: stale revision,
     reconciling, pending deactivation, backend transition, unresolved credential operation,
-    then source status/generation. Returns the row narrowed to non-``None``.
+    then source status/generation. Returns the row narrowed to non-``None``. A Topic watch Source is
+    refused first (409 ``managed_by_scheduled_task``): its Scheduled task owns activation.
     """
+    connector_owner.refuse_managed_source(source.provider)
     row = await provisioning.activation_status(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )
@@ -618,10 +620,19 @@ async def deactivate_source(
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    A Topic watch Source is refused (409 ``managed_by_scheduled_task``) before anything is paused.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
+    # A watch Source is paused only through its Scheduled task (pausing it here would stall the task).
+    connector_owner.refuse_managed_source(
+        (
+            await _source(
+                session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+            )
+        ).provider
+    )
     source = await sources.pause_source_for_connector(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )
@@ -686,82 +697,6 @@ async def _capture_telegram_revocation(
     # rechecks the captured Source G/R. No replacement capture is ever taken.
     await _owner_access(session, request, scope, expected=revocation_snapshot.access_fence)
     return revocation_snapshot
-
-
-async def _commit_source_state(
-    session: AsyncSession,
-    source: Any,
-    connector_state: str,
-    *,
-    access_fence: AccessFence,
-    multi_workspace_enabled: bool,
-    scope: WorkspaceContext,
-) -> None:
-    """Commit the open unit of work and publish a source-change replay event for ``source``.
-
-    ``source`` supplies id, generation and status; ``connector_state`` is the connector state announced.
-    Commits the caller's transaction under the given access fence and scope.
-    """
-    await commit_with_replay(
-        session,
-        [
-            make_source_change(
-                source.id,
-                source.generation,
-                source.status,
-                connector_state=connector_state,
-                scope=scope,
-            ),
-        ],
-        access_fence=access_fence,
-        multi_workspace_enabled=multi_workspace_enabled,
-        scope=scope,
-    )
-
-
-def _native_credential_secret(
-    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
-    provider: str | None,
-    *,
-    keyed: bool,
-) -> str:
-    """Return the secret string to encrypt for a native REST credential request.
-
-    Pair credentials (Podcast Index, IGDB) are serialised to compact JSON; others use the single secret.
-    Pure apart from a lazy import of the keyed validators; never logs or echoes the secret.
-
-    Raises:
-        HTTPException: 422 when a YouTube key has characters outside ``[A-Za-z0-9_-]`` or a keyed
-            provider's key validator rejects the value.
-    """
-    if isinstance(payload, PodcastIndexCredentialRequest):
-        credential_secret = json.dumps(
-            {
-                "apiKey": payload.apiKey.get_secret_value(),
-                "apiSecret": payload.apiSecret.get_secret_value(),
-            },
-            separators=(",", ":"),
-        )
-    else:
-        credential_secret = payload.secret.get_secret_value()
-    if provider == "youtube_api" and (
-        not credential_secret.isascii()
-        or not all(char.isalnum() or char in "_-" for char in credential_secret)
-    ):
-        raise HTTPException(
-            status_code=422, detail="The API key is not acceptable for this provider"
-        )
-    if keyed:
-        from modules.connectors.providers.keyed import validate_key
-        from modules.connectors.providers.macro import ProviderPayloadError
-
-        try:
-            validate_key(str(provider), credential_secret)
-        except ProviderPayloadError as exc:
-            raise HTTPException(
-                status_code=422, detail="The API key is not acceptable for this provider"
-            ) from exc
-    return credential_secret
 
 
 @router.delete("/{source_id}/credentials/provider", response_model=ActivationRead)
@@ -864,20 +799,8 @@ async def remove_provider_credential(
             raise HTTPException(
                 status_code=409, detail="Telegram credential revision changed"
             ) from exc
-        await _commit_source_state(
-            session,
-            saved_source,
-            updated.state,
-            access_fence=access_fence,
-            multi_workspace_enabled=multi_workspace_enabled,
-            scope=scope,
-        )
-        return await _activation_read(
-            session,
-            source_id,
-            updated,
-            multi_workspace_enabled=multi_workspace_enabled,
-            scope=scope,
+        return await _commit_removal(
+            session, saved_source, updated, access_fence, multi_workspace_enabled, scope
         )
     intent = await provisioning.create_delete_intent_in_uow(
         session,
@@ -905,16 +828,41 @@ async def remove_provider_credential(
     else:
         updated, _, _ = intent
         updated.error_code = "credential_delete_pending"
-    await _commit_source_state(
+    return await _commit_removal(
+        session, saved_source, updated, access_fence, multi_workspace_enabled, scope
+    )
+
+
+async def _commit_removal(
+    session: AsyncSession,
+    saved_source: Any,
+    updated: ConnectorProvisioning,
+    access_fence: Any,
+    multi_workspace_enabled: bool,
+    scope: Any,
+) -> ActivationRead:
+    """Commit a credential removal with its realtime source change, then read the activation back."""
+    await commit_with_replay(
         session,
-        saved_source,
-        updated.state,
+        [
+            make_source_change(
+                saved_source.id,
+                saved_source.generation,
+                saved_source.status,
+                connector_state=updated.state,
+                scope=scope,
+            ),
+        ],
         access_fence=access_fence,
         multi_workspace_enabled=multi_workspace_enabled,
         scope=scope,
     )
     return await _activation_read(
-        session, source_id, updated, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        session,
+        saved_source.id,
+        updated,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
 
 
@@ -1083,6 +1031,7 @@ async def start_backend_transition(
     gate = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
     source = await _source(session, source_id, multi_workspace_enabled=gate, scope=scope)
+    connector_owner.refuse_managed_source(source.provider)
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     if payload.target_backend == "native" and not collection.supports_native(source):
@@ -1151,15 +1100,17 @@ async def resolve_backend_transition(
     return await _drive_transition(session, request, scope, source_id, access_fence)
 
 
-def _native_rest_header(source: Any, desired: dict[str, Any]) -> tuple[str | None, str]:
-    """Resolve the fixed credential header for a REST-authenticated source.
+def _rest_header_name(source: Any, row: Any, desired: dict[str, Any]) -> tuple[str, bool, Any]:
+    """Return ``(header_name, keyed, row)`` for a source that authenticates with a REST header, else raise 422.
 
-    Returns ``(keyed_header, header_name)``: ``keyed_header`` is the keyed-preset placement (``header``,
-    ``query:<param>`` or ``path:<token>``) or ``None``; ``header_name`` is the header the secret is bound to
-    (keyed, native placement, local ``Authorization``, workspace-app ``Authorization``, else the configured
-    custom header). Raises HTTP 422 when the source uses none of these header authentications.
+    ``row`` is the activation row, returned non-None (a missing row raises 422 like a non-header source).
+
+    Precedence: keyed preset placement, native REST placement, local-service ``Authorization``, workspace-app
+    bearer header (Notion, Slack, Mastodon, X), then a generic REST source's configured header name.
     """
-    keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")
+    keyed_header = collection.KEYED_PROVIDERS.get(
+        source.provider or ""
+    )  # keyed preset: fixed placement (header | query:<param> | path:<token>)
     workspace_app_header = (
         "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
     )
@@ -1172,14 +1123,19 @@ def _native_rest_header(source: Any, desired: dict[str, Any]) -> tuple[str | Non
         else None
     )
     if (
-        keyed_header is None
-        and local_header is None
-        and workspace_app_header is None
-        and native_header is None
-        and (
-            source.provider is not None
-            or desired.get("auth_method") != "http_header"
-            or not desired.get("auth_header_name")
+        source.status != "active"
+        or source.type != "api"
+        or row is None
+        or (
+            keyed_header is None
+            and local_header is None
+            and workspace_app_header is None
+            and native_header is None
+            and (
+                source.provider is not None
+                or desired.get("auth_method") != "http_header"
+                or not desired.get("auth_header_name")
+            )
         )
     ):
         raise HTTPException(
@@ -1192,7 +1148,49 @@ def _native_rest_header(source: Any, desired: dict[str, Any]) -> tuple[str | Non
         or workspace_app_header
         or str(desired["auth_header_name"])
     )
-    return keyed_header, header_name
+    return header_name, keyed_header is not None, row
+
+
+def _validated_rest_secret(
+    payload: NativeRestCredentialRequest | PodcastIndexCredentialRequest,
+    provider: str | None,
+    *,
+    keyed: bool,
+) -> str:
+    """Return the credential secret to encrypt, or raise 422 when it does not fit the provider.
+
+    Podcast Index and IGDB take a key/secret pair serialised as one JSON envelope; every other provider takes a
+    single secret. YouTube API keys are ASCII ``[A-Za-z0-9_-]``; keyed presets run their own key validator.
+    """
+    is_pair = isinstance(payload, PodcastIndexCredentialRequest)
+    if is_pair != (provider in {"podcast_index", "igdb_games"}):
+        raise HTTPException(status_code=422, detail="Credential fields do not match this provider")
+    if isinstance(payload, PodcastIndexCredentialRequest):
+        secret = json.dumps(
+            {
+                "apiKey": payload.apiKey.get_secret_value(),
+                "apiSecret": payload.apiSecret.get_secret_value(),
+            },
+            separators=(",", ":"),
+        )
+    else:
+        secret = payload.secret.get_secret_value()
+    unacceptable = HTTPException(
+        status_code=422, detail="The API key is not acceptable for this provider"
+    )
+    if provider == "youtube_api" and (
+        not secret.isascii() or not all(char.isalnum() or char in "_-" for char in secret)
+    ):
+        raise unacceptable
+    if keyed:
+        from modules.connectors.providers.keyed import validate_key
+        from modules.connectors.providers.macro import ProviderPayloadError
+
+        try:
+            validate_key(str(provider), secret)
+        except ProviderPayloadError as exc:
+            raise unacceptable from exc
+    return secret
 
 
 @router.put("/{source_id}/credentials/native-rest", response_model=ActivationRead)
@@ -1223,19 +1221,11 @@ async def reenter_native_rest_credential(
     row = await provisioning.activation_status(
         session, source_id, multi_workspace_enabled=gate, scope=scope
     )
-    if source.status != "active" or source.type != "api" or row is None:
-        raise HTTPException(
-            status_code=422, detail="This source does not use REST header authentication"
-        )
-    keyed_header, header_name = _native_rest_header(source, dict(row.desired_configuration))
+    desired = dict(row.desired_configuration) if row is not None else {}
+    header_name, keyed, row = _rest_header_name(source, row, desired)
     if row.desired_revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
-    is_pair = isinstance(payload, PodcastIndexCredentialRequest)
-    if is_pair != (source.provider in {"podcast_index", "igdb_games"}):
-        raise HTTPException(status_code=422, detail="Credential fields do not match this provider")
-    credential_secret = _native_credential_secret(
-        payload, source.provider, keyed=keyed_header is not None
-    )
+    credential_secret = _validated_rest_secret(payload, source.provider, keyed=keyed)
     operation_id = uuid7()
     try:
         ciphertext = encrypt_rest_secret(
@@ -1287,10 +1277,13 @@ async def reenter_native_rest_credential(
         credential_revision=row.credential_revision,
         workspace_id=scope.workspace_id,
     )
-    await _commit_source_state(
+    await commit_with_replay(
         session,
-        source,
-        row.state,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=row.state, scope=scope
+            ),
+        ],
         access_fence=access_fence,
         multi_workspace_enabled=gate,
         scope=scope,

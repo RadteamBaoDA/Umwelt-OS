@@ -14,7 +14,14 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import is_instance_operator

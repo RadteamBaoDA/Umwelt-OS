@@ -43,7 +43,16 @@ export type DailyContextData = {
 export const dailyKeys = {
   context: (date: string, timezone: string) => ['daily-context', date, timezone] as const,
   briefs: (date: string, timezone: string) => ['daily-briefs', date, timezone] as const,
+  slotOwner: ['brief-slot-owner'] as const,
 };
+
+/** Who schedules the daily brief: the internal cron, or one Scheduled-tasks rule (a Daily brief task). */
+export type BriefSlotOwner = { logical_job: 'daily_brief'; schedule_owner: 'internal_brief' | 'automation'; automation_id: string | null };
+
+/** Reads the daily brief slot owner; `schedule_owner === 'automation'` means a Daily brief task is enabled. */
+export function getBriefSlotOwner(signal?: AbortSignal): Promise<BriefSlotOwner> {
+  return apiRequest<BriefSlotOwner>('/api/v1/briefs/schedule/ownership', { signal });
+}
 
 /** Loads the saved brief and current-record widgets for one local date. */
 export function getDailyContext(date: string, timezone: string, signal?: AbortSignal): Promise<DailyContextData> {

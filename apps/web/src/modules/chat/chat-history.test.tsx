@@ -50,6 +50,19 @@ beforeEach(() => {
   listConversations.mockResolvedValue([]);
 });
 
+describe('scheduled-task group', () => {
+  it('lists only task threads in a tasks group above today', () => {
+    const task = conv('task', {
+      context_kind: 'automation',
+      metadata: { scheduled_task: { kind: 'daily_brief' } },
+    } as Partial<Conversation>);
+    const groups = groupConversationsByDay([conv('plain'), task], 'UTC');
+    expect(groups.map((g) => g.key)).toEqual(['tasks', 'today']);
+    expect(groups[0].items.map((c) => c.id)).toEqual(['task']);
+    expect(groups[1].items.map((c) => c.id)).toEqual(['plain']);
+  });
+});
+
 describe('groupConversationsByDay', () => {
   it('buckets pinned, today, yesterday, 7 days, 30 days and older in preference timezone', () => {
     const now = new Date('2026-06-15T12:00:00Z');

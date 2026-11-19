@@ -154,6 +154,7 @@ async def _run_turn(model: Any, prompt: str = "BTC price?") -> SimpleNamespace:
         trip_images_on=False,
         local_only_turn=False,
         owner_timezone="UTC",
+        task_draft_on=False,
         ui_tools=None,
         open_stream=model.open_stream,
     )

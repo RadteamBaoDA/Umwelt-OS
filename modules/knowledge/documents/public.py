@@ -246,6 +246,10 @@ from modules.knowledge.documents._ready import (
     _publish_document_ready,
     _publish_extraction_ready,
 )
+from modules.knowledge.documents._recent import (
+    DocumentBrief,
+    list_recent_source_documents,
+)
 from modules.knowledge.documents._scope import (
     _admit_document_scope,
     _document_scope,
@@ -441,6 +445,7 @@ __all__ = [
     "export_observation_evidence",
     "export_page",
     "export_timeline_evidence",
+    "DocumentBrief",
     "find_document_identity",
     "get_document",
     "get_document_cleanup_operation",
@@ -457,6 +462,7 @@ __all__ = [
     "list_indexable_workspace_ids",
     "list_news_document_projections",
     "list_provider_snapshots",
+    "list_recent_source_documents",
     "list_ready_document_workspace_ids",
     "list_ready_version_refs",
     "list_tool_documents",

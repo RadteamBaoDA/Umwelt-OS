@@ -368,8 +368,11 @@ def _assistant_metadata(
     route_decision: dict[str, Any] | None,
     uncited: bool = False,
     grounding: GroundingReport | None = None,
+    task_draft: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Message ``metadata_json`` kwargs: reasoning, UI parts, ``uncited``, grounding flags and the router audit trail (pure).
+    """Message ``metadata_json`` kwargs: reasoning, UI parts, ``uncited``, grounding flags, the router audit trail and the task draft (pure).
+
+    ``task_draft`` is the validated ``draft_scheduled_task`` card; it is display-only and saves nothing.
 
     ``grounding`` (None when the check did not run) adds ``unverified_numbers`` (count and examples) when any
     number was unmatched, ``misattributed_numbers`` (examples) when a figure sits under another row's
@@ -390,6 +393,7 @@ def _assistant_metadata(
         and not unverified
         and not partial
         and not misattributed
+        and not task_draft
     ):
         return {}
     return {
@@ -419,6 +423,7 @@ def _assistant_metadata(
                 if grounding and misattributed
                 else {}
             ),
+            **({"task_draft": task_draft} if task_draft else {}),
             # Audit trail of the external router's choice (category + renderer only, no content).
             **(
                 {
@@ -504,7 +509,14 @@ async def _persist_final(
             citations=valid_citations,
             response_id=c.response_id,
             revision_of_message_id=turn.revision_of_message_id,
-            **_assistant_metadata(st, generative_uis, env.ts.route_decision, uncited, grounding),
+            **_assistant_metadata(
+                st,
+                generative_uis,
+                env.ts.route_decision,
+                uncited,
+                grounding,
+                task_draft=env.ts.task_draft,
+            ),
         )
         session.add(assistant_msg)
         await session.flush()

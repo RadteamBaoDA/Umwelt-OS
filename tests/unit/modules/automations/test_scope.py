@@ -164,6 +164,7 @@ def _worker_patches(**overrides: object):
         "modules.automations.worker.scheduler.tick": AsyncMock(return_value=0),
         "modules.automations.worker.producers.sweep": AsyncMock(return_value=0),
         "modules.automations.worker.execution.fan_out_triggers": AsyncMock(return_value=0),
+        "modules.automations.worker._topic_settle.sweep": AsyncMock(return_value=0),
         "modules.automations.worker.execution.dispatch_runs": AsyncMock(return_value=1),
     }
     stack.update(overrides)  # type: ignore[arg-type]
@@ -243,6 +244,7 @@ async def test_owner_mismatch_skips_workspace_without_sweeps() -> None:
         "scheduler.tick",
         "producers.sweep",
         "execution.fan_out_triggers",
+        "_topic_settle.sweep",
         "execution.dispatch_runs",
     ):
         mocks[f"modules.automations.worker.{name}"].assert_not_called()

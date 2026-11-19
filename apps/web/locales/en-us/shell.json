@@ -94,6 +94,7 @@
   "permissions.mcpBody": "Connect outside tools and choose which of them may read your data, in chat or when collecting data.",
   "globalSettings": "Global settings",
   "sourcesNavigation": "Data sources sections",
+  "scheduledTasks": "Scheduled tasks",
   "statusline.label": "Status line",
   "statusline.modeNormal": "NORMAL",
   "statusline.modeInsert": "INSERT",

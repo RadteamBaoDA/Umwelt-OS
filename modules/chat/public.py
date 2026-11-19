@@ -214,6 +214,30 @@ from modules.chat._public.export import (
 from modules.chat._public.export import (
     validate_export_fences as validate_export_fences,
 )
+from modules.chat._public.scheduled_task_threads import (
+    append_task_message as append_task_message,
+)
+from modules.chat._public.scheduled_task_threads import (
+    delete_automation_conversation as delete_automation_conversation,
+)
+from modules.chat._public.scheduled_task_threads import (
+    ensure_automation_conversation as ensure_automation_conversation,
+)
+from modules.chat._public.scheduled_task_threads import (
+    scrub_task_messages as scrub_task_messages,
+)
+from modules.chat._public.scheduled_task_threads import (
+    withheld_brief_ids as withheld_brief_ids,
+)
+from modules.chat._public.scheduled_task_threads import (
+    withheld_topic_messages as withheld_topic_messages,
+)
+from modules.chat._public.web_search_command import (
+    CollectorSearchOutcome as CollectorSearchOutcome,
+)
+from modules.chat._public.web_search_command import (
+    search_web_for_collection as search_web_for_collection,
+)
 from modules.chat.citations import (
     validate_answer_citations,
     validate_citations,
@@ -225,6 +249,9 @@ from modules.chat.models import (
     Message,
     ResponseRun,
     StreamEvent,
+)
+from modules.chat.retrieval import (
+    _neutralize_angles as neutralize_angles,
 )
 from modules.chat.retrieval import (
     build_context,
@@ -277,6 +304,12 @@ from modules.chat.worker import (
 )
 
 __all__ = [
+    "CollectorSearchOutcome",
+    "search_web_for_collection",
+    "append_task_message",
+    "delete_automation_conversation",
+    "ensure_automation_conversation",
+    "scrub_task_messages",
     "AgentActivityLink",
     "AgentActivityRead",
     "AnswerContext",
@@ -344,6 +377,7 @@ __all__ = [
     "read_memory_export_origin",
     "revalidate_context_fence",
     "run_response_generation",
+    "neutralize_angles",
     "run_web_search",
     "search_conversations",
     "validate_answer_citations",

@@ -69,6 +69,7 @@ from modules.connectors.backends import (
 from modules.connectors.backends import (
     is_native_provider as _is_native_provider,
 )
+from modules.connectors.catalog import get_catalog_entry as get_catalog_entry
 from modules.connectors.data_shapes import (
     DataShape as DataShape,
 )
@@ -577,6 +578,14 @@ _LAZY_DTO_MODULES = {
     "ManagedNoChanges": "modules.connectors.collection_schemas",
     "GitHubBindingFence": "modules.connectors.github.schemas",
     "GitHubSegmentProof": "modules.connectors.github.schemas",
+    "TopicWatchConfig": "modules.connectors.topic_watch",
+    "provision_topic_watch_source": "modules.connectors.topic_watch",
+    "update_topic_watch_source": "modules.connectors.topic_watch",
+    "retire_topic_watch_source": "modules.connectors.topic_watch",
+    "request_topic_watch_collection": "modules.connectors.topic_watch",
+    "estimate_tokens": "modules.connectors.topic_watch_rules",
+    "token_cap": "modules.connectors.topic_watch_rules",
+    "refuse_managed_source": "modules.connectors.topic_watch_rules",
 }
 
 
@@ -616,6 +625,30 @@ if TYPE_CHECKING:
     )
     from modules.connectors.providers.manual_finance import (
         render_finance_markdown as render_finance_markdown,
+    )
+    from modules.connectors.topic_watch import (
+        TopicWatchConfig as TopicWatchConfig,
+    )
+    from modules.connectors.topic_watch import (
+        provision_topic_watch_source as provision_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        request_topic_watch_collection as request_topic_watch_collection,
+    )
+    from modules.connectors.topic_watch import (
+        retire_topic_watch_source as retire_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        update_topic_watch_source as update_topic_watch_source,
+    )
+    from modules.connectors.topic_watch_rules import (
+        estimate_tokens as estimate_tokens,
+    )
+    from modules.connectors.topic_watch_rules import (
+        refuse_managed_source as refuse_managed_source,
+    )
+    from modules.connectors.topic_watch_rules import (
+        token_cap as token_cap,
     )
 
 if TYPE_CHECKING:

@@ -227,20 +227,31 @@ async def test_auth_hashing_runs_off_loop(monkeypatch: pytest.MonkeyPatch) -> No
 
 async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     idents: list[int] = []
-    from modules.connectors.providers import rest
+    monkeypatch.setattr(feed_catalog, "_records_from_feed", _slow(idents, "page"))
+    monkeypatch.setattr(feed_catalog, "provider_feed_url", lambda _s: "https://example.test/feed")
 
-    page = SimpleNamespace(records=(), coverage="returned_snapshot")
-    monkeypatch.setattr(feed_catalog, "_records_from_feed", _slow(idents, page))
+    async def read(_url: str, _before_request: Any) -> bytes:
+        return b"<feed/>"
 
-    async def fetch(_url: str, **_kwargs: Any) -> Any:
-        return SimpleNamespace(body=b"<feed/>", etag=None, last_modified=None)
+    monkeypatch.setattr(feed_catalog, "_read_feed", read)
+    # YouTube now has its own target sweep; arXiv is the remaining single-feed path that parses records.
+    source = SimpleNamespace(provider="arxiv")
+    clock = iter(float(n) for n in range(0, 1000, 3))
+    # Skip the 3 s arXiv spacing; a module stand-in keeps the event loop's own clock untouched.
+    monkeypatch.setattr(feed_catalog, "time", SimpleNamespace(monotonic=lambda: next(clock)))
 
-    monkeypatch.setattr(rest, "fetch_bounded", fetch)
-    source = SimpleNamespace(
-        provider="youtube",
-        type="rss",
-        configuration={"youtube_channel_id": "UC" + "a" * 22, "history_mode": "returned_snapshot"},
-    )
+    class Session:
+        async def __aenter__(self) -> Session:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+        def begin(self) -> Session:
+            return self
+
+        async def scalar(self, *_args: object, **_kwargs: object) -> bool:
+            return True  # advisory lock granted
 
     async def allow_request() -> None:
         return None
@@ -249,7 +260,7 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
         feed_catalog.collect_provider_feed(  # type: ignore[arg-type]
             source,
             collected_at=datetime.now(UTC),
-            session_factory=None,
+            session_factory=Session,
             before_request=allow_request,
         )
     )

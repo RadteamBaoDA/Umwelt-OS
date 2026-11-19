@@ -1,5 +1,6 @@
 import { apiRequest, csrfHeaders, workspaceHeaders, workspaceTargetFor } from '@/core/api';
 import type { ApiResponse } from '@/core/api-contract';
+import type { components } from '@/core/api-types.gen';
 
 /**
  * Citation evidence reference pointing to an exact grounded revision chunk.
@@ -170,6 +171,10 @@ export interface ChatMessage {
   /** Follow-up question suggestions written after the answer settled; absent or empty when none. */
   suggestions?: string[];
   response_id: string | null;
+  /** Allowlisted scheduled-task fields (server `MessageRead.task`); null/absent for ordinary messages. */
+  task?: components['schemas']['DailyBriefMessageMeta'] | components['schemas']['TopicWatchMessageMeta'] | null;
+  /** Model-proposed scheduled task awaiting owner confirmation (server `MessageRead.task_draft`); never saved by the server. */
+  task_draft?: components['schemas']['ScheduledTaskDraft'] | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
   created_at: string;

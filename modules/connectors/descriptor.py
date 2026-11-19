@@ -18,6 +18,7 @@ class ConnectorsDescriptor(ModuleDescriptor):
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources", "ingestion")
     optional_dependencies: tuple[str, ...] = (
+        "chat",
         "knowledge.documents",
         "knowledge.entities",
         "knowledge.relationships",

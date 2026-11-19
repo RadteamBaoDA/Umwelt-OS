@@ -10,6 +10,10 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.chat import conversation_service
+from modules.chat._public.scheduled_task_threads import (
+    SCRUBBED_CONTENT,
+    is_withheld_task_message,
+)
 from modules.chat._routes.guards import (
     _message_mutation_digest,
     _message_reasoning,
@@ -29,7 +33,9 @@ from modules.chat.schemas import (
     SendMessageResponse,
     WebSearchOutcomeRead,
     parse_generative_ui_parts,
+    parse_task_message_meta,
 )
+from modules.chat.task_drafts import parse_task_draft
 
 
 def _message_reads(
@@ -37,21 +43,36 @@ def _message_reads(
     current_citations: list[Any],
     response_ids_by_user_message: dict[UUID, UUID],
     web_search_by_assistant: dict[UUID, WebSearchOutcomeRead],
+    withheld_brief_ids: frozenset[str] = frozenset(),
+    withheld_topic_keys: frozenset[str] = frozenset(),
 ) -> list[MessageRead]:
     """Translate stored messages into API DTOs using already-filtered current citations.
 
     Pure mapping: ``current_citations`` aligns one-to-one with ``messages_rows`` (strict zip).
-    The first generative-UI part is mirrored into ``generative_ui`` for older clients.
+    The first generative-UI part is mirrored into ``generative_ui`` for older clients. A scheduled-task
+    brief message whose :func:`task_brief_key` is in ``withheld_brief_ids`` (its sources are no longer
+    eligible, or its brief id is malformed) is returned with the scrub placeholder, no citations and
+    ``task=None``, so the copy fails closed. A topic-watch post is scrubbed the same way when its
+    :func:`topic_source_key` is in ``withheld_topic_keys`` (its Source is gone, inactive or local-only).
+    The ``task`` DTO alone uses the lenient
+    ``parse_task_message_meta``; the withhold decision never depends on it.
     """
+    task_metas = [parse_task_message_meta(getattr(m, "metadata_json", None)) for m in messages_rows]
+    withheld = [
+        is_withheld_task_message(
+            getattr(m, "metadata_json", None), withheld_brief_ids, withheld_topic_keys
+        )
+        for m in messages_rows
+    ]
     return [
         MessageRead(
             id=m.id,
             conversation_id=m.conversation_id,
             role=m.role,
-            content=m.content,
+            content=SCRUBBED_CONTENT if gone else m.content,
             client_request_id=m.client_request_id,
             model_identity=m.model_identity,
-            citations=citations,
+            citations=[] if gone else citations,
             response_id=m.response_id or response_ids_by_user_message.get(m.id),
             revision_of_message_id=m.revision_of_message_id,
             created_at=m.created_at,
@@ -61,11 +82,15 @@ def _message_reads(
             reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
             suggestions=_message_suggestions(getattr(m, "metadata_json", None)),
             uncited=_message_uncited(getattr(m, "metadata_json", None)),
+            task=None if gone else task,
+            task_draft=None if gone else parse_task_draft(getattr(m, "metadata_json", None)),
         )
-        for m, citations, parts in zip(
+        for m, citations, parts, task, gone in zip(
             messages_rows,
             current_citations,
             (parse_generative_ui_parts(getattr(m, "metadata_json", None)) for m in messages_rows),
+            task_metas,
+            withheld,
             strict=True,
         )
     ]

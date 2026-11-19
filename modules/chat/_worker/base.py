@@ -219,6 +219,47 @@ def _day_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> tupl
     return None
 
 
+_TASK_THREAD_DROPPED_KEYS = (
+    "selected_refs",
+    "selected_only",
+    "selection_fences",
+    "entity_ids",
+    "date_context",
+    "timezone",
+    "date",
+)
+
+
+def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> bool:
+    """Pin a scheduled-task thread's retrieval scope to the server-stored one; True when it applied.
+
+    A thread whose metadata has ``scheduled_task`` may only retrieve from the sources its posted briefs
+    used (``task_source_scope``, written by the scheduler, never by the client). The client-supplied
+    ``source_scope`` is overwritten in ``context`` so it cannot widen the scope, and every downstream reader
+    (retrieval and ``query_collected_data``) sees the same list. A missing or empty list means "no sources".
+    Malformed entries are dropped. Plain conversations are untouched and return False.
+
+    Every other client retrieval override is dropped too (``selected_refs``, ``selected_only``,
+    ``selection_fences``, ``entity_ids``, ``date_context``, ``timezone`` and a client day ``date``), so the
+    thread retrieves only from the pinned sources. Call this before ``_day_scope`` or any other reader of
+    ``context``; a day scope stored in conversation metadata may still apply afterwards.
+    """
+    meta = metadata or {}
+    if "scheduled_task" not in meta:
+        return False
+    raw = meta.get("task_source_scope")
+    pinned: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            pinned.append(str(UUID(str(item))))
+        except ValueError:
+            continue
+    context["source_scope"] = pinned
+    for key in _TASK_THREAD_DROPPED_KEYS:
+        context.pop(key, None)
+    return True
+
+
 async def is_run_cancelled(response_id: UUID, redis: Redis) -> bool:
     """Check whether a cancellation request has been registered in Redis for this response.
 

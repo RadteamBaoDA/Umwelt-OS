@@ -20,6 +20,7 @@ class ChatDescriptor(ModuleDescriptor):
     optional_dependencies: tuple[str, ...] = (
         "agents",
         "connectors",
+        "dashboard",
         "knowledge.observations",
         "knowledge.relationships",
         "knowledge.timeline",

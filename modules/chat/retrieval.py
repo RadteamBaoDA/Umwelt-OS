@@ -436,7 +436,7 @@ async def _collect_search_refs(
     scores, and extends ``warnings``. ``TypeError`` is re-raised; any other error is logged and
     reported as a warning. The worker commits before ``build_context`` so no locks are held.
 
-    Fail closed: when the scope is enforced (gadget turn) and empty, search is skipped, because the search
+    Fail closed: when the scope is enforced (gadget or scheduled-task-thread turn) and empty, search is skipped, because the search
     contract treats an empty ``source_ids`` as "no filter" and would read the whole workspace.
     """
     if request.source_scope_enforced and not request.source_scope:

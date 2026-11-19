@@ -22,6 +22,8 @@ import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
 import { focusCitations } from './chat-citation-focus';
 import { CitationPanel } from './citation-panel';
+import { isTaskBriefMessage } from './task-brief-message';
+import { isTaskTopicMessage } from './task-topic-message';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
@@ -51,6 +53,10 @@ const ToolRendering = dynamic(() => import('./generative-ui/components/tool-rend
 const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.SaveTemplateButton), {
   loading: () => <div aria-hidden="true" className="h-8 w-32" />,
 });
+
+const TaskDraftCard = dynamic(() => import('./task-draft-card').then((m) => m.TaskDraftCard));
+const TaskBriefMessage = dynamic(() => import('./task-brief-message').then((m) => m.TaskBriefMessage));
+const TaskTopicMessage = dynamic(() => import('./task-topic-message').then((m) => m.TaskTopicMessage));
 
 type WebReasonKey =
   | 'web.reason_not_configured'
@@ -481,6 +487,10 @@ function MessageBody({
 
       {isUser ? (
         <ChatMarkdown content={msg.content} locale={locale} />
+      ) : isTaskBriefMessage(msg) ? (
+        <TaskBriefMessage msg={msg} />
+      ) : isTaskTopicMessage(msg) ? (
+        <TaskTopicMessage msg={msg} />
       ) : (
         <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />
       )}
@@ -904,6 +914,8 @@ const TranscriptMessage = React.memo(function TranscriptMessage(props: Transcrip
             citations={msg.citations}
           />
         ))}
+
+      {!isUser && msg.task_draft ? <TaskDraftCard draft={msg.task_draft} /> : null}
 
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
     </div>

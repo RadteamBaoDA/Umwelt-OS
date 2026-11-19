@@ -52,6 +52,7 @@ from modules.chat.generative_ui.tool_specs import (
 from modules.chat.schemas import (
     AnswerContext,
 )
+from modules.chat.task_drafts import TOOL_DRAFT_SCHEDULED_TASK, ScheduledTaskDraft
 from modules.chat.templates import run_template_tool
 from modules.chat.todos import run_todo_tool
 from modules.chat.ui_theme import publish_theme
@@ -178,6 +179,9 @@ class _TurnState:
     input_requests: int = 0  # request_user_input calls answered or rejected so far this turn
     tool_rounds: int = 0  # continuing tool rounds so far (see MAX_TOOL_ROUNDS_PER_TURN)
     synth_done: bool = False  # the closing no-tools synthesis round was already opened this turn
+    task_draft: dict[str, Any] | None = (
+        None  # validated draft_scheduled_task card for the final message
+    )
 
 
 @dataclass(frozen=True)
@@ -495,6 +499,39 @@ class _RequestUserInputHandler:
         return outcome.tool_result
 
 
+class _TaskDraftHandler:
+    """``draft_scheduled_task``: validate a proposed task and attach it to this answer as a card. Writes nothing."""
+
+    data_round = True
+
+    def available(self, env: _ToolEnv) -> bool:
+        """Only in plain chat turns (see ``_task_draft_offered``)."""
+        return env.setup.task_draft_on
+
+    def round_cap(self, env: _ToolEnv) -> int:
+        """One draft per round."""
+        return 1
+
+    async def run(self, env: _ToolEnv, call: dict[str, str]) -> str:
+        """Validate the arguments; keep the last valid draft on the turn state for the message metadata.
+
+        Never touches the database or the automations module: the owner saves from the web editor.
+        Invalid arguments return ``status=invalid`` so the model can retry.
+        """
+        try:
+            draft = ScheduledTaskDraft.model_validate_json(call["arguments"] or "{}")
+        except ValueError as exc:
+            return json.dumps({"status": "invalid", "error": str(exc)[:300]})
+        env.ts.task_draft = draft.model_dump(mode="json")  # last valid call wins
+        return json.dumps(
+            {
+                "status": "shown_to_owner",
+                "saved": False,
+                "note": "Ask the owner to review the card and press Save. Do not claim it exists.",
+            }
+        )
+
+
 register_chat_tool([TOOL_READ_SKILL], _ReadSkillHandler())
 
 
@@ -508,3 +545,6 @@ register_chat_tool(LOCAL_DATA_TOOLS, _LocalDataHandler())
 
 
 register_chat_tool([TOOL_REQUEST_USER_INPUT], _RequestUserInputHandler())
+
+
+register_chat_tool([TOOL_DRAFT_SCHEDULED_TASK], _TaskDraftHandler())

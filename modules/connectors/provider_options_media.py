@@ -1,15 +1,173 @@
-"""Media-provider option validators split out of ``provider_options`` (pure, I/O-free).
+"""Media-provider option types and validators split out of ``provider_options`` to keep it small.
 
-``provider_options`` re-exports every name here, so existing imports keep working. Shared literals and
-helpers are imported lazily inside the functions that need them because ``provider_options`` imports this
-module at load time.
+Owns the media Literal/Annotated option types, the media option-name set and caps, the query cleaner shared by
+the validators, and every persistence-time validator for keyed and free media providers (TMDB, Trakt, OMDb, MAL,
+Google Books, Open Library, Gutendex, Podcast Index, ListenBrainz, Steam, IGDB, YouTube, ANN, MangaDex, RSS).
+Pure and I/O-free. ``provider_options`` re-exports every name, so callers keep importing from it.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
-from typing import Any, get_args
+from typing import Annotated, Any, Literal, get_args
+
+from pydantic import Field, StrictInt, StringConstraints
+
+MediaGenre = Literal[
+    "action",
+    "adventure",
+    "sci_fi",
+    "fantasy",
+    "romance",
+    "thriller",
+    "horror",
+    "comedy",
+    "drama",
+    "mystery",
+    "documentary",
+    "animation",
+    "slice_of_life",
+    "history",
+    "music",
+    "sports",
+    "non_fiction",
+    "programming",
+    "rpg",
+    "strategy",
+]
+MediaLanguage = Literal[
+    "en",
+    "vi",
+    "ja",
+    "ko",
+    "zh",
+    "zh-hk",
+    "fr",
+    "de",
+    "es",
+    "pt",
+    "it",
+    "ru",
+    "id",
+    "th",
+]
+MediaFormat = Literal[
+    "tv",
+    "tv_short",
+    "movie",
+    "special",
+    "ova",
+    "ona",
+    "music",
+    "manga",
+    "manhwa",
+    "manhua",
+    "novel",
+    "one_shot",
+    "ebook",
+    "audiobook",
+    "magazine",
+    "scripted",
+    "animation",
+    "reality",
+    "talk_show",
+    "documentary",
+    "album",
+    "single",
+    "ep",
+    "episodic",
+    "serial",
+    "main_game",
+    "dlc",
+    "expansion",
+    "remake",
+    "remaster",
+]
+AnimeSeason = Literal["winter", "spring", "summer", "fall"]
+MalAnimeRanking = Literal[
+    "all", "airing", "upcoming", "tv", "ova", "movie", "special", "bypopularity", "favorite"
+]
+MalMangaRanking = Literal[
+    "manga", "novels", "oneshots", "doujin", "manhwa", "manhua", "bypopularity", "favorite"
+]
+MAL_RANKING_DEFAULTS = {"mal_anime": "all", "mal_manga": "manga"}
+OpenLibraryMode = Literal["subject", "search", "recent"]
+MediaStatus = Literal["finished", "releasing", "not_yet_released", "cancelled", "hiatus"]
+AniListMode = Literal["airing", "trending", "updated"]
+AniListMangaCountry = Literal["JP", "KR", "CN", "TW", "ALL"]
+AniListMediaId = Annotated[StrictInt, Field(gt=0)]
+MediaTag = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$"
+    ),
+]
+ContentRating = Literal["safe", "pg", "pg_13", "r", "suggestive", "mature", "explicit", "clean"]
+YoutubeFilter = Literal["all", "long_form", "shorts"]
+MAX_MEDIA_COUNTRIES = 24
+MAX_MEDIA_GENRES = 16
+MAX_MEDIA_LANGUAGES = 16
+MAX_MEDIA_FORMATS = 16
+MAX_CONTENT_RATINGS = 8
+MEDIA_OPTION_NAMES = frozenset(
+    {
+        "media_country",
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "media_tags",
+        "release_year",
+        "anime_season",
+        "content_ratings",
+        "media_statuses",
+        "min_rating",
+        "exclude_adult",
+    }
+)
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_OPERATOR = re.compile(r"(?i)\b(?:site|domain|domainis|sourcelang|sourcecountry)\s*:")
+
+
+def clean_query(value: str) -> str:
+    """Strip control characters, fold whitespace and refuse operators that bypass the enum selectors.
+
+    Used for ``gdelt_query`` and ``nvd_keyword``. The result is URL-encoded by the builders, so this guards
+    query semantics (source/domain operators), not injection.
+
+    Raises:
+        ValueError: when the text carries a ``site:``/``domain:``/``sourcelang:``/``sourcecountry:`` operator.
+    """
+    cleaned = " ".join(_CONTROL.sub(" ", value).split())
+    if _OPERATOR.search(cleaned):
+        raise ValueError("Use the selectors instead of source operators in the query")
+    return cleaned
+
+
+def _validate_media_options(cfg: Mapping[str, Any]) -> None:
+    """Validate bounded numeric media option ranges (``min_rating`` and ``release_year``).
+
+    Raises:
+        ValueError: when ``min_rating`` is non-finite or outside ``[0.0, 100.0]``, or ``release_year``
+            is not an integer inside ``[1800, 2100]``.
+    """
+    min_rating = cfg.get("min_rating")
+    if min_rating is not None:
+        if (
+            isinstance(min_rating, bool)
+            or not isinstance(min_rating, (int, float))
+            or not math.isfinite(float(min_rating))
+            or not 0.0 <= float(min_rating) <= 100.0
+        ):
+            raise ValueError("min_rating must be a finite number between 0 and 100")
+    release_year = cfg.get("release_year")
+    if release_year is not None and (
+        type(release_year) is not int or not 1800 <= release_year <= 2100
+    ):
+        raise ValueError("release_year must be between 1800 and 2100")
 
 
 def _validate_media_provider_options(provider: str, cfg: Mapping[str, Any]) -> None:
@@ -142,8 +300,6 @@ def validate_youtube_api_options(cfg: Mapping[str, Any]) -> None:
 
 def validate_podcast_index_options(cfg: Mapping[str, Any]) -> None:
     """Validate the documented recent-feed and term-search query shapes before storing a scope."""
-    from modules.connectors.provider_options import clean_query
-
     query = cfg.get("podcast_index_query")
     recent = (
         "podcast_index_languages",
@@ -207,12 +363,6 @@ def _validate_game_options(provider: str, cfg: Mapping[str, Any]) -> None:
 
 def validate_mal_target(provider: str, cfg: Mapping[str, Any]) -> None:
     """Reject ranking and season targets incompatible with the selected MAL v2 endpoint."""
-    from modules.connectors.provider_options import (
-        AnimeSeason,
-        MalAnimeRanking,
-        MalMangaRanking,
-    )
-
     mode = cfg.get("mal_mode", "ranking")
     ranking = cfg.get("mal_ranking_type")
     year, season = cfg.get("mal_season_year"), cfg.get("mal_season")
@@ -238,8 +388,6 @@ def validate_mal_target(provider: str, cfg: Mapping[str, Any]) -> None:
 
 def validate_google_books_target(cfg: Mapping[str, Any]) -> None:
     """Require bounded query or subject text and validate Google Books search filter modes."""
-    from modules.connectors.provider_options import _CONTROL
-
     query, subject = cfg.get("google_books_query"), cfg.get("google_books_subject")
     if query is None and subject is None:
         raise ValueError("Google Books requires a query or subject")

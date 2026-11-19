@@ -51,14 +51,34 @@ async def delete_conversation(
     never commits; the route or owning service commits after its unit of work.
     """
 
-    from modules.agents.public import purge_conversation_actions
-    from modules.chat.scope import multi_workspace_enabled, owner_default_scope
-    from modules.memory.public import lock_export_privacy
+    from modules.chat.scope import owner_default_scope
 
     try:
         scope = await owner_default_scope(session, owner_id)
     except (HTTPException, DomainError):
         return False
+    return await delete_conversation_in_scope(
+        session, conversation_id, scope, skip_pinned=skip_pinned
+    )
+
+
+async def delete_conversation_in_scope(
+    session: AsyncSession,
+    conversation_id: UUID,
+    scope: Scope,
+    *,
+    skip_pinned: bool = False,
+) -> bool:
+    """Delete one conversation of ``scope.workspace_id`` inside the caller's transaction.
+
+    Same lock order and cascade as :func:`delete_conversation` (Memory privacy fence, conversation
+    parent, then Agent rows) but the workspace is the caller's, not the owner's default. Returns
+    False when the row is absent from that workspace or skipped by ``skip_pinned``. Never commits.
+    """
+    from modules.agents.public import purge_conversation_actions
+    from modules.chat.scope import multi_workspace_enabled
+    from modules.memory.public import lock_export_privacy
+
     await lock_export_privacy(session, scope.workspace_id)
     conversation = await session.scalar(
         _select(Conversation)

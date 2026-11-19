@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import (
     AwareDatetime,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     HttpUrl,
@@ -25,6 +26,9 @@ from pydantic import (
 )
 
 from core.workspaces.schemas import AccessFence
+from modules.connectors.backends import (
+    TOPIC_WATCH_FIELDS as TOPIC_WATCH_FIELDS,
+)
 from modules.connectors.backends import (
     is_native_provider as _is_native_provider,
 )
@@ -221,6 +225,17 @@ class CoinGeckoAsset(BaseModel):
         return self
 
 
+def _lower_host(value: object) -> object:
+    """Strip and lowercase a hostname before the pattern check so "EXAMPLE.com" is accepted."""
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+# Lowercased hostname for Topic watch site filters (dot-boundary suffix match happens in the collector).
+SiteHost = Annotated[
+    str, BeforeValidator(_lower_host), StringConstraints(max_length=253, pattern=r"^[a-z0-9.-]+$")
+]
+
+
 class ConnectorConfig(BaseModel):
     """Validate bounded source scopes, per-provider mappings, timezone, and schedule settings.
 
@@ -370,6 +385,17 @@ class ConnectorConfig(BaseModel):
     job_min_salary_usd: StrictInt | None = Field(default=None, ge=0, le=20000)
     coin_ids: tuple[CoinId, ...] | None = Field(default=None, min_length=1, max_length=MAX_COINS)
     kp_min: float | None = Field(default=None, ge=0, le=9)
+    # Topic watch scope (the registry requires topic, max items and token budget on that provider only).
+    topic_watch_topic: str | None = Field(default=None, min_length=1, max_length=500)
+    topic_watch_keep_rule: str | None = Field(default=None, max_length=500)
+    topic_watch_languages: list[Annotated[str, StringConstraints(pattern=r"^[a-z]{2}$")]] | None = (
+        Field(default=None, max_length=4)
+    )
+    topic_watch_include_sites: list[SiteHost] | None = Field(default=None, max_length=10)
+    topic_watch_exclude_sites: list[SiteHost] | None = Field(default=None, max_length=10)
+    topic_watch_max_items: StrictInt | None = Field(default=None, ge=1, le=10)
+    topic_watch_token_budget: StrictInt | None = Field(default=None, ge=1, le=200_000)
+    topic_watch_model_role: Literal["background", "chat", "brief"] | None = None
     advisory_min_level: StrictInt | None = Field(default=None, ge=1, le=4)
     # Multi-dimensional media filter options & YouTube scope upgrades (all default to None).
     media_country: IsoCountry | None = None

@@ -50,7 +50,7 @@ WRITERS = {
     ("modules/agents/_public/cleanup.py", "_cleanup_unavailable_marker"),
     ("modules/agents/_public/cleanup.py", "_cleanup_phase_a"),
     ("modules/agents/_public/cleanup.py", "_cleanup_phase_b"),
-    ("modules/chat/_public/conversations.py", "delete_conversation"),
+    ("modules/chat/_public/conversations.py", "delete_conversation_in_scope"),
     ("modules/chat/_public/cleanup.py", "purge_document_copied_evidence_page"),
     ("modules/chat/_worker/purge.py", "_purge_expired_conversations"),
     ("modules/chat/_worker/purge.py", "_purge_expired_activity_links"),

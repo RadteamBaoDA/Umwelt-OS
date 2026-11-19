@@ -21,7 +21,7 @@ class DashboardDescriptor(ModuleDescriptor):
         "notifications",
         "knowledge.documents",
     )
-    optional_dependencies: tuple[str, ...] = ("connectors",)
+    optional_dependencies: tuple[str, ...] = ("chat", "connectors", "knowledge.observations")
     scheduled_jobs: tuple[str, ...] = ("run_scheduled_brief", "run_scheduled_highlights")
     provides: tuple[str, ...] = ("dashboards", "gadget_definitions", "daily_context", "daily_brief")
     requires: tuple[str, ...] = ("sources", "world_observations")

@@ -247,10 +247,7 @@ async def fetch_bounded(
     Optional ``on_bad_request`` and ``on_forbidden`` classifiers receive bounded 400 and 403 bodies,
     respectively, and may raise typed, redacted provider errors.
     """
-    # Several public APIs reject UA-less clients; caller headers (e.g. SEC's User-Agent) win, case-insensitively.
-    merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
-    if not any(name.lower() == "user-agent" for name in merged):
-        merged["User-Agent"] = DEFAULT_USER_AGENT
+    merged = _default_headers(headers)
     method, post_body = _prepare_request_body(merged, json_body, request_body, request_content_type)
     current = url
     first_origin = _origin(url)
@@ -314,6 +311,18 @@ async def fetch_bounded(
                     _rate_limit_remaining(response.headers),
                 )
     raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
+
+
+def _default_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    """Add compression and a default User-Agent to the caller's headers.
+
+    Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
+    User-Agent) always win, compared case-insensitively.
+    """
+    merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
+    if not any(name.lower() == "user-agent" for name in merged):
+        merged["User-Agent"] = DEFAULT_USER_AGENT
+    return merged
 
 
 async def _raise_http_error(

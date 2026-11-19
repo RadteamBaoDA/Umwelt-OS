@@ -21,74 +21,62 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 from urllib.parse import quote, urlencode
 
-from pydantic import Field, StrictInt, StringConstraints
+from pydantic import StringConstraints
 
-from modules.connectors.provider_options_filters import (
-    filter_media_records as filter_media_records,
-)
-from modules.connectors.provider_options_filters import (
-    filter_records as filter_records,
-)
-from modules.connectors.provider_options_filters import (
-    in_region as in_region,
-)
-from modules.connectors.provider_options_media import (
+from modules.connectors.provider_options_media import (  # isort: skip
+    MAL_RANKING_DEFAULTS as MAL_RANKING_DEFAULTS,
+    MAX_CONTENT_RATINGS as MAX_CONTENT_RATINGS,
+    MAX_MEDIA_COUNTRIES as MAX_MEDIA_COUNTRIES,
+    MAX_MEDIA_FORMATS as MAX_MEDIA_FORMATS,
+    MAX_MEDIA_GENRES as MAX_MEDIA_GENRES,
+    MAX_MEDIA_LANGUAGES as MAX_MEDIA_LANGUAGES,
+    MEDIA_OPTION_NAMES as MEDIA_OPTION_NAMES,
     TMDB_DISCOVER_OPTIONS as TMDB_DISCOVER_OPTIONS,
-)
-from modules.connectors.provider_options_media import (
+    AniListMangaCountry as AniListMangaCountry,
+    AniListMediaId as AniListMediaId,
+    AniListMode as AniListMode,
+    AnimeSeason as AnimeSeason,
+    ContentRating as ContentRating,
+    MalAnimeRanking as MalAnimeRanking,
+    MalMangaRanking as MalMangaRanking,
+    MediaFormat as MediaFormat,
+    MediaGenre as MediaGenre,
+    MediaLanguage as MediaLanguage,
+    MediaStatus as MediaStatus,
+    MediaTag as MediaTag,
+    OpenLibraryMode as OpenLibraryMode,
+    YoutubeFilter as YoutubeFilter,
     _validate_game_options as _validate_game_options,
-)
-from modules.connectors.provider_options_media import (
     _validate_gutendex_options as _validate_gutendex_options,
-)
-from modules.connectors.provider_options_media import (
     _validate_keyed_media_provider_options as _validate_keyed_media_provider_options,
-)
-from modules.connectors.provider_options_media import (
+    _validate_media_options as _validate_media_options,
     _validate_media_provider_options as _validate_media_provider_options,
-)
-from modules.connectors.provider_options_media import (
     _validate_openlibrary_options as _validate_openlibrary_options,
-)
-from modules.connectors.provider_options_media import (
     _validate_rss_movie_options as _validate_rss_movie_options,
-)
-from modules.connectors.provider_options_media import (
     _validate_tmdb_certification as _validate_tmdb_certification,
-)
-from modules.connectors.provider_options_media import (
+    clean_query as clean_query,
     validate_google_books_target as validate_google_books_target,
-)
-from modules.connectors.provider_options_media import (
     validate_igdb_options as validate_igdb_options,
-)
-from modules.connectors.provider_options_media import (
     validate_listenbrainz_options as validate_listenbrainz_options,
-)
-from modules.connectors.provider_options_media import (
     validate_mal_target as validate_mal_target,
-)
-from modules.connectors.provider_options_media import (
     validate_omdb_search_filters as validate_omdb_search_filters,
-)
-from modules.connectors.provider_options_media import (
     validate_podcast_index_options as validate_podcast_index_options,
-)
-from modules.connectors.provider_options_media import (
     validate_steam_options as validate_steam_options,
-)
-from modules.connectors.provider_options_media import (
     validate_tmdb_options as validate_tmdb_options,
-)
-from modules.connectors.provider_options_media import (
     validate_youtube_api_options as validate_youtube_api_options,
+    wikidata_selector_sets as wikidata_selector_sets,
+)
+
+from modules.connectors.provider_options_filters import (  # isort: skip
+    filter_media_records as filter_media_records,
+    filter_records as filter_records,
+    in_region as in_region,
 )
 
 if TYPE_CHECKING:
@@ -234,118 +222,6 @@ IsoCountry = Literal[
     "AT",
     "AR",
 ]
-MediaGenre = Literal[
-    "action",
-    "adventure",
-    "sci_fi",
-    "fantasy",
-    "romance",
-    "thriller",
-    "horror",
-    "comedy",
-    "drama",
-    "mystery",
-    "documentary",
-    "animation",
-    "slice_of_life",
-    "history",
-    "music",
-    "sports",
-    "non_fiction",
-    "programming",
-    "rpg",
-    "strategy",
-]
-MediaLanguage = Literal[
-    "en",
-    "vi",
-    "ja",
-    "ko",
-    "zh",
-    "zh-hk",
-    "fr",
-    "de",
-    "es",
-    "pt",
-    "it",
-    "ru",
-    "id",
-    "th",
-]
-MediaFormat = Literal[
-    "tv",
-    "tv_short",
-    "movie",
-    "special",
-    "ova",
-    "ona",
-    "music",
-    "manga",
-    "manhwa",
-    "manhua",
-    "novel",
-    "one_shot",
-    "ebook",
-    "audiobook",
-    "magazine",
-    "scripted",
-    "animation",
-    "reality",
-    "talk_show",
-    "documentary",
-    "album",
-    "single",
-    "ep",
-    "episodic",
-    "serial",
-    "main_game",
-    "dlc",
-    "expansion",
-    "remake",
-    "remaster",
-]
-AnimeSeason = Literal["winter", "spring", "summer", "fall"]
-MalAnimeRanking = Literal[
-    "all", "airing", "upcoming", "tv", "ova", "movie", "special", "bypopularity", "favorite"
-]
-MalMangaRanking = Literal[
-    "manga", "novels", "oneshots", "doujin", "manhwa", "manhua", "bypopularity", "favorite"
-]
-MAL_RANKING_DEFAULTS = {"mal_anime": "all", "mal_manga": "manga"}
-OpenLibraryMode = Literal["subject", "search", "recent"]
-MediaStatus = Literal["finished", "releasing", "not_yet_released", "cancelled", "hiatus"]
-AniListMode = Literal["airing", "trending", "updated"]
-AniListMangaCountry = Literal["JP", "KR", "CN", "TW", "ALL"]
-AniListMediaId = Annotated[StrictInt, Field(gt=0)]
-MediaTag = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$"
-    ),
-]
-ContentRating = Literal["safe", "pg", "pg_13", "r", "suggestive", "mature", "explicit", "clean"]
-YoutubeFilter = Literal["all", "long_form", "shorts"]
-MAX_MEDIA_COUNTRIES = 24
-MAX_MEDIA_GENRES = 16
-MAX_MEDIA_LANGUAGES = 16
-MAX_MEDIA_FORMATS = 16
-MAX_CONTENT_RATINGS = 8
-MEDIA_OPTION_NAMES = frozenset(
-    {
-        "media_country",
-        "media_countries",
-        "media_genres",
-        "media_languages",
-        "media_formats",
-        "media_tags",
-        "release_year",
-        "anime_season",
-        "content_ratings",
-        "media_statuses",
-        "min_rating",
-        "exclude_adult",
-    }
-)
 WbIndicator = Literal["gdp", "gdp_growth", "inflation_cpi", "unemployment", "population", "fdi"]
 # Union of every currency any FX provider below lists; per-provider membership is checked in validate_options.
 FxCurrency = Literal[
@@ -876,8 +752,6 @@ _GDELT_WINDOWS = {
     "7d": timedelta(days=7),
 }
 _LEVEL = re.compile(r"\bLevel\s*([1-4])\b", re.IGNORECASE)
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-_OPERATOR = re.compile(r"(?i)\b(?:site|domain|domainis|sourcelang|sourcecountry)\s*:")
 _COORDS = (
     re.compile(r"Location:\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)"),
     re.compile(r"Coordinates:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)"),
@@ -889,48 +763,10 @@ def option_fields(provider: str) -> frozenset[str]:
     return frozenset(OPTION_FIELDS.get(provider, ()))
 
 
-def clean_query(value: str) -> str:
-    """Strip control characters, fold whitespace and refuse operators that bypass the enum selectors.
-
-    Used for ``gdelt_query`` and ``nvd_keyword``. The result is URL-encoded by the builders, so this guards
-    query semantics (source/domain operators), not injection.
-
-    Raises:
-        ValueError: when the text carries a ``site:``/``domain:``/``sourcelang:``/``sourcecountry:`` operator.
-    """
-    cleaned = " ".join(_CONTROL.sub(" ", value).split())
-    if _OPERATOR.search(cleaned):
-        raise ValueError("Use the selectors instead of source operators in the query")
-    return cleaned
-
-
 def _ordered(literal: Any, chosen: Iterable[str]) -> list[str]:
     """Deduplicate ``chosen`` and put it in the Literal's declared order so equal choices give equal URLs."""
     wanted = set(chosen)
     return [item for item in get_args(literal) if item in wanted]
-
-
-def _validate_media_options(cfg: Mapping[str, Any]) -> None:
-    """Validate bounded numeric media option ranges (``min_rating`` and ``release_year``).
-
-    Raises:
-        ValueError: when ``min_rating`` is non-finite or outside ``[0.0, 100.0]``, or ``release_year``
-            is not an integer inside ``[1800, 2100]``.
-    """
-    min_rating = cfg.get("min_rating")
-    if min_rating is not None:
-        if (
-            isinstance(min_rating, bool)
-            or not isinstance(min_rating, (int, float))
-            or not math.isfinite(float(min_rating))
-            or not 0.0 <= float(min_rating) <= 100.0
-        ):
-            raise ValueError("min_rating must be a finite number between 0 and 100")
-    release_year = cfg.get("release_year")
-    if release_year is not None and (
-        type(release_year) is not int or not 1800 <= release_year <= 2100
-    ):
-        raise ValueError("release_year must be between 1800 and 2100")
 
 
 def _validate_tvmaze_options(cfg: Mapping[str, Any]) -> None:

@@ -114,6 +114,12 @@ try {
       }
       $project = 'bbd-os-test-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
       $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml', '--profile', 's3')
+      # Opt-in real-data search for the topic-watch e2e: E2E_REAL_SEARCH=1 starts the keyless SearXNG service and admits
+      # the compose bridge range for web-search endpoints only; otherwise the public-address guard stays strict.
+      if ($env:E2E_REAL_SEARCH -eq '1') {
+        $compose += @('--profile', 'real-search')
+        $env:E2E_WEB_SEARCH_ALLOWED_CIDRS = '["172.16.0.0/12"]'
+      }
       $previousWebPort = $env:WEB_PORT
       $previousApiTestPort = $env:API_TEST_PORT
       $previousTestPostgresPort = $env:TEST_POSTGRES_PORT
@@ -232,6 +238,7 @@ try {
         else { $env:PLAYWRIGHT_EXTERNAL_SERVER = $previousExternalServer }
         if ($null -eq $previousAllowPublic) { Remove-Item Env:E2E_ALLOW_PUBLIC_PROVIDERS -ErrorAction SilentlyContinue }
         else { $env:E2E_ALLOW_PUBLIC_PROVIDERS = $previousAllowPublic }
+        Remove-Item Env:E2E_WEB_SEARCH_ALLOWED_CIDRS -ErrorAction SilentlyContinue
         if ($null -eq $previousE2eLocale) { Remove-Item Env:E2E_LOCALE -ErrorAction SilentlyContinue }
         else { $env:E2E_LOCALE = $previousE2eLocale }
       }

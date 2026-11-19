@@ -289,7 +289,9 @@ class QuotaWindowPolicy:
 
     policy_key: str
     budget_kind: Literal["provider", "credential", "ip"]
-    window: Literal["second", "minute", "day", "day_pacific", "month"]
+    window: Literal[
+        "second", "minute", "day", "day_pacific", "month"
+    ]  # day_pacific: midnight-to-midnight America/Los_Angeles (YouTube)
     unit: Literal["http_calls", "request_weight", "call_credits"]
     limit_units: int | None
     cost_per_send: int = 1

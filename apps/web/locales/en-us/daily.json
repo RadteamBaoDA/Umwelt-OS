@@ -26,6 +26,10 @@
   "day.goals": "Active goals",
   "day.stories": "Stories",
   "day.events": "Events",
+  "day.markets": "Markets",
+  "day.weather": "Weather",
+  "day.hazards": "Hazards",
+  "day.sourceHealth": "Source health",
   "itemCount": "{count, plural, one {# item} other {# items}}",
   "emptyWidget": "Nothing for this day.",
   "futureNoNews": "News is not generated for future days.",
@@ -40,5 +44,6 @@
   "watchlist.empty": "Watchlist empty",
   "watchlist.emptyDetail": "Add a rule to start watching for matches.",
   "streamCount": "{count, plural, one {# record} other {# records}}",
+  "openFullBrief": "Open full brief",
   "foot.summary": "Tasks due {tasks} · Active goals {goals}"
 }

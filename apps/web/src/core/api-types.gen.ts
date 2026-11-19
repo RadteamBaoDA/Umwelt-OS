@@ -760,6 +760,9 @@ export interface paths {
         /**
          * Delete Automation
          * @description Soft-delete a rule (history retained) when the expected revision matches.
+         *
+         *     For a Topic watch, ``purge_items=true`` also deletes the items it collected; by default its
+         *     Source is archived and the items stay searchable.
          */
         delete: operations["delete_automation_api_v1_automations__automation_id__delete"];
         options?: never;
@@ -1887,6 +1890,7 @@ export interface paths {
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
          *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     A Topic watch Source is refused (409 ``managed_by_scheduled_task``) before anything is paused.
          */
         post: operations["deactivate_source_api_v1_connectors__source_id__deactivate_post"];
         delete?: never;
@@ -2408,7 +2412,8 @@ export interface paths {
          *         response: HTTP response object for no-store header attachment.
          *
          *     Returns:
-         *         ConversationDetailRead schema containing conversation metadata and messages.
+         *         ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task
+         *         brief messages whose sources are no longer eligible come back as the scrub placeholder.
          *
          *     Raises:
          *         HTTPException: 404 if conversation is not found.
@@ -7285,7 +7290,7 @@ export interface components {
          */
         AutomationCreate: {
             /** Actions */
-            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"])[];
+            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"] | components["schemas"]["CollectSourceAction"])[];
             /** Conditions */
             conditions?: components["schemas"]["Condition"][];
             /**
@@ -7304,7 +7309,7 @@ export interface components {
          */
         AutomationDefinition: {
             /** Actions */
-            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"])[];
+            actions: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"] | components["schemas"]["CollectSourceAction"])[];
             /** Conditions */
             conditions?: components["schemas"]["Condition"][];
             /** Trigger */
@@ -7345,6 +7350,8 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /** Next Run At */
+            next_run_at?: string | null;
             /** Revision */
             revision: number;
             /** Trigger */
@@ -7363,7 +7370,7 @@ export interface components {
          */
         AutomationUpdate: {
             /** Actions */
-            actions?: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"])[] | null;
+            actions?: (components["schemas"]["RunAgentAction"] | components["schemas"]["CreateTaskAction"] | components["schemas"]["CreateNotificationAction"] | components["schemas"]["GenerateBriefAction"] | components["schemas"]["CallWebhookAction"] | components["schemas"]["CollectSourceAction"])[] | null;
             /** Conditions */
             conditions?: components["schemas"]["Condition"][] | null;
             /** Enabled */
@@ -8418,6 +8425,33 @@ export interface components {
             items: components["schemas"]["Coin"][];
         };
         /**
+         * CollectSourceAction
+         * @description Run the rule's Topic watch collection (web search, bounded fetch, summary) into its own Source.
+         *
+         *     ``source_id`` and ``consent`` are server-assigned on save (client values are discarded);
+         *     ``grant_consent_est_tokens`` is request-only: the owner accepts that per-run token estimate and it
+         *     is never stored.
+         */
+        CollectSourceAction: {
+            consent?: components["schemas"]["TopicConsent"] | null;
+            /** Grant Consent Est Tokens */
+            grant_consent_est_tokens?: number | null;
+            /**
+             * Model Role
+             * @default background
+             * @enum {string}
+             */
+            model_role: "background" | "chat" | "brief";
+            /** Source Id */
+            source_id?: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "collect_source";
+            watch: components["schemas"]["TopicWatchSpec"];
+        };
+        /**
          * CollectionAdmissionRead
          * @description Return the request and fenced admission token that later managed calls must carry.
          */
@@ -8947,6 +8981,22 @@ export interface components {
             tmdb_language?: string | null;
             /** Tmdb Mode */
             tmdb_mode?: ("now_playing" | "upcoming" | "changes" | "airing_today" | "on_the_air") | null;
+            /** Topic Watch Exclude Sites */
+            topic_watch_exclude_sites?: string[] | null;
+            /** Topic Watch Include Sites */
+            topic_watch_include_sites?: string[] | null;
+            /** Topic Watch Keep Rule */
+            topic_watch_keep_rule?: string | null;
+            /** Topic Watch Languages */
+            topic_watch_languages?: string[] | null;
+            /** Topic Watch Max Items */
+            topic_watch_max_items?: number | null;
+            /** Topic Watch Model Role */
+            topic_watch_model_role?: ("background" | "chat" | "brief") | null;
+            /** Topic Watch Token Budget */
+            topic_watch_token_budget?: number | null;
+            /** Topic Watch Topic */
+            topic_watch_topic?: string | null;
             /** Trakt Calendar Days */
             trakt_calendar_days?: number | null;
             /** Trakt Certifications */
@@ -9497,6 +9547,25 @@ export interface components {
         CsrfResponse: {
             /** Csrftoken */
             csrfToken: string;
+        };
+        /**
+         * DailyBriefMessageMeta
+         * @description Allowlisted view of the Daily brief keys stored in a message's private ``metadata_json``.
+         */
+        DailyBriefMessageMeta: {
+            /** Brief Citations */
+            brief_citations?: components["schemas"]["TaskBriefCitationRead"][];
+            /** Brief Id */
+            brief_id: string;
+            /** Brief Revision */
+            brief_revision: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            task_kind: "daily_brief";
         };
         /**
          * DailyContext
@@ -11585,11 +11654,26 @@ export interface components {
          */
         GenerateBriefAction: {
             /**
+             * Deliver Chat
+             * @default false
+             */
+            deliver_chat: boolean;
+            /** Extra Instruction */
+            extra_instruction?: string | null;
+            /**
+             * Model Role
+             * @default brief
+             * @enum {string}
+             */
+            model_role: "brief" | "chat" | "background";
+            /**
              * Scope
              * @default daily
              * @constant
              */
             scope: "daily";
+            /** Sections */
+            sections?: ("stories" | "markets" | "weather" | "hazards" | "agenda" | "source_health")[];
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -13428,6 +13512,9 @@ export interface components {
             role: string;
             /** Suggestions */
             suggestions?: string[];
+            /** Task */
+            task?: (components["schemas"]["DailyBriefMessageMeta"] | components["schemas"]["TopicWatchMessageMeta"]) | null;
+            task_draft?: components["schemas"]["ScheduledTaskDraft"] | null;
             /**
              * Uncited
              * @default false
@@ -15711,6 +15798,38 @@ export interface components {
             type: "schedule";
         };
         /**
+         * ScheduledTaskDraft
+         * @description Model-proposed Daily brief task shown to the owner as a card; never persisted as an automation by the server.
+         */
+        ScheduledTaskDraft: {
+            /**
+             * Days
+             * @default daily
+             * @enum {string}
+             */
+            days: "daily" | "weekdays";
+            /** Extra Instruction */
+            extra_instruction?: string | null;
+            /**
+             * Kind
+             * @constant
+             */
+            kind: "daily_brief";
+            /**
+             * Model Role
+             * @default brief
+             * @enum {string}
+             */
+            model_role: "brief" | "chat" | "background";
+            /** Sections */
+            sections?: ("stories" | "markets" | "weather" | "hazards" | "agenda" | "source_health")[];
+            /**
+             * Time
+             * @description Local HH:MM
+             */
+            time: string;
+        };
+        /**
          * SearchFilters
          * @description Bound source, date, and content-type filters for a search request.
          */
@@ -16509,6 +16628,22 @@ export interface components {
             visualization?: string | null;
         };
         /**
+         * TaskBriefCitationRead
+         * @description One citation of a brief posted by a scheduled task.
+         */
+        TaskBriefCitationRead: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Ref */
+            ref: number;
+            /** Source Ids */
+            source_ids?: string[];
+            /** Title */
+            title: string;
+        };
+        /**
          * TaskCreate
          * @description Payload contract for creating an owner task.
          */
@@ -16842,6 +16977,21 @@ export interface components {
             todos: components["schemas"]["TodoItem"][];
         };
         /**
+         * TopicConsent
+         * @description One-time owner consent bound to a definition hash; written only by the server.
+         */
+        TopicConsent: {
+            /** Est Tokens */
+            est_tokens: number;
+            /**
+             * Granted At
+             * Format: date-time
+             */
+            granted_at: string;
+            /** Hash */
+            hash: string;
+        };
+        /**
          * TopicCreate
          * @description Validate topic creation fields and document profile input bounds.
          */
@@ -16933,6 +17083,133 @@ export interface components {
             name?: string | null;
             /** Weight */
             weight?: number | null;
+        };
+        /**
+         * TopicWatchItemRead
+         * @description One collected item of a Topic watch post; every field is untrusted text shown as plain text.
+         */
+        TopicWatchItemRead: {
+            /** Document Id */
+            document_id?: string | null;
+            /** Site */
+            site?: string | null;
+            /** Story Id */
+            story_id?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Title */
+            title: string;
+            /** Url */
+            url?: string | null;
+        };
+        /**
+         * TopicWatchMessageMeta
+         * @description Allowlisted view of the Topic watch keys stored in a message's private ``metadata_json``.
+         *
+         *     ``source_id`` is deliberately absent: it is stored for withholding only and never sent to clients.
+         */
+        TopicWatchMessageMeta: {
+            /** Automation Id */
+            automation_id?: string | null;
+            /**
+             * Coverage
+             * @enum {string}
+             */
+            coverage: "complete" | "partial";
+            /** Items */
+            items?: components["schemas"]["TopicWatchItemRead"][];
+            /** Run Id */
+            run_id: string;
+            stats?: components["schemas"]["TopicWatchStatsRead"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            task_kind: "topic_watch";
+        };
+        /**
+         * TopicWatchSpec
+         * @description What a Topic watch looks for: the topic, an optional keep rule, languages, sites and item cap.
+         */
+        TopicWatchSpec: {
+            /** Exclude Sites */
+            exclude_sites?: string[];
+            /** Include Sites */
+            include_sites?: string[];
+            /** Keep Rule */
+            keep_rule?: string | null;
+            /** Languages */
+            languages?: string[];
+            /**
+             * Max Items
+             * @default 5
+             */
+            max_items: number;
+            /** Topic */
+            topic: string;
+        };
+        /**
+         * TopicWatchStatsRead
+         * @description Bounded run telemetry of a Topic watch post (counts plus an optional partial-run reason).
+         */
+        TopicWatchStatsRead: {
+            /**
+             * Blocked
+             * @default 0
+             */
+            blocked: number;
+            /**
+             * Duplicates
+             * @default 0
+             */
+            duplicates: number;
+            /**
+             * Failed
+             * @default 0
+             */
+            failed: number;
+            /**
+             * Fetched
+             * @default 0
+             */
+            fetched: number;
+            /**
+             * Items
+             * @default 0
+             */
+            items: number;
+            /**
+             * Off Topic
+             * @default 0
+             */
+            off_topic: number;
+            /**
+             * Queries
+             * @default 0
+             */
+            queries: number;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Results
+             * @default 0
+             */
+            results: number;
+            /**
+             * Seen
+             * @default 0
+             */
+            seen: number;
+            /**
+             * Timeout
+             * @default 0
+             */
+            timeout: number;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
         };
         /**
          * TraceContext
@@ -19076,6 +19353,7 @@ export interface operations {
         parameters: {
             query: {
                 expected_revision: number;
+                purge_items?: boolean;
             };
             header?: {
                 origin?: string | null;

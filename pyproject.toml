@@ -21,7 +21,7 @@ dependencies = [
     "uvicorn[standard]>=0.35,<1",
     "authlib>=1.9.1,<2",
     "itsdangerous>=2.2,<3",
-    "openai>=2.20,<3",
+    "openai>=2.20,<4",
     "cryptography>=50,<51",
     "graphiti-core==0.30.2",
     "neo4j==5.28.3",

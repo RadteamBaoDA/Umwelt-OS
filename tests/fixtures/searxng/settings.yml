@@ -1,0 +1,11 @@
+# Disposable SearXNG settings for the opt-in topic-watch e2e (docker-compose.test.yml, profile real-search).
+use_default_settings: true
+server:
+  secret_key: "bbd-os-disposable-searxng-secret"
+  limiter: false
+  image_proxy: false
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json

@@ -27,7 +27,7 @@ class AutomationsDescriptor(ModuleDescriptor):
         "knowledge.entities",
         "knowledge.timeline",
     )
-    optional_dependencies: tuple[str, ...] = ("chat", "ingestion")
+    optional_dependencies: tuple[str, ...] = ("chat", "connectors", "ingestion")
     scheduled_jobs: tuple[str, ...] = ("process_automation_run",)
     provides: tuple[str, ...] = ("automation_rules",)
     requires: tuple[str, ...] = ("tasks", "notifications", "dashboard", "agents")

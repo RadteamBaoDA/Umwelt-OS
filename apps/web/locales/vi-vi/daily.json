@@ -26,6 +26,10 @@
   "day.goals": "Mục tiêu đang theo dõi",
   "day.stories": "Tin tức",
   "day.events": "Sự kiện",
+  "day.markets": "Thị trường",
+  "day.weather": "Thời tiết",
+  "day.hazards": "Cảnh báo",
+  "day.sourceHealth": "Tình trạng nguồn",
   "itemCount": "{count, plural, other {# mục}}",
   "emptyWidget": "Không có gì cho ngày này.",
   "futureNoNews": "Không tạo tin tức cho các ngày trong tương lai.",
@@ -40,5 +44,6 @@
   "watchlist.empty": "Danh sách theo dõi trống",
   "watchlist.emptyDetail": "Thêm một quy tắc để bắt đầu theo dõi.",
   "streamCount": "{count, plural, other {# bản ghi}}",
+  "openFullBrief": "Mở bản tin đầy đủ",
   "foot.summary": "Việc đến hạn {tasks} · Mục tiêu đang chạy {goals}"
 }

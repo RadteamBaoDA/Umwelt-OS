@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, RefreshCw, Sparkles } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
@@ -11,6 +12,7 @@ import { DateSelector } from './date-selector';
 import {
   dailyKeys,
   generateBrief,
+  getBriefSlotOwner,
   getDailyContext,
   type DailyBriefRevision,
   type DailyContextData,
@@ -21,7 +23,9 @@ import { useSelectedDay } from './selected-day';
 import { useWorkspace } from '@/core/workspace-context';
 import { BriefShareButton, SharedBriefs } from './brief-sharing';
 import { BriefText } from './brief-text';
+import { briefCitationHref } from './brief-citation-href';
 import { useSession } from '@/core/session';
+import { getRuleConversationId } from '@/modules/automations/public-api';
 import { FootBarSlot } from '@/components/gadget-title-slot';
 import { useReportGadgetFreshness } from './gadget-freshness';
 
@@ -31,15 +35,23 @@ export { BriefText };
  * Backend-provided widget `title_key` values (modules/dashboard/context.py) mapped to literal `daily` catalog keys;
  * the payload keeps its legacy camelCase ids, so the mapping lives here rather than in a runtime key concatenation.
  */
-const WIDGET_TITLE_KEY = {
+export const WIDGET_TITLE_KEY = {
   dayTasks: 'day.tasks',
   dayGoals: 'day.goals',
   dayStories: 'day.stories',
   dayEvents: 'day.events',
+  dayMarkets: 'day.markets',
+  dayWeather: 'day.weather',
+  dayHazards: 'day.hazards',
+  daySourceHealth: 'day.sourceHealth',
 } as const;
 
-/** Catalog key of a day-widget title; an id the backend adds later falls back to the events title. */
-function widgetTitleKey(titleKey: string) {
+/**
+ * Catalog key of a day-widget title; an id the backend adds later falls back to the events title.
+ * @param titleKey - Backend widget `title_key` (for example `dayMarkets`).
+ * @returns Literal `daily` catalog key.
+ */
+export function widgetTitleKey(titleKey: string) {
   return WIDGET_TITLE_KEY[titleKey as keyof typeof WIDGET_TITLE_KEY] ?? WIDGET_TITLE_KEY.dayEvents;
 }
 
@@ -143,9 +155,22 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
   );
 }
 
-/** Saved brief body: stale notice, text and citations, or the empty message. */
-function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
+/**
+ * Saved brief body: stale notice, text, citations (linked via `briefCitationHref` when a page exists) and an "open full brief" link, or the empty message. The link is
+ * shown only while an automation owns the brief slot (a Daily brief task is enabled) and goes to
+ * the task's chat thread (`/chat/{conversation_id}`), or to Settings > Scheduled tasks while the task has no thread yet.
+ * The ownership and conversation reads are best-effort: while the ownership read loads or fails the link stays hidden,
+ * and a failed conversation read falls back to Settings.
+ */
+export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
   const t = useTranslations('daily');
+  const owner = useQuery({ queryKey: dailyKeys.slotOwner, queryFn: ({ signal }) => getBriefSlotOwner(signal) });
+  const automationId = owner.data?.schedule_owner === 'automation' ? owner.data.automation_id : null;
+  const thread = useQuery({
+    queryKey: ['automation-conversation', automationId],
+    queryFn: () => getRuleConversationId(automationId!),
+    enabled: Boolean(automationId),
+  });
   if (!brief) return <p className="text-sm text-muted-foreground">{t('noBrief')}</p>;
   return (
     <>
@@ -157,12 +182,27 @@ function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
       <BriefText key={`${brief.id}:${brief.revision}`} brief={brief} />
       {brief.citations.length > 0 && (
         <ol className="brief-refs space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
-          {brief.citations.map((citation) => (
-            <li key={citation.ref} id={`brief-ref-${citation.ref}`}>
-              [{citation.ref}] {citation.title}
-            </li>
-          ))}
+          {brief.citations.map((citation) => {
+            const href = briefCitationHref(citation.kind, citation.id);
+            return (
+              <li key={citation.ref} id={`brief-ref-${citation.ref}`}>
+                [{citation.ref}]{' '}
+                {href ? (
+                  <Link href={href} className="underline">
+                    {citation.title}
+                  </Link>
+                ) : (
+                  citation.title
+                )}
+              </li>
+            );
+          })}
         </ol>
+      )}
+      {owner.data?.schedule_owner === 'automation' && (
+        <Link href={thread.data ? `/chat/${encodeURIComponent(thread.data)}` : '/settings/scheduled-tasks'} className="text-xs underline">
+          {t('openFullBrief')}
+        </Link>
       )}
     </>
   );

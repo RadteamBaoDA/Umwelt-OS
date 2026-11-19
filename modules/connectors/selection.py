@@ -20,7 +20,19 @@ if TYPE_CHECKING:
 DEFAULT_MAX_ITEMS = 100
 # Wall-clock budget of one collection run; scheduler stamps it as attempt_deadline_at, executor enforces it.
 RUN_DEADLINE_SECONDS = 90
+# Topic watch plans, searches, fetches pages and calls a model per page, which does not fit in 90 s; only this
+# provider gets the longer wall-clock budget (the slot lease is renewed by the heartbeat, so 120 s TTL is fine).
+TOPIC_WATCH_DEADLINE_SECONDS = 240
 SKEW = timedelta(minutes=10)  # clock-skew margin below a stored cursor; dedup absorbs the re-read
+
+
+def run_deadline_seconds(provider: str | None) -> int:
+    """Return the wall-clock budget of one collection run for ``provider``.
+
+    ``topic_watch`` gets ``TOPIC_WATCH_DEADLINE_SECONDS``; every other provider (and ``None``) keeps
+    ``RUN_DEADLINE_SECONDS``. Pure. The scheduler stamps it as ``attempt_deadline_at`` and the executor enforces it.
+    """
+    return TOPIC_WATCH_DEADLINE_SECONDS if provider == "topic_watch" else RUN_DEADLINE_SECONDS
 
 
 def fold(text: str) -> tuple[str, ...]:

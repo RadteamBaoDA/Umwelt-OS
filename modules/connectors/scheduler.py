@@ -51,7 +51,8 @@ from modules.connectors.models import (
     ConnectorSchedule,
     ConnectorWorkspaceDispatch,
 )
-from modules.connectors.selection import RUN_DEADLINE_SECONDS
+from modules.connectors.selection import RUN_DEADLINE_SECONDS as RUN_DEADLINE_SECONDS
+from modules.connectors.selection import run_deadline_seconds
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
@@ -559,7 +560,7 @@ async def admit_collection_request(
 
     Busy source, workspace or capacity defers without burning an attempt. Revision changes
     cancel the request; the sixth admission fails it. Commits before any provider I/O. The admission
-    stamps ``attempt_started_at`` and ``attempt_deadline_at`` (now + run deadline).
+    stamps ``attempt_started_at`` and ``attempt_deadline_at`` (now + the provider's run deadline).
     """
     peek = await session.get(ConnectorCollectionRequest, request_id)
     if peek is None or peek.status != "queued":
@@ -629,7 +630,7 @@ async def admit_collection_request(
     request.error_code = None
     # Stamped at admission so the manual-collect cooldown and the overdue-attempt metric have data.
     request.attempt_started_at = now
-    request.attempt_deadline_at = now + timedelta(seconds=RUN_DEADLINE_SECONDS)
+    request.attempt_deadline_at = now + timedelta(seconds=run_deadline_seconds(source.provider))
     try:
         await session.flush()
     except IntegrityError:
