@@ -14,19 +14,20 @@
   - "Show on dashboard" deep-links Add gadget with the Feed template and the task source.
   - Delete asks whether to keep items (default keep; the source is archived).
   - Generic connector routes refuse task-managed sources with `managed_by_scheduled_task`.
-- Phase 3 (create from chat), delivered: the `draft_scheduled_task` chat tool attaches an unsaved task card that opens the pre-filled Daily brief editor.
+- Phase 3 (create from chat), delivered: the `draft_scheduled_task` chat tool attaches an unsaved task card; Review and create hands the draft to Settings › Scheduled tasks (this tab's sessionStorage, validated on read, never the URL), which opens the Daily brief editor pre-filled. Save there is the only write.
+- Production-readiness fixes found by the full suites: arq kept results for `process_graph_operation` (fixed id `graph:{id}`) made recovery re-enqueues no-ops for an hour after an unclaimed attempt (heavy-slot jobs now keep no result); built-in enable failed for every provider (keyed media options missing on `BuiltinEnableRequest`); `provider_specs` lost its `CHECKED_ON` import in the media merge; two Alembic heads (brief evidence migration re-chained as `0027_brief_evidence_kinds`); the Scheduled tasks editors shipped on every workspace route through chained module indexes; Topic watch failures now show the collector's own code with an en-us/vi-vi explanation; the chat volume benchmark is opt-in (`CHAT_VOLUME_BENCH=1`) and its fixture writes contract-valid provider records.
 - Real-e2e fixes:
   - Phase 1: brief `max_tokens` raised from 500 to 2048; driver UUID subclass in the lock-free support check; MissingGreenlet on pause; no-Markdown brief prompt.
   - Phase 2: topic watch now settles through the native leased path (ingestion refuses the generic batch path for native providers); the settle stays pending while the ingestion run is in flight; task-managed `topic_watch` gets a fixed provider scope (topic, keep rule, languages, site lists), so Feed and News show its items; dashboard deep-link params are stripped only once the dashboard is ready.
 - Validation:
-  - Unit tests: `pytest tests/unit/modules/{connectors,automations,ingestion,news,knowledge/documents}` 3230 passed, 2 skipped. ruff, mypy (connectors and automations) and lint-imports pass.
+  - Gates on the merged `feature/more-datasource` tree: `pytest tests/unit` 7939 passed, 2 skipped; Vitest 1804 passed; ruff format/check, mypy (core, apps, modules), lint-imports, function-length, file-size and GenUI parity ratchets, web lint/typecheck and API types all pass. `tests/test_migrations.py` 16 passed.
+  - Docker integration suite: 173 passed, 3 skipped (opt-in benchmarks), 0 dead letters. Bundle budget OK (largest route 817.6 KB / 825, chat 816.7 KB / 820).
   - E2E: Docker with real sources, a real model from `.env.e2e-real` and SearXNG via `E2E_REAL_SEARCH=1`. Final run 23/23: `scheduled-tasks-chat-real` 2/2, `scheduled-tasks-real` 6/6, `scheduled-tasks-topic-real` 5/5, `dashboard-ux` 8/8, bootstrap 2/2.
   - Report: `reports/scheduled-tasks-phase1-report.html` (not committed).
 - Not delivered:
   - SearXNG engines vary: DuckDuckGo returns a CAPTCHA and Brave returns 429, so production needs a stable engine.
   - Telegram delivery is deferred.
   - There is no per-story or per-source citation page, and hazards are global.
-  - `/chat` bundle size is not measured, and the Docker integration suite and `tests/test_migrations.py` were not run.
 <!-- scheduled-tasks-phase1-status:end -->
 
 ## 2026-11-18 - Media datasource Phase 4 complete
