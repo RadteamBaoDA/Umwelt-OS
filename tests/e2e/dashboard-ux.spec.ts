@@ -119,8 +119,6 @@ test.describe('dashboard ux', () => {
 
   test('new page: Three columns frame, then From template News', async ({ page }) => {
     await openDash(page);
-    const pages = page.getByRole('tab');
-    const before = await pages.count();
     await page.getByRole('button', { name: uiText('dashboard', 'toggleEdit') }).click();
     await page.getByRole('button', { name: uiText('dashboard', 'addGroup.label') }).click();
     const dialog = page.getByRole('dialog', { name: uiText('dashboard', 'addGroup.title') });
@@ -128,8 +126,9 @@ test.describe('dashboard ux', () => {
     await dialog.getByRole('radio', { name: uiText('dashboard', 'group.frameThreeColumns') }).check();
     await dialog.getByRole('button', { name: uiText('dashboard', 'create'), exact: true }).click();
     await expect(dialog).toBeHidden({ timeout: 30_000 });
+    // The new page's tab is the proof it was created; a page-wide tab count also counted gadget source tabs, which
+    // disappear once the new (empty) page becomes active.
     await expect(page.getByRole('tab', { name: PAGE })).toBeVisible({ timeout: 30_000 });
-    expect(await pages.count()).toBeGreaterThan(before);
 
     // From template -> News opens the preset picker in append mode on the active dashboard.
     await page.getByRole('button', { name: uiText('dashboard', 'addGroup.label') }).click();
