@@ -181,7 +181,7 @@ test.describe('media datasources and gadgets', () => {
     const wikidata = await openChooseStep(page, 'provider.wikidataMovies', `${PREFIX} wikidata`);
     await expect(wikidata.dialog.getByText(uiText('sources', 'guideAccess.wikidata.keyless'))).toBeVisible();
     await expect(wikidata.dialog.getByText(uiText('sources', 'guideAccess.wikidata.keyed'))).toBeVisible();
-    const tmdb = await openChooseStep(page, 'TMDB movies', `${PREFIX} tmdb`, 'dummy-e2e-key');
+    const tmdb = await openChooseStep(page, 'provider.tmdbMovies', `${PREFIX} tmdb`, 'dummy-e2e-key');
     await expect(tmdb.dialog.getByText(uiText('sources', 'guideAccess.tmdbMovies.keyless'))).toBeVisible();
     await expect(tmdb.dialog.getByText(uiText('sources', 'guideAccess.tmdbMovies.keyed'))).toBeVisible();
     await expect(tmdb.dialog.getByText(uiText('sources', 'tmdb.attributionNotice'))).toBeVisible();
@@ -193,7 +193,7 @@ test.describe('media datasources and gadgets', () => {
   });
 
   test('youtube api scope: Most popular mode hides channel targets (UI only)', async ({ page }) => {
-    const { dialog } = await openChooseStep(page, 'YouTube Data API', `${PREFIX} youtube`, 'dummy-e2e-key');
+    const { dialog } = await openChooseStep(page, 'provider.youtubeApi', `${PREFIX} youtube`, 'dummy-e2e-key');
     const targets = uiText('sources', 'youtube.targetMode');
     await expect(dialog.getByRole('combobox', { name: targets, exact: true })).toBeVisible();
     await pickOption(page, dialog, uiText('sources', 'youtube.apiMode'), uiText('sources', 'youtube.modePopular'));

@@ -3,6 +3,7 @@
 import { OPTION_LABEL_KEY } from './builtin-option-keys';
 import { ApiError } from '@/core/api';
 import { ConnectorCatalogEntry, ConnectorConfig, intervalBelowMinimum } from './api';
+import { providerLabelKey } from './provider-label-keys';
 
 export const intervals = [15, 30, 60, 360, 1440] as const;
 export const genericProviderIds = new Set(['rss', 'web', 'rest', 'mcp']);
@@ -192,12 +193,18 @@ const PROVIDER_KEY = {
 } as const;
 
 /**
- * Maps a provider identifier to its localized catalog key.
+ * Maps a provider identifier to its localized catalog key. `PROVIDER_KEY` is the picker's own table; ids it does not list
+ * (for example the keyed providers such as `tmdb_movies` and `youtube_api`) fall back to the full `PROVIDER_LABEL_KEY`
+ * table so keyed and keyless tiles translate the same way.
  * @param providerId Catalog provider id.
- * @returns A `provider.<id>` key, or `provider.label` (the generic word) when the picker should show the catalog label instead.
+ * @returns A `provider.<id>` key, or `provider.label` (the generic word) when no table translates the id and the picker
+ *   should show the catalog label instead.
  */
-export function providerKey(providerId: string): (typeof PROVIDER_KEY)[keyof typeof PROVIDER_KEY] | 'provider.label' {
-  return Object.hasOwn(PROVIDER_KEY, providerId) ? PROVIDER_KEY[providerId as keyof typeof PROVIDER_KEY] : 'provider.label';
+export function providerKey(
+  providerId: string,
+): (typeof PROVIDER_KEY)[keyof typeof PROVIDER_KEY] | NonNullable<ReturnType<typeof providerLabelKey>> | 'provider.label' {
+  if (Object.hasOwn(PROVIDER_KEY, providerId)) return PROVIDER_KEY[providerId as keyof typeof PROVIDER_KEY];
+  return providerLabelKey(providerId) ?? 'provider.label';
 }
 
 /**

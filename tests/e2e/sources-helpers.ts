@@ -164,16 +164,16 @@ export const WIZARD_CASES: WizardCase[] = [
   { id: 'arxiv', card: 'arXiv', expect: 'fetch', fields: { 'source-scope-arxiv_category': 'cs.AI' } },
   { id: 'huggingface', card: 'Hugging Face models', expect: 'fetch', fields: { 'source-scope-huggingface_author': 'google' } },
   { id: 'github_releases', card: 'GitHub Releases', expect: 'fetch', fields: { 'source-scope-github_owner': 'vercel', 'source-scope-github_repository': 'next.js' } },
-  { id: 'youtube', card: 'YouTube', expect: 'fetch', fields: { 'source-scope-youtube_channel_id': 'UC_x5XG1OV2P6uZZ5FSM9Ttw' } },
+  { id: 'youtube', card: uiText('sources', 'provider.youtube'), expect: 'fetch', fields: { 'source-scope-youtube_channel_id': 'UC_x5XG1OV2P6uZZ5FSM9Ttw' } },
   { id: 'open_meteo', card: 'Open-Meteo forecast', expect: 'fetch', fields: { 'source-scope-weather_latitude': '21.03', 'source-scope-weather_longitude': '105.85', 'source-scope-weather_timezone': 'Asia/Ho_Chi_Minh', 'source-scope-weather_metrics': 'temperature_2m' } },
-  { id: 'coingecko', card: 'CoinGecko', expect: 'fetch', key: 'dummy-e2e-key' }, // Demo tier answers the keyless simple/price call even with an unrecognised key,
-  keyedCase('finnhub_news', 'Finnhub market news'),
-  keyedCase('newsapi', 'NewsAPI'),
-  keyedCase('fred', 'FRED series', { 'source-scope-fred_series_id': 'DGS10' }),
-  keyedCase('openweathermap', 'OpenWeather', { 'source-scope-owm_latitude': '21.03', 'source-scope-owm_longitude': '105.85' }),
-  keyedCase('openaq', 'OpenAQ', { 'source-scope-openaq_location_id': '8118' }),
-  keyedCase('nasa_firms', 'NASA FIRMS', { 'source-scope-firms_country': 'VNM' }),
-  { id: 'alpha_vantage', card: 'Alpha Vantage', expect: 'fetch', // IBM daily data is served for any key string (verified by curl); a live key is used when set
+  { id: 'coingecko', card: uiText('sources', 'provider.coinGecko'), expect: 'fetch', key: 'dummy-e2e-key' }, // Demo tier answers the keyless simple/price call even with an unrecognised key,
+  keyedCase('finnhub_news', uiText('sources', 'provider.finnhubNews')),
+  keyedCase('newsapi', uiText('sources', 'provider.newsapi')),
+  keyedCase('fred', uiText('sources', 'provider.fred'), { 'source-scope-fred_series_id': 'DGS10' }),
+  keyedCase('openweathermap', uiText('sources', 'provider.openweathermap'), { 'source-scope-owm_latitude': '21.03', 'source-scope-owm_longitude': '105.85' }),
+  keyedCase('openaq', uiText('sources', 'provider.openaq'), { 'source-scope-openaq_location_id': '8118' }),
+  keyedCase('nasa_firms', uiText('sources', 'provider.nasaFirms'), { 'source-scope-firms_country': 'VNM' }),
+  { id: 'alpha_vantage', card: uiText('sources', 'provider.alphaVantage'), expect: 'fetch', // IBM daily data is served for any key string (verified by curl); a live key is used when set
      key: liveKey('alpha_vantage') ?? 'dummy-e2e-key', live: !!liveKey('alpha_vantage'), fields: { 'source-scope-market_symbols': 'IBM', 'source-scope-market_currency': 'USD', 'source-scope-market_exchange_timezone': 'America/New_York' } },
 ];
 
