@@ -6,6 +6,7 @@ revision) spread over one year, plus 50,000 documents/chunks of mixed accented V
 unaccent search. Seeding is set-based SQL. Each of four representative calls runs through the real tool
 (1 warm-up, then 5 measured runs); ``EXPLAIN (ANALYZE, BUFFERS)`` is taken from the statements the tool
 really sent. Timings and plans are written to ``test-results/chat-volume/``.
+Run with ``CHAT_VOLUME_BENCH=1`` (and ``INTEGRATION=1``); the default integration suite skips it.
 """
 
 from __future__ import annotations
@@ -35,8 +36,11 @@ from modules.knowledge.documents.schemas import ProviderRecordMetadata
 
 pytestmark = [
     pytest.mark.integration,
+    # Opt-in: it seeds ~2M rows and 50k documents into the shared stack, whose workers then spend the rest of the
+    # suite on them (later worker-driven tests time out). Run it on purpose with CHAT_VOLUME_BENCH=1.
     pytest.mark.skipif(
-        os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
+        os.getenv("INTEGRATION") != "1" or os.getenv("CHAT_VOLUME_BENCH") != "1",
+        reason="requires INTEGRATION=1 and CHAT_VOLUME_BENCH=1 (seeds ~2M rows)",
     ),
 ]
 
