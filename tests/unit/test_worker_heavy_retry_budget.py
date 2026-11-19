@@ -73,3 +73,10 @@ def test_every_registered_heavy_job_is_in_the_retry_budget_set() -> None:
         if _is_heavy(getattr(f, "coroutine", f))
     }
     assert heavy == HEAVY_SLOT_JOBS
+
+
+def test_fixed_id_heavy_jobs_keep_no_result() -> None:
+    """A kept arq result blocks re-enqueueing `graph:{id}`; recovery must be able to requeue a pending operation."""
+    registered = {getattr(f, "name", None): f for f in WorkerSettings.functions}  # type: ignore[attr-defined]
+    for name in HEAVY_SLOT_JOBS:
+        assert registered[name].keep_result_s == 0, name
