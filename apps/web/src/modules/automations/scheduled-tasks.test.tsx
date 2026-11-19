@@ -112,7 +112,7 @@ describe('scheduled tasks workspace', () => {
     window.history.pushState({}, '', '/');
   });
 
-  it('?draft=1 opens the editor pre-filled from the chat draft and consumes it', async () => {
+  it('?draft=1 opens the editor pre-filled from the chat draft and drops it on close', async () => {
     const draft = { time: '06:30', days: 'weekdays', sections: ['stories', 'weather'], extraInstruction: 'Short', modelRole: 'brief' };
     window.sessionStorage.setItem('umwelt:brief-draft', JSON.stringify(draft));
     window.history.pushState({}, '', '/settings/scheduled-tasks?draft=1');
@@ -120,7 +120,10 @@ describe('scheduled tasks workspace', () => {
     render(view(<ScheduledTasksWorkspace />));
     expect(await screen.findByDisplayValue('06:30')).toBeTruthy();
     expect(screen.getByDisplayValue('Short')).toBeTruthy();
-    expect(window.sessionStorage.getItem('umwelt:brief-draft')).toBeNull();
+    // Kept while the editor is open (the page may remount once the workspace resolves), dropped when it closes.
+    expect(window.sessionStorage.getItem('umwelt:brief-draft')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(window.sessionStorage.getItem('umwelt:brief-draft')).toBeNull());
     window.history.pushState({}, '', '/');
   });
 

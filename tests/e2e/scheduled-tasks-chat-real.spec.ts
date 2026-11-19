@@ -29,7 +29,8 @@ const mask = (text: string) => (KEY ? text.split(KEY).join('***') : text);
 /** Saves a full-page screenshot for the HTML report (never on settings pages that show credentials). */
 async function shot(page: Page, name: string) {
   mkdirSync(SHOTS, { recursive: true });
-  await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true, animations: 'disabled' });
+  // Viewport only: a full-page capture resizes the viewport and catches the settings route mid-render.
+  await page.screenshot({ path: path.join(SHOTS, `${name}.png`), animations: 'disabled' });
 }
 
 type Automation = { id: string; revision: number; trigger: unknown; actions: { type: string }[] };

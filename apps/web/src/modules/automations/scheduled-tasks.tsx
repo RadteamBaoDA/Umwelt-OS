@@ -44,7 +44,8 @@ import {
   describeSchedule,
   isLegacyBrief,
   scheduledTaskKind,
-  takeBriefDraft,
+  clearBriefDraft,
+  readBriefDraft,
   topicOutcome,
   type BriefDraft,
   type ScheduledTaskTemplate,
@@ -435,8 +436,8 @@ function useDeepLink(
 
 /**
  * Opens the Daily brief editor pre-filled from a chat draft (`?draft=1`, payload in this tab's sessionStorage), once the
- * rules have loaded. The draft is consumed on first read; when a Daily brief task (or legacy brief rule) already exists
- * it is dropped, because a workspace has one brief slot and the existing task is edited instead.
+ * rules have loaded. The draft stays stashed until the editor closes (see `clearBriefDraft`); when a Daily brief task
+ * (or legacy brief rule) already exists it is dropped, because a workspace has one brief slot.
  */
 function useDraftHandoff(
   params: ReturnType<typeof useSearchParams>,
@@ -448,9 +449,10 @@ function useDraftHandoff(
   // Adjusting state during render once the rules arrive (same pattern as useDeepLink), so the list never flashes first.
   if (applied || !loaded || params?.get('draft') !== '1') return;
   setApplied(true);
-  const draft = takeBriefDraft();
+  const draft = readBriefDraft();
   const hasBrief = items.some((rule) => scheduledTaskKind(rule) === 'daily_brief' || isLegacyBrief(rule));
   if (draft && !hasBrief) setEditor({ mode: 'draft', initial: draft });
+  else clearBriefDraft();
 }
 
 /**
@@ -594,7 +596,10 @@ export function ScheduledTasksWorkspace() {
         legacy={legacy}
         csrfToken={csrfToken}
         onSaved={() => setTab('yours')}
-        onCloseEditor={() => setEditor(null)}
+        onCloseEditor={() => {
+          clearBriefDraft();
+          setEditor(null);
+        }}
         onCloseDelete={() => setDeleting(null)}
       />
     </section>

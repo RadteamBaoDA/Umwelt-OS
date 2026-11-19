@@ -127,14 +127,15 @@ export function stashBriefDraft(draft: BriefDraft): void {
 }
 
 /**
- * Reads and removes the stashed chat draft, so a reload never reopens it. Returns null when absent or when the stored
- * value does not have the exact draft shape (it is page-writable storage, so it is validated like any input).
+ * Reads the stashed chat draft without removing it: the page can mount twice (first under a pending workspace, then
+ * for the resolved one), so the draft is cleared by {@link clearBriefDraft} when its editor closes, not on read. Returns
+ * null when absent or when the stored value does not have the exact draft shape (page-writable storage is validated
+ * like any input).
  */
-export function takeBriefDraft(): BriefDraft | null {
+export function readBriefDraft(): BriefDraft | null {
   let raw: string | null = null;
   try {
     raw = window.sessionStorage.getItem(BRIEF_DRAFT_KEY);
-    window.sessionStorage.removeItem(BRIEF_DRAFT_KEY);
   } catch {
     return null;
   }
@@ -162,4 +163,13 @@ function isBriefDraft(input: unknown): input is BriefDraft {
     (instruction === null || (typeof instruction === 'string' && instruction.length <= 500)) &&
     ROLES.includes(value.modelRole as BriefModelRole)
   );
+}
+
+/** Drops the stashed chat draft once its editor closed (saved or cancelled), so a reload never reopens it. */
+export function clearBriefDraft(): void {
+  try {
+    window.sessionStorage.removeItem(BRIEF_DRAFT_KEY);
+  } catch {
+    // Storage unavailable: nothing was stashed either.
+  }
 }
