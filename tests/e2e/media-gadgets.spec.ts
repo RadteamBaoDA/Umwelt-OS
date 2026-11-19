@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { test, expect, E2E_LOCALE } from './fixtures';
 import { collectedRecordCount, deleteSources, enableBuiltinViaSettings, escapeRe, findSources, openWizard, removeBuiltinSource, writeHeaders } from './sources-helpers';
@@ -7,7 +9,9 @@ import { uiRe, uiText } from './ui-text';
  * Media datasource -> gadget end-to-end (spec new-datasource-v2 section 3.3 / 3.5 item 3): the keyless LiveChart built-in,
  * a scoped TVMaze source created through the Sources UI, the keyless-vs-key guidance and attribution badge, the YouTube
  * Data API scope panel, and `media_feed` / `media_calendar` gadgets bound to those sources. Live providers: a remote
- * outage (5xx, timeout, throttle) skips the dependent step with an explicit reason, it never passes silently.
+ * outage (5xx, timeout, throttle) skips the dependent step with an explicit reason, it never passes silently. The gadget
+ * tests do NOT depend on live data: they bind a manual source seeded by `seed_media_fixture.py` (contract-valid media
+ * records, more than one projection page) so rendering, filters, chips, Load more and calendar buckets always run.
  *
  * UI labels come from the owner-locale catalogs (`uiText`), so the UI-only tests run under en-us and vi-vi. The built-in
  * enable helper is English-only, so that one test is skipped in other locales. Needs outbound public network access;
@@ -15,6 +19,8 @@ import { uiRe, uiText } from './ui-text';
  */
 const PREFIX = 'e2e-media';
 const TVMAZE = `${PREFIX} tvmaze`;
+const FIXTURE = `${PREFIX} fixture`;
+const FIXTURE_ROWS = 130;
 const DASHBOARD = `${PREFIX} dashboard`;
 const SHELF = `${PREFIX} shelf`;
 const CALENDAR = `${PREFIX} calendar`;
@@ -77,21 +83,16 @@ async function projectionItems(page: Page, sourceIds: string[]) {
   return ((await res.json()) as { items: { media?: { genres: string[] } | null }[] }).items;
 }
 
-/** Ids of the media sources that exist for this spec (TVMaze scoped source and, when enabled, LiveChart). */
-async function mediaSourceIds(page: Page): Promise<string[]> {
-  const builtins = await (await page.request.get('/api/v1/connectors/builtins')).json() as { id: string; source_id: string | null }[];
-  const live = builtins.find((b) => b.id === LIVECHART.id)?.source_id;
-  return [...(await findSources(page, TVMAZE)).map((s) => s.id), ...(live ? [live] : [])];
-}
-
-/** Skips the calling test unless the media sources already expose typed records (a provider outage leaves none). */
-async function requireMediaData(page: Page) {
-  const ids = await mediaSourceIds(page);
-  const tv = (await findSources(page, TVMAZE))[0];
-  if (tv) await collectedRecordCount(page, tv.id, 60_000);
-  let count = 0;
-  await expect.poll(async () => (count = (await projectionItems(page, ids)).filter((i) => i.media).length), { timeout: 90_000 }).toBeGreaterThan(0).catch(() => undefined);
-  test.skip(count === 0, 'no media records collected (remote provider outage or empty schedule): nothing to render');
+/** Creates the manual fixture source and seeds its media documents (disposable stack DB via TEST_DATABASE_URL). */
+async function seedFixtureSource(page: Page): Promise<string> {
+  await page.goto('/dashboard'); // writeHeaders derives Origin from the current page URL
+  const created = await page.request.post('/api/v1/sources', { data: { type: 'manual', name: FIXTURE }, headers: await writeHeaders(page) });
+  expect(created.ok(), `create fixture source: ${created.status()} ${await created.text()}`).toBe(true);
+  const id = ((await created.json()) as { id: string }).id;
+  const run = spawnSync('uv', ['run', 'python', 'tests/e2e/seed_media_fixture.py', id, String(FIXTURE_ROWS)], { cwd: join(__dirname, '..', '..'), encoding: 'utf8', env: process.env });
+  expect(run.status, `seed fixture: ${run.stdout}${run.stderr}`).toBe(0);
+  await expect.poll(async () => (await projectionItems(page, [id])).filter((i) => i.media).length, { timeout: 30_000 }).toBeGreaterThan(0);
+  return id;
 }
 
 /** Opens the e2e dashboard and waits for the edit toolbar. */
@@ -104,15 +105,18 @@ async function openDashboard(page: Page) {
   await expect(page.locator('[data-route-loader]')).toBeHidden({ timeout: 30_000 });
 }
 
-/** Adds one media gadget through Edit layout > Add gadget > template tile > bound sources > Name, then saves the layout. */
-async function addMediaGadget(page: Page, tileKey: string, name: string) {
+/** Adds one media gadget (optionally with Items shown / Exclude keywords, bound to the seeded fixture source) through Edit layout > Add gadget > template tile > bound sources > Name, then saves the layout. */
+async function addMediaGadget(page: Page, tileKey: string, name: string, scope: { limit?: string; exclude?: string } = {}) {
   await openDashboard(page);
   await page.getByRole('button', { name: uiText('dashboard', 'toggleEdit') }).click();
   await page.getByRole('button', { name: uiText('dashboard', 'addGadget.label'), exact: true }).click();
   const dialog = page.getByRole('dialog', { name: uiText('dashboard', 'addGadget.title') });
   await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(uiText('gadgetSettings', tileKey))}\\b`) }).click();
-  await dialog.getByRole('checkbox', { name: new RegExp(`^${escapeRe(TVMAZE)}`) }).click();
+  await dialog.getByRole('checkbox', { name: new RegExp(`^${escapeRe(FIXTURE)}`) }).click();
   await dialog.getByLabel(uiText('gadgetSettings', 'name'), { exact: true }).fill(name);
+  if (scope.limit || scope.exclude) await dialog.getByText(uiText('gadgetSettings', 'advanced'), { exact: true }).click(); // collapsed <details>
+  if (scope.limit) await dialog.getByLabel(uiText('gadgetSettings', 'limit'), { exact: true }).fill(scope.limit);
+  if (scope.exclude) await dialog.getByLabel(uiText('gadgetSettings', 'excludeKeywords'), { exact: true }).fill(scope.exclude);
   const add = dialog.getByRole('button', { name: uiText('dashboard', 'addGadget.label'), exact: true });
   await expect(add).toBeEnabled({ timeout: 60_000 });
   await add.click();
@@ -217,9 +221,14 @@ test.describe('media datasources and gadgets', () => {
     await expect(page).toHaveURL(/\/dashboard\/[0-9a-f-]{36}/);
   });
 
+  test('seed the fixture media source', async ({ page }) => {
+    await seedFixtureSource(page);
+  });
+
   test('media_feed gadget: cards, filter popover, active chip, clear, load more', async ({ page }) => {
-    await requireMediaData(page);
-    await addMediaGadget(page, 'templateTypes.media_shelf.name', SHELF);
+    await // Items shown = 100 equals the projection page, so the Load more button (shown only while fewer than that many
+    // items survive the gadget's own keyword filters) needs an exclusion: it drops fixtures 000-009 from page one.
+    await addMediaGadget(page, 'templateTypes.media_shelf.name', SHELF, { limit: '100', exclude: 'fixture 00' });
     const shelf = page.getByRole('region', { name: SHELF, exact: true });
     const cards = shelf.getByRole('article');
     await expect(cards.first()).toBeVisible({ timeout: 60_000 });
@@ -243,9 +252,11 @@ test.describe('media datasources and gadgets', () => {
     await expect(cards).toHaveCount(before, { timeout: 30_000 });
 
     // Genre filter: use a canonical genre present in the collected data; every kept card must still render, chip shows.
-    const items = await projectionItems(page, await mediaSourceIds(page));
+    const [fixture] = await findSources(page, FIXTURE);
+    const items = await projectionItems(page, [fixture!.id]);
     const genre = items.flatMap((i) => i.media?.genres ?? []).find((g) => g);
-    if (genre) {
+    expect(genre, 'fixture carries a canonical genre').toBeTruthy();
+    {
       const genreLabel = uiText('gadgetSettings', `media.values.${genre}`);
       await filter.click();
       await page.getByRole('combobox', { name: uiText('gadgetSettings', 'media.genres'), exact: true }).click();
@@ -255,26 +266,22 @@ test.describe('media datasources and gadgets', () => {
       await page.keyboard.press('Escape');
       await shelf.getByRole('button', { name: uiText('dashboard', 'media.clear') }).click();
       await expect(cards).toHaveCount(before, { timeout: 30_000 });
-    } else {
-      test.info().annotations.push({ type: 'no-genre', description: 'collected records carry no canonical genre; genre filter not exercised' });
     }
 
     const more = shelf.getByRole('button', { name: uiText('dashboard', 'feed.loadMore') });
-    if (await more.isVisible()) {
-      await more.click();
-      await expect.poll(() => cards.count(), { timeout: 30_000 }).toBeGreaterThan(before);
-    } else {
-      test.info().annotations.push({ type: 'no-pagination', description: `only ${before} items: Load more not offered` });
-    }
+    await expect(more, `${FIXTURE_ROWS} fixture rows exceed one page`).toBeVisible();
+    await more.click();
+    await expect.poll(() => cards.count(), { timeout: 30_000 }).toBeGreaterThan(before);
   });
 
-  test('media_calendar gadget: buckets or empty state', async ({ page }) => {
-    await requireMediaData(page);
-    await addMediaGadget(page, 'templateTypes.release_calendar.name', CALENDAR);
+  test('media_calendar gadget: recent and upcoming buckets', async ({ page }) => {
+    await // Default Items shown is 25: the earliest releases would fill it before the upcoming bucket, so show the maximum.
+    await addMediaGadget(page, 'templateTypes.release_calendar.name', CALENDAR, { limit: '100' });
     const calendar = page.getByRole('region', { name: CALENDAR, exact: true });
-    const buckets = ['recent', 'today', 'tomorrow', 'thisWeek', 'upcoming'].map((key) => uiRe('dashboard', `media.${key}`));
-    const bucket = calendar.getByRole('heading', { name: new RegExp(buckets.map((r) => r.source).join('|')) }).first();
-    await expect(bucket.or(calendar.getByText(uiText('dashboard', 'media.empty')))).toBeVisible({ timeout: 60_000 });
+    // Fixture releases sit 1-6 days back and 1-29 days ahead: the recent and upcoming buckets always exist.
+    await expect(calendar.getByRole('heading', { name: uiRe('dashboard', 'media.recent') })).toBeVisible({ timeout: 60_000 });
+    await expect(calendar.getByRole('heading', { name: uiRe('dashboard', 'media.upcoming') })).toBeVisible();
+    await expect(calendar.getByText(uiText('dashboard', 'media.empty'))).toHaveCount(0);
     await expect(calendar.getByRole('alert')).toHaveCount(0);
   });
 
