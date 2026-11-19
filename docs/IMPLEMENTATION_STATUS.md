@@ -27,7 +27,7 @@
 - Not delivered:
   - SearXNG engines vary: DuckDuckGo returns a CAPTCHA and Brave returns 429, so production needs a stable engine.
   - Telegram delivery is deferred.
-  - There is no per-story or per-source citation page, and hazards are global.
+  - Brief citations open the story (`/news?story=<id>`), the Timeline event or Sources; market, weather and hazard facts stay plain text because no page shows a single such fact. Hazards are global, not filtered by the owner's location.
 <!-- scheduled-tasks-phase1-status:end -->
 
 ## 2026-11-19 - Media datasource review complete
