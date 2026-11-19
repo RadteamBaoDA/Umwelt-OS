@@ -244,7 +244,8 @@ export async function openWizard(page: Page) {
  */
 export async function connectWizardSource(page: Page, c: WizardCase, name: string, timeout = 120_000): Promise<Outcome> {
   const dialog = await openWizard(page);
-  await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(c.card)}`) }).click();
+  // `(?! Data API)`: the keyed "YouTube Data API" card shares the "YouTube" prefix of the keyless YouTube feed card.
+  await dialog.getByRole('button', { name: new RegExp(`^${escapeRe(c.card)}(?! Data API)`) }).click();
   await dialog.getByLabel('Source name').fill(name);
   const next = dialog.getByRole('button', { name: 'Next', exact: true });
   await next.click(); // provider -> connect (creates the draft source)
