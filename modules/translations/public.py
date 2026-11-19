@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
 from core.errors import (
-    ConflictError,
     DomainError,
     ForbiddenError,
     NotFoundError,
@@ -59,7 +58,7 @@ from modules.translations.schemas import (
 
 PROMPT_VERSION = "v2"  # T2 owns prompt text; bumping it invalidates every cache fingerprint.
 MAX_NONTERMINAL_PER_WORKSPACE = 100
-MAX_BATCHES_PER_MINUTE = 4
+MAX_BATCHES_PER_MINUTE = 20  # cost stays bounded by the queue cap and the cache
 RETRY_AFTER_SECONDS = "60"
 
 
@@ -297,6 +296,62 @@ async def _enforce_translation_limits(
         raise _too_many("Translation queue is full")
 
 
+async def _authorize_items(
+    session: AsyncSession,
+    actor: WorkspaceContext,
+    request: TranslationBatchRequest,
+    *,
+    multi_workspace_enabled: bool,
+) -> list[ResourceAuthorization | str]:
+    """Authorize each item in request order; never raises for per-item problems.
+
+    Returns the owner verdict for admissible items, else an ``error_code``: ``resource_unavailable``
+    (missing and unauthorized are deliberately indistinguishable) or ``stale_request`` (the
+    client's revision differs from the verdict).
+    """
+    out: list[ResourceAuthorization | str] = []
+    for item in request.items:
+        verdict = await _authorize(
+            session,
+            actor,
+            item.resource_type,
+            item.resource_id,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if verdict is None:
+            out.append("resource_unavailable")
+        elif verdict.resource_revision != item.resource_revision:
+            out.append("stale_request")
+        else:
+            out.append(verdict)
+    return out
+
+
+def _merge_items(
+    request: TranslationBatchRequest,
+    outcomes: list[ResourceAuthorization | str],
+    rows: list[ContentTranslation],
+) -> list[TranslationItemStatusRead]:
+    """Response items in request order: rejected ones as failed+error_code, others from ``rows``.
+
+    ``rows`` holds one translation per admissible item, in request order. Never carries content.
+    """
+    admitted = iter(rows)
+    return [
+        TranslationItemStatusRead(
+            resource_type=i.resource_type,
+            resource_id=i.resource_id,
+            status="failed",
+            error_code=o,
+        )
+        if isinstance(o, str)
+        else TranslationItemStatusRead(
+            resource_type=i.resource_type, resource_id=i.resource_id, status=next(admitted).status
+        )
+        for i, o in zip(request.items, outcomes, strict=True)
+    ]
+
+
 async def request_translations(
     session: AsyncSession,
     scope: WorkspaceContext,
@@ -307,7 +362,10 @@ async def request_translations(
     app_settings: object | None = None,
     redis: object | None = None,
 ) -> TranslationBatchEnqueue:
-    """Authorize every item first (404 uniformly, then 409 stale), dedup, bound, persist pending rows.
+    """Authorize each item (rejected ones become failed items), dedup, bound, persist pending rows.
+
+    Rejected items (``resource_unavailable`` / ``stale_request``) are neither persisted nor counted
+    against the limits; with no admissible item the result has ``batch_id=None``.
 
     The caller commits, then enqueues ``enqueue_ids`` best effort (recovery covers a lost enqueue).
     A ``failed`` row with an unchanged fingerprint is NOT retried; it waits for new input/settings.
@@ -331,23 +389,15 @@ async def request_translations(
                 for i in request.items
             ],
         )
-    verdicts: list[ResourceAuthorization] = []
-    for item in request.items:
-        verdict = await _authorize(
-            session,
-            actor,
-            item.resource_type,
-            item.resource_id,
-            multi_workspace_enabled=multi_workspace_enabled,
+    outcomes = await _authorize_items(
+        session, actor, request, multi_workspace_enabled=multi_workspace_enabled
+    )
+    valid = [i for i, o in zip(request.items, outcomes, strict=True) if not isinstance(o, str)]
+    verdicts = [o for o in outcomes if not isinstance(o, str)]
+    if not valid:  # nothing admissible: report per-item failures, persist nothing
+        return TranslationBatchEnqueue(
+            batch_id=None, settings=settings, items=_merge_items(request, outcomes, [])
         )
-        if verdict is None:
-            raise NotFoundError(detail="Resource not found")
-        verdicts.append(verdict)
-    if any(
-        v.resource_revision != i.resource_revision
-        for v, i in zip(verdicts, request.items, strict=False)
-    ):
-        raise ConflictError(detail="Resource revision changed")
     now = datetime.now(UTC)
     policy_fp = await _policy_fingerprint(session, app_settings, redis, actor.workspace_id)
     configs = [
@@ -381,7 +431,7 @@ async def request_translations(
                     ContentTranslation.target_language == settings.target_language,
                     ContentTranslation.config_hash.in_(configs),
                     ContentTranslation.prompt_version == PROMPT_VERSION,
-                    ContentTranslation.resource_id.in_([i.resource_id for i in request.items]),
+                    ContentTranslation.resource_id.in_([i.resource_id for i in valid]),
                 )
                 .with_for_update()
             )
@@ -390,7 +440,7 @@ async def request_translations(
     rows: list[ContentTranslation] = []
     fresh: list[ContentTranslation] = []
     retry: list[ContentTranslation] = []
-    for item, verdict, config in zip(request.items, verdicts, configs, strict=False):
+    for item, verdict, config in zip(valid, verdicts, configs, strict=False):
         found = existing.get(
             (
                 item.resource_type,
@@ -457,18 +507,13 @@ async def request_translations(
             resource_revision=i.resource_revision,
             translation_id=t.id,
         )
-        for n, (i, t) in enumerate(zip(request.items, rows, strict=False))
+        for n, (i, t) in enumerate(zip(valid, rows, strict=False))
     )
     await session.flush()
     return TranslationBatchEnqueue(
         batch_id=batch.id,
         settings=settings,
-        items=[
-            TranslationItemStatusRead(
-                resource_type=i.resource_type, resource_id=i.resource_id, status=t.status
-            )
-            for i, t in zip(request.items, rows, strict=False)
-        ],
+        items=_merge_items(request, outcomes, rows),
         enqueue_ids=[t.id for t in (*fresh, *retry)],
     )
 

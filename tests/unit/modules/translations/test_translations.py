@@ -160,17 +160,17 @@ async def test_disabled_returns_blocked_without_enqueue(fences):
     assert fences == ["lock"]
 
 
-async def test_no_registered_authorizer_is_uniform_404():
+async def test_no_registered_authorizer_is_failed_resource_unavailable():
     row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
     request = TranslationBatchRequest.model_validate({"items": [_item()]})
-    with pytest.raises(DomainError) as exc:
-        await public.submit_batch(
-            _session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True
-        )
-    assert exc.value.status_code == 404
+    out = await public.submit_batch(
+        _session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True
+    )
+    assert out.batch_id is None
+    assert [(i.status, i.error_code) for i in out.items] == [("failed", "resource_unavailable")]
 
 
-async def test_stale_visible_revision_is_409_after_all_authorized():
+async def test_stale_visible_revision_is_failed_stale_request():
     row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
 
     async def ok(session, *, scope, resource_id, multi_workspace_enabled):
@@ -178,11 +178,60 @@ async def test_stale_visible_revision_is_409_after_all_authorized():
 
     public.register_resource_authorizer("news_story", ok)
     request = TranslationBatchRequest.model_validate({"items": [_item()]})
-    with pytest.raises(DomainError) as exc:
-        await public.submit_batch(
-            _session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True
+    out = await public.submit_batch(
+        _session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True
+    )
+    assert out.batch_id is None
+    assert [(i.status, i.error_code) for i in out.items] == [("failed", "stale_request")]
+
+
+async def test_mixed_batch_keeps_order_and_only_valid_item_is_persisted(monkeypatch):
+    row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
+    ids = [uuid4(), uuid4(), uuid4()]
+    monkeypatch.setattr(public, "_policy_fingerprint", AsyncMock(return_value="p"))
+
+    async def authorizer(session, *, scope, resource_id, multi_workspace_enabled):
+        if resource_id == ids[0]:
+            return None
+        return public.ResourceAuthorization(
+            "server-rev" if resource_id == ids[1] else "r1", "c" * 64, "v" * 64
         )
-    assert exc.value.status_code == 409
+
+    public.register_resource_authorizer("news_story", authorizer)
+    session = _session(scalar=row)
+    # settings row first, then the rate-limit and queue counts (nothing recent or pending)
+    session.scalar = AsyncMock(side_effect=[row, 0, 0])
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: []))
+    session.add = MagicMock(side_effect=lambda o: setattr(o, "id", uuid4()))
+    added: list[list] = []
+
+    def add_all(objs):
+        batch = list(objs)  # the caller passes a generator; keep it for assertions
+        added.append(batch)
+        for o in batch:
+            if isinstance(o, ContentTranslation):
+                o.id = uuid4()
+
+    session.add_all = MagicMock(side_effect=add_all)
+    request = TranslationBatchRequest.model_validate(
+        {"items": [_item(resource_id=str(i)) for i in ids]}
+    )
+    out = await public.request_translations(
+        session, _scope(), request, multi_workspace_enabled=True
+    )
+    assert out.batch_id is not None
+    assert [i.resource_id for i in out.items] == ids
+    assert [(i.status, i.error_code) for i in out.items] == [
+        ("failed", "resource_unavailable"),
+        ("failed", "stale_request"),
+        ("pending", None),
+    ]
+    persisted = added[0]
+    assert [t.resource_id for t in persisted] == [ids[2]]
+
+
+async def test_rate_limit_constant_is_twenty():
+    assert public.MAX_BATCHES_PER_MINUTE == 20
 
 
 async def test_batch_read_is_actor_and_workspace_bound(fences):

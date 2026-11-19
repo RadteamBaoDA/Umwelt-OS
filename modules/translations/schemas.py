@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from modules.settings.public import TranslationSettingsRead
 
+# github_project is intentionally not translatable: it renders timeline events, not documents.
 ResourceType = Literal["news_story", "daily_brief", "document"]
 TranslationStatus = Literal["pending", "ready", "unchanged", "blocked", "failed"]
 
@@ -47,10 +48,12 @@ class TranslationItemStatusRead(BaseModel):
     resource_type: ResourceType
     resource_id: UUID
     status: TranslationStatus
+    error_code: str | None = None
 
 
 class TranslationBatchAccepted(BaseModel):
-    """202 body. Disabled workspaces get ``batch_id=None``, blocked items and no enqueue."""
+    """202 body. Disabled workspaces get ``batch_id=None`` and blocked items; rejected items are
+    ``failed`` with ``error_code`` ``resource_unavailable``/``stale_request`` (no batch if all are)."""
 
     batch_id: UUID | None
     items: list[TranslationItemStatusRead]
@@ -73,7 +76,6 @@ class TranslationItemRead(TranslationItemStatusRead):
     translation: TranslationPayload | None = None
     target_language: Literal["vi", "en"]
     original_revision: str
-    error_code: str | None = None
 
 
 class TranslationBatchRead(BaseModel):

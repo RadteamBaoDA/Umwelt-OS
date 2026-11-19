@@ -17230,7 +17230,8 @@ export interface components {
         };
         /**
          * TranslationBatchAccepted
-         * @description 202 body. Disabled workspaces get ``batch_id=None``, blocked items and no enqueue.
+         * @description 202 body. Disabled workspaces get ``batch_id=None`` and blocked items; rejected items are
+         *     ``failed`` with ``error_code`` ``resource_unavailable``/``stale_request`` (no batch if all are).
          */
         TranslationBatchAccepted: {
             /** Batch Id */
@@ -17283,7 +17284,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief";
+            resource_type: "news_story" | "daily_brief" | "document";
             /**
              * Status
              * @enum {string}
@@ -17312,13 +17313,15 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief";
+            resource_type: "news_story" | "daily_brief" | "document";
         };
         /**
          * TranslationItemStatusRead
          * @description Per-item status without content.
          */
         TranslationItemStatusRead: {
+            /** Error Code */
+            error_code?: string | null;
             /**
              * Resource Id
              * Format: uuid
@@ -17328,7 +17331,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief";
+            resource_type: "news_story" | "daily_brief" | "document";
             /**
              * Status
              * @enum {string}
