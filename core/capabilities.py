@@ -12,6 +12,7 @@ runtime condition callers should handle.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -170,13 +171,13 @@ async def purge_resource_translations(
     session: AsyncSession,
     workspace_id: UUID,
     resource_type: str,
-    resource_id: UUID,
+    resource_ids: Sequence[UUID],
 ) -> int:
-    """Delete every actor's derived translations of one resource (flush-only); returns the removed row count."""
+    """Delete every actor's derived translations of a batch of resources (flush-only); returns the removed row count."""
     removed: int = await resolve_capability(PURGE_RESOURCE_TRANSLATIONS)(
         session,
         workspace_id,
         resource_type,
-        resource_id,
+        resource_ids,
     )
     return removed

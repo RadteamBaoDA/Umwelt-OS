@@ -284,7 +284,6 @@ from modules.knowledge.documents._versions import (
     review_version_fences,
     review_version_locator,
 )
-from modules.knowledge.documents._translation import read_document_translation_input
 
 # Schema/DTO contract re-exports so other modules can import them from this facade.
 from modules.sources import public as sources
