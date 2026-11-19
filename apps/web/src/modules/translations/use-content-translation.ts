@@ -80,10 +80,18 @@ function isResolvedCache(cached: TranslationResult | undefined): boolean {
   return cached.status === 'unchanged' || (cached.status === 'ready' && cached.translation !== null);
 }
 
-/** True when an item returned by POST /batches needs a GET /batches/{id} read to fetch its payload or error code. */
+/**
+ * True when an item returned by POST /batches needs a GET /batches/{id} read to fetch its payload or error code.
+ * Ready items need a payload; blocked/failed items need an error code. An invalid item rejected by the batch
+ * endpoint arrives already carrying `error_code` (resource_unavailable / stale_request), so it is settled from
+ * the POST response and never re-read. A missing or null code marks a cache hit whose reason only GET returns.
+ *
+ * @param item One item from the POST /batches response.
+ * @returns True only when the item must be re-read before its outcome is known.
+ */
 function itemNeedsHydration(item: Seen): boolean {
   if (item.status === 'ready') return !item.translation;
-  if (item.status === 'blocked' || item.status === 'failed') return item.error_code === undefined;
+  if (item.status === 'blocked' || item.status === 'failed') return item.error_code == null;
   return false;
 }
 
@@ -134,7 +142,9 @@ async function runTranslationGroup(params: {
   onSettings(accepted.settings);
   const seenAccepted = accepted.items as Seen[];
   const needsHydration = Boolean(accepted.batch_id) && seenAccepted.some(itemNeedsHydration);
-  take(needsHydration ? seenAccepted.filter((item) => item.status === 'pending' || item.status === 'unchanged') : seenAccepted);
+  // Settled items (including rejected ones with an error_code) are taken now; only items still lacking their
+  // payload or error code wait for the GET below, so an invalid item is never dropped from the batch.
+  take(needsHydration ? seenAccepted.filter((item) => !itemNeedsHydration(item)) : seenAccepted);
 
   let pending = seenAccepted.some((i) => i.status === 'pending');
   // Cache hits (ready/blocked/failed) from POST /batches carry no payload or error_code: hydrate immediately.

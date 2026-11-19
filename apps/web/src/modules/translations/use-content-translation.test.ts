@@ -269,4 +269,65 @@ describe('useContentTranslation', () => {
     await settle();
     expect(result.current.unchanged.has('s0')).toBe(true);
   });
+  it('settles POST items that carry an error_code immediately and hydrates only the ones without one', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      items: [
+        { resource_type: 'news_story', resource_id: 's0', status: 'failed', error_code: 'resource_unavailable', translation: null },
+        { resource_type: 'news_story', resource_id: 's1', status: 'failed', error_code: 'stale_request', translation: null },
+        { resource_type: 'news_story', resource_id: 's2', status: 'ready' },
+      ],
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    });
+    // The GET only carries the item that still lacks a payload, so s0/s1 can only come from the POST.
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      target_language: 'vi',
+      items: [
+        {
+          resource_type: 'news_story',
+          resource_id: 's2',
+          status: 'ready',
+          translation: { title: 'Hydrated' },
+          original_revision: 'r',
+          error_code: null,
+        },
+      ],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(3)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(api.readTranslationBatch).toHaveBeenCalledTimes(1);
+    expect(result.current.issues.get('s0')?.errorCode).toBe('resource_unavailable');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('stale_request');
+    expect(result.current.results.get('s2')?.translation?.title).toBe('Hydrated');
+  });
+
+  it('settles an all-invalid batch (batch_id null) from POST alone with no GET or polling', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      batch_id: null,
+      items: [
+        { resource_type: 'news_story', resource_id: 's0', status: 'failed', error_code: 'resource_unavailable', translation: null },
+        { resource_type: 'news_story', resource_id: 's1', status: 'failed', error_code: 'stale_request', translation: null },
+      ],
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    });
+    expect(api.readTranslationBatch).not.toHaveBeenCalled();
+    expect(result.current.issues.get('s0')?.errorCode).toBe('resource_unavailable');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('stale_request');
+    expect(result.current.pendingIds.size).toBe(0);
+  });
 });

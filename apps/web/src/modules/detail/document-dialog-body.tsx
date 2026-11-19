@@ -55,8 +55,19 @@ function DocumentDetailTranslation({
   );
 }
 
-/** Version preview body: loading, error retry, or bounded/translated content blockquote. */
-function DocumentVersionPreview({
+/**
+ * Version preview body: loading, error retry, or bounded/translated content blockquote.
+ * The "…" marker is driven by the original content length, not by whether a translation is shown: the
+ * translated excerpt is cut from the same original, so it is a prefix of longer content whenever the original is.
+ *
+ * @param props.isPending True while the version content is loading (shows a status line).
+ * @param props.isError True when the version content failed to load (shows a retry button).
+ * @param props.isSuccess True when the original content is available for display.
+ * @param props.content Original version content; sliced to PREVIEW_LIMIT for the fallback view.
+ * @param props.translatedExcerpt Translated excerpt when a ready translation is shown; null/undefined otherwise.
+ * @param props.onRetry Invoked when the user retries a failed content load.
+ */
+export function DocumentVersionPreview({
   isPending,
   isError,
   isSuccess,
@@ -91,7 +102,8 @@ function DocumentVersionPreview({
   }
   if (!isSuccess) return null;
   const shownContent = translatedExcerpt ?? content.slice(0, PREVIEW_LIMIT);
-  const truncated = !translatedExcerpt && content.length > PREVIEW_LIMIT;
+  // Original length decides the marker: a translated excerpt is a prefix of the original, so it is truncated too.
+  const truncated = content.length > PREVIEW_LIMIT;
   return (
     <div className="grid gap-1">
       <h3 className="text-sm font-semibold">{d('contentPreview')}</h3>

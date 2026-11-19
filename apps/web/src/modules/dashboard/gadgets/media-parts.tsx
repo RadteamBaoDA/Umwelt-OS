@@ -1,7 +1,13 @@
 'use client';
 
 import { useId, useMemo, useRef, useState } from 'react';
-import { ItemTranslateButton, TranslationStatusBanner, useItemTranslation, type ItemTranslationController } from '@/modules/translations';
+import {
+  CollectionTranslationBar,
+  ItemTranslateButton,
+  TranslationStatusBanner,
+  useItemTranslation,
+  type ItemTranslationController,
+} from '@/modules/translations';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
 import Link from 'next/link';
@@ -1032,6 +1038,8 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
           {t('media.interactionFailed')}
         </p>
       )}
+      {/* Hidden by the bar itself when translation is off or nothing is left to translate. */}
+      <CollectionTranslationBar controller={translation} />
       <TranslationStatusBanner issues={translation.issues} />
       <MediaResults
         sourceCount={sourceIds.length}
