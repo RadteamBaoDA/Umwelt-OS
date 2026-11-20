@@ -11,7 +11,7 @@ from core.auth.dependencies import require_account_write
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.rate_limit import require_budget
-from core.worker_queues import queue_for
+from core.worker_queues import ahead_of_backlog, queue_for
 from core.workspaces.dependencies import require_workspace_read
 from core.workspaces.schemas import WorkspaceContext
 from modules.translations import (
@@ -44,7 +44,12 @@ async def create_batch(
     member: Member,
     _admission: WriteAdmission,
 ) -> TranslationBatchAccepted:
-    """Authorize and queue references; disabled workspaces get blocked items and nothing is queued."""
+    """Authorize and queue references; disabled workspaces get blocked items and nothing is queued.
+
+    Each enqueue is best effort and sets ``_defer_until=ahead_of_backlog()`` so a user click jumps
+    the bulk extraction backlog on the shared model queue. Enqueue errors are suppressed because
+    ``recover_translation_jobs`` re-enqueues any row whose enqueue was lost.
+    """
     result = await public.request_translations(
         session,
         member,
@@ -64,6 +69,7 @@ async def create_batch(
                 str(translation_id),
                 _job_id=f"translation:{translation_id}",
                 _queue_name=queue_for("translate_content"),
+                _defer_until=ahead_of_backlog(),
             )
     return result
 

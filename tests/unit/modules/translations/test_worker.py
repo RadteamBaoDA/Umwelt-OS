@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
@@ -334,3 +334,35 @@ def test_jobs_and_crons_are_registered():
 def test_slot_ttl_is_120_seconds_with_20_second_renewal():
     assert worker.SLOT_TTL_SECONDS == 120
     assert worker.HEARTBEAT_SECONDS == 20
+
+
+async def test_recover_enqueues_translation_ahead_of_backlog() -> None:
+    """Recovered translations must queue on arq:model with a past _defer_until so they jump the backlog."""
+    ready = uuid4()
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.commit = AsyncMock()
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: [ready]))
+    redis = MagicMock()
+    redis.enqueue_job = AsyncMock()
+    ctx = {"session_factory": lambda: _AsyncSessionCtx(session), "redis": redis}
+    assert await worker.recover_translation_jobs(ctx) == 1
+    redis.enqueue_job.assert_awaited_once()
+    kwargs = redis.enqueue_job.await_args.kwargs
+    assert redis.enqueue_job.await_args.args == ("translate_content", str(ready))
+    assert kwargs["_queue_name"] == "arq:model"
+    assert kwargs["_job_id"] == f"translation:{ready}"
+    assert kwargs["_defer_until"] < datetime.now(UTC) - timedelta(minutes=30)
+
+
+class _AsyncSessionCtx:
+    """Async context manager yielding a fixed session, standing in for the worker session factory."""
+
+    def __init__(self, session: MagicMock) -> None:
+        self.session = session
+
+    async def __aenter__(self) -> MagicMock:
+        return self.session
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None

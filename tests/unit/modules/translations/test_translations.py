@@ -1,5 +1,6 @@
 """Mock-level T1 contracts: DTO exactness, deny-by-default admission, scope predicates, route deps."""
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -292,3 +293,30 @@ def test_admitted_cached_failure_carries_stored_reason_but_pending_does_not():
     pending = SimpleNamespace(status="pending", error_code="stale_leftover")
     assert public._admitted_status(item, failed).error_code == "input_too_large"
     assert public._admitted_status(item, pending).error_code is None
+
+
+async def test_create_batch_enqueues_ahead_of_backlog(monkeypatch):
+    """User-clicked translations must carry a past _defer_until so they run ahead of queued extraction."""
+    from modules.translations import routes
+
+    tid = uuid4()
+    monkeypatch.setattr(
+        public,
+        "request_translations",
+        AsyncMock(return_value=SimpleNamespace(enqueue_ids=[tid])),
+    )
+    monkeypatch.setattr(routes, "authenticated_session_ref", lambda _request: None)
+    redis = MagicMock()
+    redis.enqueue_job = AsyncMock()
+    state = SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False), redis=redis)
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    session = MagicMock()
+    session.commit = AsyncMock()
+    value = TranslationBatchRequest.model_validate({"items": [_item()]})
+    await routes.create_batch(value, request, session, _scope(), object())
+    redis.enqueue_job.assert_awaited_once()
+    kwargs = redis.enqueue_job.await_args.kwargs
+    assert redis.enqueue_job.await_args.args == ("translate_content", str(tid))
+    assert kwargs["_queue_name"] == "arq:model"
+    assert kwargs["_job_id"] == f"translation:{tid}"
+    assert kwargs["_defer_until"] < datetime.now(UTC) - timedelta(minutes=30)

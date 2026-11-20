@@ -28,7 +28,7 @@ from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import AIExecutionConfig, RequestPolicy
 from core.telemetry import count, observe_ms
 from core.worker_context import worker_session_factory as _factory
-from core.worker_queues import queue_for
+from core.worker_queues import ahead_of_backlog, queue_for
 from core.workspaces.public import (
     lock_access_fence,
     resolve_workspace_context,
@@ -556,7 +556,12 @@ async def translate_content(ctx: dict[str, object], translation_id: str) -> None
 
 
 async def recover_translation_jobs(ctx: dict[str, object]) -> int:
-    """Re-enqueue up to 50 stuck rows (unleased >30 s, or lease expired); fail exhausted attempt budgets."""
+    """Re-enqueue up to 50 stuck rows (unleased >30 s, or lease expired); fail exhausted attempt budgets.
+
+    Recovered jobs carry ``_defer_until=ahead_of_backlog()`` so they run before bulk extraction
+    requeued on the same model queue; enqueue errors per row are suppressed and the row is retried
+    on the next cron tick. Returns the number of rows selected (not the number enqueued).
+    """
     factory, now, c = _factory(ctx), datetime.now(UTC), ContentTranslation
     dead = or_(c.lease_token.is_(None), c.lease_expires_at <= now)
     async with factory() as session:
@@ -591,6 +596,7 @@ async def recover_translation_jobs(ctx: dict[str, object]) -> int:
                 str(translation_id),
                 _job_id=f"translation:{translation_id}",
                 _queue_name=queue_for("translate_content"),
+                _defer_until=ahead_of_backlog(),
             )
     return len(ids)
 
