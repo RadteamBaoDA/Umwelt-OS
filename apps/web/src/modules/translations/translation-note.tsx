@@ -17,6 +17,7 @@ const REASON_KEYS = {
   translation_disabled: 'reason.translationDisabled',
   rate_limited: 'reason.rateLimited',
   request_failed: 'reason.requestFailed',
+  still_queued: 'reason.stillQueued',
 } as const;
 const CODES = Object.keys(REASON_KEYS) as (keyof typeof REASON_KEYS)[];
 

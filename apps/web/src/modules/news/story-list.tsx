@@ -24,6 +24,7 @@ import {
   TranslateActionButton,
   TranslatedBadge,
   TranslationNote,
+  TranslationRunProgress,
   TranslationStatusBanner,
   untranslatedTargets,
   useContentTranslation,
@@ -705,6 +706,7 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
   const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } =
     p;
+  const progress = translation.progress;
   const refreshButton = (
     <Button
       variant="ghost"
@@ -722,8 +724,10 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
 
   const pendingCount = translation.pendingIds?.size ?? 0;
   const untranslatedCount = untranslatedTargets(targets, translation).length;
-  const translationToolbarAction: ReactNode = (
-    <>
+  // Wrapper is only mounted when it has content: an empty flex item would add a gap before the refresh button.
+  const showTranslationToolbar = translation.results.size > 0 || (translation.enabled && (untranslatedCount > 0 || pendingCount > 0));
+  const translationToolbarAction: ReactNode = showTranslationToolbar ? (
+    <div className="relative flex items-center gap-1.5">
       {translation.results.size ? (
         <TranslatedBadge
           showOriginal={showOriginal}
@@ -734,13 +738,15 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
       {translation.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
         <TranslateActionButton
           compact
-          label={pendingCount > 0 ? tTrans('translatingCount', { count: pendingCount }) : tTrans('translateAll')}
+          label={tTrans('translateAll')}
           pending={pendingCount > 0}
+          pendingLabel={progress ? tTrans('translatingProgress', { done: progress.done, total: progress.total }) : undefined}
           onClick={translateAll}
         />
       ) : null}
-    </>
-  );
+      <TranslationRunProgress progress={progress} />
+    </div>
+  ) : null;
 
   const pageActions: ReactNode = (
     <>

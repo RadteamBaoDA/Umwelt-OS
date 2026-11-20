@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { POLL_MS } from './use-content-translation';
 import { useItemTranslation } from './use-item-translation';
 
 const api = vi.hoisted(() => ({
@@ -48,5 +49,40 @@ describe('useItemTranslation', () => {
     await settle();
     expect(api.submitTranslationBatch).toHaveBeenCalledTimes(1);
     expect(api.submitTranslationBatch.mock.calls[0][0]).toHaveLength(25);
+  });
+
+  it('translateAll reports run progress that increments as results arrive and clears when the run completes', async () => {
+    api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) => ({
+      batch_id: 'b1',
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 1 },
+      items: items.map((i) => ({ resource_type: 'document', resource_id: i.resource_id, status: 'pending' })),
+    }));
+    const { result } = renderHook(() => useItemTranslation('document', targets(30)), { wrapper });
+    await settle();
+    await settle();
+    act(() => {
+      result.current.translateAll();
+    });
+    await settle();
+    expect(result.current.progress).toEqual({ done: 0, total: 25 });
+    api.readTranslationBatch.mockResolvedValue({
+      items: targets(25).map((t, i) => ({
+        resource_type: 'document',
+        resource_id: t.id,
+        status: i < 4 ? 'unchanged' : 'pending',
+        original_revision: 'r',
+      })),
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(result.current.progress).toEqual({ done: 4, total: 25 });
+    api.readTranslationBatch.mockResolvedValue({
+      items: targets(25).map((t) => ({ resource_type: 'document', resource_id: t.id, status: 'unchanged', original_revision: 'r' })),
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    expect(result.current.progress).toBeNull();
   });
 });

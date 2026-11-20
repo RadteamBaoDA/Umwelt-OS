@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { useWorkspaceSession as readWorkspaceSession } from '@/core/app-shell/workspace-session';
 import { ApiError, workspaceGeneration } from '@/core/api';
@@ -8,6 +8,9 @@ import { workspaceKeys } from '@/core/query-keys';
 import { useWorkspace as readWorkspace } from '@/core/workspace-context';
 import { fetchTranslationSettings, readTranslationBatch, submitTranslationBatch } from './api';
 import type { ResourceType, TranslationItemRequest, TranslationResult, TranslationSettings } from './types';
+
+/** Reason code stored on a batch that is still pending at the client deadline; the item stays retryable. */
+export const STILL_QUEUED_CODE = 'still_queued';
 
 /** Reads the workspace session (calling its single `useContext` hook), returning null when rendered outside a provider in unit tests. */
 function readSafeWorkspaceSession(): { csrfToken: string } | null {
@@ -32,6 +35,10 @@ export const POLL_MS = 2000;
 export const MAX_POLL_MS = 60_000;
 
 export type TranslationTarget = { id: string; revision: string };
+/** Progress of the most recent Translate-all submission: `done` items no longer pending out of `total` submitted. */
+export type TranslationProgress = { done: number; total: number };
+/** Options for `translate`: `collection` marks a Translate-all run whose progress is exposed. */
+export type TranslateOptions = { collection?: boolean };
 export type ContentTranslation = {
   enabled: boolean;
   targetLanguage: 'vi' | 'en';
@@ -44,7 +51,9 @@ export type ContentTranslation = {
   /** Resource ids the server reported as already in the target language: render a note, not a Translate button. */
   unchanged: ReadonlySet<string>;
   /** Requests on-demand translation for the given subset (or all current `targets` when omitted). */
-  translate: (subset?: TranslationTarget[]) => void;
+  /** Progress of the active Translate-all run, or null when no collection run is still settling. */
+  progress: TranslationProgress | null;
+  translate: (subset?: TranslationTarget[], options?: TranslateOptions) => void;
 };
 
 /** Cache key of one translated resource revision: [workspace, generation, type, id, revision, settings revision]. */
@@ -198,18 +207,56 @@ function failGroup(
 }
 
 /**
- * Removes cache entries still reading `pending` after a run ends (deadline reached, aborted, or failed).
- * Without this, the entry (staleTime Infinity) would keep the button disabled until a reload.
+ * Settles cache entries still reading `pending` after a run ends. Without this, the entry (staleTime Infinity)
+ * would keep the button disabled until a reload.
+ * - Deadline reached while the run was still live (`stillQueued` true): the entry becomes a `failed` issue with
+ *   `still_queued`, so the note explains the wait and the Translate button is clickable again (a retry
+ *   re-submits and the server returns the existing row).
+ * - Run aborted (unmount, workspace switch, settings change): the entry is removed silently, as before.
  *
  * @param queryClient Shared react-query client holding the translation cache.
  * @param todo Targets this run was responsible for.
  * @param keyFor Builds the cache key of one target for the run's workspace generation.
+ * @param stillQueued True only when the run ended by reaching its deadline without being aborted.
  */
-function dropStalePending(queryClient: QueryClient, todo: TranslationTarget[], keyFor: (item: TranslationTarget) => QueryKey): void {
+function settleStalePending(
+  queryClient: QueryClient,
+  todo: TranslationTarget[],
+  keyFor: (item: TranslationTarget) => QueryKey,
+  stillQueued: boolean,
+): void {
   for (const item of todo) {
-    if (queryClient.getQueryData<TranslationResult>(keyFor(item))?.status !== 'pending') continue;
-    queryClient.removeQueries({ queryKey: keyFor(item), exact: true });
+    const key = keyFor(item);
+    if (queryClient.getQueryData<TranslationResult>(key)?.status !== 'pending') continue;
+    if (stillQueued)
+      queryClient.setQueryData<TranslationResult>(key, { status: 'failed', translation: null, errorCode: STILL_QUEUED_CODE });
+    else queryClient.removeQueries({ queryKey: key, exact: true });
   }
+}
+
+/**
+ * Derives the Translate-all run progress: how many of the run's submitted ids have a non-pending outcome in the
+ * cache (ready, unchanged, blocked, failed or still_queued). Returns null once every id has settled, so the bar
+ * and its label disappear on completion.
+ *
+ * @param run Ids submitted by the most recent collection run.
+ * @param targets Currently loaded targets, in the same order as `entries`.
+ * @param entries Cache observer results for `targets`.
+ * @returns `{ done, total }` while the run is still settling, otherwise null.
+ */
+function runProgress(
+  run: readonly string[],
+  targets: TranslationTarget[],
+  entries: ReadonlyArray<{ data?: unknown }>,
+): TranslationProgress | null {
+  const index = new Map(targets.map((t, i) => [t.id, i]));
+  let done = 0;
+  for (const id of run) {
+    const i = index.get(id);
+    const status = i === undefined ? undefined : (entries[i]?.data as TranslationResult | undefined)?.status;
+    if (status && status !== 'pending') done += 1;
+  }
+  return done >= run.length ? null : { done, total: run.length };
 }
 
 /**
@@ -270,8 +317,10 @@ export function nextUntranslatedBatch(
  * list cards and detail dialogs share them immediately. Cached DB hits returned by POST /batches without
  * a payload are hydrated immediately via GET /batches/{id}; pending items poll every 2 s while visible
  * for at most 60 s. Everything in flight is aborted on unmount, workspace switch, or settings change.
- * Request failures (429, 409, 404, others) are stored per target as `failed` with a reason code, and
- * entries left `pending` when a run ends are removed so the Translate button recovers.
+ * Request failures (429, 409, 404, others) are stored per target as `failed` with a reason code. An entry still
+ * `pending` at the 60 s deadline becomes `failed` with `still_queued`; an entry left `pending` by an aborted run
+ * is removed. Both leave the Translate button clickable. A Translate-all run (`translate(subset, { collection: true })`)
+ * also exposes `progress` until every submitted id has settled.
  *
  * @param type Resource type supported by the translation API.
  * @param targets Currently loaded resource references (id and revision).
@@ -314,6 +363,12 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
   const controllersRef = useRef<Set<AbortController>>(new Set());
   const inFlightIdsRef = useRef<Set<string>>(new Set());
   const [submittingIds, setSubmittingIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Ids submitted by the latest Translate-all run; progress is derived from the cache, so this only records membership.
+  const [collectionRun, setCollectionRun] = useState<{ ids: string[] } | null>(null);
+  // The disabled observer queries above do not reliably re-render this hook when a poll writes the cache mid-run
+  // (seen in tests: a ready item stayed invisible until the whole run settled). Each cache write bumps this counter so
+  // results and Translate-all progress appear as each poll lands, not only when the run ends.
+  const [, bumpRender] = useReducer((n: number) => n + 1, 0);
 
   // Abort every in-flight batch when the workspace, resource type, or settings revision changes (or on unmount).
   useEffect(() => {
@@ -324,17 +379,19 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
       controllers.clear();
       inFlight.clear();
       setSubmittingIds(new Set());
+      setCollectionRun(null);
     };
   }, [scopeKey, enabled]);
 
   const translate = useCallback(
-    (subset?: TranslationTarget[]) => {
+    (subset?: TranslationTarget[], options?: TranslateOptions) => {
       if (!enabled || !workspaceId) return;
       const generation = workspaceGeneration();
       const todo = selectTodoTargets(subset ?? targets, inFlightIdsRef.current, (item) =>
         queryClient.getQueryData<TranslationResult>(keyOf(item, generation)),
       );
       if (todo.length === 0) return;
+      if (options?.collection) setCollectionRun({ ids: todo.map((t) => t.id) });
 
       const controller = new AbortController();
       controllersRef.current.add(controller);
@@ -356,6 +413,7 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
             errorCode: item.error_code ?? null,
           });
         }
+        if (valid()) bumpRender();
       };
       const onSettings = (next: TranslationSettings) => queryClient.setQueryData(['translation-settings', workspaceId], next);
 
@@ -369,7 +427,8 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
           ),
         ),
       ).finally(() => {
-        dropStalePending(queryClient, todo, keyFor);
+        // Reaching the deadline keeps the item retryable with a note; an aborted run is cleaned up silently.
+        settleStalePending(queryClient, todo, keyFor, valid());
         controllersRef.current.delete(controller);
         for (const item of todo) inFlightIdsRef.current.delete(item.id);
         setSubmittingIds(new Set(inFlightIdsRef.current));
@@ -378,7 +437,8 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
     [enabled, workspaceId, targets, queryClient, keyOf, type, csrfToken],
   );
 
-  return { enabled, targetLanguage, ...deriveTranslationState({ targets, entries, enabled, submittingIds }), translate };
+  const progress = collectionRun && enabled ? runProgress(collectionRun.ids, targets, entries) : null;
+  return { enabled, targetLanguage, ...deriveTranslationState({ targets, entries, enabled, submittingIds }), progress, translate };
 }
 
 /**

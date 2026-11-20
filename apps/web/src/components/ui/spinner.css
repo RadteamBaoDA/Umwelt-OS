@@ -61,3 +61,10 @@ html[data-skin='terminal'] .spinner-glyph::before {
     animation: none;
   }
 }
+
+/* The icon keeps Tailwind's animate-spin for route checks; reduced motion stops it (the glyph is handled above). */
+@media (prefers-reduced-motion: reduce) {
+  .spinner-icon.animate-spin {
+    animation: none;
+  }
+}

@@ -20,7 +20,7 @@ export type ItemTranslationController = ContentTranslation & {
   shown: (id: string) => TranslationPayload | undefined;
   /** Requests on-demand translation for one item and ensures its translation is shown once ready. */
   translateOne: (target: TranslationTarget) => void;
-  /** Requests on-demand translation for the next untranslated slice (at most 25) and switches the view to translated. */
+  /** Requests on-demand translation for the next untranslated slice (at most 25) and switches the view to translated. Its run progress is exposed as `progress`. */
   translateAll: () => void;
 };
 
@@ -67,7 +67,7 @@ export function useItemTranslation(type: ResourceType, targets: TranslationTarge
   const translateAll = () => {
     setShowOriginal(false);
     setPerItemOriginal(new Set());
-    translation.translate(nextUntranslatedBatch(targets, translation));
+    translation.translate(nextUntranslatedBatch(targets, translation), { collection: true });
   };
 
   return {

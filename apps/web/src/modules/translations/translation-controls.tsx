@@ -1,13 +1,14 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Languages, Loader2 } from 'lucide-react';
+import { Languages } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { ApiError } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
@@ -18,6 +19,8 @@ import { isWorkspaceTranslationBlocker, TranslationNote } from './translation-no
 import type { TranslationLanguage, TranslationResult } from './types';
 import type { ItemTranslationController } from './use-item-translation';
 import { untranslatedTargets, type TranslationTarget } from './use-content-translation';
+import { TranslationRunProgress } from './translation-progress';
+import { usePendingStage } from './use-pending-stage';
 
 /**
  * Reusable on-demand Translate button for gadgets, rows, and detail views.
@@ -28,6 +31,8 @@ import { untranslatedTargets, type TranslationTarget } from './use-content-trans
  * @param props.onClick Invoked when the user explicitly requests translation.
  * @param props.compact Renders a slimmer inline button suitable for dense list rows and toolbars.
  * @param props.ariaLabel Optional explicit accessible name when `label` is terse.
+ * @param props.pendingLabel Static text shown while pending (the collection progress label); when omitted, a
+ * single pending request walks the staged reassurance labels (8 s, 30 s) driven by `usePendingStage`.
  */
 export function TranslateActionButton({
   label,
@@ -35,28 +40,49 @@ export function TranslateActionButton({
   onClick,
   compact = false,
   ariaLabel,
+  pendingLabel,
 }: {
   label: string;
   pending?: boolean;
   onClick: () => void;
   compact?: boolean;
   ariaLabel?: string;
+  pendingLabel?: string;
 }) {
   const t = useTranslations('translations');
+  const stage = usePendingStage(pending);
+  // The three stage labels share one grid cell: the inactive ones are invisible and aria-hidden, so the button keeps
+  // its width when the stage advances and the accessible name tracks only the visible stage.
+  const stagedLabels = [t('translating'), t('stillTranslating'), t('waitingInQueue')];
   return (
     <Button
       type="button"
       variant={compact ? 'ghost' : 'outline'}
       size="sm"
       disabled={pending}
+      aria-busy={pending || undefined}
       aria-label={ariaLabel}
       onClick={onClick}
       className={
         compact ? 'h-6 gap-1 px-1.5 text-xs font-normal text-muted-foreground hover:text-foreground' : 'h-7 gap-1.5 px-2.5 text-xs'
       }
     >
-      {pending ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Languages className="size-3.5" aria-hidden="true" />}
-      <span>{pending ? t('translating') : label}</span>
+      {pending ? <Spinner className="size-3.5" /> : <Languages className="size-3.5" aria-hidden="true" />}
+      {pending && !pendingLabel ? (
+        <span className="inline-grid">
+          {stagedLabels.map((text, index) => (
+            <span
+              key={index}
+              aria-hidden={index !== stage || undefined}
+              className={index === stage ? 'col-start-1 row-start-1' : 'invisible col-start-1 row-start-1'}
+            >
+              {text}
+            </span>
+          ))}
+        </span>
+      ) : (
+        <span className="tabular-nums">{pending ? pendingLabel : label}</span>
+      )}
     </Button>
   );
 }
@@ -127,8 +153,9 @@ export function CollectionTranslationBar({ controller }: { controller: ItemTrans
   const untranslatedCount = untranslatedTargets(controller.targets, controller).length;
   if (!controller.enabled && controller.results.size === 0) return null;
   if (controller.results.size === 0 && untranslatedCount === 0 && pendingCount === 0) return null;
+  const { progress } = controller;
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="relative flex flex-wrap items-center gap-1.5">
       {controller.results.size > 0 ? (
         <TranslatedBadge
           showOriginal={controller.showOriginal}
@@ -139,11 +166,13 @@ export function CollectionTranslationBar({ controller }: { controller: ItemTrans
       {controller.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
         <TranslateActionButton
           compact
-          label={pendingCount > 0 ? t('translatingCount', { count: pendingCount }) : t('translateAll')}
+          label={t('translateAll')}
           pending={pendingCount > 0}
+          pendingLabel={progress ? t('translatingProgress', { done: progress.done, total: progress.total }) : undefined}
           onClick={controller.translateAll}
         />
       ) : null}
+      <TranslationRunProgress progress={progress} />
     </div>
   );
 }
