@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { test, expect, expectNoRawKeys } from "./fixtures";
+import { forceSkin } from "./translation-helpers";
 import { collectedRecordCount, escapeRe, findSources } from "./sources-helpers";
 import { uiText } from "./ui-text";
 
@@ -110,6 +111,9 @@ async function expectNotStuck(page: Page) {
 }
 
 test.describe.configure({ mode: "serial", timeout: 300_000 });
+test.beforeEach(async ({ page }) => {
+  await forceSkin(page, "default");
+});
 
 test.describe("translation on demand", () => {
   test("setup: BBC news dashboard with stories, translation enabled", async ({
@@ -370,10 +374,7 @@ test.describe("translation on demand", () => {
     page,
   }, testInfo) => {
     for (const skin of ["default", "terminal"] as const) {
-      await page.addInitScript((s) => {
-        if (s === "terminal") localStorage.setItem("umwelt-skin", "terminal");
-        else localStorage.removeItem("umwelt-skin");
-      }, skin);
+      await forceSkin(page, skin);
       await openDash(page);
       if (skin === "terminal")
         await expect(page.locator("html")).toHaveAttribute(
@@ -394,16 +395,28 @@ test.describe("translation on demand", () => {
         path,
         contentType: "image/png",
       });
-      const overflow = await page
-        .getByRole("region")
-        .evaluateAll((els) =>
-          els
-            .filter((e) => e.scrollWidth > e.clientWidth + 1)
-            .map((e) => e.getAttribute("aria-label")),
-        );
-      expect(overflow, `${skin}: gadgets with horizontal overflow`).toEqual([]);
+      // Poll so a transient mid-layout measurement (gadget still loading) is not read as overflow; persistent
+      // horizontal overflow still fails after the timeout.
+      await expect
+        .poll(
+          () =>
+            page
+              .getByRole("region")
+              .evaluateAll((els) =>
+                els
+                  .filter((e) => e.scrollWidth > e.clientWidth + 1)
+                  .map((e) => e.getAttribute("aria-label")),
+              ),
+          {
+            timeout: 15_000,
+            message: `${skin}: gadgets with horizontal overflow`,
+          },
+        )
+        .toEqual([]);
       console.log(`screenshot ${skin}: ${path}`);
     }
+    // Leave the owner storageState on the default skin: the fixture persists localStorage after each test.
+    await page.evaluate(() => localStorage.removeItem("umwelt-skin"));
     console.log(`translation counts ${JSON.stringify(counts)}`);
   });
 });

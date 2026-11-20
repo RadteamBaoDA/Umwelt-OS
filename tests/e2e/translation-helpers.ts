@@ -71,6 +71,40 @@ export async function openDashboard(page: Page, url: string) {
 }
 
 /**
+ * Forces a known skin before the page's own scripts run. The skin lives only in localStorage (`umwelt-skin`), and the
+ * shared fixture saves the browser state back into the owner storageState after every test, so a skin left behind by
+ * one test leaks into every later one. Call before the first navigation; a later call overrides an earlier one.
+ */
+export async function forceSkin(page: Page, skin: "default" | "terminal") {
+  await page.addInitScript((s) => {
+    if (s === "terminal") localStorage.setItem("umwelt-skin", "terminal");
+    else localStorage.removeItem("umwelt-skin");
+  }, skin);
+}
+
+/**
+ * Returns the path of the dashboard that holds the "e2e-translation feed" region, or "" when none does. Walks the
+ * dashboards list (not whichever dashboard /dashboard redirects to), so the result is deterministic.
+ */
+export async function findFeedDashboard(page: Page): Promise<string> {
+  const list = (await (await page.request.get("/api/v1/dashboards")).json()) as
+    { id: string }[] | { items: { id: string }[] };
+  const dashboards = Array.isArray(list) ? list : list.items;
+  for (const d of dashboards) {
+    await page.goto(`/dashboard/${d.id}`);
+    const found = await page
+      .getByRole("region", { name: FEED_NAME })
+      .waitFor({ timeout: 20_000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (found) return `/dashboard/${d.id}`;
+  }
+  return "";
+}
+
+/**
  * Creates the BBC World starter source, a dashboard with a Feed gadget bound to it, waits for clustered stories and
  * enables workspace translation. Returns the dashboard path. Needs outbound public network.
  */
@@ -82,22 +116,36 @@ export async function setupBbcDashboard(
   const create = page.getByRole("button", {
     name: uiText("dashboard", "createFirstDashboard"),
   });
-  if (
-    await create.waitFor({ timeout: 20_000 }).then(
-      () => true,
-      () => false,
-    )
-  ) {
-    await create.click();
-    await page.getByLabel(uiText("dashboard", "dashboardName")).fill(home);
-    await page
-      .getByRole("dialog")
-      .getByRole("button", {
-        name: uiText("dashboard", "create"),
-        exact: true,
-      })
-      .click();
+  // The empty state can flash while the dashboard list loads, so decide only once the route loader is gone and either
+  // the first-run button or an existing dashboard's edit toggle is showing.
+  const edit = page.getByRole("button", {
+    name: uiText("dashboard", "toggleEdit"),
+  });
+  await expect(page.locator("[data-route-loader]")).toBeHidden({
+    timeout: 30_000,
+  });
+  await expect(create.or(edit).first()).toBeVisible({ timeout: 30_000 });
+  const firstRun = !(await edit.isVisible());
+  if (!firstRun) {
+    // A spec that ran earlier on the same stack already built this dashboard (same flow, same feed name): reuse it
+    // instead of re-running the first-run wizard, which no longer exists once a dashboard does.
+    const [existing] = await findSources(page, "BBC");
+    const reused = existing ? await findFeedDashboard(page) : "";
+    if (reused) {
+      await setTranslation(page, true, "vi");
+      return reused;
+    }
+    throw new Error("A dashboard exists but has no BBC feed gadget to reuse");
   }
+  await create.click();
+  await page.getByLabel(uiText("dashboard", "dashboardName")).fill(home);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", {
+      name: uiText("dashboard", "create"),
+      exact: true,
+    })
+    .click();
   await page
     .getByRole("button", { name: uiText("dashboard", "setup.connect") })
     .click();

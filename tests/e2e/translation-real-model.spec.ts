@@ -5,6 +5,7 @@ import { test, expect } from "./fixtures";
 import { escapeRe } from "./sources-helpers";
 import { uiText } from "./ui-text";
 import {
+  forceSkin,
   itemButton,
   openDashboard,
   setTranslation,
@@ -199,6 +200,9 @@ test.describe("translation (real model)", () => {
     "set E2E_REAL_API_KEY / E2E_REAL_BASE_URL / E2E_REAL_MODEL in .env.e2e-real",
   );
 
+  test.beforeEach(async ({ page }) => {
+    await forceSkin(page, "default");
+  });
   test.afterEach(async ({ page }) => {
     await expectNoKeyLeak(page);
   });
