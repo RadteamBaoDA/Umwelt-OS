@@ -20,7 +20,6 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { useSkin } from '@/core/use-skin';
 import type { GadgetFilters, GadgetInstance, GadgetScope } from '../api';
 import { liveMapWeatherKey } from '../gadget-editor-model';
 import { LiveEventLegend } from './live-map-legend';
@@ -78,8 +77,7 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
   const t = useTranslations('dashboard');
   // Overview defaults to the 3D globe; the choice is session-local and never written to the saved layout.
   const [engine, setEngine] = useState<'globe' | 'flat'>('globe');
-  // Terminal shows the demo's short "globe | flat" labels; the full names stay as accessible names.
-  const terminal = useSkin() === 'terminal';
+  // Short "globe | flat" labels; the full names stay as accessible names.
   // Two-button segmented control (not a Select): the pressed segment is the active engine, as in the developer-theme demo.
   const engineSegment = (
     <div role="group" aria-label={t('map.engineLabel')} className="map-engine-seg inline-flex shrink-0 items-center gap-1">
@@ -88,20 +86,20 @@ export function LiveMapOverview({ toolbarStart }: { toolbarStart?: ReactNode }) 
         size="sm"
         variant={engine === 'globe' ? 'default' : 'ghost'}
         aria-pressed={engine === 'globe'}
-        aria-label={terminal ? t('map.globeEngine') : undefined}
+        aria-label={t('map.globeEngine')}
         onClick={() => setEngine('globe')}
       >
-        {terminal ? t('map.globeShort') : t('map.globeEngine')}
+        {t('map.globeShort')}
       </Button>
       <Button
         type="button"
         size="sm"
         variant={engine === 'flat' ? 'default' : 'ghost'}
         aria-pressed={engine === 'flat'}
-        aria-label={terminal ? t('map.flatEngine') : undefined}
+        aria-label={t('map.flatEngine')}
         onClick={() => setEngine('flat')}
       >
-        {terminal ? t('map.flatShort') : t('map.flatEngine')}
+        {t('map.flatShort')}
       </Button>
     </div>
   );
@@ -167,7 +165,7 @@ const COMPACT_ROW_CLASS = 'grid h-[26px] grid-cols-[auto_minmax(0,1fr)_auto_auto
  *
  * @param props.onSelect Called with the event key when its title button is pressed.
  * @param props.inDialog Use the stacked row layout (no caller currently sets this).
- * @param props.terminal Render terminal-skin rows (`HH:MM KIND title #tag`) instead of the default rows.
+ * @param props.logRows Render compact log rows (`HH:MM KIND title #tag`) instead of the dated page rows.
  */
 function LiveEventList({
   events,
@@ -175,14 +173,14 @@ function LiveEventList({
   emptyState,
   resetKey,
   inDialog = false,
-  terminal = false,
+  logRows = false,
 }: {
   events: StoredEvent[];
   onSelect: (key: string) => void;
   emptyState: ReactNode;
   resetKey: string;
   inDialog?: boolean;
-  terminal?: boolean;
+  logRows?: boolean;
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
@@ -205,7 +203,7 @@ function LiveEventList({
     <div className={inDialog ? 'min-h-0' : 'min-h-0 flex-1 overflow-y-auto'}>
       <ul aria-label={t('liveMap.events')} className="divide-y divide-border">
         {shown.visible.map((event) =>
-          terminal ? (
+          logRows ? (
             <TerminalEventRow key={event.key} event={event} onSelect={onSelect} />
           ) : (
             <li key={event.key} className={rowClass}>
@@ -552,31 +550,28 @@ function LiveEmptyState({
  * @param props.onSelect Called with an event key when its row is pressed.
  * @param props.emptyState Shown by the list when there are no events.
  * @param props.resetKey Filter key; changing it collapses the "show more" expansion.
- * @param props.terminal Terminal skin: `live events 37` heading and terminal rows.
  */
 function OverviewEventsPanel({
   events,
   onSelect,
   emptyState,
   resetKey,
-  terminal,
 }: {
   events: StoredEvent[];
   onSelect: (key: string) => void;
   emptyState: ReactNode;
   resetKey: string;
-  terminal: boolean;
 }) {
   const t = useTranslations('dashboard');
   return (
-    <div className={terminal ? 'live-events-term flex flex-col' : 'flex min-h-[10.5rem] shrink-0 flex-col'}>
+    <div className="live-events-term flex flex-col">
       <div className="flex shrink-0 items-center gap-3">
         <h3 className="shrink-0 text-xs font-medium text-muted-foreground">
-          {t('liveMap.events')} {terminal ? <span className="live-events-count">{events.length}</span> : `(${events.length})`}
+          {t('liveMap.events')} <span className="live-events-count">{events.length}</span>
         </h3>
         <LiveEventLegend events={events} />
       </div>
-      <LiveEventList events={events} onSelect={onSelect} emptyState={emptyState} resetKey={resetKey} terminal={terminal} />
+      <LiveEventList events={events} onSelect={onSelect} emptyState={emptyState} resetKey={resetKey} logRows />
     </div>
   );
 }
@@ -627,9 +622,9 @@ function LiveMapPlot({
 }
 
 /**
- * Terminal-skin overview pane (developer-theme `.dash-map`): title bar with the engine/collapse actions, refresh and
+ * Overview pane (developer-theme `.dash-map`, both skins): title bar with the engine/collapse actions, refresh and
  * sources icons, one filter row, the map plot, the event list with its legend, and the credit footer line.
- * Filter state is owned by the caller so the default and terminal layouts share one set of filters.
+ * Filter state is owned by the caller so the overview and gadget layouts share one set of filters.
  */
 function TerminalOverviewMap(p: {
   filtered: StoredEvent[];
@@ -671,7 +666,7 @@ function TerminalOverviewMap(p: {
           count={p.filtered.length}
         />
         {p.plot}
-        <OverviewEventsPanel events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} terminal />
+        <OverviewEventsPanel events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} />
       </div>
       <p className="live-map-foot shrink-0">{t('map.basemapCredit')}</p>
       {p.sourcesDialog}
@@ -679,7 +674,7 @@ function TerminalOverviewMap(p: {
   );
 }
 
-/** Default-skin live map layout: toolbar chips, plot, weather notes, credit line and event list (or overview panel). */
+/** Live map gadget layout (non-overview): toolbar chips, plot, weather notes, credit line, event list and source status. */
 function DefaultLiveMap(p: {
   toolbarStart?: ReactNode;
   tags: string[];
@@ -690,15 +685,12 @@ function DefaultLiveMap(p: {
   onDays: (value: string) => void;
   results: ReturnType<typeof useLiveFeed>['results'];
   onRefresh: () => void;
-  overview: boolean;
-  onOpenSources: () => void;
   plot: ReactNode;
   weather: ReactNode;
   filtered: StoredEvent[];
   onSelect: (key: string) => void;
   emptyState: ReactNode;
   resetKey: string;
-  sourcesDialog: ReactNode;
   sourceStatus: ReactNode;
 }) {
   const t = useTranslations('dashboard');
@@ -714,22 +706,12 @@ function DefaultLiveMap(p: {
         onDays={p.onDays}
         results={p.results}
         onRefresh={p.onRefresh}
-        onOpenSources={p.overview ? p.onOpenSources : undefined}
       />
       {p.plot}
       {p.weather}
       <p className="shrink-0 text-xs text-muted-foreground">{t('map.basemapCredit')}</p>
-      {p.overview ? (
-        <>
-          <OverviewEventsPanel events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} terminal={false} />
-          {p.sourcesDialog}
-        </>
-      ) : (
-        <>
-          <LiveEventList events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} />
-          {p.sourceStatus}
-        </>
-      )}
+      <LiveEventList events={p.filtered} onSelect={p.onSelect} emptyState={p.emptyState} resetKey={p.resetKey} />
+      {p.sourceStatus}
     </section>
   );
 }
@@ -776,7 +758,6 @@ function LiveMapContent({
   toolbarStart?: ReactNode;
   visible?: boolean;
 }) {
-  const terminal = useSkin() === 'terminal';
   const { setNode, size } = useElementSize();
   const [tags, setTags] = useState<string[]>([]);
   const [query, setQuery] = useState('');
@@ -788,7 +769,7 @@ function LiveMapContent({
   const feed = useLiveFeed(scope, { tags, days, query, now }, visible);
   const { workspaceId, isOwner, providers, accepted, config, results, events: filtered, points, statuses } = feed;
   const selectedEvent = filtered.find((event) => event.key === selected);
-  // The overview map reports its event count to the page header (terminal statusline); cleared on unmount.
+  // The overview map reports its event count to the page header (page header summary); cleared on unmount.
   useEffect(() => {
     if (!overview) return undefined;
     publishLiveEventCount(filtered.length);
@@ -823,7 +804,7 @@ function LiveMapContent({
       <LiveSourceStatus providers={providers} config={config} statuses={statuses} inDialog />
     </LiveSourcesDialog>
   );
-  // Props both layouts share; each layout picks what it renders (the terminal one ignores `results`/`weather`).
+  // Props both layouts share; each layout picks what it renders (the overview one ignores `results`/`weather`).
   const shared = {
     toolbarStart,
     tags,
@@ -841,12 +822,11 @@ function LiveMapContent({
     onRefresh: feed.refresh,
     onOpenSources: () => setSourcesOpen(true),
   };
-  if (overview && terminal) return <TerminalOverviewMap {...shared} refreshing={results.some((result) => result.isFetching)} />;
+  if (overview) return <TerminalOverviewMap {...shared} refreshing={results.some((result) => result.isFetching)} />;
   return (
     <DefaultLiveMap
       {...shared}
       results={results}
-      overview={overview}
       weather={<LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />}
       sourceStatus={<LiveSourceStatus providers={providers} config={config} statuses={statuses} />}
     />

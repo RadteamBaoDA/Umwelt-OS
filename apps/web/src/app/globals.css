@@ -314,28 +314,29 @@ html[data-skin='terminal'] [data-slot='tabs-trigger'] {
   line-height: 1.55;
 }
 
-/* Gadget hero figures: 34px bold (demo .metric); the compact figure keeps 24px. */
-html[data-skin='terminal'] .text-figure {
+/* Gadget hero figures: 34px bold (demo .metric); the compact figure keeps 24px. Layout, shared by both skins. */
+.text-figure {
   font-size: 34px;
   line-height: 1.1;
   font-weight: 700;
 }
-html[data-skin='terminal'] .text-figure-sm {
+.text-figure-sm {
   font-weight: 700;
 }
 
-/* Gadget tables (demo table.data): 8px header and 9px body cell padding, hairline rule under each row. */
-html[data-skin='terminal'] .dashboard-gadget-body table th {
+/* Gadget tables (demo table.data): 8px header and 9px body cell padding, hairline rule under each row. Shared by both
+   skins; the uppercase mono header (`table th` above) stays terminal-only. */
+.dashboard-gadget-body table th {
   padding: 8px 10px;
   font-weight: 500;
   color: var(--muted);
   border-bottom: 1px solid var(--line);
 }
-html[data-skin='terminal'] .dashboard-gadget-body table td {
+.dashboard-gadget-body table td {
   padding: 9px 10px;
   border-bottom: 1px solid var(--rule);
 }
-html[data-skin='terminal'] .dashboard-gadget-body table tr:hover td {
+.dashboard-gadget-body table tr:hover td {
   background: var(--active);
 }
 
@@ -376,10 +377,12 @@ html[data-skin='terminal']
     padding: 0 8px;
     font-size: 12px;
   }
-  /* Toggle chips inside gadgets: `[ ] label` / `[x] label`. Icon-only toggles (bookmark) are left alone. */
-  html[data-skin='terminal']
-    :is(.dashboard-gadget-body, #dashboard-overview-map)
-    [data-slot='button'][aria-pressed]:not([data-size='icon']) {
+}
+
+/* Toggle chips inside gadgets and the overview map (compact layout, both skins). Icon-only toggles (bookmark) are left
+   alone. Pressed is the active tint with accent ink; the terminal skin draws `[ ]` / `[x]` glyphs instead of the tint. */
+@media (pointer: fine) {
+  :is(.dashboard-gadget-body, #dashboard-overview-map) [data-slot='button'][aria-pressed]:not([data-size='icon']) {
     min-height: 28px;
     height: 28px;
     padding: 0 6px;
@@ -389,16 +392,22 @@ html[data-skin='terminal']
     border-color: transparent;
     color: var(--muted);
   }
-  html[data-skin='terminal']
+  html:not([data-skin='terminal'])
     :is(.dashboard-gadget-body, #dashboard-overview-map)
-    [data-slot='button'][aria-pressed]:not([data-size='icon'])::before {
-    content: '[ ] ' / '';
-    color: var(--control);
+    [data-slot='button'][aria-pressed='true']:not([data-size='icon']) {
+    background: var(--active);
+    color: var(--accent);
   }
   html[data-skin='terminal']
     :is(.dashboard-gadget-body, #dashboard-overview-map)
     [data-slot='button'][aria-pressed='true']:not([data-size='icon']) {
     color: var(--accent);
+  }
+  html[data-skin='terminal']
+    :is(.dashboard-gadget-body, #dashboard-overview-map)
+    [data-slot='button'][aria-pressed]:not([data-size='icon'])::before {
+    content: '[ ] ' / '';
+    color: var(--control);
   }
   html[data-skin='terminal']
     :is(.dashboard-gadget-body, #dashboard-overview-map)

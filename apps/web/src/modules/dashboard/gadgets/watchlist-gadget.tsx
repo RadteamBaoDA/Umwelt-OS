@@ -4,10 +4,8 @@ import { Plus, Search } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSkin } from '@/core/use-skin';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatDateTime } from '@/core/i18n';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
@@ -17,7 +15,6 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { metricBetterDirection } from './metric-direction';
 import { deltaVsPrevious, formatObservationValue, historyPerSeries, seriesKey } from './provider-observation-gadget';
 import { SeriesRow } from './series-row';
-import { formatRelativeTime } from './relative-time';
 
 /** Literal catalog keys for the screen-reader severity and status labels (no runtime key concatenation). */
 const SEVERITY_KEY = {
@@ -223,7 +220,7 @@ function severityEdge(severity: WatchlistItem['severity']): string {
 
 /**
  * One rule row: a symbol row with sparkline when live observations exist, otherwise the target/condition/time row.
- * In the terminal skin a rule match is a plain `HIT  text` log row (alerting = danger, matched = warning,
+ * A rule match is a plain `HIT  text` log row (alerting = danger, matched = warning,
  * monitoring = muted `idle`); symbol rows keep their value layout.
  */
 function WatchlistRow({
@@ -237,7 +234,6 @@ function WatchlistRow({
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
-  const terminal = useSkin() === 'terminal';
   const edge = severityEdge(item.severity);
   const srSeverity = (
     <span className="sr-only">
@@ -262,43 +258,16 @@ function WatchlistRow({
       </li>
     );
   }
-  if (terminal) {
-    const hit = item.status !== 'monitoring';
-    return (
-      <li
-        className="watch-hit-row"
-        data-status={item.status}
-        title={[item.condition, item.matchReason].filter(Boolean).join(' · ') || undefined}
-      >
-        <span className="watch-hit-level">{hit ? t('watchlist.levelHit') : t('watchlist.levelIdle')}</span>
-        <span className="watch-hit-text">{item.target}</span>
-        {srSeverity}
-      </li>
-    );
-  }
+  const hit = item.status !== 'monitoring';
   return (
-    <li className={`flex items-start justify-between gap-3 border-l-2 py-2 pl-3 ${edge}`}>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{item.target}</p>
-        <p className="truncate text-xs text-muted-foreground">{item.condition}</p>
-        {item.matchReason && <p className="line-clamp-1 text-xs text-muted-foreground">{item.matchReason}</p>}
-        {srSeverity}
-      </div>
-      <div className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-        <p className={item.status === 'alert' ? 'font-semibold text-destructive' : undefined}>
-          {item.lastMatchedAt ? (
-            <time
-              dateTime={item.lastMatchedAt}
-              title={t('watchlist.matchedTitle', { time: formatDateTime(item.lastMatchedAt, display.locale, display.timezone) })}
-            >
-              {formatRelativeTime(item.lastMatchedAt, display.locale)}
-            </time>
-          ) : (
-            t('watchlist.never')
-          )}
-        </p>
-        <p>{t('watchlist.matchCount', { count: item.matchCount })}</p>
-      </div>
+    <li
+      className="watch-hit-row"
+      data-status={item.status}
+      title={[item.condition, item.matchReason].filter(Boolean).join(' · ') || undefined}
+    >
+      <span className="watch-hit-level">{hit ? t('watchlist.levelHit') : t('watchlist.levelIdle')}</span>
+      <span className="watch-hit-text">{item.target}</span>
+      {srSeverity}
     </li>
   );
 }
@@ -318,7 +287,6 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
   const daily = useTranslations('daily');
 
   const [filterQuery, setFilterQuery] = useState<string>('');
-  const terminal = useSkin() === 'terminal';
 
   const definition = instance.definition;
   const highlightRules: HighlightRule[] = definition.highlight_rules ?? [];
@@ -327,8 +295,7 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
 
   const filteredItems = filterWatchItems(items, filterQuery);
   const sortedItems = sortWatchItems(filteredItems);
-  const alertingCount = items.filter((item) => item.status === 'alert').length;
-  // Terminal skin: every `HIT` row counts as alerting, and the tail counts the configured rules (demo `.metric`).
+  // Every `HIT` row counts as alerting, and the tail counts the configured rules (demo `.metric`).
   const hitCount = items.filter((item) => item.status !== 'monitoring').length;
   // The latest match time is the newest real data timestamp this gadget knows about.
   useReportGadgetFreshness(
@@ -343,15 +310,9 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
           className="text-figure-sm"
           title={highlightRules.length > 0 ? daily('highlightRules.applied', { count: highlightRules.length }) : undefined}
         >
-          {terminal ? (
-            // Terminal skin: the alerting count is the big figure, the rest a muted tail (developer-theme `.metric`).
-            <>
-              <span className="watch-figure">{hitCount}</span>{' '}
-              <span className="watch-figure-tail">{t('watchlist.summaryTail', { total: highlightRules.length || items.length })}</span>
-            </>
-          ) : (
-            t('watchlist.summary', { alerting: alertingCount, total: items.length })
-          )}
+          {/* The alerting count is the big figure, the rest a muted tail (developer-theme `.metric`). */}
+          <span className="watch-figure">{hitCount}</span>{' '}
+          <span className="watch-figure-tail">{t('watchlist.summaryTail', { total: highlightRules.length || items.length })}</span>
         </p>
         {onAddRule && (
           <Button type="button" variant="ghost" size="sm" onClick={onAddRule} className="h-7 shrink-0 gap-1 px-2 text-xs">
@@ -361,9 +322,9 @@ export function WatchlistGadget({ instance, initialItems = [], onAddRule }: Watc
         )}
       </div>
 
-      {/* Search filter: the terminal skin hides it for short lists (<= TERMINAL_FILTER_MIN rows), where it is not needed. */}
-      {items.length > (terminal ? TERMINAL_FILTER_MIN : 0) && (
-        <div className={terminal ? 'watch-filter relative shrink-0' : 'relative shrink-0'}>
+      {/* Search filter: hidden for short lists (<= TERMINAL_FILTER_MIN rows), where it is not needed. */}
+      {items.length > TERMINAL_FILTER_MIN && (
+        <div className="watch-filter relative shrink-0">
           <Search className="w-3.5 h-3.5 absolute left-2 top-2 text-muted-foreground pointer-events-none" aria-hidden="true" />
           <Input
             type="search"

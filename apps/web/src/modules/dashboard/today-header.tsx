@@ -2,7 +2,6 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useSkin } from '@/core/use-skin';
 import { useState } from 'react';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -79,14 +78,14 @@ export function TodayHeader({
   });
   const hour = Number(getDateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: timezone }).format(now));
   const greeting = t(greetingKey(hour));
-  // Terminal skin prints the compact demo form ("Thu, Nov 12, 2026"); the default skin keeps the long date.
-  const terminal = useSkin() === 'terminal';
-  const date = getDateTimeFormat(
-    normalizeFormattingLocale(locale),
-    terminal
-      ? { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: timezone }
-      : { dateStyle: 'full', timeZone: timezone },
-  ).format(now);
+  // Compact date form ("Thu, Nov 12, 2026") in both skins.
+  const date = getDateTimeFormat(normalizeFormattingLocale(locale), {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: timezone,
+  }).format(now);
   const counts = useQuery({
     queryKey: ['today-since', lastVisit, sourceIds.join(',')],
     enabled: lastVisit !== null && sourceIds.length > 0,

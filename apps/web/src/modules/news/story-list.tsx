@@ -13,7 +13,6 @@ import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-vie
 import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Button } from '@/components/ui/button';
 import { useLocalPref } from '@/core/use-local-pref';
-import { useSkin } from '@/core/use-skin';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
@@ -189,11 +188,11 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
   );
 }
 
-/** Stories observed within this many minutes carry the NEW level in the terminal log rows; older ones read INFO. */
+/** Stories observed within this many minutes carry the NEW level in the log rows; older ones read INFO. */
 const NEW_STORY_MINUTES = 15;
 
 /**
- * Terminal-skin log row of an embedded story: `HH:MM  LEVEL  title  #publisher` (developer-theme `.log li`).
+ * Log row of an embedded story: `HH:MM  LEVEL  title  #publisher` (developer-theme `.log li`).
  * The title button opens the story detail exactly like the default row; the tag links to the publisher's article when
  * the evidence URL is a safe http(s) URL (licence text stays in the link title). LEVEL is NEW for stories observed in
  * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal. A line under the title holds
@@ -233,7 +232,7 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
       ) : tag ? (
         <span className="story-log-tag">{tag}</span>
       ) : null}
-      {/* Own line under the title (outside the title button), so on-demand translation stays reachable in the terminal log. */}
+      {/* Own line under the title (outside the title button), so on-demand translation stays reachable in the log. */}
       <span className="story-log-actions">
         <StoryTranslateControl vm={vm} story={story} />
         <StoryRowIssue vm={vm} storyId={story.id} />
@@ -243,7 +242,7 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
 }
 
 /**
- * Short lower-case publisher tag of a story for the terminal log row, with its safe article URL and licence text.
+ * Short lower-case publisher tag of a story for the log row, with its safe article URL and licence text.
  * Uses the first evidence item that names a publisher, else the first evidence item's source name; empty tag when none.
  */
 function storyLogTag(story: Story): { tag: string; href: string | undefined; license: string | undefined } {
@@ -310,9 +309,8 @@ function Attribution({ story }: { story: Story }) {
 
 type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 
-/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow terminal panes CSS hides the whole title-bar slot, so the translation toolbar, List | Cards toggle and refresh are repeated in this row (CSS picks the copy) and no control is lost. */
+/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow panes CSS hides the whole title-bar slot, so the translation toolbar, List | Cards toggle and refresh are repeated in this row (CSS picks the copy) and no control is lost. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
-  const terminal = useSkin() === 'terminal';
   const { embedded, actionsHost, incompleteNotice, refreshButton, pageActions, translationToolbarAction } = vm;
   return embedded ? (
     // Slim meta row: partial-data notice on the left, on-demand translation control + refresh on the right (no overlap with stories).
@@ -329,15 +327,13 @@ function StoryListChrome({ vm }: { vm: StoryListVm }) {
           </div>
         </div>
       </TitleBarSlot>
-      {/* Narrow terminal panes: the title-bar toggle and refresh are hidden by CSS (so the meta and `[ collect now ]` fit) and this body-row
+      {/* Narrow panes: the title-bar toggle and refresh are hidden by CSS (so the meta and `[ collect now ]` fit) and this body-row
           copy, shown only when narrow, keeps both reachable. */}
-      {terminal && (
-        <div className="feed-view-narrow ml-auto gap-1">
-          {translationToolbarAction}
-          <FeedViewToggle view={vm.view} setView={vm.setView} />
-          {refreshButton}
-        </div>
-      )}
+      <div className="feed-view-narrow ml-auto gap-1">
+        {translationToolbarAction}
+        <FeedViewToggle view={vm.view} setView={vm.setView} />
+        {refreshButton}
+      </div>
     </div>
   ) : actionsHost ? (
     createPortal(pageActions, actionsHost)
@@ -450,51 +446,9 @@ function StoryListStatus({ vm }: { vm: StoryListVm }) {
   );
 }
 
-/** Hero treatment of the lead story: image, large title, excerpt, source count and attribution. */
-function StoryLead({ vm, story }: { vm: StoryListVm; story: Story }) {
-  const { t, display, onSelectStory, shown, relativeTime } = vm;
-  return (
-    <div data-testid="news-lead" className="min-w-0">
-      <FeedImage src={story.image_url} className="mb-2" />
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={(event) => onSelectStory(story.id, event.currentTarget)}
-        className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="text-xl font-semibold leading-snug">{shown(story)?.title ?? story.title}</span>
-        {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt) ? (
-          <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
-            {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}
-          </span>
-        ) : null}
-        <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
-          {/* A single source is not a headline figure: show it as plain meta text instead. */}
-          {story.source_count >= 2 ? (
-            <>
-              <span className="text-figure-sm text-foreground">{story.source_count}</span>
-              <span>{t('sourcesLabel', { count: story.source_count })}</span>
-            </>
-          ) : (
-            <span>{t('sources', { count: story.source_count })}</span>
-          )}
-          <span aria-hidden="true">·</span>
-          <span className="tabular-nums" title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
-            {relativeTime(story.observed_at)}
-          </span>
-        </span>
-      </Button>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Attribution story={story} />
-        <StoryTranslateControl vm={vm} story={story} />
-      </div>
-    </div>
-  );
-}
-
-/** Lead story beside the list when embedded, otherwise the plain story list. */
+/** Embedded list view as a log, embedded cards as a grid, otherwise the plain story list. */
 function StoryListBody({ vm }: { vm: StoryListVm }) {
-  const { leadStory, more, view, embedded } = vm;
+  const { more, view, embedded } = vm;
   const rows = more.visible;
   if (vm.log)
     return (
@@ -504,17 +458,7 @@ function StoryListBody({ vm }: { vm: StoryListVm }) {
         ))}
       </ol>
     );
-  return leadStory ? (
-    // Wide gadgets put the lead left and the list right; narrow ones stack them.
-    <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-      <StoryLead vm={vm} story={leadStory} />
-      <ol className="min-w-0 divide-y divide-border">
-        {rows.map((story) => (
-          <StoryRow key={story.id} vm={vm} story={story} />
-        ))}
-      </ol>
-    </div>
-  ) : (
+  return (
     <ol className={embedded && view === 'cards' ? 'grid shrink-0 gap-3 @[40rem]/gadget:grid-cols-2' : 'shrink-0 divide-y divide-border'}>
       {rows.map((story) => (
         <StoryRow key={story.id} vm={vm} story={story} />
@@ -606,7 +550,7 @@ function useStoryListData(props: StoryListProps) {
   };
 }
 
-/** Wires on-demand translation for loaded stories and derives the partial-data notice, relevance spread and lead story. */
+/** Wires on-demand translation for loaded stories and derives the partial-data notice and relevance spread. */
 function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const { t, incompleteLabel, stories, incompleteReasons, embedded } = p;
   const tTrans = useTranslations('translations');
@@ -668,17 +612,9 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const scores = stories.flatMap((s) => (s.relevance == null ? [] : [Math.round(s.relevance * 100)]));
   const relevanceVaries = scores.length > 1 && Math.max(...scores) - Math.min(...scores) >= 10;
 
-  // Embedded lead: the story with the most sources (first on ties) gets the hero treatment.
-  const leadStory =
-    embedded && stories.length > 0
-      ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
-      : null;
-  // Cards mode drops the lead hero: every story is a card. Embedded lists collapse to the lead + 4 rows or 6 cards.
-  // Terminal skin renders the list view as a log (no lead hero), eight rows before "show more".
-  const log = useSkin() === 'terminal' && embedded && p.view === 'list';
-  const heroStory = p.view === 'cards' || log ? null : leadStory;
-  const listStories = heroStory ? stories.filter((story) => story.id !== heroStory.id) : stories;
-  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : log ? 8 : 4, `${p.sourceTab}|${p.view}`);
+  // Embedded list view is a log (no lead hero), eight rows before "show more"; cards show six.
+  const log = embedded && p.view === 'list';
+  const more = useShowMore(stories, !embedded ? stories.length : p.view === 'cards' ? 6 : log ? 8 : 4, `${p.sourceTab}|${p.view}`);
 
   return {
     ...p,
@@ -688,9 +624,7 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     incompleteNotice,
     scores,
     relevanceVaries,
-    leadStory: heroStory,
     log,
-    listStories,
     more,
     showOriginal,
     setShowOriginal,

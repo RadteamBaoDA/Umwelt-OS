@@ -14,7 +14,10 @@ import type { DashboardGroup } from './api';
 import { TodayHeader } from './today-header';
 import type { LayoutEditOrigin } from './layout-geometry';
 
-/** Persistent panel tab list inside the page's Tabs root; Add stays outside the keyboard roving set. */
+/**
+ * Persistent panel tab list inside the page's Tabs root; Add stays outside the keyboard roving set. In both skins the
+ * strip hugs its tabs so the muted "+ Add tab" sits right beside them (shared terminal layout).
+ */
 export function GroupTabs({
   groups,
   onAdd,
@@ -30,7 +33,7 @@ export function GroupTabs({
   const t = useTranslations('dashboard');
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-border pb-2">
-      <div className="min-w-0 flex-1 overflow-x-auto">
+      <div className="min-w-0 flex-initial overflow-x-auto">
         <TabsList className="h-9 min-w-max bg-muted/30 p-0.5">
           {[...groups]
             .sort((a, b) => Number(b.is_overview) - Number(a.is_overview) || a.position - b.position)
@@ -48,7 +51,7 @@ export function GroupTabs({
         </TabsList>
       </div>
       {canAdd && (
-        <Button type="button" size="sm" variant="outline" onClick={onAdd} className="shrink-0">
+        <Button type="button" size="sm" variant="ghost" onClick={onAdd} className="shrink-0 text-muted-foreground">
           <Plus className="size-4" aria-hidden="true" />
           {t('addPanel')}
         </Button>

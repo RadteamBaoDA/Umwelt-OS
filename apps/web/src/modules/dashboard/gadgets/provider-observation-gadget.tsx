@@ -12,11 +12,9 @@ import { isStale, periodKind } from '@/modules/sources';
 import type { GadgetInstance } from '../api';
 import { METRIC_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { useReportGadgetFreshness } from '../gadget-freshness';
-import { GadgetKpi } from './gadget-kpi';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatMetricLabel } from './metric-label';
 import { metricBetterDirection } from './metric-direction';
-import { SeriesRow } from './series-row';
 import { RangeChips } from './range-chips';
 import {
   axisDateFormatter,
@@ -38,7 +36,6 @@ import {
   TerminalSparkRow,
   terminalObservationLayout,
 } from './observation-terminal';
-import { useSkin } from '@/core/use-skin';
 import { getDateTimeFormat } from '@/modules/shared';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
@@ -383,44 +380,15 @@ function TerminalObservationRows({
   );
 }
 
-/** Default-skin single reading: KPI with delta, range chips and the axes-bearing history chart. */
-function SingleKpi({
-  item: single,
-  history,
-  fmt,
-  range,
-}: {
-  item: WorldObservation;
-  history: ReturnType<typeof historyPerSeries>;
-  fmt: Pick<ReturnType<typeof useObservationFormatters>, 't' | 'display' | 'timesTitle' | 'labelOf' | 'unitOf'>;
-  range: RangeControl;
-}) {
-  const { t, display, timesTitle, labelOf, unitOf } = fmt;
-  return (
-    <div
-      title={timesTitle(single)}
-      data-testid="observation-row"
-      role="group"
-      aria-label={single.value === null ? t('weather.missingValue') : `${single.value} ${single.currency ?? single.unit}`}
-    >
-      <GadgetKpi
-        label={labelOf(single)}
-        value={single.value}
-        currency={single.currency ?? undefined}
-        unit={unitOf(single)}
-        format={(v) => formatObservationValue(single, v, display.locale)}
-        deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))}
-        better={metricBetterDirection(single.metric)}
-        series={history.get(seriesKey(single))}
-        sparkHeight={110}
-        axes={chartAxes(history.get(seriesKey(single)), display.locale, display.timezone)}
-        chips={<RangeChips value={range.value} onChange={range.onChange} />}
-      />
-    </div>
-  );
-}
-
-/** One reading as a KPI (single series, with range chips and chart axes), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
+/**
+ * Observation readings in the shared compact layout: a single-series chart (figure, change tail, range chips, history
+ * line), sparkline rows for small multi-series panes, or a symbol / last / change table, with observed/published/
+ * collected tooltips on every reading.
+ *
+ * @param props.instance Gadget instance; its title labels the list.
+ * @param props.items Latest reading per series; `props.history` their per-series history for sparklines.
+ * @param props.range Session-local chart range control used by the single-series chart.
+ */
 function ObservationRows({
   instance,
   items,
@@ -436,76 +404,15 @@ function ObservationRows({
   sources: ReturnType<typeof useEffectiveLookback>['sources'];
   sourceIds: string[];
 }) {
-  const { t, display, timesTitle, labelOf, unitOf } = useObservationFormatters(sources, sourceIds);
-  const single = items.length === 1 ? items[0] : null;
-  const terminal = useSkin() === 'terminal';
-  if (terminal)
-    return (
-      <TerminalObservationRows
-        instance={instance}
-        items={items}
-        history={history}
-        range={range}
-        fmt={{ t, display, timesTitle, labelOf }}
-      />
-    );
-  const kpiStrip = items.length >= 2 && items.length <= 8; // wide gadgets show these as one KPI row
-  if (single) return <SingleKpi item={single} history={history} fmt={{ t, display, timesTitle, labelOf, unitOf }} range={range} />;
-  const list = (
-    <ul
-      className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`}
-      aria-label={instance.title || t('providerObs.title')}
-    >
-      {items.map((item) => (
-        <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
-          <SeriesRow
-            label={labelOf(item)}
-            value={item.value}
-            currency={item.currency ?? undefined}
-            unit={unitOf(item)}
-            format={(v) => formatObservationValue(item, v, display.locale)}
-            series={history.get(seriesKey(item))}
-            deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))}
-            better={metricBetterDirection(item.metric)}
-          />
-        </li>
-      ))}
-    </ul>
-  );
-  if (!kpiStrip) return list;
+  const { t, display, timesTitle, labelOf } = useObservationFormatters(sources, sourceIds);
   return (
-    <>
-      <ul
-        data-testid="observation-kpi-strip"
-        aria-label={instance.title || t('providerObs.title')}
-        className="hidden gap-x-6 @[48rem]/gadget:grid"
-        style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
-      >
-        {items.map((item) => (
-          <li key={item.id} title={timesTitle(item)} data-testid="observation-kpi">
-            <GadgetKpi
-              size="sm"
-              sparkHeight={24}
-              label={labelOf(item)}
-              value={item.value}
-              currency={item.currency ?? undefined}
-              unit={unitOf(item)}
-              format={(v) => formatObservationValue(item, v, display.locale)}
-              deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))}
-              better={metricBetterDirection(item.metric)}
-              series={history.get(seriesKey(item))}
-            />
-          </li>
-        ))}
-      </ul>
-      {list}
-    </>
+    <TerminalObservationRows instance={instance} items={items} history={history} range={range} fmt={{ t, display, timesTitle, labelOf }} />
   );
 }
 
 /**
  * Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes). One series renders a KPI
- * (figure, delta vs previous observation, sparkline); several render SeriesRows.
+ * (figure, delta vs previous observation, sparkline); several render sparkline rows or a table.
  * Several bound sources (up to 5) each get their own query, because one shared request would drop symbol-less rows
  * (Fear & Greed, FX) under a `symbols` filter and share a row budget; their rows are merged (labels prefixed with
  * the source name) and the merged list is capped at 20. `symbols` apply only to symbol-keyed providers. Observed/published/collected times

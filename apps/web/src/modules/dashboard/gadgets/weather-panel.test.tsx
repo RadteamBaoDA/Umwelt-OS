@@ -176,15 +176,12 @@ describe('WeatherPanel', () => {
       </QueryClientProvider>,
     );
     const strip = await screen.findByTestId('weather-minmax');
-    expect(strip.textContent).toBe('Low 23°C · High 31°C');
+    expect(strip.textContent).toBe('low 23° · high 31°');
   });
 });
 
-describe('WeatherPanel terminal skin', () => {
-  afterEach(() => document.documentElement.removeAttribute('data-skin'));
-
-  it('renders the figure, one summary line and the same readings as the default panel', async () => {
-    document.documentElement.setAttribute('data-skin', 'terminal');
+describe('WeatherPanel compact layout', () => {
+  it('renders the figure and one summary line without skin-specific markup', async () => {
     api.listWorldObservationWindow.mockResolvedValue({
       truncated: false,
       items: [

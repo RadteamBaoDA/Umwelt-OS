@@ -160,12 +160,12 @@ describe('ProviderObservationGadget', () => {
     });
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [at(3, 110, 'c'), at(2, 100, 'b'), at(1, 90, 'a')] });
     view();
-    const pill = await screen.findByTestId('delta-pill');
-    expect(pill.textContent).toContain('+10.0%');
+    await screen.findByTestId('observation-row');
+    expect(document.querySelector('.obs-term-figure > small')?.textContent).toContain('+10.00%');
     expect(screen.getByTestId('sparkline')).toBeTruthy();
   });
 
-  it('multiple series render one SeriesRow each with its own delta', async () => {
+  it('multiple series render one sparkline row each with its own delta', async () => {
     const row = (id: string, symbol: string, day: number, value: number) => ({
       ...base,
       id,
@@ -182,12 +182,12 @@ describe('ProviderObservationGadget', () => {
     });
     view();
     await screen.findAllByTestId('observation-row');
-    const pills = screen.getAllByTestId('delta-pill').map((p) => p.textContent);
+    const pills = Array.from(document.querySelectorAll('.obs-term-chg')).map((p) => p.textContent);
     expect(pills.some((text) => text?.includes('50.0%'))).toBe(true);
-    expect(pills.some((text) => text?.includes('0.0%') && !text.includes('50'))).toBe(true);
+    expect(pills.some((text) => text === '0.0%')).toBe(true);
   });
 
-  it('keeps precision for small values and compacts large ones in the KPI figure', async () => {
+  it('keeps precision for small values in the chart figure and prints large ones in full', async () => {
     api.listWorldObservationWindow.mockResolvedValue({
       truncated: false,
       items: [{ ...base, id: 'o1', provider: 'binance', metric: 'price', value: 0.0067, unit: 'u', observed_at: '2026-10-09T00:00:00Z' }],
@@ -210,10 +210,10 @@ describe('ProviderObservationGadget', () => {
       ],
     });
     view({ id: 'g9', title: '', definition: { source_ids: ['s1'], scope: { metrics: [] } } } as never);
-    expect((await screen.findByTestId('observation-row')).textContent).toMatch(/25T/);
+    expect((await screen.findByTestId('observation-row')).textContent).toMatch(/25,000,000,000,000/);
   });
 
-  it('formats multi-series rows with the same small-value precision', async () => {
+  it('formats multi-series rows with compact large values', async () => {
     const row = (id: string, symbol: string, value: number) => ({
       ...base,
       id,
@@ -227,7 +227,7 @@ describe('ProviderObservationGadget', () => {
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: [row('a', 'AAA', 0.0067), row('b', 'BBB', 2.5e13)] });
     view();
     const rows = await screen.findAllByTestId('observation-row');
-    expect(rows[0].textContent).toContain('0.0067');
+    // Sparkline rows use the compact reading (one fraction digit, thousands abbreviated).
     expect(rows[1].textContent).toMatch(/25T/);
   });
 
@@ -349,12 +349,12 @@ describe('latestPerSeries', () => {
       ],
     }));
     view({ id: 'g5', title: '', definition: { source_ids: ['s1', 's2'], scope: { metrics: [] } } } as never);
-    expect((await screen.findAllByText(/^Kp A · /))[0]).toBeTruthy();
-    expect(screen.getAllByText(/^Kp B · /).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/^kp a · /))[0]).toBeTruthy();
+    expect(screen.getAllByText(/^kp b · /).length).toBeGreaterThan(0);
     expect(screen.getAllByTestId('observation-row')).toHaveLength(2);
   });
 
-  it('renders a KPI strip (CSS-gated to wide containers) plus the list for 2-8 series, list only for more', async () => {
+  it('picks sparkline rows for 2-8 series and the symbol table for more, with no KPI strip', async () => {
     const row = (id: string, symbol: string) => ({
       ...base,
       id,
@@ -367,15 +367,14 @@ describe('latestPerSeries', () => {
     });
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: ['A', 'B', 'C'].map((s) => row(s, s)) });
     const first = view();
-    const strip = await screen.findByTestId('observation-kpi-strip');
-    expect(strip.className).toContain('@[48rem]/gadget:grid');
-    expect(strip.className).toContain('hidden');
-    expect(screen.getAllByTestId('observation-kpi')).toHaveLength(3);
-    expect(screen.getAllByTestId('observation-row')[0]!.closest('ul')!.className).toContain('@[48rem]/gadget:hidden');
+    await screen.findAllByTestId('observation-row');
+    expect(document.querySelectorAll('.obs-spark-row')).toHaveLength(3);
+    expect(screen.queryByTestId('observation-kpi-strip')).toBeNull();
     first.unmount();
     api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: 'ABCDEFGHI'.split('').map((s) => row(s, s)) });
     view();
     await screen.findAllByTestId('observation-row');
-    expect(screen.queryByTestId('observation-kpi-strip')).toBeNull();
+    expect(document.querySelector('.obs-term-head')).toBeTruthy();
+    expect(document.querySelector('.obs-spark-row')).toBeNull();
   });
 });

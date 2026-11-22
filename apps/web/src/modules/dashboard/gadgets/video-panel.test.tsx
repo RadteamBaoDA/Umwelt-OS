@@ -80,10 +80,11 @@ describe('VideoPanel', () => {
   });
 
   it('accepts media projections regardless of provider or URL hostname and shows creator, time and duration', async () => {
-    mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
+    mocks.list.mockResolvedValue({ items: [projection('hero'), projection('a')], next_cursor: null });
     renderPanel(['s1']);
     expect(await screen.findByText('Media a')).toBeTruthy();
-    expect(screen.getByText(/Creator/)).toBeTruthy();
+    // The first video is the hero frame; the second reads as a list row with creator, time and duration.
+    expect(screen.getAllByText(/Creator/).length).toBeGreaterThan(0);
     expect(screen.getByText(/3 min/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Media a' }).getAttribute('href')).toBe('https://media.example/a');
   });
@@ -113,7 +114,7 @@ describe('VideoPanel', () => {
   });
 
   it('searches loaded projection metadata and sends only immutable IDs to Ask AI', async () => {
-    mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
+    mocks.list.mockResolvedValue({ items: [projection('hero'), projection('a')], next_cursor: null });
     renderPanel(['s1']);
     await screen.findByText('Media a');
     fireEvent.change(screen.getByRole('textbox', { name: 'Search media' }), { target: { value: 'creator' } });
@@ -126,7 +127,7 @@ describe('VideoPanel', () => {
   });
 
   it('supports owner read and bookmark interactions', async () => {
-    mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
+    mocks.list.mockResolvedValue({ items: [projection('hero'), projection('a')], next_cursor: null });
     renderPanel(['s1']);
     await screen.findByText('Media a');
     await userEvent.click(screen.getByRole('button', { name: 'Mark read' }));

@@ -18,7 +18,6 @@ import { DashboardHeader, formatRelativeAge } from './dashboard-header';
 import { DashboardTranslationControl } from '@/modules/translations';
 import { buildHeaderSummary } from './header-summary';
 import { useLiveEventCount } from './live-event-count';
-import { useSkin } from '@/core/use-skin';
 import './dashboard-skin.css';
 import { GroupTabs, LayoutNotices, StaleSourcesPanel, TimezoneFooter, TodayHeaderGate } from './dashboard-panels';
 import { FreshnessStrip } from './freshness-strip';
@@ -107,7 +106,7 @@ type PageOps = {
 
 /**
  * Dashboard header wired to the data, layout and CRUD hooks (summary text, edit toggle, switcher actions).
- * On the Overview group (and, in the terminal skin, every group) the today greeting (`TodayHeaderGate`) renders under
+ * On every group the today greeting (`TodayHeaderGate`) renders under
  * the title; its own visibility rule still applies. Terminal summaries show the gadget count on non-Overview groups.
  *
  * @param overview True when the active group is the Overview group.
@@ -134,7 +133,6 @@ function ConnectedHeader({
   const display = useDisplayPreferences();
   const { session, save } = ops;
   const { activeDashboard, sources, showFirstRun } = data;
-  const terminal = useSkin() === 'terminal';
   // Only the overview group mounts the live map; elsewhere the count is null and its fragment is omitted.
   const liveEvents = useLiveEventCount();
   return (
@@ -151,18 +149,14 @@ function ConnectedHeader({
         t,
         sources.lastUpdatedAt !== null ? formatRelativeAge(sources.lastUpdatedAt, display.locale) : null,
         sources.staleSources.length,
-        terminal
-          ? {
-              sources: overview ? sources.dashboardSources.length : 0,
-              liveEvents: liveEvents,
-              // Non-Overview groups report their gadget count instead of the dashboard-wide source count.
-              gadgets: overview ? null : (activeDashboard?.instances.filter((i) => i.group_id === session.activeGroupId).length ?? 0),
-            }
-          : undefined,
+        {
+          sources: overview ? sources.dashboardSources.length : 0,
+          liveEvents: liveEvents,
+          // Non-Overview groups report their gadget count instead of the dashboard-wide source count.
+          gadgets: overview ? null : (activeDashboard?.instances.filter((i) => i.group_id === session.activeGroupId).length ?? 0),
+        },
       )}
-      greeting={
-        overview || terminal ? <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} /> : undefined
-      }
+      greeting={<TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />}
       translationControl={<DashboardTranslationControl />}
       onSwitch={save.requestSwitchDashboard}
       onCreate={() => crud.setCreateOpen(true)}

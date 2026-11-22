@@ -25,7 +25,6 @@ import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
-import { useSkin } from '@/core/use-skin';
 
 /** Props for the VideoPanel gadget component. */
 export interface VideoPanelProps {
@@ -141,8 +140,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     `${item.title} ${item.excerpt} ${item.media?.creator ?? ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
   );
   const more = useShowMore(items, 5, `${selectedSources.join(',')}:${search}`);
-  const terminal = useSkin() === 'terminal';
-  const first = terminal ? terminalFirstVideo(items) : undefined;
+  const first = terminalFirstVideo(items);
   useReportGadgetFreshness(null, items.length ? daily('streamCount', { count: items.length }) : null);
 
   return (

@@ -8,9 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { useSkin } from '@/core/use-skin';
 import { cleanExcerpt } from '@/modules/news';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 import {
@@ -94,16 +92,15 @@ function SelectModeToggle({ selectMode, onToggle }: { selectMode: boolean; onTog
   );
 }
 
-/** Terminal-only: hosts the select toggle in the gadget title bar (it rides in the first row otherwise). */
+/** Hosts the select toggle in the gadget title bar while records exist and selection mode is off. */
 function TableToolbar({ visible, toggle }: { visible: boolean; toggle: React.ReactNode }) {
-  if (useSkin() !== 'terminal' || !visible) return null;
+  if (!visible) return null;
   return <TitleBarSlot>{toggle}</TitleBarSlot>;
 }
 
-/** Terminal-only column header row (TITLE / SOURCE / PUBLISHED); decorative, so hidden from assistive technology. */
+/** Column header row (TITLE / SOURCE / PUBLISHED); decorative, so hidden from assistive technology. */
 function TableHead() {
   const t = useTranslations('dashboard');
-  if (useSkin() !== 'terminal') return null;
   return (
     <li className="tbl-head" aria-hidden="true">
       <span>{t('tableColTitle')}</span>
@@ -177,20 +174,16 @@ function TableRecordRow({
   selectMode,
   checked,
   setSelectedRecords,
-  toggle,
   translation,
 }: {
   record: FeedDocument;
   selectMode: boolean;
   checked: boolean;
   setSelectedRecords: React.Dispatch<React.SetStateAction<Record<string, SelectedRecordIdentity>>>;
-  /** The select-mode toggle, rendered in the first row at rest. */
-  toggle: React.ReactNode;
   /** Shared on-demand document translation controller for this table. */
   translation: ItemTranslationController;
 }) {
   const display = useDisplayPreferences();
-  const terminal = useSkin() === 'terminal';
   const translated = translation.shown(record.document_id);
   const effectiveTitle = translated?.title ?? record.title;
   const sourceName = record.provider_metadata?.source_fields?.source;
@@ -200,18 +193,15 @@ function TableRecordRow({
     <li className="tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
       {selectMode && <TableRowCheckbox record={record} checked={checked} setSelectedRecords={setSelectedRecords} />}
       <TableRowTitle title={effectiveTitle} excerpt={excerpt} />
-      {terminal && <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>}
+      <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>
       <div className="tbl-date flex shrink-0 flex-col items-end gap-0.5">
-        {terminal ? null : toggle}
         <ItemTranslateButton
           controller={translation}
           target={{ id: record.document_id, revision: record.document_version_id }}
           title={effectiveTitle}
         />
         <time className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" dateTime={stamp ?? undefined}>
-          {terminal
-            ? formatTerminalStamp(stamp, display.locale, display.timezone)
-            : formatDateTime(stamp, display.locale, display.timezone)}
+          {formatTerminalStamp(stamp, display.locale, display.timezone)}
         </time>
       </div>
     </li>
@@ -289,7 +279,7 @@ export function TablePanel({ instance }: TablePanelProps) {
 
   return (
     <section className="flex h-full flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
-      {/* At rest the toggle rides in the first row (no row of its own); selection mode needs room for Ask AI + Done. */}
+      {/* At rest the toggle rides in the title bar; selection mode needs room for Ask AI + Done. */}
       <TableToolbar visible={records.length > 0 && !selectMode} toggle={toggle} />
       {records.length > 0 && selectMode && (
         <TableSelectionBar
@@ -329,14 +319,13 @@ export function TablePanel({ instance }: TablePanelProps) {
         // Stacked rows: title/excerpt on the left, date right on wide bodies and wrapped below on narrow ones.
         <ul className="tbl-list min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
           <TableHead />
-          {records.map((record, index) => (
+          {records.map((record) => (
             <TableRecordRow
               key={record.document_id}
               record={record}
               selectMode={selectMode}
               checked={selectedIds.has(record.document_id)}
               setSelectedRecords={setSelectedRecords}
-              toggle={index === 0 && !selectMode ? toggle : null}
               translation={translation}
             />
           ))}

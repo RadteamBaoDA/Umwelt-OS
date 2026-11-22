@@ -16,7 +16,6 @@ import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-vie
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
-import { useSkin } from '@/core/use-skin';
 import { FEED_LANGUAGES, languageLabel, type FeedStreamItem, type SelectedTelegramIdentity } from './feed-model';
 import { formatRelativeTime } from './relative-time';
 import { ItemTranslateButton, type ItemTranslationController } from '@/modules/translations';
@@ -247,7 +246,7 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
 }
 
 /**
- * Terminal-skin Telegram message row (developer-theme `.dash-msg`): unread dot, channel name and clock on the first
+ * Telegram message row (developer-theme `.dash-msg`): unread dot, channel name and clock on the first
  * line, the message text on the second. Keeps the read/bookmark actions and selection checkbox of the standard row.
  *
  * @param props.item Message to show; `props.ctx` supplies selection and interaction handlers.
@@ -343,11 +342,10 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
 
 /** Lead + list (or a responsive card grid): one DOM per item; the container query turns the first item into a lead on wide gadgets. */
 export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRowContext }) {
-  const terminal = useSkin() === 'terminal';
   const [lead, ...rest] = items;
   if (!lead) return null;
-  // Terminal Telegram feeds are plain two-line log rows: no wide-gadget lead headline.
-  if (terminal && ctx.isTelegram && ctx.view !== 'cards') {
+  // Telegram feeds are plain two-line log rows: no wide-gadget lead headline.
+  if (ctx.isTelegram && ctx.view !== 'cards') {
     return (
       <ul className="msg-log min-w-0">
         {items.map((item) => (
@@ -403,7 +401,7 @@ export function FeedFilterPopover(props: FeedFilterProps) {
       <PopoverTrigger asChild>
         <Button type="button" variant="ghost" size="sm" className="feed-tool-opt h-8 gap-1 px-2 text-xs">
           <ListFilter className="h-3.5 w-3.5" aria-hidden="true" />
-          {/* Terminal skin keeps the label for assistive tech only; the icon alone shows in the title bar. */}
+          {/* The title-bar copy keeps the label for assistive tech only; the icon alone shows in the title bar. */}
           <span className="feed-tool-label">
             {activeFilterCount > 0 ? t('feed.filterActive', { count: activeFilterCount }) : t('feed.filter')}
           </span>
@@ -492,20 +490,17 @@ export interface FeedToolbarProps {
   setView: (view: FeedView) => void;
 }
 
-/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. In the terminal skin it renders in the gadget title bar (`TitleBarSlot`); in narrow panes the List | Cards toggle moves from the title bar to a body row (CSS decides which copy shows), so no control is lost. */
+/** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. It renders in the gadget title bar (`TitleBarSlot`); in narrow panes the List | Cards toggle moves from the title bar to a body row (CSS decides which copy shows), so no control is lost. */
 export function FeedToolbar(props: FeedToolbarProps) {
   const t = useTranslations('dashboard');
-  const terminal = useSkin() === 'terminal';
   const { onlyUnread, selectMode, refreshing } = props;
   return (
     <>
-      {/* Narrow terminal panes: the title-bar copy of the view toggle is hidden by CSS (`.feed-view-slot`) so the meta and
+      {/* Narrow panes: the title-bar copy of the view toggle is hidden by CSS (`.feed-view-slot`) so the meta and
         `[ collect now ]` keep their room; this body-row copy (shown only when narrow) keeps list/cards reachable. */}
-      {terminal && (
-        <div className="feed-view-narrow">
-          <FeedViewToggle view={props.view} setView={props.setView} />
-        </div>
-      )}
+      <div className="feed-view-narrow">
+        <FeedViewToggle view={props.view} setView={props.setView} />
+      </div>
       <TitleBarSlot>
         <div className="gadget-toolbar flex items-center justify-between gap-2 text-xs">
           <Button

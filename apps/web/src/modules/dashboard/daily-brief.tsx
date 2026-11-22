@@ -267,8 +267,8 @@ function CurrentRecords({ data, display }: { data: DailyContextData; display: Di
 }
 
 /**
- * Terminal pane foot (demo `.pane-foot`): `Tasks due N · Active goals M` on the left, and the current-record refresh
- * time reported as the gadget freshness ("updated ..." on the right). Portaled only in the terminal skin.
+ * Pane foot (demo `.pane-foot`): `Tasks due N · Active goals M` on the left, and the current-record refresh
+ * time reported as the gadget freshness ("updated ..." on the right). Portaled into the gadget foot.
  *
  * @param props.data Selected-day context whose widgets carry the task and goal counts.
  */

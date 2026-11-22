@@ -4,7 +4,6 @@ import { useState, type ReactNode } from 'react';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useLocalPref } from '@/core/use-local-pref';
-import { useSkin } from '@/core/use-skin';
 import { useTranslations } from 'next-intl';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LiveMapOverview } from './gadgets/live-map-gadget';
@@ -16,7 +15,7 @@ const COLLAPSE_VALUES = ['0', '1'] as const;
 
 /**
  * Collapse/expand control of the Overview map; disclosure semantics (aria-expanded) with a stable label per state.
- * `iconOnly` (terminal skin, expanded) shows just the icon inside the map title bar; the label stays as the accessible name.
+ * `iconOnly` (expanded) shows just the icon inside the map title bar; the label stays as the accessible name.
  */
 function MapToggle({ collapsed, iconOnly, onToggle }: { collapsed: boolean; iconOnly: boolean; onToggle: () => void }) {
   const t = useTranslations('dashboard');
@@ -65,11 +64,8 @@ export function DashboardOverview({
   // Desktop-only: the compact Map | Gadgets tab switch already lets small screens hide the map.
   const [collapsedFlag, setCollapsedFlag] = useLocalPref<'0' | '1'>(MAP_COLLAPSED_KEY, '0', COLLAPSE_VALUES);
   const collapsed = collapsedFlag === '1';
-  const terminal = useSkin() === 'terminal';
   const [compactView, setCompactView] = useState<'map' | 'gadgets'>('map');
-  const toggle = (
-    <MapToggle collapsed={collapsed} iconOnly={terminal && !collapsed} onToggle={() => setCollapsedFlag(collapsed ? '0' : '1')} />
-  );
+  const toggle = <MapToggle collapsed={collapsed} iconOnly={!collapsed} onToggle={() => setCollapsedFlag(collapsed ? '0' : '1')} />;
   const map = (
     <div id={MAP_PANEL_ID} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       {/* Toggle sits in the map toolbar row (not absolutely positioned) so it cannot cover the filters. */}
