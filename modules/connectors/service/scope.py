@@ -8,7 +8,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from ipaddress import ip_address
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import (
@@ -25,6 +25,16 @@ from core.errors import (
     NotFoundError,
 )
 from core.workspaces.schemas import Scope
+from modules.connectors.backends import (
+    IGDB_SCOPE_FIELDS,
+    LISTENBRAINZ_SCOPE_FIELDS,
+    PODCAST_INDEX_SCOPE_FIELDS,
+    STEAM_SCOPE_FIELDS,
+    TVMAZE_SCOPE_FIELDS,
+    YOUTUBE_API_SCOPE_FIELDS,
+    YOUTUBE_SCOPE_FIELDS,
+    YOUTUBE_TARGET_FIELDS,
+)
 from modules.connectors.models import (
     AgentBrowserGrant,
 )
@@ -40,6 +50,9 @@ from modules.connectors.service.schemas import (
     ProviderScopeSnapshot,
 )
 
+if TYPE_CHECKING:
+    from modules.sources.public import ConnectorSource
+
 
 def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
     """Expose the CII provider's truthful unavailable v8 projection through the connector owner."""
@@ -48,23 +61,90 @@ def cii_v8_availability(requested_countries: list[str]) -> CiiProjection:
     return unavailable_v8_projection(requested_countries)
 
 
-# Providers whose scope is exactly one of several alternative fields (enforced by registry.validate).
+# Providers whose scope needs at least one target field. Provider validation enforces any mutual exclusion.
 _ALTERNATIVE_SCOPE_FIELDS: dict[str, frozenset[str]] = {
+    "youtube": YOUTUBE_TARGET_FIELDS,
+    # most_popular needs no channel target; the mode itself is the alternative that completes scope.
+    "youtube_api": YOUTUBE_TARGET_FIELDS | {"youtube_api_mode"},
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
+    "google_books": frozenset({"google_books_query", "google_books_subject"}),
 }
 
 
 # Single source of truth for catalog scope fields that may be absent from a stored configuration. Lives here (not in
 # registry.py, which imports this module) to avoid an import cycle; registry.validate imports it too.
 OPTIONAL_SCOPE_FIELDS: dict[str, frozenset[str]] = {
+    "podcast_index": PODCAST_INDEX_SCOPE_FIELDS,
+    "listenbrainz_releases": LISTENBRAINZ_SCOPE_FIELDS,
+    "steam_releases": STEAM_SCOPE_FIELDS,
+    "igdb_games": IGDB_SCOPE_FIELDS,
+    "youtube": YOUTUBE_SCOPE_FIELDS,
+    "youtube_api": YOUTUBE_API_SCOPE_FIELDS,
     "github": frozenset({"github_history_days"}),
     "mastodon": frozenset({"mastodon_account", "mastodon_hashtag"}),
     "x": frozenset({"x_account", "x_query"}),
+    "topic_watch": frozenset(
+        {
+            "topic_watch_keep_rule",
+            "topic_watch_languages",
+            "topic_watch_include_sites",
+            "topic_watch_exclude_sites",
+            "topic_watch_model_role",
+        }
+    ),
     "coingecko": frozenset(
         {"coingecko_assets"}
     ),  # absent on legacy BTC/USD sources (collection falls back to BTC)
+    "mal_anime": frozenset({"mal_mode", "mal_ranking_type", "mal_season_year", "mal_season"}),
+    "mal_manga": frozenset({"mal_ranking_type"}),
+    "google_books": frozenset({"google_books_query", "google_books_subject"}),
+    "omdb_lookup": frozenset({"omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search"}),
+    "anilist_anime": frozenset({"media_ids"}),
+    "openlibrary_books": frozenset(
+        {"openlibrary_mode", "openlibrary_subject", "openlibrary_query"}
+    ),
+    "gutendex_books": frozenset({"gutendex_topic", "gutendex_search"}),
+    "anilist_manga": frozenset({"media_ids"}),
+    "ann_news": frozenset({"ann_mode", "ann_media_type", "ann_category", "ann_edition"}),
+    "mangaupdates_releases": frozenset({"series_ids"}),
+    "mangadex_releases": frozenset({"manga_ids"}),
+    "tvmaze_schedule": TVMAZE_SCOPE_FIELDS,
+    "podcast_rss": frozenset({"feed_url", "itunes_podcast_id"}),
+    "wikidata_movies": frozenset({"lookback_days", "language"}),
 }
+
+
+# Task-managed providers have no catalog entry (owners never add them from Sources), so their content scope is fixed
+# here. Topic watch items belong to the topic, keep rule, languages and site lists; the item count, token budget and
+# model role tune a run, not what it is about, so changing them must not hide items already collected.
+_TASK_MANAGED_SCOPE_FIELDS: dict[str, tuple[str, ...]] = {
+    "topic_watch": (
+        "topic_watch_topic",
+        "topic_watch_keep_rule",
+        "topic_watch_languages",
+        "topic_watch_include_sites",
+        "topic_watch_exclude_sites",
+    ),
+}
+
+
+def _scope_fields(provider_id: str | None) -> tuple[str, ...] | None:
+    """Return the scope fields of a supported provider, or None so the caller fails closed.
+
+    Catalog providers must be available, implemented or credential-gated; task-managed providers
+    use their fixed fields. Unknown or unavailable providers have no verifiable scope.
+    """
+    from modules.connectors.catalog import get_catalog_entry
+
+    if provider_id is None:
+        return None
+    entry = get_catalog_entry(provider_id)
+    if entry is None:
+        return _TASK_MANAGED_SCOPE_FIELDS.get(provider_id)
+    if entry.availability not in {"available", "implemented", "requires_credentials"}:
+        return None
+    return entry.scope_fields
 
 
 def _scope_values(
@@ -90,6 +170,38 @@ def _scope_values(
     return values
 
 
+def _scope_snapshot(source: "ConnectorSource") -> ProviderScopeSnapshot | None:
+    """Hash the validated non-secret scope fields of one source's CURRENT configuration.
+
+    Pure apart from reading the provider catalog/registry. Returns None (fail closed) for an unsupported
+    or unavailable provider, an invalid configuration, or a missing required scope field. Status is NOT
+    checked here: callers apply their own lifecycle rule. The result holds no configuration values.
+    """
+    provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
+    scope_fields = _scope_fields(provider_id)
+    if provider_id is None or scope_fields is None:
+        return None
+    try:
+        from modules.connectors.registry import configuration as provider_configuration
+
+        configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
+    except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
+        return None
+    values = _scope_values(provider_id, scope_fields, configuration)
+    if values is None:
+        return None
+    encoded = json.dumps(
+        [provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return ProviderScopeSnapshot(
+        workspace_id=source.workspace_id,
+        source_id=source.id,
+        source_generation=source.generation,
+        provider_id=provider_id,
+        discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
+    )
+
+
 async def get_current_provider_scope(
     session: AsyncSession,
     source_id: UUID,
@@ -103,7 +215,6 @@ async def get_current_provider_scope(
     The result contains no connector configuration values. Unsupported providers,
     inactive sources, invalid config, and stale generations fail closed as None.
     """
-    from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
 
     fence = await sources.get_source_fence(
@@ -116,33 +227,40 @@ async def get_current_provider_scope(
     )
     if source is None or source.status != fence.status or source.generation != fence.generation:
         return None
-    provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
-    entry = get_catalog_entry(provider_id) if provider_id else None
-    if (
-        provider_id is None
-        or entry is None
-        or entry.availability not in {"available", "implemented", "requires_credentials"}
-    ):
-        return None
-    try:
-        from modules.connectors.registry import configuration as provider_configuration
+    return _scope_snapshot(source)
 
-        configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
-    except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
-        return None
-    values = _scope_values(provider_id, entry.scope_fields, configuration)
-    if values is None:
-        return None
-    encoded = json.dumps(
-        [provider_id, values], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+
+async def chat_scope_discriminators(
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> dict[UUID, str | None]:
+    """Map each readable chat source to the scope discriminator of its CURRENT configuration.
+
+    Read-only, one admitted batch read (at most 200 ids, enforced by the sources owner). Only sources in
+    the scope's workspace with status ``active`` or ``paused`` appear in the result; archived, unknown
+    and foreign ids are omitted (fail closed for the caller). The value is None when the provider has no
+    verifiable scope (unsupported provider, invalid config, missing required field). Unlike
+    :func:`get_current_provider_scope` the generation is not compared, because pause/resume bumps it
+    while the data collected under the same scope fields stays valid for chat.
+    """
+    from modules.sources import public as sources
+
+    found = await sources.get_connector_sources(
+        session,
+        frozenset(source_ids),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    return ProviderScopeSnapshot(
-        workspace_id=source.workspace_id,
-        source_id=source.id,
-        source_generation=source.generation,
-        provider_id=provider_id,
-        discriminator=hashlib.sha256(encoded.encode()).hexdigest(),
-    )
+    result: dict[UUID, str | None] = {}
+    for source_id, source in found.items():
+        if source.status not in ("active", "paused"):
+            continue
+        snapshot = _scope_snapshot(source)
+        result[source_id] = snapshot.discriminator if snapshot is not None else None
+    return result
 
 
 async def export_provider_scope(
@@ -160,7 +278,6 @@ async def export_provider_scope(
     pause/archive alone does not erase portable owner evidence; changed or unsupported scope fails closed.
     Credential bytes and provider configuration are never returned.
     """
-    from modules.connectors.catalog import get_catalog_entry
     from modules.sources import public as sources
     from modules.sources.public import SourceExportFence
 
@@ -183,12 +300,8 @@ async def export_provider_scope(
     if source is None or source.generation != expected_source_generation:
         return None
     provider_id = source.provider or {"rss": "rss", "web": "web", "api": "rest"}.get(source.type)
-    entry = get_catalog_entry(provider_id) if provider_id else None
-    if (
-        provider_id is None
-        or entry is None
-        or entry.availability not in {"available", "implemented", "requires_credentials"}
-    ):
+    scope_fields = _scope_fields(provider_id)
+    if provider_id is None or scope_fields is None:
         return None
     try:
         from modules.connectors.registry import configuration as provider_configuration
@@ -196,7 +309,7 @@ async def export_provider_scope(
         configuration = provider_configuration(source).model_dump(mode="json", exclude_none=True)
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         return None
-    values = _scope_values(provider_id, entry.scope_fields, configuration)
+    values = _scope_values(provider_id, scope_fields, configuration)
     if values is None:
         return None
     encoded = json.dumps(

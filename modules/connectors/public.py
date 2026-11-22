@@ -69,6 +69,7 @@ from modules.connectors.backends import (
 from modules.connectors.backends import (
     is_native_provider as _is_native_provider,
 )
+from modules.connectors.catalog import get_catalog_entry as get_catalog_entry
 from modules.connectors.data_shapes import (
     DataShape as DataShape,
 )
@@ -123,7 +124,6 @@ from modules.connectors.provider_options import (
     GdeltLang,
     GdeltTimespan,
     HnList,
-    IsoCountry,
     JobCity,
     JobKeyword,
     JobLevel,
@@ -140,6 +140,48 @@ from modules.connectors.provider_options import (
     WikiLanguage,
     clean_query,
     option_fields,
+)
+from modules.connectors.provider_options import (
+    MAX_CONTENT_RATINGS as MAX_CONTENT_RATINGS,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_COUNTRIES as MAX_MEDIA_COUNTRIES,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_FORMATS as MAX_MEDIA_FORMATS,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_GENRES as MAX_MEDIA_GENRES,
+)
+from modules.connectors.provider_options import (
+    MAX_MEDIA_LANGUAGES as MAX_MEDIA_LANGUAGES,
+)
+from modules.connectors.provider_options import (
+    MEDIA_OPTION_NAMES as MEDIA_OPTION_NAMES,
+)
+from modules.connectors.provider_options import (
+    AnimeSeason as AnimeSeason,
+)
+from modules.connectors.provider_options import (
+    ContentRating as ContentRating,
+)
+from modules.connectors.provider_options import (
+    IsoCountry as IsoCountry,
+)
+from modules.connectors.provider_options import (
+    MediaFormat as MediaFormat,
+)
+from modules.connectors.provider_options import (
+    MediaGenre as MediaGenre,
+)
+from modules.connectors.provider_options import (
+    MediaLanguage as MediaLanguage,
+)
+from modules.connectors.provider_options import (
+    YoutubeFilter as YoutubeFilter,
+)
+from modules.connectors.provider_options import (
+    filter_media_records as filter_media_records,
 )
 from modules.connectors.provider_specs import (
     BUILTIN_PROVIDERS as BUILTIN_PROVIDERS,
@@ -493,6 +535,9 @@ from modules.connectors.service.scope import (
     agent_browser_target_in_scope as agent_browser_target_in_scope,
 )
 from modules.connectors.service.scope import (
+    chat_scope_discriminators as chat_scope_discriminators,
+)
+from modules.connectors.service.scope import (
     cii_v8_availability as cii_v8_availability,
 )
 from modules.connectors.service.scope import (
@@ -533,6 +578,14 @@ _LAZY_DTO_MODULES = {
     "ManagedNoChanges": "modules.connectors.collection_schemas",
     "GitHubBindingFence": "modules.connectors.github.schemas",
     "GitHubSegmentProof": "modules.connectors.github.schemas",
+    "TopicWatchConfig": "modules.connectors.topic_watch",
+    "provision_topic_watch_source": "modules.connectors.topic_watch",
+    "update_topic_watch_source": "modules.connectors.topic_watch",
+    "retire_topic_watch_source": "modules.connectors.topic_watch",
+    "request_topic_watch_collection": "modules.connectors.topic_watch",
+    "estimate_tokens": "modules.connectors.topic_watch_rules",
+    "token_cap": "modules.connectors.topic_watch_rules",
+    "refuse_managed_source": "modules.connectors.topic_watch_rules",
 }
 
 
@@ -572,6 +625,30 @@ if TYPE_CHECKING:
     )
     from modules.connectors.providers.manual_finance import (
         render_finance_markdown as render_finance_markdown,
+    )
+    from modules.connectors.topic_watch import (
+        TopicWatchConfig as TopicWatchConfig,
+    )
+    from modules.connectors.topic_watch import (
+        provision_topic_watch_source as provision_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        request_topic_watch_collection as request_topic_watch_collection,
+    )
+    from modules.connectors.topic_watch import (
+        retire_topic_watch_source as retire_topic_watch_source,
+    )
+    from modules.connectors.topic_watch import (
+        update_topic_watch_source as update_topic_watch_source,
+    )
+    from modules.connectors.topic_watch_rules import (
+        estimate_tokens as estimate_tokens,
+    )
+    from modules.connectors.topic_watch_rules import (
+        refuse_managed_source as refuse_managed_source,
+    )
+    from modules.connectors.topic_watch_rules import (
+        token_cap as token_cap,
     )
 
 if TYPE_CHECKING:

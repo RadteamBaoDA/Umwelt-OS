@@ -3,6 +3,7 @@
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
+import { Spinner } from '@/components/ui/spinner';
 import {
   AlertCircleIcon,
   ArrowDownIcon,
@@ -12,7 +13,6 @@ import {
   ChevronRightIcon,
   CopyIcon,
   GlobeIcon,
-  Loader2Icon,
   PaperclipIcon,
   PencilIcon,
   RefreshCwIcon,
@@ -22,6 +22,8 @@ import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
 import { focusCitations } from './chat-citation-focus';
 import { CitationPanel } from './citation-panel';
+import { isTaskBriefMessage } from './task-brief-message';
+import { isTaskTopicMessage } from './task-topic-message';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
@@ -37,6 +39,7 @@ import Link from 'next/link';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
+import './chat-skin.css';
 
 /** Fixed-height placeholder shown while a widget chunk loads, so the transcript does not jump when it resolves. */
 function WidgetSkeleton() {
@@ -50,6 +53,10 @@ const ToolRendering = dynamic(() => import('./generative-ui/components/tool-rend
 const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.SaveTemplateButton), {
   loading: () => <div aria-hidden="true" className="h-8 w-32" />,
 });
+
+const TaskDraftCard = dynamic(() => import('./task-draft-card').then((m) => m.TaskDraftCard));
+const TaskBriefMessage = dynamic(() => import('./task-brief-message').then((m) => m.TaskBriefMessage));
+const TaskTopicMessage = dynamic(() => import('./task-topic-message').then((m) => m.TaskTopicMessage));
 
 type WebReasonKey =
   | 'web.reason_not_configured'
@@ -281,7 +288,10 @@ function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) 
 function ProviderMissingNotice() {
   const t = useTranslations('chat');
   return (
-    <div role="status" className="flex max-w-prose flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
+    <div
+      role="status"
+      className="chat-provider-notice flex max-w-prose flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-3 text-sm"
+    >
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">{t('provider.gateTitle')}</p>
         <p className="text-muted-foreground">{t('empty.providerMissingBody')}</p>
@@ -292,6 +302,15 @@ function ProviderMissingNotice() {
     </div>
   );
 }
+
+/**
+ * Terminal-skin ASCII wordmark for the chat empty state, copied verbatim from the design demo (`ck-banner`).
+ * `String.raw` keeps the backslashes and leading spaces that JSX text would collapse.
+ */
+const EMPTY_BANNER = String.raw` _   _ __  ____      _____ _   _____
+| | | |  \/  \ \    / / __| | |_   _|
+| |_| | |\/| |\ \/\/ /| _|| |__ | |
+ \___/|_|  |_| \_/\_/ |___|____||_|   v2.4`;
 
 /**
  * Composer-first empty state: one sentence about what Chat can do with this workspace plus starter prompts
@@ -307,6 +326,10 @@ function EmptyIntro({ onSendPrompt, capabilities }: { onSendPrompt: (prompt: str
   const startersId = React.useId();
   return (
     <div className="mt-auto flex flex-col gap-4 py-8">
+      {/* Terminal-only decoration (hidden by CSS in the default skin); aria-hidden because it carries no meaning. */}
+      <pre className="chat-empty-banner" aria-hidden="true">
+        {EMPTY_BANNER}
+      </pre>
       <div className="flex flex-col gap-1">
         <h2 className="text-lg font-semibold text-foreground">{t('empty.stateTitle')}</h2>
         <p className="max-w-prose text-sm text-muted-foreground">{t('empty.stateDescription')}</p>
@@ -464,6 +487,10 @@ function MessageBody({
 
       {isUser ? (
         <ChatMarkdown content={msg.content} locale={locale} />
+      ) : isTaskBriefMessage(msg) ? (
+        <TaskBriefMessage msg={msg} />
+      ) : isTaskTopicMessage(msg) ? (
+        <TaskTopicMessage msg={msg} />
       ) : (
         <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />
       )}
@@ -888,6 +915,8 @@ const TranscriptMessage = React.memo(function TranscriptMessage(props: Transcrip
           />
         ))}
 
+      {!isUser && msg.task_draft ? <TaskDraftCard draft={msg.task_draft} /> : null}
+
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
     </div>
   );
@@ -956,7 +985,7 @@ function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool']
   return (
     <div role="status" aria-live="polite" className="mb-1">
       <div data-testid={activeTool ? 'tool-status' : undefined} className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+        <Spinner className="size-4 text-muted-foreground" />
         <span>{label}</span>
       </div>
     </div>

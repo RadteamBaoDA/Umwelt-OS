@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import AccessFence, Scope
+from modules.dashboard.daily_schemas import DailyWidget
 from modules.dashboard.models import DailyBrief, DailyBriefEvidence
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
@@ -23,6 +25,11 @@ from modules.sources import public as sources
 MAX_FACTS = 40
 MAX_BRIEF_EVIDENCE = 100
 MAX_PROMPT_TITLE = 200
+MAX_FACT_ID = 64  # daily_brief_evidence.fact_id column width
+# Observation-derived kinds: always independent markers (no document support); their only source
+# identity is the single ``source_id`` carried by the stored citation.
+MARKER_FACT_KINDS = frozenset({"markets", "weather", "hazards", "source_health"})
+DOCUMENT_FACT_KINDS = frozenset({"tasks", "goals", "stories", "events"})
 
 
 def _prompt_title(title: str) -> str:
@@ -47,12 +54,13 @@ def _validate_fact_group(
 
     Pure (no I/O). Rows must share kind/id/hash, have contiguous support indexes, and either carry a
     full (document, version, chunk, source) tuple without repeats or be one independent marker row
-    (never for stories). A story needs at least one real support row. Mutates the three
-    accumulators; returns False on the first violation.
+    (never for stories). A story needs at least one real support row. Observation kinds
+    (``MARKER_FACT_KINDS``) must be exactly one marker row with a 1..64 character id (not necessarily
+    a UUID) and a non-null ``source_id`` that joins ``captured_sources``. Mutates the three accumulators; returns False on the first violation.
     """
     exemplar = captured[0]
     if (
-        exemplar.fact_kind not in {"tasks", "goals", "stories", "events"}
+        exemplar.fact_kind not in DOCUMENT_FACT_KINDS | MARKER_FACT_KINDS
         or not re.fullmatch(r"[0-9a-f]{64}", exemplar.fact_hash)
         or any(
             item.fact_kind != exemplar.fact_kind
@@ -63,6 +71,21 @@ def _validate_fact_group(
         or [item.support_index for item in captured] != list(range(len(captured)))
     ):
         return False
+    if exemplar.fact_kind in MARKER_FACT_KINDS:
+        # One marker row; never document-backed, so it adds no document identity. Its source is
+        # captured whether or not the final prose cites the fact: the fact was in the prompt and can
+        # shape the text, so deleting/pausing/local_only-ing its source must withhold the brief.
+        if not (
+            len(captured) == 1
+            and 0 < len(exemplar.fact_id) <= MAX_FACT_ID
+            and exemplar.document_id is None
+            and exemplar.document_version_id is None
+            and exemplar.chunk_id is None
+            and exemplar.source_id is not None
+        ):
+            return False
+        captured_sources.add(exemplar.source_id)
+        return True
     try:
         if str(UUID(exemplar.fact_id)) != exemplar.fact_id:
             return False
@@ -93,6 +116,42 @@ def _validate_fact_group(
             raise RuntimeError("invariant violated: item.document_id must not be None")
         captured_documents.add(item.document_id)
     return not (exemplar.fact_kind == "stories" and not observed)
+
+
+def _fact_candidates(widgets: Sequence[DailyWidget]) -> tuple[list[dict[str, Any]], set[str]]:
+    """Flatten widget items into unvetted fact candidates and the source ids they reference.
+
+    News facts without any source id are skipped. ``_canonical_title`` keeps the untruncated title
+    so support lookups can compare against the stored value. Pure; privacy filtering happens later.
+    """
+    candidates: list[dict[str, Any]] = []
+    wanted: set[str] = set()
+    for widget in widgets:
+        for item in widget.items:
+            ids = [str(s) for s in item.get("source_ids", [])]
+            if widget.id not in ("stories", "events") and item.get("source_id"):
+                ids.append(str(item["source_id"]))
+            if widget.module == "news" and not ids:
+                continue
+            detail = (
+                item.get("detail")
+                or item.get("status")
+                or item.get("progress")
+                or item.get("type")
+                or ""
+            )
+            candidates.append(
+                {
+                    "kind": widget.id,
+                    "id": item["id"],
+                    "title": _prompt_title(item["title"]),
+                    "detail": str(detail),
+                    "source_ids": ids,
+                    "_canonical_title": str(item["title"]),
+                }
+            )
+            wanted.update(ids)
+    return candidates, wanted
 
 
 async def _load_evidence_groups(
@@ -146,7 +205,8 @@ def _validate_citations(
 
     Pure. Each citation must have exactly the stored keys, a unique known ref whose kind/id match
     the captured fact, string title, unique canonical UUID source ids and exactly the captured
-    source set. Returns ``None`` on any mismatch.
+    source set (a marker row's single ``source_id`` included). Returns ``None`` on any
+    mismatch.
     """
     citations = row.citations
     if not isinstance(citations, list) or not citations or len(citations) > MAX_FACTS:
@@ -180,6 +240,7 @@ def _validate_citations(
         captured_source_ids = sorted(
             {str(item.source_id) for item in grouped[reference] if item.source_id is not None}
         )
+        # A marker row's single source_id is captured, so one comparison covers every kind.
         if sorted(set(citation["source_ids"])) != captured_source_ids:
             return None
     return citation_by_ref
@@ -229,9 +290,15 @@ async def _captured_support_eligible(
             multi_workspace_enabled=multi_workspace_enabled,
         )
         return set(locked) == captured_documents
+    # The driver returns its own UUID subclass; the documents contract accepts plain ``uuid.UUID``
+    # only (it raised ValueError, which read every document-backed brief as withheld). One ID per
+    # call keeps within its 100-ID batch bound.
     for document_id in captured_documents:
         if not await documents.existing_document_ids(
-            session, [document_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            session,
+            [UUID(str(document_id))],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ):
             return False
     return True
@@ -359,6 +426,8 @@ async def _captured_inputs_match(
     citation_by_ref = _validate_citations(row, grouped)
     if citation_by_ref is None:
         return False
+    # Every marker row's source (cited or not) is already in captured_sources via
+    # _validate_fact_group, so a deleted/paused/local_only observation source withholds the brief.
     if not await _captured_support_eligible(
         session,
         captured_sources,

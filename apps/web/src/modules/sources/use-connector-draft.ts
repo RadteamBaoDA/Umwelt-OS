@@ -22,6 +22,7 @@ import {
   type VerifyState,
 } from './connector-editor-model';
 import type { SourceAiOptions } from './api';
+import { inactiveMediaModeFilters } from './builtin-option-specs';
 
 /** Result of the last successful draft validation, bound to the source generation and revision it checked. */
 export type DraftValidation = {
@@ -72,7 +73,14 @@ function useDraftFields(source: Source | null | undefined) {
   const [scopeResetEpoch, setScopeResetEpoch] = useState(0);
   const [authMethod, setAuthMethod] = useState<DraftAuthMethod>(source?.provider === 'telegram' ? 'telegram_bot_token' : 'none');
   const [authHeaderName, setAuthHeaderName] = useState('Authorization');
-  const [secret, setSecret] = useState('');
+  const [secret, setSecretValue] = useState('');
+  const [apiSecret, setApiSecret] = useState('');
+  const setSecret = setSecretValue;
+  /** Clears both write-only credential fields; only for reset paths (activation result, reload, removal), never per keystroke. */
+  const clearSecrets = useCallback(() => {
+    setSecretValue('');
+    setApiSecret('');
+  }, []);
   const [telegramSecretAction, setTelegramSecretAction] = useState<'keep' | 'replace'>('keep');
   const [revision, setRevision] = useState(0);
   const [backendChoice, setBackendChoice] = useState<ExecutionBackend | null>(null);
@@ -99,6 +107,9 @@ function useDraftFields(source: Source | null | undefined) {
     setAuthHeaderName,
     secret,
     setSecret,
+    clearSecrets,
+    apiSecret,
+    setApiSecret,
     telegramSecretAction,
     setTelegramSecretAction,
     revision,
@@ -130,7 +141,7 @@ function useDraftStatus() {
  * the accepted server configuration, which source the draft was loaded for) plus the draft version that fences stale saves.
  */
 function useDraftRefs(source: Source | null | undefined, fields: ReturnType<typeof useDraftFields>) {
-  const { provider, name, sourceId, revision, dirty, secret } = fields;
+  const { provider, name, sourceId, revision, dirty, secret, apiSecret } = fields;
   const providerRef = useRef(provider);
   const nameRef = useRef(name);
   const sourceIdRef = useRef(sourceId);
@@ -147,7 +158,7 @@ function useDraftRefs(source: Source | null | undefined, fields: ReturnType<type
     nameRef.current = name;
     sourceIdRef.current = sourceId;
     revisionRef.current = revision;
-    dirtyRef.current = dirty || Boolean(secret);
+    dirtyRef.current = dirty || Boolean(secret || apiSecret);
   });
   /** Records the draft-dirty flag in the leave-guard ref (written from field handlers; kept in the hook that owns the ref). */
   const setDirtyRef = useCallback((value: boolean) => {
@@ -213,7 +224,7 @@ export function selectProvider(
   draft.setConfiguration(defaultConfiguration(next, entry));
   draft.setAuthMethod('none');
   draft.setAuthHeaderName('Authorization');
-  draft.setSecret('');
+  draft.clearSecrets();
   // A new Telegram source has no stored token to keep, so it must start in replace mode.
   draft.setTelegramSecretAction(next === 'telegram' ? 'replace' : 'keep');
   draft.setBackendChoice(null);
@@ -231,14 +242,25 @@ export function selectProvider(
  * effective authentication mode, and the settings payload sent to the server. A source is created before its first save, so an
  * unsaved one reloads with an empty server configuration; defaults keep required scope (e.g. Google News site, locale and
  * history mode) from being silently missing while values the owner typed or cleared still win.
+ * Endpoint-incompatible media filters are omitted from validation and save payloads for existing drafts.
  */
 export function useEffectiveDraft(draft: ConnectorDraft, currentEntry: ConnectorCatalogEntry | undefined) {
   const { revision, provider, draftConfiguration, secret, authMethod, authHeaderName } = draft;
   const configuration = useMemo<ConnectorConfig>(() => {
-    if (!(revision === 0 && currentEntry)) return draftConfiguration;
-    const merged = { ...defaultConfiguration(provider, currentEntry), ...draftConfiguration };
-    // A default below the provider's hard minimum would be rejected on save; start at the floor instead.
-    return { ...merged, schedule_interval_minutes: clampInterval(merged.schedule_interval_minutes, currentEntry) };
+    let merged = draftConfiguration;
+    if (revision === 0 && currentEntry) {
+      merged = { ...defaultConfiguration(provider, currentEntry), ...draftConfiguration };
+      // A default below the provider's hard minimum would be rejected on save; start at the floor instead.
+      merged.schedule_interval_minutes = clampInterval(merged.schedule_interval_minutes, currentEntry);
+    }
+    const inactive =
+      provider === 'tmdb_movies'
+        ? inactiveMediaModeFilters('tmdb_mode', merged.tmdb_mode)
+        : inactiveMediaModeFilters('omdb_mode', provider === 'omdb_lookup' ? merged.omdb_mode : undefined);
+    if (!inactive.length) return merged;
+    const settingsConfiguration = { ...merged };
+    for (const key of inactive) delete settingsConfiguration[key];
+    return settingsConfiguration;
   }, [revision, currentEntry, provider, draftConfiguration]);
   // Registered providers never use REST header auth (their key goes through a dedicated credential slot), so a stale
   // 'http_header' choice from a previously selected REST card must not reach the backend's provider auth check.

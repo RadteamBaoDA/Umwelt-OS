@@ -174,10 +174,10 @@ export async function reloadServerConfiguration(ctx: EditorContext) {
     const { acceptedConfiguration, activationResult } = reloaded;
     draft.serverConfigurationRef.current = acceptedConfiguration;
     draft.draftVersion.current += 1;
-    draft.setSecret('');
+    draft.clearSecrets();
     ctx.sync.applyServerConfiguration(acceptedConfiguration);
     draft.setDirty(false);
-    draft.setSecret('');
+    draft.clearSecrets();
     draft.dirtyRef.current = false;
     draft.setConflict(false);
     draft.setError('');
@@ -328,7 +328,7 @@ async function publishSaved(
   draft.setProviderCredentialConfigured(acknowledged.provider_credential_configured);
   if (draft.draftVersion.current === submittedVersion) {
     draft.setDirty(false);
-    draft.dirtyRef.current = Boolean(draft.secret);
+    draft.dirtyRef.current = Boolean(draft.secret || draft.apiSecret);
   }
   draft.setValidation(null);
   queryClient.setQueryData(connectorKeys.configuration(id), acknowledged);
@@ -378,7 +378,7 @@ export async function saveConfiguration(
 /** Removes a stored provider credential only when there is no unsaved draft or secret input. */
 export async function removeCredential(ctx: EditorContext) {
   const { draft, requests } = ctx;
-  if (draft.dirtyRef.current || draft.secret) return;
+  if (draft.dirtyRef.current || draft.secret || draft.apiSecret) return;
   const token = requests.beginRequest('remove');
   const id = draft.sourceId;
   if (!token || !id) return;
@@ -399,7 +399,7 @@ export async function removeCredential(ctx: EditorContext) {
       draft.setDirty(false);
       draft.dirtyRef.current = false;
     }
-    draft.setSecret('');
+    draft.clearSecrets();
     await refreshOwnerState(ctx, id, token);
   } catch (cause) {
     if (requests.requestIsCurrent(token)) draft.setError(errorText(cause));

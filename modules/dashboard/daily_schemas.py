@@ -8,6 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_
 
 DayRelation = Literal["past", "today", "future"]
 WidgetStatus = Literal["ok", "empty", "not_applicable", "unavailable"]
+BriefSection = Literal["stories", "markets", "weather", "hazards", "agenda", "source_health"]
+ALL_BRIEF_SECTIONS: tuple[BriefSection, ...] = (
+    "stories",
+    "markets",
+    "weather",
+    "hazards",
+    "agenda",
+    "source_health",
+)
 
 
 def validate_timezone(value: str) -> str:
@@ -36,6 +45,17 @@ class BriefRead(BaseModel):
     citations: list[dict[str, Any]]
     model_alias: str
     generated_at: datetime
+
+
+class BriefDocumentRef(BaseModel):
+    """One document chunk that supports a fact of a saved brief (ids only, no content)."""
+
+    fact_ref: int
+    fact_kind: str
+    source_id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
 
 
 class BriefCleanupProgress(BaseModel):

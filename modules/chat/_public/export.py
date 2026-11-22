@@ -29,6 +29,14 @@ from core.errors import (
 )
 from core.pagination import b64url_decode, b64url_encode
 from core.workspaces.schemas import WorkspaceContext
+from modules.chat._public.scheduled_task_threads import (
+    SCRUBBED_CONTENT,
+    is_withheld_task_message,
+    task_brief_key,
+    topic_source_key,
+    withheld_brief_ids,
+    withheld_topic_messages,
+)
 from modules.chat.models import (
     Conversation,
     Message,
@@ -222,7 +230,11 @@ async def read_memory_export_origin(
     if not history_enabled:
         return None
     now = _datetime.now(_UTC)
-    conversation_scope = _chat_export_scope(now, now, scope.workspace_id)
+    # Memory origins never admit scheduled-task threads: their briefs can be withheld at read time,
+    # and that lookup must not run inside this Memory-side transaction.
+    conversation_scope = _chat_export_scope(
+        now, now, scope.workspace_id, include_task_threads=False
+    )
     row = (
         await session.execute(
             _select(
@@ -323,7 +335,7 @@ async def search_conversations(
     conversation once and inherits every owner and retention filter of the outer query.
 
     Search shows nothing when history storage is off, and never ephemeral,
-    expired or automation threads. Deleted rows are gone, so they never match.
+    expired or non-task automation threads. Deleted rows are gone, so they never match.
     """
     # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
     try:
@@ -367,12 +379,26 @@ async def search_conversations(
     return list((await session.scalars(statement)).all())
 
 
-def _chat_export_scope_retained(now: _datetime) -> tuple[ColumnElement[bool], ...]:
-    """Retention predicates shared by export scope and search (no snapshot cutoff)."""
+def _chat_export_scope_retained(
+    now: _datetime, *, include_task_threads: bool = True
+) -> tuple[ColumnElement[bool], ...]:
+    """Retention predicates shared by export scope and search (no snapshot cutoff).
+
+    Automation threads are excluded except scheduled-task threads (metadata key ``scheduled_task``,
+    the same ``has_key`` test the conversation list uses) while ``include_task_threads`` is true.
+    With it false every automation thread is excluded, for callers that cannot apply the read-time
+    withheld-brief check (Memory origins).
+    """
+    automation_ok: list[ColumnElement[bool]] = [
+        Conversation.context_kind.is_(None),
+        Conversation.context_kind != "automation",
+    ]
+    if include_task_threads:
+        automation_ok.append(Conversation.metadata_json.has_key("scheduled_task"))
     return (
         Conversation.ephemeral.is_(False),
         _or(Conversation.expires_at.is_(None), Conversation.expires_at > now),
-        _or(Conversation.context_kind.is_(None), Conversation.context_kind != "automation"),
+        _or(*automation_ok),
     )
 
 
@@ -380,13 +406,19 @@ def _chat_export_scope(
     snapshot_at: _datetime,
     now: _datetime,
     workspace_id: UUID,
+    *,
+    include_task_threads: bool = True,
 ) -> tuple[ColumnElement[bool], ...]:
-    """Filter to the workspace's retained, non-automation conversation history unchanged at the cutoff."""
+    """Filter to the workspace's retained conversation history unchanged at the cutoff.
+
+    Automation threads are excluded except scheduled-task threads, unless ``include_task_threads``
+    is false (see :func:`_chat_export_scope_retained`).
+    """
     return (
         Conversation.workspace_id == workspace_id,
         Conversation.created_at <= snapshot_at,
         Conversation.updated_at <= snapshot_at,
-        *_chat_export_scope_retained(now),
+        *_chat_export_scope_retained(now, include_task_threads=include_task_threads),
     )
 
 
@@ -615,6 +647,7 @@ async def _stream_export_message_candidates(
             Message.role.label("role"),
             Message.content.label("content"),
             Message.citations.label("citations"),
+            Message.metadata_json.label("metadata_json"),
             Message.response_id.label("response_id"),
             Message.revision_of_message_id.label("revision_of_message_id"),
             Message.created_at.label("message_created_at"),
@@ -749,7 +782,11 @@ async def _export_message_records(
 
     Order: stream candidate rows (stream closed), resolve the page's exact evidence fences in
     one owner call, then build records under the page byte budget. ``has_more`` also holds when
-    the byte budget left candidates unserved. Read-only.
+    the byte budget left candidates unserved. Scheduled-task brief and topic-watch messages whose
+    sources are no longer eligible (batched, lock-free ``withheld_brief_ids`` and
+    ``withheld_topic_messages`` lookups) export as
+    the scrub placeholder with no citations, and each such message's fence records
+    ``brief_withheld`` so the final fence check can detect a later change. Writes nothing.
 
     Raises:
         ValueError: when a single record alone exceeds the page byte budget.
@@ -767,10 +804,30 @@ async def _export_message_records(
     evidence = await _chat_export_evidence_fences(
         session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
+    # Task brief copies whose sources are no longer eligible export as the scrub placeholder.
+    page_metadatas = [c[0].get("metadata_json") for c in candidates]
+    withheld = await withheld_brief_ids(
+        session, page_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    withheld_topics = await withheld_topic_messages(
+        session, page_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     for message_row, parsed, initially_omitted in candidates:
         citations, citation_fences, omitted = _rebuild_export_citations(
             parsed, evidence, initially_omitted
         )
+        task_metadata = message_row.get("metadata_json")
+        is_task = (
+            task_brief_key(task_metadata) is not None or topic_source_key(task_metadata) is not None
+        )
+        is_withheld = is_withheld_task_message(task_metadata, withheld, withheld_topics)
+        if is_withheld:
+            message_row["content"], citations, citation_fences, omitted = (
+                SCRUBBED_CONTENT,
+                [],
+                [],
+                0,
+            )
         message_item = ChatExportMessageRead(
             id=message_row["message_id"],
             conversation_id=message_row["conversation_id"],
@@ -801,6 +858,7 @@ async def _export_message_records(
                 message_created_at=message_row["message_created_at"],
                 message_updated_at=message_row["message_updated_at"],
                 citations=citation_fences,
+                brief_withheld=is_withheld if is_task else None,
             )
         )
     if len(candidates) > len(items):
@@ -913,18 +971,22 @@ async def _revalidate_export_rows(
     record_kind: str,
     fences: Sequence[ChatExportFence],
     scope: _Any,
+    multi_workspace_enabled: bool,
 ) -> tuple[str | None, list[ChatExportCitationFence]]:
     """Recheck every fenced conversation (and message) row against its recorded revision.
 
     Returns ``("record_changed", [])`` for the first row that vanished, changed, expired,
-    became ephemeral or automation-owned; otherwise ``(None, citation_fences)`` with the
-    message fences' citation fences gathered for evidence revalidation. Read-only; fresh
-    time is taken per fence.
+    became ephemeral or non-task automation-owned, or whose scheduled-task brief was published
+    live (``brief_withheld`` False) but is withheld now; otherwise ``(None, citation_fences)`` with
+    the message fences' citation fences gathered for evidence revalidation. Writes nothing; fresh
+    time is taken per fence. The withheld lookup runs once after the row loop and is lock-free,
+    so it adds no Source/Document locks to the export session.
 
     Raises:
         ValueError: when a fence carries an identity inconsistent with ``record_kind``.
     """
     citation_fences: list[ChatExportCitationFence] = []
+    published_live: list[_Any] = []  # metadata of briefs exported as live content
     for fence in fences:
         now = _datetime.now(_UTC)
         conversation = (
@@ -935,6 +997,7 @@ async def _revalidate_export_rows(
                     Conversation.ephemeral,
                     Conversation.expires_at,
                     Conversation.context_kind,
+                    Conversation.metadata_json,
                 ).where(
                     Conversation.id == fence.conversation_id,
                     Conversation.workspace_id == scope.workspace_id,
@@ -947,7 +1010,10 @@ async def _revalidate_export_rows(
             or conversation.ephemeral
             or conversation.expires_at is not None
             and conversation.expires_at <= now
-            or conversation.context_kind == "automation"
+            or (
+                conversation.context_kind == "automation"
+                and "scheduled_task" not in (conversation.metadata_json or {})
+            )
         ):
             return "record_changed", []
         if record_kind == "conversations":
@@ -962,7 +1028,7 @@ async def _revalidate_export_rows(
                 raise ValueError("Message export fence is missing its transcript revision identity")
             message = (
                 await session.execute(
-                    _select(Message.created_at, Message.updated_at).where(
+                    _select(Message.created_at, Message.updated_at, Message.metadata_json).where(
                         Message.id == fence.message_id,
                         Message.conversation_id == fence.conversation_id,
                     )
@@ -973,7 +1039,19 @@ async def _revalidate_export_rows(
                 or message.updated_at != fence.message_updated_at
             ):
                 return "record_changed", []
+            if fence.brief_withheld is False:
+                published_live.append(message.metadata_json)
             citation_fences.extend(fence.citations)
+    # Briefs and topic-watch posts share the fence flag: either one withheld now invalidates the page.
+    if published_live and (
+        await withheld_brief_ids(
+            session, published_live, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        or await withheld_topic_messages(
+            session, published_live, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    ):
+        return "record_changed", []
     return None, citation_fences
 
 
@@ -1148,7 +1226,11 @@ async def validate_export_fences(
     if observed_count != expected_snapshot_count:
         return verdict(False, "snapshot_count_changed")
     row_failure, citation_fences = await _revalidate_export_rows(
-        session, record_kind=record_kind, fences=fences, scope=scope
+        session,
+        record_kind=record_kind,
+        fences=fences,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if row_failure is not None:
         return verdict(False, row_failure)

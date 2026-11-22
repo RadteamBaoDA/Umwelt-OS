@@ -11,6 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.documents import public
+from modules.knowledge.documents._news import _extract_media_projection
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=3)
@@ -54,7 +55,17 @@ async def test_language_and_since_compose_with_privacy_filters() -> None:
 async def test_no_filters_leaves_language_unconstrained_so_unknown_matches_any() -> None:
     session = _session()
     await public.list_gadget_document_projections(session, source_ids=(uuid4(),), **KW)
-    assert "documents.language" not in _sql(session).split("WHERE")[1]
+    sql = _sql(session)
+    assert "documents.language" not in sql.split("WHERE")[1]
+    assert "normalized_version_provenance" not in sql
+
+
+def test_media_projection_preserves_landscape_artwork_aspect() -> None:
+    media = _extract_media_projection(
+        SimpleNamespace(source_fields={"media_type": "game", "artwork_aspect": "landscape"})
+    )
+    assert media is not None
+    assert media.artwork_aspect == "landscape"
 
 
 @pytest.mark.asyncio
@@ -187,3 +198,261 @@ async def test_language_and_channel_ids_compose_in_one_where() -> None:
         and "sources.provider" in sql
         and "normalized_version_provenance" in sql
     )
+
+
+@pytest.mark.asyncio
+async def test_media_filters_compile_jsonb_predicates_and_release_date_sort() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session,
+        source_ids=(uuid4(),),
+        countries=("JP", "KR"),
+        genres=("action", "sci_fi"),
+        languages=("ja",),
+        media_types=("anime",),
+        formats=("tv",),
+        content_ratings=("pg_13",),
+        release_statuses=("airing",),
+        release_year=2026,
+        release_year_from=2025,
+        release_year_to=2027,
+        release_season="fall",
+        min_rating=80.0,
+        release_window_days=14,
+        sort="release_date_asc",
+        **KW,
+    )
+    sql = _sql(session)
+    assert "normalized_version_provenance" in sql
+    assert "jsonb_typeof" in sql
+    assert "pg_input_is_valid" in sql
+    assert "CASE WHEN (jsonb_typeof" in sql and " AS NUMERIC)" in sql
+    assert "@>" in sql
+    assert "ORDER BY" in sql and "ASC" in sql
+
+
+@pytest.mark.asyncio
+async def test_min_rating_binds_exact_decimal_not_float_expansion() -> None:
+    from decimal import Decimal
+
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), min_rating=7.7, **KW
+    )
+    stmt = session.execute.await_args.args[0]
+    params = stmt.compile().params
+    assert Decimal("7.7") in params.values()
+    assert not any(isinstance(v, float) and v == 7.7 for v in params.values())
+
+
+@pytest.mark.asyncio
+async def test_media_type_filter_includes_legacy_youtube_provider_fallback() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), media_types=("youtube",), **KW
+    )
+    compiled = session.execute.call_args.args[0].compile(dialect=postgresql.dialect())
+    assert "CASE WHEN" in str(compiled) and "jsonb_typeof" in str(compiled)
+    assert "provider" in compiled.params.values()
+    assert "youtube" in compiled.params.values()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_kwargs",
+    [
+        {"countries": ("USA",)},
+        {"genres": ("Bad-Genre",)},
+        {"release_year": 1799},
+        {"release_year_from": 2027, "release_year_to": 2025},
+        {"min_rating": 101.0},
+        {"release_window_days": 91},
+        {"sort": "rating_desc"},
+    ],
+)
+async def test_invalid_media_filters_raise_value_error(bad_kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValueError):
+        await public.list_gadget_document_projections(
+            _session(),
+            source_ids=(uuid4(),),
+            **bad_kwargs,
+            **KW,
+        )
+
+
+def test_cursor_fingerprint_changes_for_every_media_filter_and_sort() -> None:
+    base_kw: dict[str, Any] = {
+        "access_fence": FENCE,
+        "source_ids": (uuid4(),),
+        "observed_since": None,
+        "channel_ids": None,
+        "language": None,
+    }
+    base = public._news_projection_cursor_fingerprint(**base_kw)
+    for override in (
+        {"countries": ("JP",)},
+        {"genres": ("action",)},
+        {"languages": ("ja",)},
+        {"media_types": ("anime",)},
+        {"formats": ("tv",)},
+        {"content_ratings": ("pg_13",)},
+        {"release_statuses": ("airing",)},
+        {"release_year": 2026},
+        {"release_year_from": 2025},
+        {"release_year_to": 2027},
+        {"release_season": "fall"},
+        {"min_rating": 80.0},
+        {"release_window_days": 14},
+        {"sort": "release_date_asc"},
+    ):
+        assert public._news_projection_cursor_fingerprint(**base_kw, **override) != base
+
+
+def test_as_gadget_document_projection_populates_media_and_youtube() -> None:
+    now = datetime.now(UTC)
+
+    def item(provider: str, sf: dict[str, Any]) -> SimpleNamespace:
+        return SimpleNamespace(
+            document_id=uuid4(),
+            document_version_id=uuid4(),
+            version_number=1,
+            source_id=uuid4(),
+            title="Item",
+            canonical_url="https://example.com/1",
+            published_at=now,
+            observed_at=now,
+            chunks=[],
+            metadata_is_version_snapshot=True,
+            local_only=False,
+            provider_metadata=SimpleNamespace(provider=provider, source_fields=sf, telegram=None),
+        )
+
+    media_dto = public._as_gadget_document_projection(
+        item(
+            "anilist_anime",
+            {
+                "media_type": "anime",
+                "artwork_aspect": "poster",
+                "country": "JP",
+                "language": "ja",
+                "genres": ["action"],
+                "rating": 86.0,
+                "release_year": 2026,
+                "external_ids": {"anilist": "21"},
+            },
+        )
+    )
+    assert media_dto.media is not None
+    assert media_dto.media.media_type == "anime"
+    assert media_dto.media.country == "JP"
+    assert media_dto.media.rating == 86.0
+
+    yt_dto = public._as_gadget_document_projection(
+        item("youtube", {"author": "3Blue1Brown", "title": "Math"})
+    )
+    assert yt_dto.media is not None
+    assert yt_dto.media.media_type == "youtube"
+    assert yt_dto.media.artwork_aspect == "video"
+    assert yt_dto.media.creator == "3Blue1Brown"
+
+    news_dto = public._as_gadget_document_projection(item("bbc_world", {"title": "News"}))
+    assert news_dto.media is None
+
+
+@pytest.mark.asyncio
+async def test_release_date_asc_admits_single_provenance_versions_and_default_window() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), sort="release_date_asc", **KW
+    )
+    compiled = session.execute.call_args.args[0].compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    # One provenance row per version (NOT EXISTS of a sibling row, no per-row count) from a
+    # materialized candidate CTE, and a bounded default window.
+    assert "count(" not in sql
+    assert "MATERIALIZED" in sql and "release_candidates" in sql
+    assert "NOT (EXISTS" in sql or "NOT EXISTS" in sql
+    assert sql.count(" >= ") >= 1 and sql.count(" <= ") >= 1
+    assert any(isinstance(v, datetime) for v in compiled.params.values())
+
+
+@pytest.mark.asyncio
+async def test_release_season_uses_enum_equality_not_like() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), release_season="fall", **KW
+    )
+    sql = _sql(session)
+    assert "LIKE" not in sql.upper().replace("ILIKE", "")
+    with pytest.raises(ValueError):
+        await public.list_gadget_document_projections(
+            _session(), source_ids=(uuid4(),), release_season="fa%", **KW
+        )
+
+
+@pytest.mark.asyncio
+async def test_contract_invalid_provider_record_is_skipped_not_raised(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stored provider_record violating the current contract hydrates to None, not a 422."""
+    from modules.knowledge.documents import _news
+
+    doc = SimpleNamespace(id=uuid4(), external_id=None, canonical_url=None, title="t")
+    doc.published_at = doc.observed_at = None
+    version = SimpleNamespace(
+        id=uuid4(), version_number=1, content_hash="h", created_at=datetime.now(UTC)
+    )
+    version.observed_at = datetime.now(UTC)
+    source = SimpleNamespace(
+        id=uuid4(), generation=1, name="s", type="api", provider="p", local_only=False
+    )
+    provenance = SimpleNamespace(
+        provenance_json={
+            "provider_record": {
+                "provider": "tvmaze_schedule",
+                "identity": "x",
+                "timestamp_basis": "collection",
+                "coverage": "returned_snapshot",
+                "content_truncated": False,
+                "source_fields": {"release_date": "2026-02-30"},
+            }
+        },
+        canonical_url=None,
+        title="t",
+        published_at=None,
+        selection_observed_at=datetime.now(UTC),
+        accepted_record_hash="a",
+        normalization_version=1,
+    )
+    monkeypatch.setattr(
+        _news,
+        "_current_document_components",
+        AsyncMock(return_value=(doc, version, source, provenance)),
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        return_value=MagicMock(all=MagicMock(return_value=[(uuid4(), 0, "chunk")]))
+    )
+    with caplog.at_level("WARNING"):
+        result = await _news.get_news_document_projection(session, doc.id, **KW)
+    assert result is None
+    assert "ValidationError" in caplog.text and str(doc.id) in caplog.text
+    assert "2026-02-30" not in caplog.text
+
+
+def test_contract_skip_warning_is_logged_once_per_version(caplog: pytest.LogCaptureFixture) -> None:
+    from uuid import uuid4
+
+    from modules.knowledge.documents import _news
+
+    document_id, version_id = uuid4(), uuid4()
+    bad = {"not": "a provider record"}
+    with caplog.at_level("WARNING", logger=_news._log.name):
+        for _ in range(3):
+            assert _news._hydrate_provider_record(
+                bad, document_id=document_id, version_id=version_id
+            ) == (
+                False,
+                None,
+            )
+    assert sum("violates contract" in r.getMessage() for r in caplog.records) == 1

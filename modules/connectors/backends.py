@@ -5,9 +5,50 @@ from typing import Any, Literal, TypeGuard
 
 CollectionBackend = Literal["native", "n8n"]
 
+# Owner-supplied scope of the first-party Topic watch provider (validated by ``ConnectorConfig``).
+TOPIC_WATCH_FIELDS = (
+    "topic_watch_topic",
+    "topic_watch_keep_rule",
+    "topic_watch_languages",
+    "topic_watch_include_sites",
+    "topic_watch_exclude_sites",
+    "topic_watch_max_items",
+    "topic_watch_token_budget",
+    "topic_watch_model_role",
+)
+# These API presets reuse the revisioned REST credential slot without an owner-configurable header.
+NATIVE_SIGNED_MEDIA_PROVIDERS = frozenset({"youtube_api", "podcast_index", "igdb_games"})
+YOUTUBE_TARGET_FIELDS = frozenset(
+    {"youtube_channel_id", "youtube_channels", "youtube_handles", "youtube_playlist_ids"}
+)
+YOUTUBE_SCOPE_FIELDS = YOUTUBE_TARGET_FIELDS | {"youtube_filter"}
+# most_popular mode, its category and region choose WHICH videos are collected, so they are identity
+# (all optional: legacy uploads sources stored without them keep their scope hash and documents).
+YOUTUBE_API_SCOPE_FIELDS = YOUTUBE_SCOPE_FIELDS | {
+    "youtube_api_mode",
+    "youtube_video_category_id",
+    "media_country",
+}
+PODCAST_INDEX_SCOPE_FIELDS = frozenset({"podcast_index_query"})
+LISTENBRAINZ_SCOPE_FIELDS = frozenset({"listenbrainz_username"})
+STEAM_SCOPE_FIELDS = frozenset({"steam_mode", "steam_country", "steam_language", "steam_appids"})
+# igdb_game_types is a format filter (OPTION_FIELDS + native fingerprint), not source identity.
+IGDB_SCOPE_FIELDS = frozenset({"igdb_region", "igdb_platforms"})
+# TVMaze identity: which schedule / which followed shows. Every field is optional so legacy built-in
+# sources (stored without them) keep the empty-scope hash and their documents stay visible.
+TVMAZE_SCOPE_FIELDS = frozenset(
+    {"tvmaze_mode", "media_country", "tvmaze_global", "tvmaze_show_ids"}
+)
+
 PROVIDER_SOURCE_TYPES = MappingProxyType(
     {
         "youtube": "rss",
+        **dict.fromkeys(NATIVE_SIGNED_MEDIA_PROVIDERS, "api"),
+        "listenbrainz_releases": "api",
+        "steam_releases": "api",
+        "podcast_rss": "rss",
+        "ann_news": "rss",
+        "letterboxd_rss": "rss",
         "arxiv": "rss",
         "huggingface": "api",
         "bluesky": "api",
@@ -19,6 +60,7 @@ PROVIDER_SOURCE_TYPES = MappingProxyType(
         "telegram": "api",
         "alpha_vantage": "api",
         "open_meteo": "api",
+        "topic_watch": "web",  # first-party: web search plus bounded page fetches (Topic watch task)
         # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
         "bbc_world": "rss",
         "vnexpress_business": "rss",
@@ -49,6 +91,18 @@ PROVIDER_SOURCE_TYPES = MappingProxyType(
         "notion": "api",
         "slack": "api",
         "sec_edgar": "api",  # scoped free preset: URL is built server-side from a validated 10-digit CIK
+        "tvmaze_schedule": "api",
+        "livechart_episodes": "rss",
+        "anilist_anime": "api",
+        "anilist_manga": "api",
+        "openlibrary_books": "api",
+        "gutendex_books": "api",
+        "hardcover_books": "api",
+        "mangaupdates_releases": "api",
+        "mangadex_releases": "api",
+        "apple_books_rss": "api",
+        "wikidata_movies": "api",
+        "itunes_movies": "api",
         "openalex": "api",  # scoped free preset: URL is built server-side from a validated scholarly_query
         **dict.fromkeys(
             (  # built-in RSS/Atom feeds (providers/news.py FEED_URLS)
@@ -80,6 +134,13 @@ PROVIDER_SOURCE_TYPES = MappingProxyType(
         ),
         **dict.fromkeys(
             (  # keyed free-tier presets (providers/keyed.py); the owner key lives in connector_rest_credentials
+                "tmdb_movies",
+                "tmdb_tv",
+                "trakt_media",
+                "omdb_lookup",
+                "mal_anime",
+                "mal_manga",
+                "google_books",
                 "finnhub_news",
                 "newsapi",
                 "fred",
@@ -106,6 +167,9 @@ PROVIDER_SOURCE_TYPES = MappingProxyType(
 FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset(
     {
         "youtube",
+        *NATIVE_SIGNED_MEDIA_PROVIDERS,
+        "listenbrainz_releases",
+        "steam_releases",
         "arxiv",
         "huggingface",
         "bluesky",
@@ -117,6 +181,7 @@ FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset(
         "telegram",
         "alpha_vantage",
         "open_meteo",
+        "topic_watch",
         "google_news",
         "sec_edgar",
         "google_mail",
@@ -132,33 +197,85 @@ FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset(
         "openaq",
         "nasa_firms",
         "coingecko",
+        "anilist_anime",
+        "anilist_manga",
+        "openlibrary_books",
+        "gutendex_books",
+        "ann_news",
+        "mangaupdates_releases",
+        "mangadex_releases",
+        "tvmaze_schedule",
+        "apple_books_rss",
+        "podcast_rss",
+        "wikidata_movies",
+        "itunes_movies",
+        "letterboxd_rss",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "google_books",
+        "hardcover_books",
     }
 )
 # Free presets collected only by the gated shared executor (fixed-endpoint presets plus the scoped Google News preset).
-GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {
-    "bluesky",
-    "reddit",
-    "mastodon",
-    "x",
-    "google_news",
-    "google_mail",
-    "google_calendar",
-    "google_drive",
-    "health",
-    "home_assistant",
-    "notion",
-    "slack",
-    "sec_edgar",
-    "openalex",
-    "fred",
-    "openweathermap",
-    "openaq",
-    "nasa_firms",
-    "coingecko",
-}
+GATED_EXECUTOR_PROVIDERS = (
+    FIXED_SCOPE_PROVIDERS
+    | NATIVE_SIGNED_MEDIA_PROVIDERS
+    | {
+        "listenbrainz_releases",
+        "steam_releases",
+        "bluesky",
+        "reddit",
+        "mastodon",
+        "x",
+        "google_news",
+        "google_mail",
+        "google_calendar",
+        "google_drive",
+        "health",
+        "home_assistant",
+        "notion",
+        "slack",
+        "sec_edgar",
+        "openalex",
+        "fred",
+        "openweathermap",
+        "openaq",
+        "nasa_firms",
+        "coingecko",
+        "topic_watch",
+        "anilist_anime",
+        "anilist_manga",
+        "openlibrary_books",
+        "gutendex_books",
+        "ann_news",
+        "mangaupdates_releases",
+        "mangadex_releases",
+        "tvmaze_schedule",
+        "apple_books_rss",
+        "podcast_rss",
+        "wikidata_movies",
+        "itunes_movies",
+        "letterboxd_rss",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "google_books",
+        "hardcover_books",
+    }
+)
 PROVIDER_SCOPE_FIELDS = MappingProxyType(
     {
-        "youtube": frozenset({"youtube_channel_id"}),
+        "youtube_api": YOUTUBE_API_SCOPE_FIELDS,
+        "podcast_index": PODCAST_INDEX_SCOPE_FIELDS,
+        "listenbrainz_releases": frozenset(
+            {
+                "listenbrainz_username",
+            }
+        ),
+        "steam_releases": STEAM_SCOPE_FIELDS,
+        "igdb_games": IGDB_SCOPE_FIELDS,
+        "topic_watch": frozenset(TOPIC_WATCH_FIELDS),
         "arxiv": frozenset({"arxiv_category"}),
         "huggingface": frozenset({"huggingface_author"}),
         "bluesky": frozenset({"bluesky_actor"}),
@@ -182,6 +299,27 @@ PROVIDER_SCOPE_FIELDS = MappingProxyType(
             {"market_symbols", "market_currency", "market_exchange_timezone"}
         ),
         "coingecko": frozenset({"coingecko_assets"}),
+        "anilist_anime": frozenset({"media_ids"}),
+        "anilist_manga": frozenset({"media_ids"}),
+        "mal_anime": frozenset({"mal_mode", "mal_ranking_type", "mal_season_year", "mal_season"}),
+        "mal_manga": frozenset({"mal_ranking_type"}),
+        "google_books": frozenset({"google_books_query", "google_books_subject"}),
+        "hardcover_books": frozenset({"hardcover_mode"}),
+        "omdb_lookup": frozenset({"omdb_mode", "omdb_imdb_id", "omdb_title", "omdb_search"}),
+        "openlibrary_books": frozenset(
+            {"openlibrary_mode", "openlibrary_subject", "openlibrary_query"}
+        ),
+        "gutendex_books": frozenset({"gutendex_topic", "gutendex_search"}),
+        "ann_news": frozenset({"ann_mode", "ann_media_type", "ann_category", "ann_edition"}),
+        "mangaupdates_releases": frozenset({"series_ids"}),
+        "mangadex_releases": frozenset({"manga_ids"}),
+        "tvmaze_schedule": TVMAZE_SCOPE_FIELDS,
+        "apple_books_rss": frozenset({"country", "kind", "chart"}),
+        "podcast_rss": frozenset({"feed_url", "itunes_podcast_id"}),
+        "wikidata_movies": frozenset({"lookback_days", "language"}),
+        "itunes_movies": frozenset({"search_terms", "country"}),
+        "letterboxd_rss": frozenset({"letterboxd_username"}),
+        "youtube": YOUTUBE_SCOPE_FIELDS,
         "open_meteo": frozenset(
             {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}
         ),

@@ -4,24 +4,40 @@ Widgets always use *current* records filtered to the selected date and carry ``u
 they are never presented as historical task-state snapshots. Only the saved brief is historical.
 """
 
+import hashlib
+from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces.schemas import Scope
+from modules.connectors.public import get_catalog_entry
 from modules.dashboard import briefs
-from modules.dashboard.daily_schemas import DailyContext, DailyWidget, DayRelation
+from modules.dashboard.daily_schemas import (
+    ALL_BRIEF_SECTIONS,
+    BriefSection,
+    DailyContext,
+    DailyWidget,
+    DayRelation,
+)
 from modules.goals import public as goals
 from modules.goals.public import GoalFilter
+from modules.knowledge.observations.public import ObservationQuery, list_observations
 from modules.news.public import StoryFilter, list_stories
 from modules.notifications import public as notifications
+from modules.sources import public as sources
 from modules.tasks import public as tasks
 from modules.tasks.public import TaskFilter
 from modules.timeline import public as timeline
 from modules.timeline.public import TimelineQuery
 
 MAX_ITEMS = 25
+WEATHER_PROVIDERS = frozenset({"open_meteo"})
+_FACT_ITEMS_MAX = 5  # per observation/health widget, so agenda facts keep room under MAX_FACTS
+_SOURCE_PAGES = 5  # ponytail: 500 newest sources; page further only if a workspace outgrows it.
 
 
 def day_bounds(day: date, timezone: str) -> tuple[datetime, datetime]:
@@ -181,6 +197,207 @@ async def _events_widget(
     )
 
 
+_FACT_TITLE_KEYS = {
+    "markets": "dayMarkets",
+    "weather": "dayWeather",
+    "hazards": "dayHazards",
+    "source_health": "daySourceHealth",
+}
+
+
+def _fact_widget(widget_id: str, items: list[dict[str, str]], as_of: datetime) -> DailyWidget:
+    """Wrap fact items (``id``/``title``/``detail``/``source_id``) into a widget.
+
+    No items gives ``status="empty"`` so the brief fact filter produces nothing for the section.
+    At most ``_FACT_ITEMS_MAX`` items are kept.
+    """
+    return DailyWidget(
+        id=widget_id,
+        module="dashboard",
+        title_key=_FACT_TITLE_KEYS[widget_id],
+        status="ok" if items else "empty",
+        updated_at=as_of if items else None,
+        items=items[:_FACT_ITEMS_MAX],
+    )
+
+
+def _fmt(value: float) -> str:
+    """Format a number compactly with thousands separators (``103.0`` -> ``103``)."""
+    return f"{value:,.10g}"
+
+
+async def _active_sources(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> list[Any]:
+    """Read up to ``_SOURCE_PAGES`` pages of owner sources, keeping active, non-local-only ones."""
+    rows: list[Any] = []
+    cursor: str | None = None
+    for _ in range(_SOURCE_PAGES):
+        page, cursor = await sources.list_sources(
+            session, 100, cursor, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        rows.extend(page)
+        if cursor is None:
+            break
+    return [row for row in rows if row.status == "active" and not row.local_only]
+
+
+def _kind_of(provider: str | None) -> str | None:
+    """Classify a provider as ``markets``, ``weather`` or ``hazards`` from the connector catalog."""
+    if not provider:
+        return None
+    if provider in WEATHER_PROVIDERS:
+        return "weather"
+    category = getattr(get_catalog_entry(provider), "category", None)
+    return {"economy": "markets", "hazards": "hazards"}.get(category or "")
+
+
+async def _points(
+    session: AsyncSession,
+    source_ids: list[Any],
+    start: datetime,
+    end: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[Any]:
+    """Read non-null observations in ``[start, end]`` for sources (32 ids per query), oldest first.
+
+    ponytail: one 100-row page per chunk; a busy chunk is truncated, add cursor paging if needed.
+    """
+    rows: list[Any] = []
+    for i in range(0, len(source_ids), 32):
+        page, *_ = await list_observations(
+            session,
+            ObservationQuery(
+                source_ids=source_ids[i : i + 32], from_at=start, to_at=end, limit=100
+            ),
+            None,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        rows.extend(page)
+    return sorted((r for r in rows if r.value is not None), key=lambda r: r.observed_at)
+
+
+def _obs_id(row: Any) -> str:
+    """Stable fact id ``<source uuid>:<16 hex of sha256(metric:symbol)>`` of one observation series.
+
+    The metric/symbol are hashed because they are provider-controlled and can push the id past the
+    64-character ``daily_brief_evidence.fact_id`` column (36 + 1 + 16 = 53 here).
+    """
+    digest = hashlib.sha256(f"{row.metric}:{row.symbol or ''}".encode()).hexdigest()[:16]
+    return f"{row.source_id}:{digest}"
+
+
+def _markets_items(points: list[Any]) -> list[dict[str, str]]:
+    """Per series: latest value and the change against the earliest point (omitted for one point)."""
+    series: dict[str, list[Any]] = defaultdict(list)
+    for row in points:
+        series[_obs_id(row)].append(row)
+    items = []
+    for key, rows in series.items():
+        first, last = rows[0], rows[-1]
+        pct = ""
+        if len(rows) > 1 and first.value:
+            pct = f" ({(last.value - first.value) / abs(first.value) * 100:+.1f}% 24h)"
+        items.append(
+            {
+                "id": key,
+                "title": last.symbol or last.metric,
+                "detail": f"{_fmt(last.value)} {last.unit}{pct}",
+                "source_id": str(last.source_id),
+            }
+        )
+    return items
+
+
+def _weather_items(points: list[Any]) -> list[dict[str, str]]:
+    """Per source: temperature min/max and summed precipitation; sources without temperature skip."""
+    by_source: dict[Any, list[Any]] = defaultdict(list)
+    for row in points:
+        by_source[row.source_id].append(row)
+    items = []
+    for source_id, rows in by_source.items():
+        temps = [r for r in rows if r.metric.startswith("temperature")]
+        if not temps:
+            continue
+        rain = sum(r.value for r in rows if r.metric.startswith("precipitation"))
+        low, high = min(r.value for r in temps), max(r.value for r in temps)
+        items.append(
+            {
+                "id": f"{source_id}:weather:",
+                "title": rows[0].region or "weather",
+                "detail": f"{low:.1f}–{high:.1f}{temps[0].unit}, rain {rain:.1f} mm",
+                "source_id": str(source_id),
+            }
+        )
+    return items
+
+
+def _hazard_items(points: list[Any]) -> list[dict[str, str]]:
+    """Top five readings by value, ties broken by the most recent ``observed_at``."""
+    ranked = sorted(points, key=lambda r: (r.value, r.observed_at), reverse=True)
+    return [
+        {
+            "id": _obs_id(r),
+            "title": r.region or r.symbol or r.metric,
+            "detail": f"{r.metric} {r.value} {r.region or ''}",
+            "source_id": str(r.source_id),
+        }
+        for r in ranked[:5]
+    ]
+
+
+async def _observation_widgets(
+    session: AsyncSession,
+    rows: list[Any],
+    wanted: set[str],
+    as_of: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> dict[str, DailyWidget]:
+    """Build the wanted markets/weather/hazards widgets with every window anchored on ``as_of``.
+
+    Markets and hazards read ``[as_of-24h, as_of]``; weather reads the forecast ``[as_of, as_of+24h]``
+    and falls back to the last 3 h when that is empty. Reads only the given (already vetted) sources.
+    """
+    kwargs: Any = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
+    ids = {k: [r.id for r in rows if _kind_of(r.provider) == k] for k in wanted}
+    day = timedelta(hours=24)
+    out: dict[str, list[dict[str, str]]] = {k: [] for k in wanted}
+    if ids.get("markets"):
+        pts = await _points(session, ids["markets"], as_of - day, as_of, **kwargs)
+        out["markets"] = _markets_items(pts)
+    if ids.get("hazards"):
+        pts = await _points(session, ids["hazards"], as_of - day, as_of, **kwargs)
+        out["hazards"] = _hazard_items(pts)
+    if ids.get("weather"):
+        pts = await _points(session, ids["weather"], as_of, as_of + day, **kwargs)
+        pts = pts or await _points(
+            session, ids["weather"], as_of - timedelta(hours=3), as_of, **kwargs
+        )
+        out["weather"] = _weather_items(pts)
+    return {k: _fact_widget(k, items, as_of) for k, items in out.items()}
+
+
+def _health_widget(rows: list[Any], as_of: datetime) -> DailyWidget:
+    """List active sources whose latest error is newer than their latest success (max five)."""
+    items = [
+        {
+            "id": str(r.id),
+            "title": r.name,
+            "detail": r.last_error_code or r.collection_error_code or "error",
+            "source_id": str(r.id),
+        }
+        for r in rows
+        if r.last_error_at is not None
+        and (r.last_success_at is None or r.last_error_at > r.last_success_at)
+    ]
+    return _fact_widget("source_health", items[:_FACT_ITEMS_MAX], as_of)
+
+
 async def build_daily_widgets(
     session: AsyncSession,
     day: date,
@@ -189,31 +406,44 @@ async def build_daily_widgets(
     scope: Scope,
     multi_workspace_enabled: bool,
     relation: DayRelation | None = None,
+    as_of: datetime | None = None,
+    sections: Sequence[BriefSection] | None = None,
 ) -> list[DailyWidget]:
     """Project current owner records for one day without reading saved brief history or notifications.
 
-    Widget queries retain their existing per-owner bounds and evidence/privacy filters. The result
-    contains current task/goal/news/timeline projections, never a historical state snapshot.
+    ``sections`` (default: all, in canonical order) selects widgets and emits them in the given order: stories, markets, weather, hazards,
+    agenda (tasks, goals, events), source_health. ``as_of`` (default: now truncated to the minute)
+    anchors every observation window so repeated calls with one value are reproducible. Widget
+    queries keep their per-owner bounds and privacy filters; fact items carry ``source_id`` so the
+    brief fact filter drops paused or local-only sources. Requires owner admission; read-only and
+    never a historical state snapshot.
     """
     await briefs._admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selected_relation = relation or relation_to_today(day, timezone)
-    return [
-        await _tasks_widget(
-            session, day, timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-        ),
-        await _goals_widget(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
-        await _stories_widget(
-            session,
-            day,
-            timezone,
-            selected_relation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        ),
-        await _events_widget(
-            session, day, timezone, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-        ),
-    ]
+    anchor = as_of or datetime.now(UTC).replace(second=0, microsecond=0)
+    ordered = tuple(dict.fromkeys(sections if sections is not None else ALL_BRIEF_SECTIONS))
+    wanted: set[str] = set(ordered)
+    kwargs: Any = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
+    obs_kinds = wanted & {"markets", "weather", "hazards"}
+    rows: list[Any] = []
+    if obs_kinds or "source_health" in wanted:
+        rows = await _active_sources(session, **kwargs)
+    observed = (
+        await _observation_widgets(session, rows, obs_kinds, anchor, **kwargs) if obs_kinds else {}
+    )
+    out: list[DailyWidget] = []
+    for section in ordered:
+        if section == "stories":
+            out.append(await _stories_widget(session, day, timezone, selected_relation, **kwargs))
+        elif section == "agenda":
+            out.append(await _tasks_widget(session, day, timezone, **kwargs))
+            out.append(await _goals_widget(session, **kwargs))
+            out.append(await _events_widget(session, day, timezone, **kwargs))
+        elif section == "source_health":
+            out.append(_health_widget(rows, anchor))
+        else:
+            out.append(observed[section])
+    return out
 
 
 async def build_daily_context(
@@ -228,6 +458,8 @@ async def build_daily_context(
 
     Retained brief history is presentation data; callers needing only fact support should use
     ``build_daily_widgets`` so malformed saved citations cannot prevent independent current reads.
+    Only the legacy ``agenda`` and ``stories`` widgets are returned, in the legacy server order
+    tasks, goals, stories, events (the web renders in server order).
     """
     await briefs._admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     relation = relation_to_today(day, timezone)
@@ -238,7 +470,11 @@ async def build_daily_context(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
         relation=relation,
+        # Brief-only fact widgets (markets, weather, hazards, source health) stay off the day view.
+        sections=("agenda", "stories"),
     )
+    legacy_order = {"tasks": 0, "goals": 1, "stories": 2, "events": 3}
+    widgets.sort(key=lambda widget: legacy_order[widget.id])
     now = datetime.now(UTC)
     return DailyContext(
         selected_date=day,

@@ -74,9 +74,9 @@ function ForecastPanel({
   const suffix = metric === 'temperature' ? '°' : metric === 'rain' ? '%' : '';
   const label = (value: unknown) => (typeof value === 'number' ? `${whole.format(value)}${suffix}` : '');
   const axis = (
-    <XAxis dataKey="hour" tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} interval={0} />
+    <XAxis dataKey="hour" tick={{ fontSize: 11, fill: 'var(--muted)' }} tickLine={false} axisLine={false} interval={0} />
   );
-  const labels = <LabelList dataKey={metric} position="top" formatter={label} style={{ fontSize: 11, fill: 'var(--foreground)' }} />;
+  const labels = <LabelList dataKey={metric} position="top" formatter={label} style={{ fontSize: 11, fill: 'var(--text)' }} />;
   const chartLabel =
     metric === 'temperature' ? t('weather.tabTemperature') : metric === 'rain' ? t('weather.tabRain') : t('weather.tabWind');
   return (

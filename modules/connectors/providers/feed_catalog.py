@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from html.parser import HTMLParser
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import parse_qs, quote, urlsplit
 from xml.etree import ElementTree
 
@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modules.connectors.provider_options_filters import filter_media_records
 from modules.connectors.providers.news import safe_xml_root
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.public import IngestionRecord
@@ -29,6 +30,7 @@ _MAX_MAPPED_BYTES = 9 * 1024 * 1024
 _ARXIV_ADVISORY_KEY = 1_380_004_657  # signed int32 form of 0x52413331
 _ATOM = "http://www.w3.org/2005/Atom"
 _YT = "http://www.youtube.com/xml/schemas/2015"
+_MEDIA = "http://search.yahoo.com/mrss/"
 _HF_RATE_LIMIT_ITEM = re.compile(r'^\s*"(api|pages|resolvers)"\s*;\s*r=(\d+)\s*;\s*t=(\d+)\s*$')
 
 
@@ -68,6 +70,43 @@ def _plain_text(value: str) -> str:
     return " ".join(" ".join(parser.parts).split())
 
 
+class _YoutubeChannelIdParser(HTMLParser):
+    """Extract only YouTube's explicit channel-id metadata from a bounded channel page."""
+
+    def __init__(self) -> None:
+        """Initialize the one value accepted from the discovery document."""
+        super().__init__(convert_charrefs=True)
+        self.channel_ids: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Read channel identity from the meta field or canonical YouTube channel URL."""
+        tag = tag.lower()
+        values = {key.lower(): value for key, value in attrs if value is not None}
+        if tag == "meta" and values.get("itemprop", "").lower() in {"channelid", "identifier"}:
+            candidate = values.get("content", "")
+            if re.fullmatch(r"UC[A-Za-z0-9_-]{22}", candidate):
+                self.channel_ids.add(candidate)
+        elif tag == "link" and values.get("rel", "").lower() == "canonical":
+            canonical = urlsplit(values.get("href", ""))
+            candidate = canonical.path.removeprefix("/channel/")
+            if (
+                canonical.scheme == "https"
+                and canonical.netloc == "www.youtube.com"
+                and canonical.path.startswith("/channel/")
+                and re.fullmatch(r"UC[A-Za-z0-9_-]{22}", candidate)
+            ):
+                self.channel_ids.add(candidate)
+
+
+def _youtube_channel_id_from_page(body: bytes) -> str:
+    """Resolve one bounded handle page only when it supplies a canonical UC channel ID."""
+    parser = _YoutubeChannelIdParser()
+    parser.feed(body.decode("utf-8", errors="replace"))
+    if len(parser.channel_ids) != 1:
+        raise ValueError("youtube_handle_unresolved")
+    return next(iter(parser.channel_ids))
+
+
 def _provider_record(
     *,
     provider: str,
@@ -93,14 +132,163 @@ def _provider_record(
     return metadata.model_dump(mode="json", exclude_none=True)
 
 
+@dataclass(frozen=True)
+class _YoutubeTarget:
+    """One fixed-host YouTube feed target, optionally requiring handle discovery first."""
+
+    url: str | None
+    handle: str | None
+    channel_id: str | None
+
+
+@dataclass(frozen=True)
+class YoutubeSnapshotPage:
+    """One complete multi-target YouTube sweep and the URL-specific validators to checkpoint with it."""
+
+    records: tuple[IngestionRecord, ...]
+    coverage: Literal["returned_snapshot", "truncated"]
+    validators: dict[str, dict[str, str]]
+    next_eligible_at: datetime | None = None
+
+
+def youtube_query_fingerprint(config: ConnectorConfig) -> str:
+    """Hash the validated YouTube target, content filter and chart scope so cursors cannot cross scopes.
+
+    ``most_popular`` has no feed targets (the chart is addressed by region and category), so its
+    fingerprint hashes those instead. Optional components are added only when set, which keeps the
+    fingerprint (and saved validator cursors) of pre-existing sources unchanged.
+    """
+    chart = config.youtube_api_mode == "most_popular"
+    scope: dict[str, object] = {
+        "targets": []
+        if chart
+        else [
+            {"url": target.url, "handle": target.handle, "channel_id": target.channel_id}
+            for target in _youtube_targets(config)
+        ],
+        "filter": config.youtube_filter or "all",
+    }
+    if chart:
+        scope["mode"] = "most_popular"
+        scope["region"] = config.media_country
+        scope["category"] = config.youtube_video_category_id
+    if config.min_rating is not None:
+        scope["min_rating"] = config.min_rating
+    encoded = json.dumps(scope, sort_keys=True, separators=(",", ":"))
+    return sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+def encode_youtube_validator_cursor(
+    fingerprint: str, validators: Mapping[str, Mapping[str, str | None]]
+) -> str:
+    """Encode bounded per-feed HTTP validators with their effective target scope for atomic receipt storage."""
+    if len(fingerprint) != 24 or len(validators) > 8:
+        raise ValueError("youtube_cursor_invalid")
+    bounded: dict[str, dict[str, str]] = {}
+    for url, values in validators.items():
+        if (
+            not isinstance(url, str)
+            or not isinstance(values, Mapping)
+            or len(url) > 300
+            or not url.startswith("https://www.youtube.com/feeds/videos.xml?")
+        ):
+            raise ValueError("youtube_cursor_invalid")
+        headers: dict[str, str] = {}
+        for key, maximum in (("etag", 256), ("last_modified", 64)):
+            value = values.get(key)
+            if (
+                isinstance(value, str)
+                and 0 < len(value) <= maximum
+                and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+            ):
+                headers[key] = value
+        if headers:
+            bounded[url] = headers
+    cursor = json.dumps(
+        {"fingerprint": fingerprint, "validators": bounded},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(cursor) > 4096:
+        raise ValueError("youtube_cursor_too_large")
+    return cursor
+
+
+def decode_youtube_validator_cursor(
+    cursor: str | None, fingerprint: str
+) -> dict[str, dict[str, str]]:
+    """Read only bounded validators for the exact current query scope; malformed or stale cursors reset safely."""
+    if not cursor or len(cursor) > 4096:
+        return {}
+    try:
+        payload = json.loads(cursor)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if (
+        not isinstance(payload, dict)
+        or payload.get("fingerprint") != fingerprint
+        or not isinstance(payload.get("validators"), dict)
+        or len(payload["validators"]) > 8
+    ):
+        return {}
+    try:
+        normalized = json.loads(encode_youtube_validator_cursor(fingerprint, payload["validators"]))
+        return cast(dict[str, dict[str, str]], normalized["validators"])
+    except (AttributeError, TypeError, ValueError):
+        return {}
+
+
+def _youtube_targets(config: ConnectorConfig) -> tuple[_YoutubeTarget, ...]:
+    """Validate exclusive YouTube scopes and build at most eight server-owned feed targets."""
+    groups = [
+        ("channel", (config.youtube_channel_id,) if config.youtube_channel_id else ()),
+        ("channels", config.youtube_channels or ()),
+        ("handles", config.youtube_handles or ()),
+        ("playlists", config.youtube_playlist_ids or ()),
+    ]
+    selected = [(kind, values) for kind, values in groups if values]
+    if len(selected) != 1 or len(selected[0][1]) > 8:
+        raise ValueError("provider_scope_invalid")
+    kind, values = selected[0]
+    content_filter = config.youtube_filter or "all"
+    if kind == "playlists" and content_filter != "all":
+        raise ValueError("youtube_filter_requires_channel_scope")
+    targets: list[_YoutubeTarget] = []
+    if kind == "handles":
+        targets.extend(_YoutubeTarget(None, handle, None) for handle in values)
+        return tuple(targets)
+    for value in values:
+        if kind == "playlists":
+            playlist_id = value
+            channel_id = None
+        else:
+            channel_id = value
+            if content_filter == "all":
+                playlist_id = None
+            else:
+                playlist_id = ("UULF" if content_filter == "long_form" else "UUSH") + value[2:]
+        url = (
+            f"https://www.youtube.com/feeds/videos.xml?playlist_id={quote(playlist_id, safe='')}"
+            if playlist_id
+            else f"https://www.youtube.com/feeds/videos.xml?channel_id={quote(value, safe='')}"
+        )
+        targets.append(_YoutubeTarget(url, None, channel_id))
+    return tuple(targets)
+
+
 def provider_feed_url(source: ConnectorSource) -> str:
-    """Build only the fixed public YouTube or single-category arXiv feed URL."""
+    """Build the single fixed public YouTube or arXiv feed URL for legacy callers."""
     config = ConnectorConfig.model_validate(source.configuration)
     if source.provider == "youtube" and source.type == "rss":
-        channel_id = config.youtube_channel_id
-        if channel_id is None or config.history_mode != "returned_snapshot":
+        if config.history_mode != "returned_snapshot":
             raise ValueError("provider_scope_invalid")
-        return f"https://www.youtube.com/feeds/videos.xml?channel_id={quote(channel_id, safe='')}"
+        targets = _youtube_targets(config)
+        if len(targets) != 1:
+            raise ValueError("youtube_multiple_targets")
+        target = targets[0]
+        if target.url is None:
+            raise ValueError("youtube_handle_requires_resolution")
+        return target.url
     if source.provider == "arxiv" and source.type == "rss":
         category = config.arxiv_category
         if category is None or config.history_mode != "returned_snapshot":
@@ -335,19 +523,24 @@ def _feed_canonical(entry: ElementTree.Element, provider: str, identity: str) ->
     return None
 
 
-def _same_youtube_channel(feed_id: str | None, configured: str | None) -> bool:
-    """Return True when two YouTube channel ids name the same channel.
+def _same_youtube_channel(feed_id: str | None, configured: str | frozenset[str] | None) -> bool:
+    """Match one feed channel against a configured ID/set, or accept any channel for a playlist feed.
 
     The Atom feed's ``yt:channelId`` is sometimes the full ``UC``+22-char id and
     sometimes the bare 22-char form. Only a leading ``UC`` on a 24-char id is
-    stripped, so distinct channels never compare equal.
+    stripped, so distinct channels never compare equal. An absent scope is used
+    only for user-selected playlists, whose feed may contain multiple channels.
     """
 
     def bare(value: str | None) -> str | None:
         """Strip the ``UC`` prefix from a 24-char channel id; leave other values untouched."""
         return value[2:] if value and len(value) == 24 and value.startswith("UC") else value
 
-    return feed_id is not None and bare(feed_id) == bare(configured)
+    if feed_id is None:
+        return False
+    if isinstance(configured, frozenset):
+        return any(bare(feed_id) == bare(channel) for channel in configured)
+    return configured is None or bare(feed_id) == bare(configured)
 
 
 @dataclass(frozen=True)
@@ -371,7 +564,9 @@ class _FeedEntry:
 
 
 # An entry mapper returns ``None`` when the entry is outside the configured scope (the page is then truncated).
-_EntryMapper = Callable[[ElementTree.Element, str | None, str, str, datetime], "_FeedEntry | None"]
+_EntryMapper = Callable[
+    [ElementTree.Element, str | frozenset[str] | None, str, str, datetime], "_FeedEntry | None"
+]
 
 
 def _timestamp_basis(modified: datetime | None, published: datetime | None) -> str:
@@ -384,21 +579,30 @@ _YT_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 
 def _youtube_entry(
     entry: ElementTree.Element,
-    scope: str | None,
+    scope: str | frozenset[str] | None,
     title: str,
     summary: str,
     collected_at: datetime,
 ) -> _FeedEntry | None:
-    """Map one YouTube Atom entry, or ``None`` when its channel/video identity is out of scope."""
+    """Map one YouTube Atom entry, canonicalizing channel identity for stable deduplication.
+
+    Return ``None`` for out-of-scope channels or malformed video IDs. The accepted channel
+    identifier remains part of ``provider_id`` so the same video in multiple feeds deduplicates.
+    """
     channel_id = entry.findtext(f"{{{_YT}}}channelId")
     video_id = entry.findtext(f"{{{_YT}}}videoId")
     if not _same_youtube_channel(channel_id, scope) or not video_id or len(video_id) > 128:
+        return None
+    canonical_channel = (
+        channel_id if channel_id and channel_id.startswith("UC") else f"UC{channel_id or ''}"
+    )
+    if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", canonical_channel):
         return None
     published_raw = entry.findtext(f"{{{_ATOM}}}published")
     modified_raw = entry.findtext(f"{{{_ATOM}}}updated")
     published = _parse_time(published_raw)
     modified = _parse_time(modified_raw)
-    identity = f"youtube:{scope}:{video_id}"
+    identity = f"youtube:{canonical_channel}:{video_id}"
     author = _plain_text(entry.findtext(f"{{{_ATOM}}}author/{{{_ATOM}}}name") or "")
     category_nodes = entry.findall(f"{{{_ATOM}}}category")
     tags = [node.attrib["term"] for node in category_nodes if node.attrib.get("term")]
@@ -417,6 +621,14 @@ def _youtube_entry(
     }
     if author:
         source_fields["author"] = author[:1000]
+    average = entry.find(f"{{{_MEDIA}}}group/{{{_MEDIA}}}community/{{{_MEDIA}}}starRating")
+    try:
+        # media:starRating@average is 1-5 stars; the shared min_rating filter uses a 0-100 scale.
+        rating = float(average.attrib["average"]) * 20 if average is not None else None
+    except (KeyError, ValueError):
+        rating = None
+    if rating is not None and 0 <= rating <= 100:
+        source_fields["rating"] = round(rating, 2)
     if _YT_VIDEO_ID.fullmatch(video_id):
         source_fields["image_url"] = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
     if published_raw is not None:
@@ -452,7 +664,7 @@ def _youtube_entry(
 
 def _arxiv_entry(
     entry: ElementTree.Element,
-    scope: str | None,
+    scope: str | frozenset[str] | None,
     title: str,
     summary: str,
     collected_at: datetime,
@@ -579,7 +791,11 @@ def _mark_truncated(records: list[IngestionRecord]) -> None:
 
 
 def _records_from_feed(
-    source: ConnectorSource, body: bytes, collected_at: datetime
+    source: ConnectorSource,
+    body: bytes,
+    collected_at: datetime,
+    *,
+    expected_channel_id: str | None = None,
 ) -> ProviderCollectionPage:
     """Map actual scoped YouTube/arXiv Atom entries, limiting output and preserving source clocks.
 
@@ -594,7 +810,18 @@ def _records_from_feed(
     mapped_bytes = 0
     entries = root.findall(f"{{{_ATOM}}}entry")
     truncated = len(entries) > 500
-    scope = config.youtube_channel_id if source.provider == "youtube" else config.arxiv_category
+    if source.provider == "youtube":
+        configured_channels = set(config.youtube_channels or ())
+        if config.youtube_channel_id:
+            configured_channels.add(config.youtube_channel_id)
+        if expected_channel_id:
+            scope: str | frozenset[str] | None = expected_channel_id
+        elif configured_channels:
+            scope = frozenset(configured_channels)
+        else:
+            scope = None
+    else:
+        scope = config.arxiv_category
     for entry in entries[:500]:
         title = _plain_text(entry.findtext(f"{{{_ATOM}}}title") or "")
         summary = _plain_text(
@@ -617,10 +844,186 @@ def _records_from_feed(
         records.append(record)
     if truncated:
         _mark_truncated(records)
+    if source.provider == "youtube" and config.min_rating is not None:
+        # keep_missing: videos with ratings disabled stay; only a known rating below the floor is dropped.
+        records = filter_media_records(
+            {"min_rating": config.min_rating}, records, keep_missing=True
+        )
     return ProviderCollectionPage(
         records=tuple(records),
         coverage="truncated" if truncated else "returned_snapshot",
         next_eligible_at=None,
+    )
+
+
+async def _youtube_target_url(
+    target: _YoutubeTarget,
+    *,
+    content_filter: str,
+    before_request: Callable[[], Awaitable[None]],
+) -> tuple[str, str | None]:
+    """Resolve a bounded handle and return its fixed feed URL plus the channel identity fence."""
+    from modules.connectors.providers.rest import ProviderHttpError, fetch_bounded
+
+    channel_id = target.channel_id
+    url: str | None
+    if target.handle is not None:
+        page = await fetch_bounded(
+            f"https://www.youtube.com/@{quote(target.handle, safe='')}",
+            headers={"Accept": "text/html"},
+            before_send=before_request,
+            max_bytes=1024 * 1024,
+        )
+        if page.body is None:
+            raise ProviderHttpError(304)
+        channel_id = await asyncio.to_thread(_youtube_channel_id_from_page, page.body)
+        if channel_id is None:  # pragma: no cover - discovery parser either returns or raises
+            raise ValueError("youtube_handle_unresolved")
+        playlist = (
+            "UULF" + channel_id[2:]
+            if content_filter == "long_form"
+            else "UUSH" + channel_id[2:]
+            if content_filter == "shorts"
+            else None
+        )
+        url = (
+            f"https://www.youtube.com/feeds/videos.xml?playlist_id={quote(playlist, safe='')}"
+            if playlist
+            else f"https://www.youtube.com/feeds/videos.xml?channel_id={quote(channel_id, safe='')}"
+        )
+    else:
+        url = target.url
+    if url is None:
+        raise ValueError("provider_scope_invalid")
+    return url, channel_id
+
+
+async def _collect_youtube_feeds(
+    source: ConnectorSource,
+    config: ConnectorConfig,
+    targets: tuple[_YoutubeTarget, ...],
+    *,
+    collected_at: datetime,
+    before_request: Callable[[], Awaitable[None]],
+    validators: Mapping[str, Mapping[str, str | None]] | None = None,
+) -> YoutubeSnapshotPage:
+    """Fetch each bounded YouTube target with URL-specific validators; return only a complete sweep for receipt.
+
+    A target answering 304 contributes no records but keeps its validators. The page still reports
+    ``returned_snapshot``: coverage is receipt metadata only and nothing downstream tombstones or deletes
+    documents that a snapshot omits (documents are upserted by identity), so a 304'd target's previously
+    accepted items stay readable. A 304 without a prior validator raises ``ProviderHttpError(304)``. A rate
+    limit mid-sweep returns no records, the prior validators and ``next_eligible_at`` instead.
+    """
+    from modules.connectors.providers.rest import ProviderHttpError, fetch_bounded
+
+    mapped: dict[str, IngestionRecord] = {}
+    next_validators: dict[str, dict[str, str]] = {}
+    mapped_bytes = 0
+    truncated = False
+    try:
+        async with asyncio.timeout(120):
+            for target in targets:
+                url, channel_id = await _youtube_target_url(
+                    target,
+                    content_filter=config.youtube_filter or "all",
+                    before_request=before_request,
+                )
+                prior = (validators or {}).get(url, {})
+                headers = {"Accept": "application/atom+xml, application/xml, text/xml"}
+                if prior.get("etag"):
+                    headers["If-None-Match"] = str(prior["etag"])
+                if prior.get("last_modified"):
+                    headers["If-Modified-Since"] = str(prior["last_modified"])
+                fetched = await fetch_bounded(
+                    url,
+                    headers=headers,
+                    before_send=before_request,
+                    max_bytes=_MAX_PAGE_BYTES,
+                )
+                if fetched.body is None:
+                    if not prior:
+                        raise ProviderHttpError(304)
+                    next_validators[url] = {
+                        key: value for key, value in prior.items() if value is not None
+                    }
+                    continue
+                response_validators: dict[str, str] = {}
+                for key, value, maximum in (
+                    ("etag", fetched.etag, 256),
+                    ("last_modified", fetched.last_modified, 64),
+                ):
+                    if (
+                        isinstance(value, str)
+                        and 0 < len(value) <= maximum
+                        and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+                    ):
+                        response_validators[key] = value
+                if response_validators:
+                    next_validators[url] = response_validators
+                page = await asyncio.to_thread(
+                    _records_from_feed,
+                    source,
+                    fetched.body,
+                    collected_at,
+                    expected_channel_id=channel_id,
+                )
+                truncated = truncated or page.coverage == "truncated"
+                for record in page.records:
+                    if record.provider_id in mapped:
+                        continue
+                    size = len(record.model_dump_json().encode("utf-8"))
+                    if len(mapped) >= 500 or mapped_bytes + size > _MAX_MAPPED_BYTES:
+                        truncated = True
+                        break
+                    mapped[record.provider_id] = record
+                    mapped_bytes += size
+                if truncated and (len(mapped) >= 500 or mapped_bytes >= _MAX_MAPPED_BYTES):
+                    break
+    except ProviderRateLimited as exc:
+        return YoutubeSnapshotPage(
+            records=(),
+            coverage="returned_snapshot",
+            validators={
+                url: {key: value for key, value in entries.items() if value is not None}
+                for url, entries in (validators or {}).items()
+            },
+            next_eligible_at=exc.next_eligible_at,
+        )
+    records = list(mapped.values())
+    if truncated:
+        _mark_truncated(records)
+    return YoutubeSnapshotPage(
+        records=tuple(records),
+        coverage="truncated" if truncated else "returned_snapshot",
+        validators=next_validators,
+    )
+
+
+async def collect_youtube_snapshot(
+    source: ConnectorSource,
+    *,
+    collected_at: datetime,
+    before_request: Callable[[], Awaitable[None]],
+    validators: Mapping[str, Mapping[str, str | None]] | None = None,
+) -> YoutubeSnapshotPage:
+    """Collect one validated YouTube target sweep with saved validators, through the supplied send fence."""
+    if collected_at.tzinfo is None or collected_at.utcoffset() is None:
+        raise ValueError("collected_at must be timezone-aware")
+    config = ConnectorConfig.model_validate(source.configuration)
+    if (
+        source.provider != "youtube"
+        or source.type != "rss"
+        or config.history_mode != "returned_snapshot"
+    ):
+        raise ValueError("provider_scope_invalid")
+    return await _collect_youtube_feeds(
+        source,
+        config,
+        _youtube_targets(config),
+        collected_at=collected_at,
+        before_request=before_request,
+        validators=validators,
     )
 
 
@@ -631,24 +1034,27 @@ async def collect_provider_feed(
     session_factory: async_sessionmaker[AsyncSession],
     before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
-    """Collect one bounded public Atom snapshot and serialize arXiv requests across workers.
+    """Collect bounded YouTube targets or one public arXiv Atom snapshot.
 
-    ``before_request`` is the native every-physical-send fence callback.
+    YouTube handle discovery and every feed fetch use the same native send fence. arXiv
+    requests remain serialized across workers. ``before_request`` fences every physical send.
     """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
-    url = provider_feed_url(source)
     if source.provider == "youtube":
-        try:
-            async with asyncio.timeout(30):
-                body = await _read_feed(url, before_request)
-        except ProviderRateLimited as exc:
-            return ProviderCollectionPage(
-                records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at
-            )
-        return await asyncio.to_thread(_records_from_feed, source, body, collected_at)
+        page = await collect_youtube_snapshot(
+            source,
+            collected_at=collected_at,
+            before_request=before_request,
+        )
+        return ProviderCollectionPage(
+            records=page.records,
+            coverage=page.coverage,
+            next_eligible_at=page.next_eligible_at,
+        )
     if source.provider != "arxiv":
         raise ValueError("provider_scope_invalid")
+    url = provider_feed_url(source)
     async with asyncio.timeout(60):
         async with session_factory() as session:
             async with session.begin():

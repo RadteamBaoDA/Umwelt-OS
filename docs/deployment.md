@@ -42,7 +42,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 
 Memory limits sum to 7.66 GiB (2.5 + 0.375 + 1 + 1 + 0.5 + 0.75 + 0.75 + 0.75), leaving about 0.34 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 9.4 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
 
-Connection budget without PgBouncer (`max_connections=120`, raised from 100 when the cron worker was split out; see "PgBouncer and horizontal scaling" for N replicas): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, chat SQL reader pool (login role `umwelt_chat_sql_login`, `pool_size=2`, no overflow, role `CONNECTION LIMIT 8`) 2 per API process and 2 for the chat-worker = 6, total 107. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 118, leaving about 2 spare. The reader role limit of 8 allows four processes with a reader pool (three today): a second API replica exceeds it, so raise the role's `CONNECTION LIMIT` before scaling. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
+Connection budget without PgBouncer (`max_connections=120`, raised from 100 when the cron worker was split out; see "PgBouncer and horizontal scaling" for N replicas): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, chat SQL reader pool (login role `umwelt_chat_sql_login`, `pool_size=2` + overflow 2, role `CONNECTION LIMIT 8`) only in the chat-worker = 4, total 105. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of 116, leaving 4 spare. The API never opens reader connections; the reader role limit of 8 allows two chat-worker replicas. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
 Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams and 64 concurrent chat response streams (503 beyond). No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
 
@@ -54,13 +54,15 @@ PostgreSQL has `max_connections=120`. Without a pooler every process owns its SQ
 
 | Role | Per replica (pool + overflow) |
 |---|---|
-| API | `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW + 2 reader)` = 2 x 22 = 44 |
+| API | `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW)` = 2 x 20 = 40 (no reader connections) |
 | worker | 7 + 10 = 17, plus up to 6 direct connections (agent checkpoints and leases) = 23 |
 | cron-worker | 9 + 5 = 14 |
-| chat-worker | 10 + 10 + 2 reader = 22 |
+| chat-worker | 10 + 10 + 4 reader = 24 (reader pool `_READER_POOL_SIZE` 2 + `_READER_MAX_OVERFLOW` 2, `modules/chat/db_query.py`) |
 | model-worker | 5 + 5 = 10 |
 
-Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `44N + 23W + 14C + 22 + 10 + 5` (admin/migrate). One of each is 118 and fits; **a second API replica (162), a second worker replica (141) or a second cron-worker replica (132) exceeds `max_connections`** (and a second API replica also exceeds the reader role's limit of 8). This is why the stack ships as a single replica of each service.
+Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `40N + 23W + 14C + 24 + 10 + 5` (admin/migrate). One of each is 116, 4 below `max_connections=120`. A second API replica (156), a second worker replica (139) or a second cron-worker replica (130) exceeds it; use PgBouncer or raise `max_connections` first.
+
+**Chat reader role limit.** The reader login `umwelt_chat_sql_login` has `CONNECTION LIMIT 8` (Alembic `0017_chat_sql_login_role`). Each chat-worker process opens up to 4 reader connections (2 pool + 2 overflow), so the role allows **two chat-worker replicas**. A fifth concurrent SQL-mode query in one process waits up to 5 s for a reader connection and then returns the retryable `sql_reader_busy` error. For more replicas, first raise the limit with `ALTER ROLE umwelt_chat_sql_login CONNECTION LIMIT <n>`, where `n >= 4 x replicas`, and account for the extra connections in the `max_connections` budget above.
 
 With the PgBouncer overlay (`docker compose -f docker-compose.yml -f docker-compose.pgbouncer.yml up -d`) the application pools become *client* pools. PostgreSQL only sees the pooler's server connections, which are fixed per database alias and do not grow with replicas:
 
@@ -130,7 +132,7 @@ To apply migrations separately, run `./scripts/dev.ps1 migrate` or `make migrate
 
 Clean install, Phase 0 upgrade, protected proxy paths, module enable/disable procedures are listed in the [release checklist](release-checklist.md#release-procedures-documented-not-executed); acceptance remains pending (`functional_acceptance`, `live_integrations`, `target_capacity` pending).
 
-Expected Alembic head: `0022_dashboard_panels` (the former 87-revision chain, including the `p12_*`/`p14_*`/`r*` revisions named below, was squashed into `0001_init`; the chain is `0001_init` → … → `0022_dashboard_panels` in `infrastructure/postgres/migrations/versions/`). Sections below that name older revisions describe behavior now contained in `0001_init`.
+Expected Alembic head: `0027_brief_evidence_kinds` (the former 87-revision chain, including the `p12_*`/`p14_*`/`r*` revisions named below, was squashed into `0001_init`; the chain is `0001_init` → … → `0027_brief_evidence_kinds` in `infrastructure/postgres/migrations/versions/`). Sections below that name older revisions describe behavior now contained in `0001_init`.
 
 - **Protected proxy paths:** besides `/api/v1/realtime/events`, apply the same no-buffering, no-cache, long-read-timeout and `Last-Event-ID` settings to the Chat response stream `/api/v1/responses/{response_id}/events`. The proxy must forward cookies and the CSRF header unchanged for all owner routes, including `/api/v1/system/*` and `/api/v1/settings/*`.
 - **Upgrade:** keep existing `.env` secrets, snapshot the Postgres, `app-data`, `n8n-data`, graph-data and (with the `s3` profile) `rustfs-data` volumes with your cloud provider first, then `migrate`. Quiesce old API/worker processes before the additive P12 cleanup migrations described below.
@@ -188,6 +190,7 @@ Web search (Tavily or Brave) has its own policy and never uses `AI_ALLOWED_ENDPO
 - `WEB_SEARCH_DAILY_LIMIT` (default `50`): searches per owner per UTC day. Failed searches count, `0` disables web search, and a Redis outage also disables it (fails closed).
 - The owner consent toggle in AI settings is required, and the provider key is stored encrypted under the connector credential key.
 - The chat-attachments upload path shares `UPLOAD_MAX_BYTES`.
+- Topic watch scheduled tasks search through this same provider and count against `WEB_SEARCH_DAILY_LIMIT` (up to 4 searches per run). Configure a provider with a dependable quota before enabling Topic watch: Tavily or Brave with an API key, or a self-hosted SearXNG with engines that do not rate-limit the server (in testing, DuckDuckGo returned CAPTCHAs and Brave's keyless engine returned 429, while Google CSE answered). Without a provider, each run fails with `web_search_not_configured`, shown to the owner as "Web search is not set up" in the run history.
 
 `r15_document_dismissed` adds the owner "Not relevant" state (`document_interactions.dismissed_at`; hides items from dashboard feed gadgets and highlights only). Its structural downgrade deletes dismissed-only interaction rows (rows that also carry read or saved state keep that state and lose only `dismissed_at`), so hidden-item preferences are lost on downgrade; not an operational rollback.
 
@@ -214,7 +217,7 @@ n8n hardening: `docker-compose.connectors.yml` requires `N8N_ENCRYPTION_KEY` (co
 - [ ] `SETUP_TOKEN` used once to create the owner account; owner login works; then rotate/remove it if desired.
 - [ ] `AUTH_TRUST_FORWARDED_FOR=true` (Caddy overlay, which overwrites `X-Forwarded-For`) or `AUTH_CLIENT_IP_HEADER=CF-Connecting-IP` (Cloudflare Tunnel) is set; startup fails without one.
 - [ ] SSE paths stream without buffering through the proxy; request body limit is set.
-- [ ] `make migrate` reached head `0022_dashboard_panels`; `/api/v1/system/ready` is healthy.
+- [ ] `make migrate` reached head `0027_brief_evidence_kinds`; `/api/v1/system/ready` is healthy.
 - [ ] Provider volume snapshots configured (Postgres, `app-data`, `n8n-data`, graph-data, `rustfs-data` when the `s3` profile is used) and a restore was rehearsed by the operator.
 - [ ] `AI_ALLOWED_ENDPOINT_*` lists are as narrow as intended; optional graph profile and connectors stay off unless needed.
 

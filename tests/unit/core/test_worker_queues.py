@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from arq.connections import ArqRedis
@@ -10,7 +11,7 @@ from arq.constants import default_queue_name
 
 from apps.worker import main as worker_main
 from core.cron import CRON_QUEUE
-from core.worker_queues import MODEL_QUEUE, pin_default_queue
+from core.worker_queues import MODEL_QUEUE, ahead_of_backlog, pin_default_queue
 
 
 class _Pipe:
@@ -66,3 +67,11 @@ def test_every_non_default_worker_pins_its_pool() -> None:
     """cron/chat/model startups all pin (cron via _boot_runtime)."""
     for hook in (worker_main._boot_runtime, worker_main.chat_startup, worker_main.model_startup):
         assert "pin_default_queue(" in inspect.getsource(hook)
+
+
+def test_ahead_of_backlog_is_tz_aware_and_an_hour_back() -> None:
+    """A past score puts interactive jobs ahead of backlog; it stays under arq's 1-day expiry headroom."""
+    now = datetime.now(UTC)
+    when = ahead_of_backlog()
+    assert when.tzinfo is not None
+    assert now - timedelta(days=1) < when < now - timedelta(minutes=30)

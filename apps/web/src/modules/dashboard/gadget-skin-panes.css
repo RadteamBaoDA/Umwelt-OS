@@ -1,0 +1,350 @@
+/*
+ * Pane details for the All gadget types board (developer-theme `#dashboard-gadgets`), shared by both skins: tasks/goals
+ * title bars, related signals, daily brief, metric sparkline rows, video frame, activity log, empty/error notices and
+ * compact feed toolbars. Presentation only; the terminal skin adds ornaments (`ERR`, `run:`, `↳`) on top.
+ * Colours come from semantic tokens. Text the design drops is visually hidden (still in the accessibility tree),
+ * never removed.
+ */
+
+/* The toolbar icon shows only inside the title-bar slot; the goal percent is already in the bar. */
+.feed-tool-icon,
+.goal-row-pct {
+  display: none;
+}
+
+/* Visually hidden (kept for assistive tech and tests). */
+:is(
+  .corr-range,
+  .corr-note,
+  .corr-details,
+  .corr-evidence,
+  .map-range,
+  .github-counts,
+  .github-recent,
+  .github-event-type,
+  .github-event-head > time,
+  .brief-saved-head,
+  .brief-records,
+  .brief-refs,
+  .video-rest,
+  .gadget-head-slot .feed-tool-label
+),
+.dashboard-gadget-body :is(.goal-row-status, .goal-row-summary) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Title-bar buttons read as plain controls (demo `.btn.sm`), not filled accent boxes; a pressed toggle keeps its tint. */
+.gadget-head-slot [data-slot='button']:not([data-size='icon'], [aria-pressed='true']) {
+  color: var(--text);
+  background: transparent;
+}
+.gadget-head-slot .feed-tool-opt,
+.gadget-head-slot [data-slot='button'][data-size='icon'] {
+  color: var(--muted);
+}
+/* Compact icon buttons keep the muted meta (`tail -f · N sources`) from being squeezed out of narrow panes. */
+.gadget-head-slot [data-slot='button'][data-size='icon'] {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+}
+/* A pressed toggle is accent ink on a quiet tint, never a filled accent box. */
+.gadget-head-slot [data-slot='button'][aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--active);
+}
+.gadget-failed {
+  margin-right: 8px;
+  font-size: 12px;
+  color: var(--danger);
+}
+.gadget-head-slot .feed-tool-icon {
+  display: inline-block;
+}
+
+/* Tasks title bar: summary text, compact view select and the create button. */
+.task-head {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.task-summary {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.task-view-select {
+  align-self: flex-end;
+  width: auto;
+  height: 24px;
+  min-height: 0;
+  padding-inline: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* Goals: title, ASCII bar (with its percent) under; no status / milestone / deadline line and no second percent. */
+
+/* Related signals (intelligence-panel.tsx): `region  date` over `↳ N signals · domains`. */
+.corr-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.corr-regions {
+  display: inline;
+}
+.corr-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  padding: 8px 0;
+}
+.corr-top {
+  display: contents;
+}
+.corr-region {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+.corr-top > time {
+  font-size: 11px;
+}
+.corr-signals {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+html[data-skin='terminal'] .corr-signals::before {
+  content: '↳ ' / '';
+}
+
+/* Daily brief: date controls and actions share one row; paragraphs with a bold lead and blue `[n]` cites. */
+.brief-root {
+  flex-direction: row;
+  align-content: flex-start; /* wrapped rows pack at the top instead of sharing the pane's spare height */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+}
+.brief-head {
+  flex: 0 1 auto;
+}
+.brief-saved {
+  display: contents;
+}
+.brief-root > :not(.brief-head, .brief-saved),
+.brief-saved > :not(.brief-actions) {
+  order: 2;
+  flex: 0 0 100%;
+}
+.brief-saved > .brief-actions {
+  order: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-end;
+}
+.brief-actions > [data-slot='button']:not([aria-pressed='true']) {
+  color: var(--text);
+  background: transparent;
+}
+/* Regenerate and Share read as icon-only buttons so the controls stay on one row (accessible names are kept). */
+.brief-actions {
+  flex-wrap: nowrap;
+}
+.brief-actions > [data-slot='button']:is(:first-child, :last-child:not(:nth-child(2))) {
+  font-size: 0;
+  gap: 0;
+}
+.brief-term-p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.brief-term-p > b {
+  font-weight: 700;
+  color: var(--strong, var(--text));
+}
+.brief-cite {
+  color: var(--info, var(--accent));
+  text-decoration: none;
+}
+.brief-cite:hover {
+  text-decoration: underline;
+}
+
+/* Metric: `name  ~line~  71.3K  +3.1%` rows (obs-term-* cells are shared with the watchlist table). */
+.obs-spark-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 60px 9ch 7ch;
+  column-gap: 12px;
+  align-items: center;
+  padding: 8px 4px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--rule);
+}
+.obs-spark-row .obs-term-name {
+  font-weight: 400;
+  color: var(--text);
+}
+.obs-spark-line {
+  display: block;
+  width: 60px;
+  height: 20px;
+}
+.obs-spark-row .obs-term-chg {
+  min-width: 0;
+  font-size: 12px;
+}
+
+/* Video: first record as a 16:9 frame with a play square and a caption (demo `.dash-video`). */
+.video-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.video-frame-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.video-frame-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 44px;
+  height: 36px;
+  place-items: center;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  transform: translate(-50%, -50%);
+}
+.video-frame-cap {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.video-frame:hover .video-frame-cap {
+  color: var(--accent);
+}
+.video-term-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Activity (github-project-gadget.tsx): coloured short code, title, relative time; the provider link shows on hover or focus. */
+.github-event-code {
+  display: inline;
+  order: 1;
+  color: var(--info, var(--accent));
+}
+.github-event-code[data-tone='ok'] {
+  color: var(--positive);
+}
+.github-event-code[data-tone='warn'] {
+  color: var(--danger);
+}
+.github-event-ago {
+  display: inline;
+  order: 3;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.github-event:is(:hover, :focus-within) .github-event-links {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+}
+
+/* Notices (gadget-notice.tsx): a failed load is an `ERR` alert block, empty and setup states read as quiet centred
+   hints whose action reads `run: ...` (demo `.alert.err` and `.empty`). */
+[data-gadget-notice='error'] {
+  margin: 8px 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--raised);
+  border-left: 3px solid var(--danger);
+}
+html[data-skin='terminal'] [data-gadget-notice='error'] > p:first-of-type::before {
+  content: 'ERR ' / '';
+  font-weight: 700;
+  margin-right: 6px;
+}
+/* Detail lines under the ERR message (e.g. last good data / next retry) align with the message text. */
+[data-gadget-notice='error'] > p:not(:first-of-type) {
+  padding-left: calc(4ch + 6px);
+}
+:is([data-gadget-notice='empty'], [data-gadget-notice='setup']) {
+  align-items: center;
+  padding: 24px 12px;
+  text-align: center;
+}
+
+html[data-skin='terminal'] [data-gadget-notice] a::before,
+html[data-skin='terminal'] [data-gadget-notice] button::before {
+  content: 'run:' / '';
+  margin-right: 0.5ch;
+  color: var(--muted);
+}
+
+/* Tasks title bar: keep the pane title readable; the muted summary is the part that gives way. */
+.gadget-header:has(.task-head) .gadget-title {
+  overflow: visible;
+  text-overflow: clip;
+}
+.task-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Terminal-only lettercase (stylistic): the shared layout above keeps the text as written. */
+html[data-skin='terminal'] .gadget-meta {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .task-row-meta[data-finished] {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .corr-title {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] :is([data-gadget-notice='empty'], [data-gadget-notice='setup']) > p {
+  text-transform: lowercase;
+}

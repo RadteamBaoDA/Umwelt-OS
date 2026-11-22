@@ -71,7 +71,7 @@ THEME_CSS = """
   --chart-1: #77c69c;
   --chart-2: #edf3ee;
   --chart-3: #8a948e;
-  --chart-4: #4a534d;
+  --chart-4: #737d76;
   --chart-5: #77c69c;
   --color-background-primary: #161a17;
   --color-background-secondary: #0e110f;
@@ -194,7 +194,7 @@ THEME_CSS = """
   --chart-1: #77c69c;
   --chart-2: #edf3ee;
   --chart-3: #8a948e;
-  --chart-4: #4a534d;
+  --chart-4: #737d76;
   --chart-5: #77c69c;
   --color-background-primary: #161a17;
   --color-background-secondary: #0e110f;
@@ -275,7 +275,7 @@ html.dark, html[data-theme="dark"], body.dark {
   --chart-1: #77c69c;
   --chart-2: #edf3ee;
   --chart-3: #8a948e;
-  --chart-4: #4a534d;
+  --chart-4: #737d76;
   --chart-5: #77c69c;
   --color-background-primary: #161a17;
   --color-background-secondary: #0e110f;

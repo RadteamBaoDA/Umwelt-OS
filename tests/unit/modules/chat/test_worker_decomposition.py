@@ -379,7 +379,7 @@ def test_system_prompt_contract_language_and_owner_local_time() -> None:
     """The prompt splits own-data (cite) from general answers, asks for the user's language and uses owner time."""
     from modules.chat._worker.setup import _compose_system_text, _local_now_text
 
-    turn = SimpleNamespace(req_params={}, day_scope=None, web_run=None)
+    turn = SimpleNamespace(req_params={}, day_scope=None, web_run=None, task_brief=None)
     text = _compose_system_text(
         turn,  # type: ignore[arg-type]
         AnswerContext(query="q", evidence=[]),

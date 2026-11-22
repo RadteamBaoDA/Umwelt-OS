@@ -6,7 +6,7 @@
  * `/vendor/genui/` (absolute origin import map), so the app must be reachable when they are opened.
  */
 
-import { buildSandboxStylesheet, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
+import { buildSandboxStylesheet, buildImportMapScriptTag, type SandboxPalette, type SandboxTheme } from '../design-system';
 import { resolveWidgetLocale } from '../copy';
 import type { AppLocaleId } from '@/core/i18n';
 import { buildCspMetaTag } from './frame-content';
@@ -106,6 +106,7 @@ function buildGeneratedScript(content: StandaloneActivityContent): string {
  * @param title - Document `<title>` (defaults to `content.title` or `'generated-widget'`).
  * @param theme - Active Umwelt-OS theme (`'light'` or `'dark'`). Defaults to `'light'`.
  * @param locale - Locale written to `<html lang>` (defaults to the page locale).
+ * @param palette - Optional palette overrides (terminal skin) so a downloaded copy matches the live frame.
  * @returns Complete standalone `<!DOCTYPE html>` document string.
  */
 export function buildStandaloneHtmlDocument(
@@ -113,6 +114,7 @@ export function buildStandaloneHtmlDocument(
   title?: string,
   theme: SandboxTheme = 'light',
   locale: AppLocaleId = resolveWidgetLocale(),
+  palette: SandboxPalette = {},
 ): string {
   // Absolute origin: a root-relative import map resolves against file:// in a downloaded copy and breaks.
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -132,7 +134,7 @@ export function buildStandaloneHtmlDocument(
   ${buildImportMapScriptTag(origin)}
   ${TRIP_ANIMATOR_SCRIPT}
   <style>
-${escapeStyleClose(buildSandboxStylesheet(theme))}
+${escapeStyleClose(buildSandboxStylesheet(theme, palette))}
   </style>${content.css ? `\n  <style>\n${escapeStyleClose(content.css)}\n  </style>` : ''}
   <script>${STANDALONE_BRIDGE_STUB}</script>
 </head>

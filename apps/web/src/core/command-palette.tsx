@@ -15,6 +15,7 @@ import { useWorkspace } from '@/core/workspace-context';
 import type { listConversations } from '@/modules/chat';
 import { searchEvents } from '@/modules/timeline/public-api';
 import { searchDocuments, searchEntities, type SearchFilters } from '@/modules/search/public-api';
+import './command-palette-skin.css';
 
 type Scope = 'all' | 'entities' | 'documents' | 'events' | 'conversations';
 const scopes: Scope[] = ['all', 'entities', 'documents', 'events', 'conversations'];

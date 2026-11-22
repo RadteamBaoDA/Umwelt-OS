@@ -26,6 +26,7 @@ from modules.knowledge.documents.schemas import (
     MAX_METADATA_BYTES,
     MEASUREMENT_PROVIDER_FIELDS,
     MEASUREMENT_PROVIDER_IDS,
+    MEDIA_PROVIDER_IDS,
     NEWS_PROVIDER_IDS,
     PROVIDER_IDS,
     CitationTargetRead,
@@ -53,6 +54,7 @@ from modules.knowledge.documents.schemas import (
     GadgetProviderMetadataRead,
     GadgetTelegramMediaRead,
     GadgetTelegramRecordRead,
+    MediaProjectionRead,
     MemberDocumentList,
     MemberDocumentRead,
     NormalizedDocumentInput,
@@ -244,6 +246,10 @@ from modules.knowledge.documents._ready import (
     _publish_document_ready,
     _publish_extraction_ready,
 )
+from modules.knowledge.documents._recent import (
+    DocumentBrief,
+    list_recent_source_documents,
+)
 from modules.knowledge.documents._scope import (
     _admit_document_scope,
     _document_scope,
@@ -257,6 +263,7 @@ from modules.knowledge.documents._tools import (
     list_tool_documents,
     revalidate_tool_document_fences,
 )
+from modules.knowledge.documents._translation import read_document_translation_input
 from modules.knowledge.documents._upload import (
     _assert_upload_absence,
     _upload_document_state,
@@ -295,6 +302,7 @@ __all__ = [
     "MAX_METADATA_BYTES",
     "MEASUREMENT_PROVIDER_FIELDS",
     "MEASUREMENT_PROVIDER_IDS",
+    "MEDIA_PROVIDER_IDS",
     "NEWS_PROVIDER_IDS",
     "PROVIDER_IDS",
     "_CLEANUP_IDENTITY_COLUMNS",
@@ -336,6 +344,7 @@ __all__ = [
     "GadgetProviderMetadataRead",
     "GadgetTelegramMediaRead",
     "GadgetTelegramRecordRead",
+    "MediaProjectionRead",
     "MemberDocumentList",
     "MemberDocumentRead",
     "NewsChunkProjection",
@@ -437,6 +446,7 @@ __all__ = [
     "export_observation_evidence",
     "export_page",
     "export_timeline_evidence",
+    "DocumentBrief",
     "find_document_identity",
     "get_document",
     "get_document_cleanup_operation",
@@ -453,6 +463,7 @@ __all__ = [
     "list_indexable_workspace_ids",
     "list_news_document_projections",
     "list_provider_snapshots",
+    "list_recent_source_documents",
     "list_ready_document_workspace_ids",
     "list_ready_version_refs",
     "list_tool_documents",
@@ -482,6 +493,7 @@ __all__ = [
     "read_chat_evidence_chunks",
     "read_document_access_projection",
     "read_document_cleanup_job_identity",
+    "read_document_translation_input",
     "read_evidence_refs",
     "read_extraction_evidence_refs",
     "read_extraction_input",

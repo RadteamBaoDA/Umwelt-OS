@@ -117,7 +117,7 @@ def test_db_query_tool_spec_is_pinned() -> None:
     import json
 
     digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
-    assert digest == "8a0c9e5682bc41dca8d9058599f8a7d9dea619c78c7c2f2b5ac07e8f9a541fa1"
+    assert digest == "b0d729fa26797dfe028bf42953068a24f786463d32d973865751f18c0c5beb5f"
 
 
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
@@ -256,7 +256,7 @@ async def test_db_query_granted_by_source_gadget_and_fails_closed(
     from modules.chat._worker import setup as worker_setup
 
     c = SimpleNamespace(scope=SimpleNamespace(workspace_id=uuid4()), response_id=uuid4())
-    open_scope = SimpleNamespace(selected_only=False)
+    open_scope = SimpleNamespace(selected_only=False, source_scope_enforced=False)
     plain = SimpleNamespace(
         req_params={DB_QUERY_KEY: True}, answer_request=open_scope
     )  # legacy flag is ignored
@@ -347,13 +347,30 @@ async def test_structured_documents_rank_per_source() -> None:
 
 def test_gadget_note_lists_provider_ids_and_round_budget() -> None:
     """The prompt note names exact provider ids, the headline-only text_query rule and the 2-round budget."""
+    from modules.chat._worker.base import MAX_DATA_QUERY_ROUNDS, MAX_SKILL_CALLS_PER_ROUND
     from modules.chat._worker.setup import _gadget_note
 
     note = _gadget_note({}, True, ["emsc_quakes", "thanhnien_news"])
     assert "emsc_quakes, thanhnien_news" in note
-    assert "at most 2 tool rounds" in note and "headline/body text only" in note
+    assert f"at most {MAX_DATA_QUERY_ROUNDS} rounds" in note
+    assert f"at most {MAX_SKILL_CALLS_PER_ROUND} tool calls per round" in note
+    assert "headline/body text only" in note
     assert "Active providers" not in _gadget_note({}, True)
     assert _gadget_note({}, False, ["emsc_quakes"]) == ""
+
+
+def test_gadget_note_asks_follow_ups_to_requery_collected_data() -> None:
+    """Both the gadget and the plain db-tool note tell the model to re-query for follow-up questions."""
+    from modules.chat._worker.setup import _gadget_note
+
+    sentence = (
+        "For follow-up questions about collected data, query again: numbers in earlier answers "
+        "may be outdated or incomplete."
+    )
+    assert sentence in _gadget_note({}, True, ["usgs"])
+    assert sentence in _gadget_note({}, True, ["usgs"], sql_on=False)
+    gadget = {"_gadget_scope": {"title": "Quakes", "renderer": "table", "scope": {}}}
+    assert sentence in _gadget_note(gadget, False, ["usgs"])
 
 
 @pytest.mark.asyncio
@@ -462,7 +479,7 @@ async def test_sql_mode_without_reader_returns_neutral_error(
     """The model sees ``sql_mode_unavailable`` with no env var name."""
     import json
 
-    from modules.chat import db_query
+    from modules.chat import _db_scope, db_query
 
     async def fence(*_a: object, **_k: object) -> str:
         return "f"
@@ -481,7 +498,12 @@ async def test_sql_mode_without_reader_returns_neutral_error(
         begin_nested=lambda: _Nested(), execute=AsyncMock(return_value=None), bind=None
     )
     monkeypatch.setattr(db_query.workspaces, "read_access_fence", fence)
+
+    async def scopes(_session: object, ids: list, **_k: object) -> dict:
+        return {sid: "d" * 64 for sid in ids}
+
     monkeypatch.setattr(db_query, "_allowed_sources", sources)
+    monkeypatch.setattr(_db_scope.connectors, "chat_scope_discriminators", scopes)
     monkeypatch.setattr(
         db_query, "Settings", lambda: SimpleNamespace(chat_sql_reader_database_url=None)
     )
@@ -755,3 +777,18 @@ async def test_ceiling_round_keeps_its_widgets_and_over_cap_payload_is_distinct(
     assert ts.ui_parts == [part]
     assert json.loads(stream._PER_ROUND_CAP_EXCEEDED) == {"error": "per_round_cap_exceeded"}
     assert "instruction" not in json.loads(stream._TOOL_BUDGET_EXHAUSTED)
+
+
+def test_provider_hint_lists_bounded_metric_ids() -> None:
+    """Measurement providers get their catalog metric ids (open ones marked), bounded; news feeds add none."""
+    from modules.chat._worker.setup import _metric_catalog_hint, _provider_hint
+    from modules.connectors.public import metric_catalog
+
+    cat = list(metric_catalog())
+    assert _metric_catalog_hint(["thanhnien_news"]) == ""
+    hint = _metric_catalog_hint(cat)
+    assert hint.startswith(" Metric ids per measurement provider: ") and len(hint) <= 600
+    assert hint.count(": ") <= 16
+    assert cat[0] in _provider_hint([cat[0]])
+    open_p = next(p for p, v in metric_catalog().items() if v.metrics_open)
+    assert "(open)" in _metric_catalog_hint([open_p])

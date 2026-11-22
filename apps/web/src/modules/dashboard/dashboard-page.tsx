@@ -15,6 +15,10 @@ import { DashboardOverview } from './dashboard-overview';
 import { DashboardPanel } from './dashboard-panel';
 import { DashboardCrudDialogs, ManagementDialog, useDashboardCrud } from './dashboard-dialogs';
 import { DashboardHeader, formatRelativeAge } from './dashboard-header';
+import { DashboardTranslationControl } from '@/modules/translations';
+import { buildHeaderSummary } from './header-summary';
+import { useLiveEventCount } from './live-event-count';
+import './dashboard-skin.css';
 import { GroupTabs, LayoutNotices, StaleSourcesPanel, TimezoneFooter, TodayHeaderGate } from './dashboard-panels';
 import { FreshnessStrip } from './freshness-strip';
 import { GadgetSettings } from './gadget-settings';
@@ -93,20 +97,6 @@ function useMobileNoticeDismissal(): [boolean, () => void] {
   return [dismissed, dismiss];
 }
 
-/** Joins the "updated" and "stale sources" fragments of the header summary; null when both are absent. */
-function buildHeaderSummary(
-  t: ReturnType<typeof useTranslations<'dashboard'>>,
-  lastUpdatedAt: number | null,
-  staleCount: number,
-  locale: string,
-): string | null {
-  const parts = [
-    lastUpdatedAt !== null ? t('summaryUpdated', { time: formatRelativeAge(lastUpdatedAt, locale) }) : null,
-    staleCount > 0 ? t('staleSources.summary', { count: staleCount }) : null,
-  ].filter(Boolean);
-  return parts.length ? parts.join(' · ') : null;
-}
-
 type PageData = ReturnType<typeof useDashboardData>;
 type PageOps = {
   session: ReturnType<typeof useLayoutSession>;
@@ -114,25 +104,37 @@ type PageOps = {
   membership: ReturnType<typeof useGadgetMembership>;
 };
 
-/** Dashboard header wired to the data, layout and CRUD hooks (summary text, edit toggle, switcher actions). */
+/**
+ * Dashboard header wired to the data, layout and CRUD hooks (summary text, edit toggle, switcher actions).
+ * On every group the today greeting (`TodayHeaderGate`) renders under
+ * the title; its own visibility rule still applies. Terminal summaries show the gadget count on non-Overview groups.
+ *
+ * @param overview True when the active group is the Overview group.
+ */
 function ConnectedHeader({
   data,
   ops,
   crud,
+  overview,
   onOpenPresets,
+  onAddGadget,
   onOpenManagement,
 }: {
   data: PageData;
   ops: PageOps;
   crud: ReturnType<typeof useDashboardCrud>;
+  overview: boolean;
   onOpenPresets: () => void;
+  onAddGadget: () => void;
   onOpenManagement: () => void;
 }) {
   const t = useTranslations('dashboard');
   const { isAdminViewer, isOwner } = useWorkspace();
   const display = useDisplayPreferences();
   const { session, save } = ops;
-  const { activeDashboard, sources } = data;
+  const { activeDashboard, sources, showFirstRun } = data;
+  // Only the overview group mounts the live map; elsewhere the count is null and its fragment is omitted.
+  const liveEvents = useLiveEventCount();
   return (
     <DashboardHeader
       dashboards={data.dashboards}
@@ -143,7 +145,19 @@ function ConnectedHeader({
       isOwner={isOwner}
       isEditMode={session.isEditMode}
       canEditLayout={session.canEditLayout}
-      summary={buildHeaderSummary(t, sources.lastUpdatedAt, sources.staleSources.length, display.locale)}
+      summary={buildHeaderSummary(
+        t,
+        sources.lastUpdatedAt !== null ? formatRelativeAge(sources.lastUpdatedAt, display.locale) : null,
+        sources.staleSources.length,
+        {
+          sources: overview ? sources.dashboardSources.length : 0,
+          liveEvents: liveEvents,
+          // Non-Overview groups report their gadget count instead of the dashboard-wide source count.
+          gadgets: overview ? null : (activeDashboard?.instances.filter((i) => i.group_id === session.activeGroupId).length ?? 0),
+        },
+      )}
+      greeting={<TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />}
+      translationControl={<DashboardTranslationControl />}
       onSwitch={save.requestSwitchDashboard}
       onCreate={() => crud.setCreateOpen(true)}
       onRename={() => {
@@ -156,6 +170,7 @@ function ConnectedHeader({
         if (session.isEditMode) save.requestExitEdit();
         else session.setIsEditMode(true);
       }}
+      onAddGadget={onAddGadget}
       onOpenManagement={onOpenManagement}
     />
   );
@@ -363,17 +378,16 @@ interface GroupBodyProps {
   onAdd: () => void;
 }
 
-/** Canvas plus the Overview-only strips (today header, freshness, stale sources, timezone footer) of one group. */
+/** Canvas plus the Overview-only strips (freshness, stale sources, timezone footer) of one group. */
 function DashboardGroupContent(props: GroupBodyProps) {
   const { ops, data, activeGroup, visibleInstances, isTablet } = props;
   const { activeDashboard, sources, showFirstRun } = data;
-  const { isAdminViewer, isOwner } = useWorkspace();
+  const { isAdminViewer } = useWorkspace();
   const display = useDisplayPreferences();
   return (
     <div className="flex flex-col gap-4 pb-4">
       {activeGroup?.is_overview && (
         <>
-          <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
           <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
         </>
       )}
@@ -659,7 +673,13 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         data={data}
         ops={ops}
         crud={crud}
+        overview={Boolean(activeDashboard?.groups.find((group) => group.id === session.activeGroupId)?.is_overview)}
         onOpenPresets={() => intents.setPresetPickerOpen(true)}
+        onAddGadget={() => {
+          // Same path as the `addTemplate` deep link: edit mode plus the editor's initial-open intent.
+          intents.setOpenAddInitially(true);
+          ops.session.setIsEditMode(true);
+        }}
         onOpenManagement={() => management.setOpen(true)}
       />
       <DashboardTabsArea data={data} ops={ops} crud={crud} intents={intents} ui={ui} isMobile={isMobile} isTablet={isTablet} />

@@ -1,0 +1,345 @@
+/*
+ * Dashboard header greeting and live-map overview legend. Imported by dashboard-page.tsx.
+ * Colours come from semantic tokens only, so both skins follow the active theme.
+ */
+.dash-greeting {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dash-live-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dash-live-legend-item {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.dash-live-legend-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+
+/* Overview map engine control (globe / flat): a joined segment in both skins.
+   The aria-pressed chip rules in globals.css would add [x]/[ ] brackets to these buttons, so the selectors below
+   repeat the gadget/overview scope, add `html` and a [data-size] attribute to outrank those rules. */
+html :is(.dashboard-gadget-body, #dashboard-overview-map) .map-engine-seg {
+  gap: 0;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+html :is(.dashboard-gadget-body, #dashboard-overview-map) .map-engine-seg > [data-slot='button'][data-size] {
+  min-height: 24px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 400;
+  border: 0;
+  border-radius: 0; /* joined segment: only the wrapper is rounded */
+  background: transparent;
+  color: var(--muted);
+}
+html :is(.dashboard-gadget-body, #dashboard-overview-map) .map-engine-seg > [data-slot='button'][aria-pressed='true'] {
+  background: var(--active);
+  color: var(--accent);
+}
+html[data-skin='terminal']
+  :is(.dashboard-gadget-body, #dashboard-overview-map)
+  .map-engine-seg
+  > [data-slot='button'][data-size][aria-pressed]::before,
+html[data-skin='terminal']
+  :is(.dashboard-gadget-body, #dashboard-overview-map)
+  .map-engine-seg
+  > [data-slot='button'][data-size][aria-pressed]::after {
+  content: none;
+}
+
+/* Map controls and gadget fields: 28px high, 12px text (demo .dash-ctrl). Fine pointers only; coarse keeps 44px. */
+@media (pointer: fine) {
+  :is(.dashboard-gadget-body, #dashboard-overview-map) :is(input:not([type='checkbox']):not([type='radio']), [data-slot='select-trigger']) {
+    height: 28px;
+    min-height: 28px;
+    padding-block: 0;
+    font-size: 12px;
+  }
+}
+
+/* Live event rows (demo .dash-evl): muted time, source as a blue #tag, row highlight on hover. */
+.live-event-row:hover {
+  background: var(--active);
+}
+.live-event-source {
+  font-size: 11px;
+  color: var(--info, var(--accent));
+}
+html[data-skin='terminal'] .live-event-source::before {
+  content: '#' / '';
+}
+
+/* Overview map pane (developer-theme .dash-map): title bar, one filter row, globe, event list, credit footer. Shared by both skins. */
+.live-map-titlebar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.live-map-titlebar .gadget-title {
+  margin: 0;
+  white-space: nowrap;
+}
+/* Title, meta (`37 events · 7d`) and the actions share one row: tighter gap and no closing ornament so the meta
+   is never clipped; the meta keeps its width, the title is what may ellipsize. */
+.live-map-titlebar {
+  gap: 6px;
+}
+html[data-skin='terminal'] .live-map-titlebar .gadget-title::after {
+  content: none;
+}
+.live-map-titlebar .gadget-meta {
+  flex-shrink: 0;
+}
+.live-map-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.live-map-titlebar-actions .map-engine-seg {
+  margin-right: 2px;
+}
+.live-map-term-body {
+  padding: 8px 10px;
+}
+.live-map-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+}
+/* The `>` prompt glyph is a terminal ornament; the default skin shows the plain search field. */
+.live-map-prompt {
+  position: relative;
+  min-width: 0;
+}
+.live-map-prompt input {
+  width: 100%;
+}
+.live-map-prompt > span {
+  display: none;
+}
+html[data-skin='terminal'] .live-map-prompt > span {
+  display: block;
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--accent);
+  pointer-events: none;
+}
+html[data-skin='terminal'] .live-map-prompt input {
+  padding-left: 22px;
+}
+.live-map-cat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--control);
+  border-radius: var(--radius-md);
+}
+.live-map-filters [data-slot='select-trigger'] {
+  width: auto;
+  min-width: 64px;
+}
+@media (pointer: fine) {
+  .live-map-cat {
+    min-height: 28px;
+    height: 28px;
+  }
+}
+.live-map-term .live-map-plot {
+  background: var(--bg);
+  border-color: var(--line);
+}
+.live-events-term {
+  flex: 0 1 245px;
+  min-height: 167px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.live-events-term h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.live-events-count {
+  font-weight: 400;
+  color: var(--muted);
+}
+/* Legend in the terminal skin: dot and count only; the category name stays for assistive tech. */
+.dash-live-legend-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.live-events-term .dash-live-legend {
+  gap: 8px;
+  color: var(--text);
+}
+.live-events-term ul > li {
+  border-top-width: 0;
+}
+.live-event-row-term {
+  display: grid;
+  grid-template-columns: 5ch 6.5ch minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  height: 26px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.live-event-row-term > time,
+.live-event-row-term > span:first-child {
+  color: var(--muted);
+}
+.live-event-kind {
+  font-size: 11px;
+  font-weight: 600;
+}
+.live-event-title {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+.live-event-title:hover {
+  color: var(--accent);
+}
+.live-event-row-term .live-event-source {
+  font-size: 10px;
+}
+.live-event-links {
+  display: inline-flex;
+  gap: 6px;
+  color: var(--muted);
+}
+.live-event-links:empty {
+  display: none;
+}
+.live-event-links a:hover {
+  color: var(--accent);
+}
+@media (pointer: coarse) {
+  .live-event-row-term {
+    height: auto;
+    min-height: 44px;
+  }
+}
+.live-map-foot {
+  padding: 6px 12px;
+  font-size: 10px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+.live-event-kind {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Terminal Overview split: map column one third, gadget panel two thirds (demo `.s4` + `.s8`), instead of 45/55. */
+@media (min-width: 1100px) {
+  [data-overview-split] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+}
+
+/* Map title-bar actions read `[globe|flat] refresh sources collapse` as in the demo: the collapse toggle goes last. */
+.live-map-titlebar-actions > [aria-expanded] {
+  order: 9;
+}
+
+/* The freshness tick strip is replaced by the statusline summary and source health in the terminal skin; it stays
+   in the accessibility tree (visually hidden) rather than being removed. */
+html[data-skin='terminal'] .freshness-strip-root {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+
+/* Page head (demo `.page-head`): actions sit on the title line, the greeting stays compact and the weather link is lowercase. */
+.dash-header {
+  align-items: flex-start;
+}
+.dash-greeting p {
+  font-size: 14px;
+}
+
+/* Map title-bar icon buttons are tighter on fine pointers so the "N events · 7d" meta keeps its full width. */
+@media (pointer: fine) {
+  .live-map-titlebar-actions [data-slot='button'][data-size='icon'] {
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+    min-height: 22px;
+  }
+  .live-map-titlebar-actions {
+    gap: 0;
+  }
+}
+
+/* Terminal-only lettercase (stylistic): the shared layout above keeps the text as written. */
+html[data-skin='terminal'] .live-event-source {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .live-map-cat {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .live-event-kind {
+  text-transform: uppercase;
+}
+html[data-skin='terminal'] .live-events-term h3 {
+  text-transform: lowercase;
+}
+html[data-skin='terminal'] .dash-greeting :is(a, button) {
+  text-transform: lowercase;
+}

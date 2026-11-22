@@ -110,6 +110,38 @@ async def test_json_body_turns_the_request_into_a_pinned_post():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "content_type"),
+    [
+        (
+            b"client_id=id&client_secret=secret&grant_type=client_credentials",
+            "application/x-www-form-urlencoded",
+        ),
+        (b"fields name; limit 1;", "text/plain"),
+    ],
+)
+async def test_raw_body_posts_keep_the_declared_content_type(body, content_type):
+    """Send non-JSON OAuth and Apicalypse bodies as pinned posts without rewriting their media type."""
+    seen = []
+    transport = httpx.MockTransport(
+        lambda request: (
+            seen.append((request.method, request.headers.get("content-type"), request.content))
+            or httpx.Response(200, json={})
+        )
+    )
+    await rest.fetch_bounded(
+        "https://api.example.com/s",
+        before_send=_noop,
+        resolve=public,
+        transport=transport,
+        request_body=body,
+        request_content_type=content_type,
+        allow_redirects=False,
+    )
+    assert seen == [("POST", content_type, body)]
+
+
+@pytest.mark.asyncio
 async def test_default_user_agent_is_sent_but_caller_user_agent_wins():
     seen = []
     transport = httpx.MockTransport(

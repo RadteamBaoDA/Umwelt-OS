@@ -161,6 +161,10 @@ def _arq_options(name: str) -> dict[str, Any]:
         options["keep_result"] = 0
     if name in HEAVY_SLOT_JOBS:
         options["max_tries"] = HEAVY_JOB_MAX_TRIES
+        # Heavy jobs are enqueued under fixed ids (`graph:{operation_id}`): a kept result (default 3600 s) would turn
+        # every recovery re-enqueue into a no-op after one attempt that ended without claiming, leaving the work pending
+        # for an hour. Nothing reads these results; the in-progress key still dedupes concurrent enqueues.
+        options["keep_result"] = 0
     return options
 
 

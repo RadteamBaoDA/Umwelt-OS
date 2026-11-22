@@ -1,0 +1,214 @@
+<style>
+/* ===================================================================== MOTION: terminal typing
+   .tw = element being "typed": its content is revealed left to right in character steps.
+   Terminal skin types; default skin fades. Reduced motion shows content immediately. */
+html[data-skin='terminal'] .tw { animation: tw-type var(--tw-dur, 400ms) steps(var(--tw-steps, 24), end) var(--tw-delay, 0ms) both; }
+html[data-skin='default'] .tw { animation: tw-fade 260ms ease-out var(--tw-delay, 0ms) both; }
+@keyframes tw-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes tw-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* New data: one background pulse so the eye finds what changed. */
+.tw-fresh { animation: tw-fresh 1800ms ease-out both; }
+@keyframes tw-fresh { from { background-color: color-mix(in srgb, var(--accent) 22%, transparent); } to { background-color: transparent; } }
+.tw-fresh-up { animation: tw-up 1400ms ease-out both; }
+.tw-fresh-down { animation: tw-down 1400ms ease-out both; }
+@keyframes tw-up { from { background-color: color-mix(in srgb, var(--positive) 28%, transparent); } to { background-color: transparent; } }
+@keyframes tw-down { from { background-color: color-mix(in srgb, var(--negative) 28%, transparent); } to { background-color: transparent; } }
+/* Block cursor that follows a freshly typed line, then disappears. */
+.tw-cur { display: inline-block; width: .55em; height: 1em; margin-left: 2px; vertical-align: text-bottom; background: var(--accent); animation: blink .8s steps(1) infinite; }
+html[data-skin='default'] .tw-cur { display: none; }
+/* Pane title while fetching: the status dot becomes a braille spinner. */
+.tw-spin { display: inline-block; width: 8px; color: var(--accent); font-size: 12px; line-height: 1; }
+.pane-title .tw-when { color: var(--accent); }
+/* Demo control */
+.demo-bar .tw-toggle[aria-pressed='true'] { background: #3fb950; color: #000; border-color: #3fb950; }
+@media (prefers-reduced-motion: reduce) {
+  .tw, .tw-fresh, .tw-fresh-up, .tw-fresh-down { animation: none !important; clip-path: none !important; }
+  .tw-cur { display: none; }
+}
+</style>
+
+<script>
+/* Terminal motion layer for gadgets.
+   1. Boot: when a view is shown, the rows of every visible gadget are typed in, top to bottom.
+   2. Live: every few seconds one visible gadget "fetches" (spinner), then a new row is typed at the top
+      of its list or its numbers roll to a new value. Off under prefers-reduced-motion. */
+(function () {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const SPIN = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+  let live = !reduce, timer = 0;
+
+  // Rows that are typed on boot, per gadget.
+  const ROWS = [
+    '.pane-body .log > li', '.dash-evl > li', '.pane-body table.data tbody tr', '.pane-body .dash-msg',
+    '.pane-body .dash-task', '.pane-body .dash-signal', '.pane-body .dash-goal', '.dash-brief p',
+    '.pane-body > p', '.pane-body .metric', '.pane-body .empty', '.pane-body .alert',
+  ].join(',');
+
+  /** Types one element: clip reveal in character steps; table rows type cell by cell. */
+  function type(el, delay) {
+    const cells = el.tagName === 'TR' ? [...el.children] : [el];
+    cells.forEach((c, i) => {
+      const n = Math.max(4, Math.min(56, (c.textContent || '').trim().length));
+      c.classList.remove('tw'); void c.offsetWidth;
+      c.style.setProperty('--tw-steps', n);
+      c.style.setProperty('--tw-dur', n * 11 + 'ms');
+      c.style.setProperty('--tw-delay', delay + i * 70 + 'ms');
+      c.classList.add('tw');
+      c.addEventListener('animationend', () => c.classList.remove('tw'), { once: true });
+    });
+  }
+
+  /** Boot sequence for the panes in the visible view(s): each pane types its rows with a short stagger. */
+  function boot() {
+    if (reduce) return;
+    const panes = [...document.querySelectorAll('.view.on .pane')].filter((p) => p.offsetParent);
+    panes.forEach((pane, pi) => {
+      const rows = [...pane.querySelectorAll(ROWS)].slice(0, 14);
+      rows.forEach((r, ri) => type(r, Math.min(pi, 8) * 90 + ri * 55));
+    });
+  }
+
+  /** Shows a braille spinner in place of the pane's status dot for `ms`, then restores it. */
+  function fetching(pane, ms) {
+    const dot = pane.querySelector('.pane-title .dot');
+    if (!dot) return Promise.resolve();
+    const spin = document.createElement('span');
+    spin.className = 'tw-spin'; spin.setAttribute('aria-hidden', 'true');
+    dot.replaceWith(spin);
+    let i = 0;
+    const id = setInterval(() => { spin.textContent = SPIN[i++ % SPIN.length]; }, 70);
+    return new Promise((res) => setTimeout(() => { clearInterval(id); spin.replaceWith(dot); res(); }, ms));
+  }
+
+  /** Marks the pane title with "updated now" so the change is attributable. */
+  function stamp(pane) {
+    const t = pane.querySelector('.pane-title');
+    if (!t) return;
+    let w = t.querySelector('.tw-when');
+    if (!w) { w = document.createElement('span'); w.className = 'tw-when small'; const act = t.querySelector('.act'); t.insertBefore(w, act); }
+    w.textContent = '· updated ' + new Date().toTimeString().slice(0, 8);
+  }
+
+  // Sample incoming data, so new rows read like the real feeds.
+  const NEW = {
+    ev: [
+      ['QUAKE', 'err', 37.8, 20.6, 'M4.3 · Ionian Sea, 62 km W of Zakynthos · 10 km deep', 'emsc'],
+      ['FIRE', 'warn', -16.2, -48.1, 'Hotspot cluster grows · Goiás, Brazil · FRP 188 MW', 'firms'],
+      ['NEWS', 'info', 1.35, 103.8, 'MAS keeps currency band slope unchanged', 'reuters'],
+      ['LAUNCH', 'ok', 5.2, -52.8, 'Ariane 6 · Kourou ELA-4 · static fire complete', 'll2'],
+      ['STORM', 'info', 12.1, 123.4, 'Man-yi track shifts north, signal no. 3 raised', 'pagasa'],
+    ],
+    log: [
+      ['NEW', 'new', 'Vietnam Q4 rice export contracts up 9% on Philippine demand', 'vnexpress'],
+      ['INFO', 'info', 'Fed minutes: officials see room to slow balance-sheet runoff', 'reuters'],
+      ['WARN', 'warn', 'gdelt: partial batch, 212 of 480 records parsed', 'gdelt'],
+      ['NEW', 'new', 'TSMC November revenue beats estimates by 4%', 'nikkei'],
+      ['INFO', 'info', 'Mekong crest at Tân Châu now forecast 3.22 m on 19 Nov', 'mrc'],
+    ],
+  };
+  let seq = 0;
+
+  function addEvent(list) {
+    const [k, c, la, lo, tx, src] = NEW.ev[seq++ % NEW.ev.length];
+    const li = document.createElement('li');
+    li.tabIndex = 0; li.dataset.ll = la + ',' + lo;
+    li.innerHTML = `<time>${new Date().toTimeString().slice(0, 5)}</time><span class="lv-${c} k">${k}</span><span class="tx">${tx}</span><span class="tag">${src}</span>`;
+    return li;
+  }
+  function addLog(list) {
+    const [k, c, tx, src] = NEW.log[seq++ % NEW.log.length];
+    const li = document.createElement('li');
+    li.innerHTML = `<time>${new Date().toTimeString().slice(0, 8)}</time><span class="lv-${c}">${k}</span><a href="#">${tx}</a><span class="tag">${src}</span>`;
+    return li;
+  }
+
+  /** Prepends a typed row with cursor + highlight, and drops the oldest row to keep the list length. */
+  function pushRow(list, li) {
+    list.prepend(li);
+    li.classList.add('tw-fresh');
+    const target = li.querySelector('.tx, a') || li;
+    const cur = document.createElement('span'); cur.className = 'tw-cur'; cur.setAttribute('aria-hidden', 'true');
+    target.appendChild(cur);
+    type(li, 0);
+    setTimeout(() => cur.remove(), 1600);
+    if (list.children.length > 16) list.lastElementChild.remove();
+  }
+
+  /** Rolls a number: scrambles its digits for ~500 ms, then settles on the new value with an up/down pulse. */
+  function roll(el, next, dir) {
+    const final = next;
+    if (reduce) { el.textContent = final; return; }
+    let n = 0;
+    const id = setInterval(() => {
+      el.textContent = final.replace(/\d/g, () => (Math.random() * 10) | 0);
+      if (++n > 8) { clearInterval(id); el.textContent = final; }
+    }, 55);
+    const cell = el.closest('td, .metric') || el;
+    cell.classList.remove('tw-fresh-up', 'tw-fresh-down'); void cell.offsetWidth;
+    cell.classList.add(dir >= 0 ? 'tw-fresh-up' : 'tw-fresh-down');
+  }
+  const fmt = (v, d) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+  /** Ticks a price table: each row whose 2nd cell is a number moves a little; the change cell follows. */
+  function tickTable(table) {
+    table.querySelectorAll('tbody tr').forEach((tr) => {
+      const [, last, chg] = tr.children;
+      if (!last || !chg || !/\d/.test(last.textContent) || Math.random() < 0.4) return;
+      const d = (last.textContent.split('.')[1] || '').length;
+      const v = parseFloat(last.textContent.replace(/,/g, ''));
+      const dv = v * (Math.random() - 0.5) * 0.006;
+      roll(last, fmt(v + dv, d), dv);
+      const pct = parseFloat(chg.textContent.replace(/[^\d.\-−]/g, '').replace('−', '-')) + (dv / v) * 100;
+      chg.className = 'n ' + (pct >= 0 ? 'up' : 'down');
+      chg.textContent = (pct >= 0 ? '▲ +' : '▼ −') + Math.abs(pct).toFixed(2) + '%';
+    });
+  }
+
+  /** One live update on a random visible gadget. */
+  async function tick() {
+    const panes = [...document.querySelectorAll('.view.on .pane')].filter((p) => p.offsetParent && !p.closest('.dash-edit'));
+    const cands = panes.filter((p) => p.querySelector('.dash-evl, .pane-body .log, table.data, .metric'));
+    if (!cands.length) return;
+    const pane = cands[(Math.random() * cands.length) | 0];
+    await fetching(pane, 650);
+    const evl = pane.querySelector('.dash-evl');
+    const log = pane.querySelector('.pane-body .log');
+    const tbl = pane.querySelector('table.data');
+    const met = pane.querySelector('.metric');
+    if (evl) pushRow(evl, addEvent(evl));
+    else if (log && log.querySelector('time')) pushRow(log, addLog(log));
+    else if (tbl) tickTable(tbl);
+    else if (met && met.firstChild && /\d/.test(met.firstChild.textContent)) {
+      const t = met.firstChild.textContent.trim(); const d = (t.split('.')[1] || '').replace(/\D/g, '').length;
+      const v = parseFloat(t.replace(/,/g, '')); const dv = v * (Math.random() - 0.5) * 0.02;
+      const span = document.createElement('span'); span.textContent = t; met.firstChild.replaceWith(span);
+      roll(span, fmt(v + dv, d), dv);
+    } else return;
+    stamp(pane);
+    const info = document.getElementById('sl-info');
+    if (info && !info.hidden) info.textContent = info.textContent.replace(/updated [^·]+/, 'updated just now ');
+  }
+
+  function schedule() {
+    clearTimeout(timer);
+    if (!live) return;
+    timer = setTimeout(async () => { await tick(); schedule(); }, 2600 + Math.random() * 2400);
+  }
+
+  document.addEventListener('view:shown', () => { requestAnimationFrame(boot); });
+  document.addEventListener('skin:changed', boot);
+  document.addEventListener('visibilitychange', () => (document.hidden ? clearTimeout(timer) : schedule()));
+
+  // Demo toggle for the live stream.
+  addEventListener('DOMContentLoaded', () => {
+    const bar = document.querySelector('.demo-bar');
+    if (!bar) return;
+    const b = document.createElement('button');
+    b.className = 'demo-full tw-toggle'; b.setAttribute('aria-pressed', String(live));
+    b.textContent = 'live data';
+    b.addEventListener('click', () => { live = !live; b.setAttribute('aria-pressed', String(live)); schedule(); });
+    bar.appendChild(b);
+    schedule();
+  });
+})();
+</script>

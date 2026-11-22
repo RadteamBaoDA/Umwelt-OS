@@ -92,6 +92,16 @@ describe('StarterPackWizard', () => {
     expect(screen.queryByRole('button', { name: 'Build my dashboard' })).toBeNull();
   });
 
+  it('treats a legacy built-in TVMaze source with another name as already added', async () => {
+    api.listSources.mockResolvedValue({
+      items: [{ id: 's1', provider: 'tvmaze_schedule', name: 'TVMaze schedule', status: 'active' }],
+      next_cursor: null,
+    });
+    wrap();
+    const box = await screen.findByRole('checkbox', { name: /Add .*TVMaze/i });
+    await waitFor(() => expect(box.getAttribute('aria-checked')).toBe('false'));
+  });
+
   it('notes when the provider floor raises a starter interval', async () => {
     api.getConnectorCatalog.mockResolvedValue([{ provider_id: 'arxiv', min_interval_minutes: 720 }]);
     wrap();

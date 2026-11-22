@@ -16,6 +16,7 @@ Boundaries kept deliberately narrow:
 import asyncio
 import logging
 import time
+import traceback
 from contextlib import suppress
 from typing import Any
 
@@ -38,6 +39,7 @@ from modules.connectors._collection.base import (
     DEDUP_ONLY_PROVIDERS,
     HEADER_AUTH_PROVIDERS,
     KEYED_PROVIDERS,
+    NATIVE_REST_PLACEMENTS,
     PAYLOAD_RATE_LIMIT_BACKOFF,
     PURE_MAX_BYTES,
     PURE_PROVIDERS,
@@ -125,6 +127,10 @@ from modules.connectors._collection.providers import (
     _run_vietnamworks,
     _run_vn_stock,
 )
+from modules.connectors._collection.topic_watch import (
+    TopicWatchFailure,
+    _run_topic_watch,  # noqa: F401  # registers the adapter
+)
 from modules.connectors._collection.web import (
     _NotModified,
     _PageText,
@@ -141,6 +147,7 @@ from modules.connectors.provider_specs import (
     get_quota_policies,
 )
 from modules.connectors.providers import rest
+from modules.connectors.selection import run_deadline_seconds
 from modules.ingestion import public as ingestion
 from modules.ingestion.public import CollectionState  # noqa: F401
 from modules.sources import public as sources  # noqa: F401
@@ -157,6 +164,7 @@ __all__ = [
     "DEDUP_ONLY_PROVIDERS",
     "HEADER_AUTH_PROVIDERS",
     "KEYED_PROVIDERS",
+    "NATIVE_REST_PLACEMENTS",
     "NativeCall",
     "NativeHandler",
     "PAYLOAD_RATE_LIMIT_BACKOFF",
@@ -245,18 +253,33 @@ __all__ = [
 ]
 
 
-def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
+def _classify(
+    exc: BaseException, *, keyless: bool = False, provider: str | None = None
+) -> dict[str, Any]:
     """Map an adapter failure to ``settle_admission`` arguments (never response text).
+
+    A ``topic_watch`` failure is never retryable: each attempt re-plans and re-charges up to four
+    searches and a model budget the owner consented to once, so a retry would multiply the spend.
 
     ``keyless`` marks a source that sends no credential: a 401/403 from it is the provider blocking or
     refusing the request (geo/IP policy, missing user agent), not a bad owner credential, so it settles as
     ``provider_rejected`` instead of the misleading ``invalid_credential``.
     """
+    settled = _classify_failure(exc, keyless=keyless)
+    if provider == "topic_watch":
+        settled.pop("retryable", None)
+    return settled
+
+
+def _classify_failure(exc: BaseException, *, keyless: bool) -> dict[str, Any]:
+    """Map an adapter failure to its settle arguments before provider-specific retry policy."""
     from modules.connectors.mcp import McpCollectionError
 
     if isinstance(exc, McpCollectionError):
         # Stable secret-free MCP code; all-calls-failed or stale config will not heal by retrying.
         return {"outcome": "failed", "error_code": exc.code}
+    if isinstance(exc, TopicWatchFailure):
+        return {"outcome": "failed", "error_code": exc.code}  # owner action needed; not retryable
     if isinstance(exc, rest.CollectionIncomplete):
         return {"outcome": "failed", "error_code": "collection_incomplete"}
     if isinstance(exc, rest.RestSchemaChanged):
@@ -288,6 +311,33 @@ def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
             "retryable": error_status(exc) == 409,
         }
     if isinstance(exc, ValueError):
+        # Name the innermost app frame and, for validation errors, the field locations and error types, never
+        # input values or messages: provider payload text could reach them, yet operators must tell a parser bug
+        # from bad upstream data.
+        frames = traceback.extract_tb(exc.__traceback__) if exc.__traceback__ else []
+        app = [f for f in frames if "/modules/" in f.filename.replace("\\", "/")]
+        chosen = app or frames
+        frame = chosen[-1] if chosen else None
+        where = (
+            f"{frame.filename.rsplit('/', 2)[-1]}:{frame.name}:{frame.lineno}"
+            if frame
+            else "unknown"
+        )
+        errors = getattr(exc, "errors", None)
+        fields = (
+            [
+                (".".join(map(str, e.get("loc", ()))), e.get("type"))
+                for e in errors(include_input=False)
+            ][:5]
+            if callable(errors)
+            else []
+        )
+        logger.warning(
+            "collection rejected an invalid provider response: %s at %s %s",
+            type(exc).__name__,
+            where,
+            fields,
+        )
         return {"outcome": "failed", "error_code": "provider_response_invalid"}
     return {"outcome": "failed", "error_code": "executor_error", "retryable": True}
 
@@ -402,12 +452,18 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
         await _settle(factory, admission, outcome="failed", error_code="collection_unsupported")
         return
     quota_policies = get_quota_policies(attempt.source.provider)
+    # Per-provider budget: only topic_watch is raised (selection.run_deadline_seconds); others keep 90 s.
+    hard_deadline = (
+        rest.RUN_DEADLINE_SECONDS
+        if attempt.source.provider != "topic_watch"
+        else run_deadline_seconds("topic_watch")
+    )
     state: dict[str, Any] = {"attempt": attempt, "factory": factory, "settings": settings}
     gate = SendGate(
         factory,
         attempt,
         settings=settings,
-        deadline=time.monotonic() + rest.RUN_DEADLINE_SECONDS,
+        deadline=time.monotonic() + hard_deadline,
         quota_provider=attempt.source.provider if quota_policies else None,
         fingerprint=_alpha_fingerprint(state)
         if attempt.source.provider == "alpha_vantage"
@@ -423,7 +479,7 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     )
     settle: dict[str, Any] | None = None
     try:
-        async with asyncio.timeout(rest.RUN_DEADLINE_SECONDS):
+        async with asyncio.timeout(hard_deadline):
             await adapter(run)
         return  # accepted: the ingestion owner already settled request + slot in its own commit
     except asyncio.CancelledError:
@@ -450,7 +506,9 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
             "provider_deadline": exc.next_eligible_at,
         }
     except Exception as exc:  # deliberate boundary: every failure must settle the request
-        settle = _classify(exc, keyless=_sends_no_credential(attempt.source))
+        settle = _classify(
+            exc, keyless=_sends_no_credential(attempt.source), provider=attempt.source.provider
+        )
         if isinstance(exc, rest.ProviderHttpError):
             # The settled code hides the upstream status; log it (never the body or URL) to tell throttles from rejects.
             logger.warning(

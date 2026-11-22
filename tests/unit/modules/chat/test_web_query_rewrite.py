@@ -186,3 +186,5 @@ async def test_retrieval_variant_keeps_names_web_variant_strips_them(
         )  # type: ignore[arg-type]
         assert rig.calls[-1][1][0]["content"].startswith(expected)
     assert "Do not include personal data" not in worker.RETRIEVAL_REWRITE_INSTRUCTIONS
+    for kept in ("dates", "time ranges", "numbers", "tickers or symbols", "units", "codes"):
+        assert kept in worker.RETRIEVAL_REWRITE_INSTRUCTIONS

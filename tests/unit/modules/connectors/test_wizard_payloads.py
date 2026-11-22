@@ -55,6 +55,15 @@ MINIMAL_SCOPE: dict[str, dict[str, Any]] = {
     },
     "notion": {"notion_page_ids": ["a1234567-b123-c123-d123-e123456789ab"]},
     "slack": {"slack_channel_ids": ["C012ABCDEF"]},
+    "openlibrary_books": {"openlibrary_mode": "subject", "openlibrary_subject": "fiction"},
+    "apple_books_rss": {"country": "US", "kind": "books", "chart": "top-free"},
+    "podcast_rss": {"feed_url": "https://example.com/podcast.xml"},
+    "itunes_movies": {"search_terms": "science fiction", "country": "US"},
+    "letterboxd_rss": {"letterboxd_username": "example"},
+    "omdb_lookup": {"omdb_mode": "title", "omdb_title": "Example movie"},
+    "google_books": {"google_books_subject": "History"},
+    "hardcover_books": {"hardcover_mode": "catalog"},
+    "igdb_games": {"igdb_region": "world"},
 }
 # open_meteo is omitted from SCOPED: the editor preselects 0/0 coordinates, UTC and a metric, so its default already validates.
 SCOPED = frozenset(MINIMAL_SCOPE)
@@ -85,6 +94,9 @@ FRONTEND_CLEARED = {
     "openweathermap": ("owm_latitude", "owm_longitude"),
     "openaq": ("openaq_location_id",),
     "nasa_firms": ("firms_country",),
+    "omdb_lookup": ("omdb_mode", "omdb_title"),
+    "google_books": ("google_books_subject",),
+    "hardcover_books": ("hardcover_mode",),
 }
 
 
@@ -195,3 +207,45 @@ def test_generic_source_without_url_is_rejected(provider: str) -> None:
     """A generic source validated before its URL step is rejected, by design."""
     with pytest.raises(ValueError):
         run_save_path(provider, frontend_default(provider))
+
+
+@pytest.mark.parametrize("provider", ["youtube_api", "podcast_index", "igdb_games"])
+def test_native_media_credential_slot_is_not_a_configuration_bearer_header(provider):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from modules.connectors.provisioning._routes.common import DraftValidationRequest
+    from modules.connectors.provisioning._routes.config import (
+        _check_draft_auth_mode,
+        _require_matching_auth,
+    )
+
+    source = SimpleNamespace(provider=provider, type="api")
+    payload = {"expected_revision": 1, "configuration": {}, "auth_method": "none"}
+    _require_matching_auth(source, ConnectorSettingsRequest(**payload))
+    _check_draft_auth_mode(source, DraftValidationRequest(expected_source_generation=1, **payload))
+    payload.update(auth_method="http_header", auth_header_name="Authorization")
+    with pytest.raises(HTTPException) as settings_error:
+        _require_matching_auth(source, ConnectorSettingsRequest(**payload))
+    with pytest.raises(HTTPException) as draft_error:
+        _check_draft_auth_mode(
+            source, DraftValidationRequest(expected_source_generation=1, **payload)
+        )
+    assert settings_error.value.status_code == draft_error.value.status_code == 422
+
+
+def test_steam_news_appids_are_preserved_in_catalog_and_serialized_scope():
+    from types import SimpleNamespace
+
+    from modules.connectors import registry
+    from modules.connectors.service.schemas import ConnectorConfig
+
+    source = SimpleNamespace(
+        id=uuid4(), provider="steam_releases", type="api", status="active", generation=1
+    )
+    config = ConnectorConfig(steam_mode="news", steam_appids=[730, 570])
+    source.configuration = serialize_source_configuration(source, config)
+    assert source.configuration["steam_appids"] == [730, 570]
+    assert registry.validate(source)["configuration"]["steam_appids"] == [730, 570]
+    assert "steam_appids" in get_catalog_entry("steam_releases").scope_fields

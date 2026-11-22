@@ -74,8 +74,12 @@ async def defer_live_provider(session: AsyncSession, *, provider: str, until: da
 
 
 def _text(value: Any, limit: int = 500) -> str | None:
-    """Return bounded plain text or None for missing/non-string provider values."""
-    return " ".join(value.split())[:limit] or None if isinstance(value, str) else None
+    """Return bounded plain text or None for missing/non-string provider values.
+
+    RSS descriptions (e.g. VnExpress) embed ``<a><img>`` markup and HTML entities;
+    ``news.plain_text`` drops tags and decodes entities so the map popup shows readable text.
+    """
+    return news.plain_text(value, limit) or None if isinstance(value, str) else None
 
 
 def _url(value: Any) -> str | None:

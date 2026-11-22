@@ -17,15 +17,23 @@ from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
 from typing import Any as _Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from sqlalchemy import delete, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
 from core.realtime import commit_with_replay
 from core.telemetry import RunMeta as _RunMeta
-from core.workspaces.schemas import Scope
+from core.workspaces.schemas import AccessFence, Scope
+from modules.automations._topic_watch import (
+    prepare_topic_actions,
+    previous_watch,
+    retire_sources,
+    retire_topic_watch,
+)
 from modules.automations.conditions import TRIGGER_FIELDS, evaluate, validate_sample
 from modules.automations.execution import (
     ACTION_MODULE,
@@ -42,8 +50,9 @@ from modules.automations.execution import (
     scrub_document_triggers,
     start_manual,
 )
-from modules.automations.models import Automation, AutomationRevision
+from modules.automations.models import Automation, AutomationRevision, AutomationSchedule
 from modules.automations.models import AutomationRun as _AutomationRun
+from modules.automations.scheduler import next_slot, parse_cron
 from modules.automations.schemas import (
     MAX_REVISION,
     AutomationCreate,
@@ -61,8 +70,10 @@ from modules.automations.schemas import (
     RunActionRead,
     RunPage,
     RunRead,
+    scheduled_task_kind,
 )
 from modules.automations.scope import _actor, _admit
+from modules.chat import public as chat
 from modules.chat.public import Conversation
 from modules.dashboard import public as dashboard
 from modules.tools.public import webhook_aliases
@@ -191,7 +202,8 @@ async def _sync_brief_slot(
 
     Invariant: the slot belongs to the internal brief cron unless one enabled schedule+generate_brief
     automation has been explicitly enabled. Transfer happens only on an explicit enable (never as a
-    side effect of editing); disable, delete or no longer qualifying hands it back.
+    side effect of editing); disable, delete or no longer qualifying hands it back. Handing back a
+    Daily brief *task* also disables the internal cron; a legacy rule leaves it as the owner set it.
     """
     if _owns_brief_slot(head.enabled, parts[0], parts[2]):
         if explicit_enable:
@@ -209,7 +221,12 @@ async def _sync_brief_slot(
             )
     else:
         await dashboard.release_brief_slot(
-            session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            session,
+            head.id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            # A paused/disabled scheduled task must not revive the internal brief cron.
+            disable_internal=scheduled_task_kind(parts[0], parts[2]) == "daily_brief",
         )
 
 
@@ -232,8 +249,41 @@ def _hash(trigger: dict[str, Any], conditions: list[Any], actions: list[Any], en
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
-def _read(head: Automation, rev: AutomationRevision) -> AutomationRead:
-    """Join a rule head with its current revision snapshot."""
+async def _next_run_at(
+    session: AsyncSession, head: Automation, rev: AutomationRevision
+) -> datetime | None:
+    """Next firing of an enabled schedule rule, else None.
+
+    Prefers the scheduler's persisted slot when it is for the current revision; the scheduler creates
+    that row lazily, so a fresh or just-edited rule falls back to computing the first slot from its cron.
+    """
+    if not head.enabled or rev.trigger.get("type") != "schedule":
+        return None
+    slot = await session.scalar(
+        select(AutomationSchedule.next_slot).where(
+            AutomationSchedule.automation_id == head.id,
+            AutomationSchedule.revision == head.revision,
+        )
+    )
+    if slot is not None:
+        return slot
+    return next_slot(
+        parse_cron(rev.trigger["cron"]),
+        ZoneInfo(rev.trigger.get("timezone", "UTC")),
+        datetime.now(UTC),
+    )
+
+
+async def _read(session: AsyncSession, head: Automation, rev: AutomationRevision) -> AutomationRead:
+    """Join a rule head with its current revision snapshot and its next scheduled run.
+
+    Callers read right after a commit, which can leave server-maintained columns (``updated_at``)
+    expired; touching them synchronously would lazy-load outside the async context
+    (``MissingGreenlet``), so expired attributes are refreshed with an awaited query first.
+    """
+    state = sa_inspect(head, raiseerr=False)
+    if state is not None and state.expired_attributes:
+        await session.refresh(head)
     return AutomationRead(
         id=head.id,
         name=head.name,
@@ -244,6 +294,7 @@ def _read(head: Automation, rev: AutomationRevision) -> AutomationRead:
         actions=rev.actions,
         created_at=head.created_at,
         updated_at=head.updated_at,
+        next_run_at=await _next_run_at(session, head, rev),
     )
 
 
@@ -299,26 +350,8 @@ async def _owned_head(
     return head
 
 
-async def create_automation(
-    session: AsyncSession,
-    payload: AutomationCreate,
-    registry: Mapping[str, Any],
-    settings: Settings,
-    *,
-    automation_id: UUID | None = None,
-    commit: bool = True,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> AutomationRead:
-    """Validate and persist a new rule at revision 1, committing head and snapshot atomically.
-
-    ``automation_id`` (stable seed ids) and ``commit=False`` (flush only, caller owns the
-    transaction) exist for the explicit demo seed; routes and tools use the defaults.
-    """
-    fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
-    )
-    validate_definition(payload, registry, settings)
+async def _require_quota(session: AsyncSession, scope: Scope) -> None:
+    """Raise ``AutomationConflict("quota_exceeded")`` when the owner already holds the maximum live rules."""
     live = (
         await session.scalars(
             select(Automation.id)
@@ -332,39 +365,93 @@ async def create_automation(
     ).all()
     if len(live) >= MAX_AUTOMATIONS_PER_OWNER:
         raise AutomationConflict("quota_exceeded", "Automation limit reached")
-    head = Automation(
-        workspace_id=scope.workspace_id,
-        owner_id=_actor(scope),
-        name=payload.name,
-        enabled=payload.enabled,
-        revision=1,
+
+
+async def create_automation(
+    session: AsyncSession,
+    payload: AutomationCreate,
+    registry: Mapping[str, Any],
+    settings: Settings,
+    *,
+    automation_id: UUID | None = None,
+    commit: bool = True,
+    allow_consent: bool = False,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> AutomationRead:
+    """Validate and persist a new rule at revision 1, committing head and snapshot atomically.
+
+    ``automation_id`` (stable seed ids) and ``commit=False`` (flush only, caller owns the
+    transaction) exist for the explicit demo seed; routes and tools use the defaults. A
+    ``collect_source`` action provisions its Topic watch Source before the rule is written (the
+    sources owner commits internally), so a later failure retires that Source again; only
+    ``allow_consent=True`` (the HTTP route) may store the owner's consent. Because that Source commit
+    drops the admission lock, the lock and the quota are re-checked before the rule is written.
+    """
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
     )
-    if automation_id is not None:
-        head.id = automation_id
-    session.add(head)
-    await session.flush()
-    rev = _append_revision(session, head, *_dump(payload))
-    if payload.enabled:
-        await _sync_brief_slot(
-            session,
-            head,
-            (rev.trigger, rev.conditions, rev.actions),
-            explicit_enable=True,
-            was_owner_candidate=False,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
+    validate_definition(payload, registry, settings)
+    await _require_quota(session, scope)
+    trigger, conditions, actions = _dump(payload)
+    actions, fresh = await prepare_topic_actions(
+        session,
+        actions,
+        trigger,
+        [],
+        name=payload.name,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_consent=allow_consent,
+        settings=settings,
+    )
+    try:
+        if fresh:
+            # create_source committed, which released the admission lock: take it again and re-count
+            # the quota before the rule is written (a conflict compensates the fresh Source below).
+            fence = await _admit(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+            )
+            await _require_quota(session, scope)
+        head = Automation(
+            workspace_id=scope.workspace_id,
+            owner_id=_actor(scope),
+            name=payload.name,
+            enabled=payload.enabled,
+            revision=1,
         )
-    if commit:
-        await commit_with_replay(
-            session,
-            [],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=fence,
-        )
-    else:
+        if automation_id is not None:
+            head.id = automation_id
+        session.add(head)
         await session.flush()
-    return _read(head, rev)
+        rev = _append_revision(session, head, trigger, conditions, actions)
+        if payload.enabled:
+            await _sync_brief_slot(
+                session,
+                head,
+                (rev.trigger, rev.conditions, rev.actions),
+                explicit_enable=True,
+                was_owner_candidate=False,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        if commit:
+            await commit_with_replay(
+                session,
+                [],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=fence,
+            )
+        else:
+            await session.flush()
+    except BaseException:
+        # Source creation committed inside the sources owner; do not leave it without a rule.
+        await retire_sources(
+            session, fresh, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        raise
+    return await _read(session, head, rev)
 
 
 async def update_automation(
@@ -374,13 +461,16 @@ async def update_automation(
     registry: Mapping[str, Any],
     settings: Settings,
     *,
+    allow_consent: bool = False,
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> AutomationRead:
     """Apply a revision-fenced patch by appending a new snapshot; old revisions stay untouched.
 
     Pausing (``enabled=False``) also bumps the revision so queued work fenced on the old
-    revision is invalidated by dispatch while its history remains.
+    revision is invalidated by dispatch while its history remains. A changed ``collect_source``
+    action re-prepares its Topic watch Source: consent survives only while the consent-bound
+    definition hash is unchanged, and only ``allow_consent=True`` (the HTTP route) can grant it.
     """
     fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
@@ -393,6 +483,7 @@ async def update_automation(
     if head.revision >= MAX_REVISION:
         raise AutomationConflict("revision_exhausted", "Revision counter exhausted", head.revision)
     current = await _current_revision(session, head)
+    fresh: list[UUID] = []
     if payload.trigger is not None or payload.conditions is not None or payload.actions is not None:
         try:
             merged = AutomationDefinition(
@@ -406,10 +497,78 @@ async def update_automation(
             raise AutomationInvalid("definition is invalid for the selected trigger") from exc
         validate_definition(merged, registry, settings)
         parts = _dump(merged)
+        # The trigger may change with the actions, so consent is re-derived from the merged definition.
+        prepared, fresh = await prepare_topic_actions(
+            session,
+            parts[2],
+            parts[0],
+            current.actions,
+            name=payload.name or head.name,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            allow_consent=allow_consent,
+            settings=settings,
+        )
+        parts = (parts[0], parts[1], prepared)
     else:
         # Pause/resume/rename copies the stored snapshot verbatim: a rule that became invalid
         # later (changed fields or disabled module) must still be pausable.
         parts = (current.trigger, current.conditions, current.actions)
+    try:
+        if fresh:
+            # create_source committed and released the admission and head locks: take them again and
+            # re-check the revision fence before writing (a conflict compensates the fresh Source).
+            fence = await _admit(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+            )
+            head = await _owned_head(session, automation_id, lock=True, scope=scope)
+            if head.revision != payload.expected_revision:
+                raise AutomationConflict(
+                    "stale_revision", f"Rule is at revision {head.revision}", head.revision
+                )
+        rev = await _write_revision(
+            session,
+            head,
+            current,
+            parts,
+            payload,
+            fence,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except BaseException:
+        await retire_sources(
+            session, fresh, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        raise
+    dropped = previous_watch(current.actions)
+    if dropped is not None and previous_watch(parts[2]) is None:
+        # The rule no longer watches a topic: archive its Source (items stay searchable).
+        await retire_topic_watch(
+            session,
+            dropped,
+            purge_items=False,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return await _read(session, head, rev)
+
+
+async def _write_revision(
+    session: AsyncSession,
+    head: Automation,
+    current: AutomationRevision,
+    parts: tuple[Any, Any, Any],
+    payload: AutomationUpdate,
+    fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> AutomationRevision:
+    """Apply name/enabled, bump the revision, append the snapshot, sync the brief slot and commit.
+
+    Runs under the caller's admitted fence and head row lock; the commit validates that fence.
+    """
     was_enabled = head.enabled
     was_candidate = _owns_brief_slot(was_enabled, current.trigger, current.actions)
     if payload.name is not None:
@@ -434,7 +593,7 @@ async def update_automation(
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=fence,
     )
-    return _read(head, rev)
+    return rev
 
 
 async def delete_automation(
@@ -442,6 +601,7 @@ async def delete_automation(
     automation_id: UUID,
     expected_revision: int,
     *,
+    purge_items: bool = False,
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> None:
@@ -449,6 +609,9 @@ async def delete_automation(
 
     Deleting also bumps the revision and appends a disabled snapshot, so dispatch has a single
     fence: any queued or approved work citing the old revision no longer matches and is dropped.
+    A Topic watch rule also deletes its thread and, after the rule's own commit, retires its Source:
+    archived by default (items stay searchable) or purged with ``purge_items=True``. The Source
+    commands commit internally, which is why they run last.
     """
     fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
@@ -465,9 +628,18 @@ async def delete_automation(
     head.enabled = False
     head.revision += 1
     _append_revision(session, head, current.trigger, current.conditions, current.actions)
+    kind = scheduled_task_kind(current.trigger, current.actions)
+    is_task = kind is not None
     await dashboard.release_brief_slot(
-        session, head.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        session,
+        head.id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        disable_internal=kind == "daily_brief",
     )
+    if is_task:
+        # The thread belongs to the task (an agent rule's thread is run history and stays).
+        await chat.delete_automation_conversation(session, head.id, scope=scope)
     await commit_with_replay(
         session,
         [],
@@ -475,6 +647,15 @@ async def delete_automation(
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=fence,
     )
+    watch = previous_watch(current.actions)
+    if watch is not None:
+        await retire_topic_watch(
+            session,
+            watch,
+            purge_items=purge_items,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
 
 
 async def get_automation(
@@ -487,7 +668,7 @@ async def get_automation(
     """Return one live owned rule at its current revision."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     head = await _owned_head(session, automation_id, scope=scope)
-    return _read(head, await _current_revision(session, head))
+    return await _read(session, head, await _current_revision(session, head))
 
 
 def capabilities(registry: Mapping[str, Any], settings: Settings) -> CapabilitiesRead:
@@ -534,6 +715,11 @@ async def get_automation_conversation_id(
     """Return the rule's Chat conversation id (hidden from the default Chat list) or None before any agent run."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     await _owned_head(session, automation_id, scope=scope)
+    return await _conversation_id(session, automation_id, scope)
+
+
+async def _conversation_id(session: AsyncSession, automation_id: UUID, scope: Scope) -> UUID | None:
+    """Return the id of the rule's live (non-archived) Chat conversation in the workspace, or None."""
     return await session.scalar(
         select(Conversation.id)
         .where(
@@ -573,7 +759,7 @@ async def list_automations(
     for head in heads:
         rev = await _current_revision(session, head)
         if trigger_type is None or rev.trigger["type"] == trigger_type:
-            items.append(_read(head, rev))
+            items.append(await _read(session, head, rev))
     return AutomationPage(items=items)
 
 

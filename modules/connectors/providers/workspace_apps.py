@@ -19,6 +19,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from modules.connectors.providers import rest
 from modules.connectors.providers.rest import Fetched
+from modules.connectors.providers.social_walk import post_title
 from modules.connectors.public import ProviderCollectionPage, ProviderRateLimited
 from modules.ingestion.public import IngestionRecord
 
@@ -391,6 +392,8 @@ def _slack_message_record(
 ) -> IngestionRecord | None:
     """Validate one history message and map it to a record, or ``None`` for replies and duplicates.
 
+    The record title is the first line of the message text (see ``post_title``).
+
     Thread replies (``thread_ts`` differing from ``ts``) are excluded; already-seen messages are
     skipped after validation. ``record_count`` enforces the per-collection record cap.
 
@@ -457,6 +460,7 @@ def _slack_message_record(
         observed_at=observed_at,
         version=version,
         metadata={
+            "title": post_title(text),
             "provider_record": provider_record,
             "channel_id": channel_id,
             "message_ts": timestamp,

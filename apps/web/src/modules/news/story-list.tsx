@@ -8,6 +8,7 @@ import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { FeedImage } from '@/components/feed-image';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
+import { FootBarSlot, TitleBarSlot } from '@/components/gadget-title-slot';
 import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
 import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Button } from '@/components/ui/button';
@@ -16,12 +17,20 @@ import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
-import { TranslatedBadge } from '@/modules/translations';
-import { TranslationNote } from '@/modules/translations';
-import { useContentTranslation } from '@/modules/translations';
+import {
+  isWorkspaceTranslationBlocker,
+  nextUntranslatedBatch,
+  TranslateActionButton,
+  TranslatedBadge,
+  TranslationNote,
+  TranslationRunProgress,
+  TranslationStatusBanner,
+  untranslatedTargets,
+  useContentTranslation,
+} from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
-import { formatRelativeTime } from '@/modules/dashboard/public-api';
+import { formatRelativeTime, useReportGadgetFreshness } from '@/modules/dashboard/public-api';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -82,6 +91,8 @@ export function StoryList(props: StoryListProps) {
 
       <StoryTrends vm={vm} />
 
+      <TranslationStatusBanner issues={vm.translation.issues} />
+
       <StoryListStatus vm={vm} />
 
       <StoryListBody vm={vm} />
@@ -103,10 +114,54 @@ export function StoryList(props: StoryListProps) {
   );
 }
 
-/** One compact story row: title, excerpt, count/time meta and publisher attribution. */
+/** Per-story on-demand Translate button or Original/Translation flip control; sits outside the selection button so controls are never nested. */
+function StoryTranslateControl({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const tTrans = useTranslations('translations');
+  const { translation, isShowingOriginal, toggleItemOriginal, translateStory } = vm;
+  if (!translation.enabled || !story.translation_revision) return null;
+  if (translation.results.has(story.id)) {
+    const showingOriginal = isShowingOriginal(story.id);
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-6 px-1.5 text-xs font-normal text-muted-foreground hover:text-foreground"
+        aria-pressed={!isShowingOriginal(story.id)}
+        onClick={() => toggleItemOriginal(story.id)}
+      >
+        {showingOriginal ? tTrans('translationShort') : tTrans('originalShort')}
+      </Button>
+    );
+  }
+  if (translation.unchanged.has(story.id)) {
+    return <span className="text-xs text-muted-foreground">{tTrans('note.unchanged')}</span>;
+  }
+  return (
+    <TranslateActionButton
+      compact
+      label={tTrans('translate')}
+      // Rows repeat the same visible label, so the accessible name carries the story title.
+      ariaLabel={tTrans('translateItem', { title: story.title })}
+      pending={translation.pendingIds?.has(story.id) ?? false}
+      onClick={() => translateStory(story)}
+    />
+  );
+}
+
+/** Renders an item-specific translation error note for one story row (workspace blockers live in the top banner). */
+function StoryRowIssue({ vm, storyId }: { vm: StoryListVm; storyId: string }) {
+  if (vm.translation.results.has(storyId)) return null;
+  const issue = vm.translation.issues.get(storyId);
+  if (!issue || issue.status === 'pending' || isWorkspaceTranslationBlocker(issue)) return null;
+  return <TranslationNote issue={issue} />;
+}
+
+/** One compact story row: title, excerpt, count/time meta, publisher attribution, and per-story translation action. */
 function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; story: Story }) {
-  const { onSelectStory, translation, shown } = vm;
-  const excerpt = cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt);
+  const { onSelectStory, shown } = vm;
+  const displayTitle = shown(story)?.title ?? story.title;
+  const excerpt = cleanExcerpt(displayTitle, shown(story)?.excerpt ?? story.excerpt);
   const card = vm.embedded && vm.view === 'cards';
   return (
     <li data-testid={card ? 'news-card' : undefined} className={card ? 'min-w-0 rounded-md border border-border p-2' : undefined}>
@@ -118,16 +173,85 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
         className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 ${card ? 'py-1' : 'py-3'}`}
       >
         <span className="flex items-start justify-between gap-2">
-          <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
+          <span className="font-medium leading-snug">{displayTitle}</span>
           <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
         </span>
         {excerpt ? <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{excerpt}</span> : null}
-        {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
         <StoryRowMeta vm={vm} story={story} />
       </Button>
-      <Attribution story={story} />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Attribution story={story} />
+        <StoryTranslateControl vm={vm} story={story} />
+      </div>
+      <StoryRowIssue vm={vm} storyId={story.id} />
     </li>
   );
+}
+
+/** Stories observed within this many minutes carry the NEW level in the log rows; older ones read INFO. */
+const NEW_STORY_MINUTES = 15;
+
+/**
+ * Log row of an embedded story: `HH:MM  LEVEL  title  #publisher` (developer-theme `.log li`).
+ * The title button opens the story detail exactly like the default row; the tag links to the publisher's article when
+ * the evidence URL is a safe http(s) URL (licence text stays in the link title). LEVEL is NEW for stories observed in
+ * the last 15 minutes, else INFO: stories carry no read state, so recency is the only signal. A line under the title holds
+ * the per-story Translate / flip control and its item note.
+ *
+ * @param props.vm Story list view model (selection callback, translation and display preferences).
+ * @param props.story Story shown by this row.
+ */
+function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const { onSelectStory, shown, display, t } = vm;
+  // Lazy initial state keeps the clock read out of render purity; the level is a snapshot taken when the row mounts.
+  const [now] = useState(() => Date.now());
+  const clock = new Intl.DateTimeFormat(normalizeFormattingLocale(display.locale), {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+    timeZone: display.timezone,
+  });
+  const observed = Date.parse(story.observed_at);
+  const isNew = now - observed < NEW_STORY_MINUTES * 60_000;
+  const { tag, href, license } = storyLogTag(story);
+  return (
+    <li className="story-log-row" data-testid="news-log-row">
+      <time dateTime={story.observed_at} title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
+        {Number.isNaN(observed) ? '' : clock.format(new Date(observed))}
+      </time>
+      <span className={isNew ? 'story-log-level story-log-new' : 'story-log-level story-log-info'}>
+        {isNew ? t('log.new') : t('log.info')}
+      </span>
+      <button type="button" className="story-log-title" onClick={(event) => onSelectStory(story.id, event.currentTarget)}>
+        {shown(story)?.title ?? story.title}
+      </button>
+      {tag && href ? (
+        <a className="story-log-tag" href={href} target="_blank" rel="noopener noreferrer" title={license}>
+          {tag}
+        </a>
+      ) : tag ? (
+        <span className="story-log-tag">{tag}</span>
+      ) : null}
+      {/* Own line under the title (outside the title button), so on-demand translation stays reachable in the log. */}
+      <span className="story-log-actions">
+        <StoryTranslateControl vm={vm} story={story} />
+        <StoryRowIssue vm={vm} storyId={story.id} />
+      </span>
+    </li>
+  );
+}
+
+/**
+ * Short lower-case publisher tag of a story for the log row, with its safe article URL and licence text.
+ * Uses the first evidence item that names a publisher, else the first evidence item's source name; empty tag when none.
+ */
+function storyLogTag(story: Story): { tag: string; href: string | undefined; license: string | undefined } {
+  const item = story.evidence?.find((e) => e.publisher) ?? story.evidence?.[0];
+  return {
+    tag: (item?.publisher ?? item?.source_name ?? '').toLowerCase().replace(/\s+/g, ''),
+    href: safeHttpUrl(item?.url),
+    license: item?.license_label ?? undefined,
+  };
 }
 
 /** Count/time/relevance meta line and partial-data reasons under a story row. */
@@ -185,15 +309,28 @@ function Attribution({ story }: { story: Story }) {
 
 type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 
-/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. */
+/** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. In narrow panes CSS hides the whole title-bar slot, so the translation toolbar, List | Cards toggle and refresh are repeated in this row (CSS picks the copy) and no control is lost. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
-  const { embedded, actionsHost, translation, incompleteNotice, showOriginal, setShowOriginal, refreshButton, pageActions } = vm;
+  const { embedded, actionsHost, incompleteNotice, refreshButton, pageActions, translationToolbarAction } = vm;
   return embedded ? (
-    // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
-    <div className="flex h-6 shrink-0 items-center justify-between gap-2">
-      <div className="min-w-0 truncate">{incompleteNotice}</div>
-      <div className="flex items-center gap-1">
-        {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+    // Slim meta row: partial-data notice on the left, on-demand translation control + refresh on the right (no overlap with stories).
+    <div className="story-meta-row flex h-6 shrink-0 items-center justify-between gap-2">
+      <div className="min-w-0 truncate">
+        <FootBarSlot>{incompleteNotice}</FootBarSlot>
+      </div>
+      <TitleBarSlot>
+        <div className="flex items-center gap-1">
+          {translationToolbarAction}
+          <div className="feed-view-slot flex items-center gap-1">
+            <FeedViewToggle view={vm.view} setView={vm.setView} />
+            {refreshButton}
+          </div>
+        </div>
+      </TitleBarSlot>
+      {/* Narrow panes: the title-bar toggle and refresh are hidden by CSS (so the meta and `[ collect now ]` fit) and this body-row
+          copy, shown only when narrow, keeps both reachable. */}
+      <div className="feed-view-narrow ml-auto gap-1">
+        {translationToolbarAction}
         <FeedViewToggle view={vm.view} setView={vm.setView} />
         {refreshButton}
       </div>
@@ -309,60 +446,19 @@ function StoryListStatus({ vm }: { vm: StoryListVm }) {
   );
 }
 
-/** Hero treatment of the lead story: image, large title, excerpt, source count and attribution. */
-function StoryLead({ vm, story }: { vm: StoryListVm; story: Story }) {
-  const { t, display, onSelectStory, shown, relativeTime } = vm;
-  return (
-    <div data-testid="news-lead" className="min-w-0">
-      <FeedImage src={story.image_url} className="mb-2" />
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={(event) => onSelectStory(story.id, event.currentTarget)}
-        className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="text-xl font-semibold leading-snug">{shown(story)?.title ?? story.title}</span>
-        {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt) ? (
-          <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
-            {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}
-          </span>
-        ) : null}
-        <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
-          {/* A single source is not a headline figure: show it as plain meta text instead. */}
-          {story.source_count >= 2 ? (
-            <>
-              <span className="text-figure-sm text-foreground">{story.source_count}</span>
-              <span>{t('sourcesLabel', { count: story.source_count })}</span>
-            </>
-          ) : (
-            <span>{t('sources', { count: story.source_count })}</span>
-          )}
-          <span aria-hidden="true">·</span>
-          <span className="tabular-nums" title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
-            {relativeTime(story.observed_at)}
-          </span>
-        </span>
-      </Button>
-      <Attribution story={story} />
-    </div>
-  );
-}
-
-/** Lead story beside the list when embedded, otherwise the plain story list. */
+/** Embedded list view as a log, embedded cards as a grid, otherwise the plain story list. */
 function StoryListBody({ vm }: { vm: StoryListVm }) {
-  const { leadStory, more, view, embedded } = vm;
+  const { more, view, embedded } = vm;
   const rows = more.visible;
-  return leadStory ? (
-    // Wide gadgets put the lead left and the list right; narrow ones stack them.
-    <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-      <StoryLead vm={vm} story={leadStory} />
-      <ol className="min-w-0 divide-y divide-border">
+  if (vm.log)
+    return (
+      <ol className="story-log shrink-0">
         {rows.map((story) => (
-          <StoryRow key={story.id} vm={vm} story={story} />
+          <StoryLogRow key={story.id} vm={vm} story={story} />
         ))}
       </ol>
-    </div>
-  ) : (
+    );
+  return (
     <ol className={embedded && view === 'cards' ? 'grid shrink-0 gap-3 @[40rem]/gadget:grid-cols-2' : 'shrink-0 divide-y divide-border'}>
       {rows.map((story) => (
         <StoryRow key={story.id} vm={vm} story={story} />
@@ -454,15 +550,54 @@ function useStoryListData(props: StoryListProps) {
   };
 }
 
-/** Requests translations for loaded stories and derives the partial-data notice, relevance spread and lead story. */
+/** Wires on-demand translation for loaded stories and derives the partial-data notice and relevance spread. */
 function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const { t, incompleteLabel, stories, incompleteReasons, embedded } = p;
-  // Only the stories currently loaded are requested for translation.
+  const tTrans = useTranslations('translations');
+  // Only the stories currently loaded are eligible for on-demand translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
+  // Mirrors useItemTranslation: each "Translate all" click submits at most one chunk of untranslated stories.
+  const nextBatchTranslateAll = () => translation.translate?.(nextUntranslatedBatch(targets, translation));
+  // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
+  useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
+  const [perItemOriginal, setPerItemOriginal] = useState<ReadonlySet<string>>(() => new Set());
+
+  /** True when this story is currently displaying its original language rather than its ready translation. */
+  const isShowingOriginal = (storyId: string) => (perItemOriginal.has(storyId) ? !showOriginal : showOriginal);
+
+  /** Flips one story between original and translated text without changing the rest of the list. */
+  const toggleItemOriginal = (storyId: string) => {
+    setPerItemOriginal((prev) => {
+      const next = new Set(prev);
+      if (next.has(storyId)) next.delete(storyId);
+      else next.add(storyId);
+      return next;
+    });
+  };
+
+  /** Triggers on-demand translation for a single story and reveals its translation once ready. */
+  const translateStory = (story: Story) => {
+    if (!story.translation_revision) return;
+    setPerItemOriginal((prev) => {
+      const next = new Set(prev);
+      if (showOriginal) next.add(story.id);
+      else next.delete(story.id);
+      return next;
+    });
+    translation.translate?.([{ id: story.id, revision: story.translation_revision }]);
+  };
+
+  /** Triggers on-demand translation for all currently loaded translatable stories. */
+  const translateAll = () => {
+    setShowOriginal(false);
+    setPerItemOriginal(new Set());
+    nextBatchTranslateAll();
+  };
+
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
-  const shown = (story: Story) => (showOriginal ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
+  const shown = (story: Story) => (isShowingOriginal(story.id) ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
 
   // Embedded gadgets show the partial-data notice in the slim top meta row.
   const incompleteNotice = incompleteReasons.size ? (
@@ -477,15 +612,9 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const scores = stories.flatMap((s) => (s.relevance == null ? [] : [Math.round(s.relevance * 100)]));
   const relevanceVaries = scores.length > 1 && Math.max(...scores) - Math.min(...scores) >= 10;
 
-  // Embedded lead: the story with the most sources (first on ties) gets the hero treatment.
-  const leadStory =
-    embedded && stories.length > 0
-      ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
-      : null;
-  // Cards mode drops the lead hero: every story is a card. Embedded lists collapse to the lead + 4 rows or 6 cards.
-  const heroStory = p.view === 'cards' ? null : leadStory;
-  const listStories = heroStory ? stories.filter((story) => story.id !== heroStory.id) : stories;
-  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : 4, `${p.sourceTab}|${p.view}`);
+  // Embedded list view is a log (no lead hero), eight rows before "show more"; cards show six.
+  const log = embedded && p.view === 'list';
+  const more = useShowMore(stories, !embedded ? stories.length : p.view === 'cards' ? 6 : log ? 8 : 4, `${p.sourceTab}|${p.view}`);
 
   return {
     ...p,
@@ -495,17 +624,23 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     incompleteNotice,
     scores,
     relevanceVaries,
-    leadStory: heroStory,
-    listStories,
+    log,
     more,
     showOriginal,
     setShowOriginal,
+    isShowingOriginal,
+    toggleItemOriginal,
+    translateStory,
+    translateAll,
+    tTrans,
   };
 }
 
-/** Builds the refresh button and the translated-badge plus refresh action group. */
+/** Builds the refresh button, on-demand translation toolbar action, and page action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
-  const { t, storiesQuery, trendQuery, showTrends, embedded, translation, showOriginal, setShowOriginal } = p;
+  const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } =
+    p;
+  const progress = translation.progress;
   const refreshButton = (
     <Button
       variant="ghost"
@@ -521,14 +656,40 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
     </Button>
   );
 
+  const pendingCount = translation.pendingIds?.size ?? 0;
+  const untranslatedCount = untranslatedTargets(targets, translation).length;
+  // Wrapper is only mounted when it has content: an empty flex item would add a gap before the refresh button.
+  const showTranslationToolbar = translation.results.size > 0 || (translation.enabled && (untranslatedCount > 0 || pendingCount > 0));
+  const translationToolbarAction: ReactNode = showTranslationToolbar ? (
+    <div className="relative flex items-center gap-1.5">
+      {translation.results.size ? (
+        <TranslatedBadge
+          showOriginal={showOriginal}
+          targetLanguage={translation.targetLanguage}
+          onToggle={() => setShowOriginal((v) => !v)}
+        />
+      ) : null}
+      {translation.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
+        <TranslateActionButton
+          compact
+          label={tTrans('translateAll')}
+          pending={pendingCount > 0}
+          pendingLabel={progress ? tTrans('translatingProgress', { done: progress.done, total: progress.total }) : undefined}
+          onClick={translateAll}
+        />
+      ) : null}
+      <TranslationRunProgress progress={progress} />
+    </div>
+  ) : null;
+
   const pageActions: ReactNode = (
     <>
-      {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+      {translationToolbarAction}
       {refreshButton}
     </>
   );
 
-  return { ...p, refreshButton, pageActions };
+  return { ...p, refreshButton, translationToolbarAction, pageActions };
 }
 
 /** Provides relative-time formatting and the compact story row renderer. */

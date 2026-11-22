@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Inter, JetBrains_Mono } from 'next/font/google';
 import { headers } from 'next/headers';
 import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
 import { ACCENT_INIT_SCRIPT } from '@/core/accent';
 import { DENSITY_INIT_SCRIPT } from '@/core/density';
+import { SKIN_INIT_SCRIPT } from '@/core/skin';
 import { NONCE_HEADER } from '@/core/csp';
 import { getPublicOrigin } from '@/core/public-origin';
 import { messages } from '@/core/messages';
@@ -15,6 +16,9 @@ import './globals.css';
 
 /** Inter is downloaded at build time and served from this origin (no runtime Google request); globals.css reads --font-inter. */
 const inter = Inter({ subsets: ['latin', 'vietnamese'], variable: '--font-inter', display: 'swap' });
+
+/** Monospace face for the terminal skin only; globals.css reads --font-mono-skin. Not preloaded so the default skin pays nothing. */
+const jetbrainsMono = JetBrains_Mono({ subsets: ['latin', 'vietnamese'], variable: '--font-mono-skin', display: 'swap', preload: false });
 
 export const metadata: Metadata = {
   // PUBLIC_ORIGIN is the existing public-origin setting (.env.example); the fallback matches its local default.
@@ -32,10 +36,11 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   const nonce = (await headers()).get(NONCE_HEADER) ?? undefined;
   return (
-    <html lang="en-US" className={inter.variable} suppressHydrationWarning>
+    <html lang="en-US" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <head>
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: ACCENT_INIT_SCRIPT }} />
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: DENSITY_INIT_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
       </head>
       <body>
         {/* Public namespaces only: workspace routes add the full catalog in app/(workspace)/layout.tsx. */}

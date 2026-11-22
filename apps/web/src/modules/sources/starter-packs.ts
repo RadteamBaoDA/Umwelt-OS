@@ -13,17 +13,17 @@ export type ScopedPackItem = {
   provider: string;
   sourceType: ScopedSourceSpec['type'];
   /** Message key (`starter.name*`) for the default source name. */
-  nameKey: 'starter.nameArxiv' | 'starter.nameGithubReleases' | 'starter.nameOpenMeteo' | 'starter.nameGoogleNews';
+  nameKey: 'starter.nameArxiv' | 'starter.nameGithubReleases' | 'starter.nameOpenMeteo' | 'starter.nameGoogleNews' | 'starter.nameTvmaze';
   configuration: Partial<ConnectorConfig>;
   /** Preferred interval; raised to the provider floor from the catalog when needed. */
   intervalMinutes: ConnectorConfig['schedule_interval_minutes'];
   edit?: ItemEdit;
 };
 export type PackItem = BuiltinPackItem | ScopedPackItem;
-export type StarterPackId = 'developer' | 'jobs' | 'crypto' | 'finance' | 'weather' | 'news';
+export type StarterPackId = 'developer' | 'jobs' | 'crypto' | 'finance' | 'weather' | 'news' | 'media';
 export type StarterPack = {
   id: StarterPackId;
-  labelKey: `starter.pack${'Developer' | 'Jobs' | 'Crypto' | 'Finance' | 'Weather' | 'News'}`;
+  labelKey: `starter.pack${'Developer' | 'Jobs' | 'Crypto' | 'Finance' | 'Weather' | 'News' | 'Media'}`;
   items: PackItem[];
   guide?: 'linkedin';
 };
@@ -33,6 +33,22 @@ export type StarterPack = {
  * list are hidden by the wizard, so entries for providers that are not deployed yet are harmless.
  */
 export const STARTER_PACKS: StarterPack[] = [
+  {
+    id: 'media',
+    labelKey: 'starter.packMedia',
+    items: [
+      { id: 'livechart_episodes', kind: 'builtin', provider: 'livechart_episodes' },
+      {
+        id: 'tvmaze_schedule',
+        kind: 'scoped',
+        provider: 'tvmaze_schedule',
+        sourceType: 'api',
+        nameKey: 'starter.nameTvmaze',
+        configuration: { tvmaze_mode: 'schedule_country', media_country: 'US' },
+        intervalMinutes: 60,
+      },
+    ],
+  },
   {
     id: 'developer',
     labelKey: 'starter.packDeveloper',

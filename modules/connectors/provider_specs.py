@@ -7,20 +7,47 @@ caps are recorded as ``limit_units=None`` (never unlimited).
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from typing import Literal
 
+from modules.connectors.provider_eligibility import DEPLOYMENT_USES as DEPLOYMENT_USES
+from modules.connectors.provider_eligibility import OperatorReview as OperatorReview
+from modules.connectors.provider_eligibility import TermsDecision as TermsDecision
+from modules.connectors.provider_eligibility import (
+    deployment_use_matches as deployment_use_matches,
+)
+from modules.connectors.provider_eligibility import evaluate_terms as evaluate_terms
 from modules.connectors.provider_options import option_fields
+from modules.connectors.provider_specs_media import MEDIA_KEYED_SPECS
+from modules.connectors.provider_specs_tables import (
+    _EXPANSION_IDS,
+    _LONG_RETENTION_IDS,
+    _NON_FREE_QUOTA_POLICIES,
+    _REALTIME_TIER_IDS,
+    PROVIDER_MIN_INTERVAL_MINUTES,
+    _day,
+    _spec,
+    _unknown,
+)
+from modules.connectors.provider_specs_tables import (
+    CHECKED_ON as CHECKED_ON,
+)
+from modules.connectors.provider_specs_tables import (
+    DISPATCHABLE as DISPATCHABLE,
+)
+from modules.connectors.provider_specs_tables import (
+    FreeProviderSpec as FreeProviderSpec,
+)
+from modules.connectors.provider_specs_tables import (
+    QuotaWindowPolicy as QuotaWindowPolicy,
+)
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 
-CHECKED_ON = "2026-10-07"
 QUOTA_POLICY_REVISION = 1
 
 DeploymentUse = Literal["personal", "noncommercial", "commercial", "unknown"]
-DEPLOYMENT_USES: tuple[str, ...] = ("personal", "noncommercial", "commercial", "unknown")
 Eligibility = Literal["open", "personal", "noncommercial", "review"]
-_USE_RANK = {"personal": 0, "noncommercial": 1, "commercial": 2}
 
 TERMS_INELIGIBLE = "provider_terms_ineligible"
 
@@ -29,242 +56,6 @@ TERMS_INELIGIBLE = "provider_terms_ineligible"
 SECTION_DAILY_CAP = 96 * MAX_SECTIONS
 
 
-@dataclass(frozen=True)
-class QuotaWindowPolicy:
-    """One durable budget window; ``limit_units=None`` means counted with no enforced cap."""
-
-    policy_key: str
-    budget_kind: Literal["provider", "credential", "ip"]
-    window: Literal["second", "minute", "day", "month"]
-    unit: Literal["http_calls", "request_weight", "call_credits"]
-    limit_units: int | None
-    cost_per_send: int = 1
-    basis: Literal["pilot_local", "official_documented", "official_unknown"] = "pilot_local"
-
-
-# Durable call-count budgets for providers whose use is governed by connector credentials,
-# local service capacity, or per-method API limits rather than free-provider terms. These do
-# not imply entitlement; adapter-specific request bounds remain authoritative as well.
-_NON_FREE_QUOTA_POLICIES: dict[str, tuple[QuotaWindowPolicy, ...]] = {
-    provider_id: (
-        QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 30),
-        # Google mail's bounded first snapshot can read 500 messages plus profile/list-page overhead.
-        QuotaWindowPolicy(
-            "pilot_calls_utc_day",
-            "provider",
-            "day",
-            "http_calls",
-            600 if provider_id.startswith("google_") else 500,
-        ),
-    )
-    for provider_id in (
-        "health",
-        "home_assistant",
-        "google_mail",
-        "google_calendar",
-        "google_drive",
-        "notion",
-        "slack",
-        "reddit",
-    )
-}
-
-# Separate live-map pilot budgets are local ceilings, not statements of provider entitlement.
-_NON_FREE_QUOTA_POLICIES.update(
-    {
-        "live_github_releases": (
-            QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 10),
-            QuotaWindowPolicy("pilot_calls_utc_day", "provider", "day", "http_calls", 48),
-        ),
-        **{
-            provider_id: (
-                QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 10),
-                QuotaWindowPolicy("pilot_calls_utc_day", "provider", "day", "http_calls", 96),
-            )
-            for provider_id in ("live_vnexpress_world", "live_vnexpress_news", "live_gaming_news")
-        },
-        "live_openweather_tiles": (
-            QuotaWindowPolicy("pilot_calls_utc_minute", "credential", "minute", "http_calls", 60),
-            QuotaWindowPolicy("pilot_calls_utc_day", "credential", "day", "http_calls", 600),
-        ),
-    }
-)
-
-
-@dataclass(frozen=True)
-class FreeProviderSpec:
-    """Catalog facts and execution bounds; availability is not a license grant."""
-
-    id: str
-    hosts: tuple[str, ...]
-    data_kind: Literal["news", "measurement", "event"]
-    key_required: bool
-    default_interval_minutes: int
-    terms_url: str
-    eligibility: Literal["open", "personal", "noncommercial", "review"]
-    attribution: str
-    execution: Literal["supported", "experimental", "research_only"]
-    label: str = ""
-    endpoints: tuple[str, ...] = ()
-    quota: tuple[QuotaWindowPolicy, ...] = ()
-    # Evidence kinds stay separate; no field implies another. Adapters ship in P2/P3/C3.
-    endpoint_probe: Literal["plan_documented", "unverified"] = "plan_documented"
-    code_implemented: bool = False
-    runtime_verified: bool = False
-    checked_on: str = CHECKED_ON
-    secret_location: Literal["header", "query", "path"] | None = None
-    category: Literal["news", "economy", "hazards", "space", "security", "tech"] = "news"
-    realtime_tier: Literal["realtime", "near_realtime"] = "near_realtime"
-    skip_embedding: bool = True
-    default_retention_days: int | None = 60
-
-
-# Providers the shared executor can dispatch (ADAPTERS or registered SIMPLE_NATIVE providers).
-# CoinGecko requires an owner-entered API key (connector_rest_credentials) and fails closed without one.
-# Code presence only; runtime_verified stays False.
-DISPATCHABLE = frozenset(
-    {
-        "bbc_world",
-        "vnexpress_business",
-        "dantri_news",
-        "thanhnien_news",
-        "tuoitre_news",
-        "hn_top",
-        "gdelt_economy",
-        "world_bank",
-        "frankfurter",
-        "ecb",
-        "binance",
-        "alternative_me",
-        "usgs",
-        "coinpaprika",
-        "vn_stock",
-        "vietnamworks_jobs",
-        "itviec_jobs",
-        "coingecko",
-        "google_news",
-        "nasa_eonet",
-        "cisa_kev",
-        "sec_edgar",
-        "openalex",
-        "bluesky",
-        # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
-        "aljazeera_world",
-        "npr_news",
-        "fed_press",
-        "gdacs_rss",
-        "lobsters",
-        "github_trending",
-        "wwr_jobs",
-        "us_travel_advisories",
-        "noaa_tsunami",
-        "jma_eqvol",
-        # Built-in table-driven JSON feeds (providers/json_feed.py JSON_FEEDS).
-        "gdacs_events",
-        "nws_alerts",
-        "emsc_quakes",
-        "launch_library",
-        "wikipedia_mostread",
-        "wikipedia_top_views",
-        "bmkg_quakes",
-        "satnogs_observations",
-        "noaa_kp",
-        "open_er_api",
-        "oecd_cli",
-        "iss_position",
-        "disease_sh",
-        "ioda",
-        "nvd",  # bespoke keyless mappers
-        # Keyed free-tier presets (providers/keyed.py); each needs an owner-entered key and fails closed without one.
-        "fred",
-        "finnhub_news",
-        "newsapi",
-        "openweathermap",
-        "openaq",
-        "nasa_firms",
-    }
-)
-
-
-# Hard minimum collection interval (minutes) per provider, the single source of truth for save-time validation,
-# the runtime clamp and the manual "Collect now" cooldown. Rule: unofficial/scraped endpoints and job boards 6 h;
-# data published once a day 24 h; small community sites and strict free tiers 1 h; publisher feeds 30 min;
-# real-time prices/hazards and owner-credential sources keep the 15-minute default (absent from the table).
-PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
-    **dict.fromkeys(
-        (
-            "world_bank",
-            "frankfurter",
-            "ecb",
-            "alternative_me",
-            "open_er_api",
-            "oecd_cli",
-            "wikipedia_mostread",
-            "wikipedia_top_views",
-            "disease_sh",
-            "openalex",
-            "fred",
-            "alpha_vantage",
-        ),
-        1440,
-    ),
-    **dict.fromkeys(
-        (
-            "vn_stock",
-            "vietnamworks_jobs",
-            "itviec_jobs",
-            "wwr_jobs",
-            "github_trending",
-            "launch_library",
-            "satnogs_observations",
-            "us_travel_advisories",
-            "nvd",
-            "sec_edgar",
-            "newsapi",
-            "nasa_firms",
-            "cisa_kev",
-            "arxiv",
-        ),
-        360,
-    ),
-    **dict.fromkeys(
-        (
-            "lobsters",
-            "fed_press",
-            "noaa_kp",
-            "ioda",
-            "open_meteo",
-            "github_releases",
-            "youtube",
-            "huggingface",
-            "openweathermap",
-            "openaq",
-            "finnhub_news",
-        ),
-        60,
-    ),
-    **dict.fromkeys(
-        (
-            "google_news",
-            "gdelt_economy",
-            "bluesky",
-            "gdacs_rss",
-            "gdacs_events",
-            "emsc_quakes",
-            "bmkg_quakes",
-            "noaa_tsunami",
-            "jma_eqvol",
-            "bbc_world",
-            "aljazeera_world",
-            "npr_news",
-            "vnexpress_business",
-            "tuoitre_news",
-            "thanhnien_news",
-            "dantri_news",
-        ),
-        30,
-    ),
-}
 DEFAULT_MIN_INTERVAL_MINUTES = 15
 # Floors at or above this are slow/unofficial sources: manual "Collect now" is rate-limited to the floor too.
 COLLECT_COOLDOWN_FLOOR_MINUTES = 360
@@ -293,68 +84,286 @@ def collection_cooldown_seconds(
     return max(0, int(floor * 60 - (now - last_started).total_seconds()))
 
 
-def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) -> QuotaWindowPolicy:
-    """Build the conservative quota window for a provider whose official daily limit is unpublished."""
-    return QuotaWindowPolicy(
-        "official_unknown_calls_utc_day",
-        kind,  # type: ignore[arg-type]
-        "day",
-        unit,  # type: ignore[arg-type]
-        None,
-        cost,
-        "official_unknown",
-    )
-
-
-def _day(
-    limit: int,
-    kind: str = "provider",
-    unit: str = "http_calls",
-    cost: int = 1,
-    key: str = "pilot_calls_utc_day",
-) -> QuotaWindowPolicy:
-    """Build a UTC-day quota window with a fixed pilot ``limit`` of ``cost``-weighted calls."""
-    return QuotaWindowPolicy(key, kind, "day", unit, limit, cost)  # type: ignore[arg-type]
-
-
-def _spec(
-    id_: str,
-    label: str,
-    category: str,
-    hosts: tuple[str, ...],
-    kind: str,
-    interval: int,
-    terms_url: str,
-    eligibility: str,
-    attribution: str,
-    endpoints: tuple[str, ...],
-    quota: tuple[QuotaWindowPolicy, ...],
-    execution: str = "supported",
-    key: bool = False,
-    secret: str | None = None,
-    implemented: bool = False,
-) -> FreeProviderSpec:
-    """Build one free-provider spec; ``code_implemented`` is true when flagged or the id is dispatchable."""
-    return FreeProviderSpec(
-        id=id_,
-        hosts=hosts,
-        data_kind=kind,  # type: ignore[arg-type]
-        key_required=key,
-        default_interval_minutes=interval,
-        terms_url=terms_url,
-        eligibility=eligibility,  # type: ignore[arg-type]
-        attribution=attribution,
-        execution=execution,  # type: ignore[arg-type]
-        label=label,
-        category=category,  # type: ignore[arg-type]
-        endpoints=endpoints,
-        quota=quota,
-        secret_location=secret,  # type: ignore[arg-type]
-        code_implemented=implemented or id_ in DISPATCHABLE,
-    )
-
-
 _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
+    _spec(
+        "anilist_anime",
+        "AniList anime",
+        "media",
+        ("graphql.anilist.co",),
+        "event",
+        30,
+        "https://anilist.co/terms",
+        "noncommercial",
+        "Data via AniList; link the original AniList entry.",
+        ("/",),
+        (
+            QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 60),
+            _unknown(),
+        ),
+    ),
+    _spec(
+        "anilist_manga",
+        "AniList manga",
+        "media",
+        ("graphql.anilist.co",),
+        "event",
+        60,
+        "https://anilist.co/terms",
+        "noncommercial",
+        "Data via AniList; link the original AniList entry.",
+        ("/",),
+        (
+            QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 60),
+            _unknown(),
+        ),
+    ),
+    _spec(
+        "livechart_episodes",
+        "LiveChart anime episodes",
+        "media",
+        ("www.livechart.me",),
+        "event",
+        30,
+        "https://www.livechart.me/terms",
+        "review",
+        "Data via LiveChart.me; link the original episode.",
+        ("/feeds/episodes",),
+        (_day(48), _unknown()),
+    ),
+    replace(
+        _spec(
+            "tvmaze_schedule",
+            "TVMaze schedule",
+            "media",
+            ("api.tvmaze.com",),
+            "event",
+            60,
+            "https://www.tvmaze.com/api#licensing",
+            "review",
+            "TVMaze (CC BY-SA 4.0); link the original TVMaze episode and disclose processing.",
+            ("/schedule", "/schedule/web", "/shows"),
+            (
+                # Followed shows cost one call per show id (max 20) per sync; TVMaze allows 20 calls/10 s.
+                _day(600),
+                QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 20),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    _spec(
+        "openlibrary_books",
+        "Open Library books",
+        "media",
+        ("openlibrary.org", "covers.openlibrary.org"),
+        "event",
+        360,
+        "https://openlibrary.org/developers/api",
+        "open",
+        "Data via Open Library (CC0 1.0); link the work record.",
+        ("/search.json", "/subjects", "/recentchanges.json", "/works"),
+        (
+            _day(48),
+            QuotaWindowPolicy(
+                "openlibrary_calls_utc_second", "provider", "second", "http_calls", 2
+            ),
+            QuotaWindowPolicy(
+                "openlibrary_calls_utc_minute", "provider", "minute", "http_calls", 150
+            ),
+            _unknown(),
+        ),
+    ),
+    _spec(
+        "gutendex_books",
+        "Gutendex public domain books",
+        "media",
+        ("gutendex.com",),
+        "event",
+        1440,
+        "https://gutendex.com/",
+        "review",
+        "Project Gutenberg public domain ebook metadata; link the original Gutenberg record.",
+        ("/books/",),
+        (
+            _day(48),
+            QuotaWindowPolicy("gutendex_calls_utc_second", "provider", "second", "http_calls", 1),
+            QuotaWindowPolicy("gutendex_calls_utc_minute", "provider", "minute", "http_calls", 60),
+            _unknown(),
+        ),
+    ),
+    replace(
+        _spec(
+            "ann_news",
+            "Anime News Network",
+            "media",
+            ("www.animenewsnetwork.com", "cdn.animenewsnetwork.com"),
+            "event",
+            60,
+            "https://www.animenewsnetwork.com/encyclopedia/api",
+            "review",
+            "Data via Anime News Network; link the original entry.",
+            ("/news/atom.xml", "/encyclopedia/reports.xml"),
+            (
+                QuotaWindowPolicy("ann_calls_utc_second", "provider", "second", "http_calls", 1),
+                QuotaWindowPolicy("ann_calls_utc_minute", "provider", "minute", "http_calls", 60),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "mangaupdates_releases",
+            "MangaUpdates releases",
+            "media",
+            ("api.mangaupdates.com",),
+            "event",
+            60,
+            "https://api.mangaupdates.com/",
+            "review",
+            "Data via MangaUpdates; attribution required and link the original series.",
+            ("/v1/releases/search",),
+            (
+                QuotaWindowPolicy(
+                    "mangaupdates_calls_utc_second", "provider", "second", "http_calls", 1
+                ),
+                QuotaWindowPolicy(
+                    "mangaupdates_calls_utc_minute", "provider", "minute", "http_calls", 60
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "mangadex_releases",
+            "MangaDex releases",
+            "media",
+            ("api.mangadex.org", "uploads.mangadex.org"),
+            "event",
+            60,
+            "https://mangadex.org/compliance",
+            "noncommercial",
+            "Data via MangaDex; attribution required, link original chapters and proxy cover images.",
+            ("/manga", "/chapter"),
+            (
+                QuotaWindowPolicy(
+                    "mangadex_calls_utc_second", "provider", "second", "http_calls", 5
+                ),
+                QuotaWindowPolicy(
+                    "mangadex_calls_utc_minute", "provider", "minute", "http_calls", 300
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "apple_books_rss",
+            "Apple Books charts",
+            "media",
+            ("rss.marketingtools.apple.com",),
+            "event",
+            360,
+            "https://www.apple.com/legal/internet-services/itunes/",
+            "review",
+            "Data via Apple Books; link the original storefront entry.",
+            ("/api/v2/{country}/books/", "/api/v2/{country}/audio-books/"),
+            (
+                QuotaWindowPolicy(
+                    "apple_media_calls_utc_minute", "provider", "minute", "http_calls", 20
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "podcast_rss",
+            "Podcast RSS",
+            "media",
+            ("owner-configured HTTPS feed host", "itunes.apple.com"),
+            "event",
+            60,
+            "https://podcastindex.org/terms",
+            "review",
+            "Podcast publisher attribution and original episode links are preserved.",
+            ("owner-configured / RSS", "/lookup"),
+            (
+                QuotaWindowPolicy(
+                    "podcast_calls_utc_minute", "provider", "minute", "http_calls", 2
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "wikidata_movies",
+            "Wikidata movies",
+            "media",
+            ("query.wikidata.org",),
+            "event",
+            360,
+            "https://www.wikidata.org/wiki/Wikidata:Licensing",
+            "open",
+            "Wikidata is CC0; identify the source and link each item.",
+            ("/sparql",),
+            (
+                QuotaWindowPolicy(
+                    "wikidata_calls_utc_minute", "provider", "minute", "http_calls", 1
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "itunes_movies",
+            "iTunes movie search",
+            "media",
+            ("itunes.apple.com",),
+            "event",
+            360,
+            "https://www.apple.com/legal/internet-services/itunes/",
+            "review",
+            "Data via Apple iTunes; link the original storefront entry.",
+            ("/search",),
+            (
+                QuotaWindowPolicy(
+                    "itunes_media_calls_utc_minute", "provider", "minute", "http_calls", 20
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
+    replace(
+        _spec(
+            "letterboxd_rss",
+            "Letterboxd diary RSS",
+            "media",
+            ("letterboxd.com",),
+            "event",
+            60,
+            "https://letterboxd.com/legal/terms-of-use/",
+            "review",
+            "Data via Letterboxd; link the original film entry.",
+            ("/{username}/rss/",),
+            (
+                QuotaWindowPolicy(
+                    "letterboxd_calls_utc_minute", "provider", "minute", "http_calls", 1
+                ),
+                _unknown(),
+            ),
+        ),
+        checked_on="2026-11-17",
+    ),
     _spec(
         "bbc_world",
         "BBC World News",
@@ -1266,80 +1275,12 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         key=True,
         secret="path",  # noqa: S106  # label/URL/enum value, not a credential
     ),
+    *MEDIA_KEYED_SPECS,
 )
 
 # The built-in expansion (RSS, JSON, bespoke and keyed presets) was checked later than the original 21 presets;
 # the date doubles as the terms version the owner acknowledges, so it must not claim the older check.
 EXPANSION_CHECKED_ON = "2026-10-21"
-_EXPANSION_IDS = frozenset(
-    {
-        "vn_stock",
-        "vietnamworks_jobs",
-        "itviec_jobs",
-        "github_trending",
-        "wwr_jobs",
-        "npr_news",
-        "fed_press",
-        "gdacs_rss",
-        "lobsters",
-        "us_travel_advisories",
-        "noaa_tsunami",
-        "jma_eqvol",
-        "gdacs_events",
-        "nws_alerts",
-        "emsc_quakes",
-        "launch_library",
-        "wikipedia_mostread",
-        "wikipedia_top_views",
-        "bmkg_quakes",
-        "satnogs_observations",
-        "noaa_kp",
-        "open_er_api",
-        "oecd_cli",
-        "iss_position",
-        "disease_sh",
-        "ioda",
-        "nvd",
-        "fred",
-        "finnhub_news",
-        "newsapi",
-        "openweathermap",
-        "openaq",
-        "nasa_firms",
-    }
-)
-_REALTIME_TIER_IDS: frozenset[str] = frozenset(
-    {
-        "binance",
-        "coinpaprika",
-        "coingecko",
-        "usgs",
-        "nws_alerts",
-        "emsc_quakes",
-        "bmkg_quakes",
-        "noaa_tsunami",
-        "jma_eqvol",
-        "iss_position",
-        "gdacs_events",
-        "noaa_kp",
-        "openweathermap",
-        "openaq",
-        "nasa_firms",
-    }
-)
-_LONG_RETENTION_IDS: frozenset[str] = frozenset(
-    {
-        "world_bank",
-        "frankfurter",
-        "ecb",
-        "fred",
-        "oecd_cli",
-        "sec_edgar",
-        "openalex",
-        "cisa_kev",
-        "nvd",
-    }
-)
 
 
 def _finalize_spec(spec: FreeProviderSpec) -> FreeProviderSpec:
@@ -1352,7 +1293,13 @@ def _finalize_spec(spec: FreeProviderSpec) -> FreeProviderSpec:
         Frozen FreeProviderSpec with tier and retention defaults populated.
     """
     is_realtime = spec.id in _REALTIME_TIER_IDS
-    retention_days = 14 if is_realtime else (365 if spec.id in _LONG_RETENTION_IDS else 60)
+    retention_days = (
+        30
+        if spec.id == "youtube_api"
+        else 14
+        if is_realtime
+        else (365 if spec.id in _LONG_RETENTION_IDS else 60)
+    )
     return replace(
         spec,
         checked_on=EXPANSION_CHECKED_ON if spec.id in _EXPANSION_IDS else spec.checked_on,
@@ -1444,65 +1391,6 @@ def get_quota_policies(provider_id: str | None) -> tuple[QuotaWindowPolicy, ...]
     return _NON_FREE_QUOTA_POLICIES.get(provider_id, ())
 
 
-def deployment_use_matches(eligibility: str, deployment_use: str) -> bool:
-    """Whether a catalog eligibility class admits the declared deployment use.
-
-    open admits any declared use (attribution duties remain); personal admits only personal;
-    noncommercial admits personal or noncommercial; review (and anything unrecognised) is always
-    False here because it needs a separate persisted operator review.
-    """
-    if eligibility == "open":
-        return True
-    if eligibility == "personal":
-        return deployment_use == "personal"
-    if eligibility == "noncommercial":
-        return deployment_use in {"personal", "noncommercial"}
-    return False
-
-
-@dataclass(frozen=True)
-class OperatorReview:
-    """Operator-recorded review evidence; never derived from an owner tick."""
-
-    state: Literal["pending", "approved", "rejected"]
-    allowed_use: str | None = None
-    evidence_ref: str | None = None
-    reviewed_terms_version: str | None = None
-
-
-@dataclass(frozen=True)
-class TermsDecision:
-    """Eligibility outcome; ``code`` is a stable machine reason."""
-
-    allowed: bool
-    code: Literal["ok", "terms_not_acknowledged", "use_incompatible", "operator_review_required"]
-
-
-def evaluate_terms(
-    spec: FreeProviderSpec,
-    *,
-    declared_use: str | None,
-    acknowledged_terms_version: str | None,
-    review: OperatorReview | None = None,
-) -> TermsDecision:
-    """Deny by default. The single check shared by catalog readiness and source activation."""
-    if not acknowledged_terms_version or declared_use not in DEPLOYMENT_USES:
-        return TermsDecision(False, "terms_not_acknowledged")
-    if spec.eligibility != "review":
-        ok = deployment_use_matches(spec.eligibility, declared_use)
-        return TermsDecision(ok, "ok" if ok else "use_incompatible")
-    if (
-        review is None
-        or review.state != "approved"
-        or not review.evidence_ref
-        or review.reviewed_terms_version != acknowledged_terms_version
-        or review.allowed_use not in _USE_RANK
-    ):
-        return TermsDecision(False, "operator_review_required")
-    ok = declared_use in _USE_RANK and _USE_RANK[declared_use] <= _USE_RANK[review.allowed_use]
-    return TermsDecision(ok, "ok" if ok else "use_incompatible")
-
-
 # Presets the owner can switch on with one toggle: fixed endpoint (no owner scope), no API key, and an
 # adapter exists. Derived (not listed) so a new fixed-scope spec is exposed automatically. backends has no
 # connector imports, so this module-level import is cycle-safe.
@@ -1530,7 +1418,16 @@ INCREMENTAL_PROVIDERS: frozenset[str] = frozenset(
     if spec.id in BUILTIN_PROVIDERS
     and spec.data_kind in ("news", "event")
     and spec.id not in MEASUREMENT_PROVIDER_IDS
-) | {"google_news"}
+) | {
+    "google_news",
+    "tmdb_movies",
+    "tmdb_tv",
+    "trakt_media",
+    "omdb_lookup",
+    "mal_anime",
+    "mal_manga",
+    "google_books",
+}
 
 # Optional per-sync selection options accepted only by INCREMENTAL_PROVIDERS (see modules.connectors.selection).
 COLLECTION_FILTER_FIELDS = frozenset(

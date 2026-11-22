@@ -2,6 +2,8 @@ import type { useTranslations } from 'next-intl';
 
 /** Generic template kind (`templateTypes.<kind>`) shown for each available renderer. */
 export const TEMPLATE_KIND_BY_RENDERER: Record<string, string> = {
+  media_feed: 'media_shelf',
+  media_calendar: 'release_calendar',
   news_feed: 'feed',
   telegram_feed: 'messageList',
   text_panel: 'text',
@@ -26,6 +28,8 @@ export const TEMPLATE_KIND_BY_RENDERER: Record<string, string> = {
  * Ids outside a table (new renderers) fall back to the raw id or an empty description.
  */
 const RENDERER_NAME_KEY = {
+  media_feed: 'renderers.media_feed',
+  media_calendar: 'renderers.media_calendar',
   news_feed: 'renderers.news_feed',
   telegram_feed: 'renderers.telegram_feed',
   text_panel: 'renderers.text_panel',
@@ -47,6 +51,8 @@ const RENDERER_NAME_KEY = {
   github_project: 'renderers.github_project',
 } as const;
 const TEMPLATE_NAME_KEY = {
+  media_shelf: 'templateTypes.media_shelf.name',
+  release_calendar: 'templateTypes.release_calendar.name',
   feed: 'templateTypes.feed.name',
   messageList: 'templateTypes.messageList.name',
   text: 'templateTypes.text.name',
@@ -66,6 +72,8 @@ const TEMPLATE_NAME_KEY = {
   activity: 'templateTypes.activity.name',
 } as const;
 const TEMPLATE_DESCRIPTION_KEY = {
+  media_shelf: 'templateTypes.media_shelf.description',
+  release_calendar: 'templateTypes.release_calendar.description',
   feed: 'templateTypes.feed.description',
   messageList: 'templateTypes.messageList.description',
   text: 'templateTypes.text.description',

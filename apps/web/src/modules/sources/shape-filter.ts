@@ -10,6 +10,8 @@ const SHAPES: readonly DataShape[] = [
   'project_activity',
   'weather',
   'series',
+  'job',
+  'media',
 ];
 
 /**

@@ -139,7 +139,7 @@ html.dark {
   --chart-1: #77c69c;
   --chart-2: #edf3ee;
   --chart-3: #8a948e;
-  --chart-4: #4a534d;
+  --chart-4: #737d76;
   --chart-5: #77c69c;
 }
 
@@ -215,6 +215,342 @@ html.dark[data-accent='plum'] {
 }
 .dark .accent-swatch-plum {
   background: #e07aa5;
+}
+
+/* Skin picker preview swatch: shows the terminal look in any skin/theme (modules/account/skin-picker.css).
+   Values mirror docs/design-system/tokens.json skins.terminal (bg, text, accent). Not a :root block, so the
+   design-system parity test (first :root / html.dark blocks only) is unaffected. */
+html {
+  --skin-preview-terminal-bg: #0d1117;
+  --skin-preview-terminal-text: #c9d1d9;
+  --skin-preview-terminal-accent: #3fb950;
+}
+
+/* ===================================================================== Terminal skin
+   Opt-in per device: `data-skin="terminal"` on <html> (core/skin.ts). Every rule here is scoped under
+   html[data-skin='terminal'], so the default skin computes exactly as before. Terminal is always dark, so its
+   values are set directly. Values mirror docs/design-system/tokens.json `skins.terminal`.
+   Specificity: `html.dark[data-accent=x]` is (0,2,1). The (0,2,1) selectors below come later in the file and win ties,
+   so the terminal palette holds even when an accent or the dark class is set. */
+html[data-skin='terminal'],
+html[data-skin='terminal'].dark,
+html[data-skin='terminal'][data-accent],
+html[data-skin='terminal'].dark[data-accent] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --surface: #0f141a;
+  --raised: #161b22;
+  --active: #1f2630;
+  --text: #c9d1d9;
+  --strong: #e6edf3;
+  --muted: #8b949e;
+  --line: #232a33;
+  --rule: #161b22;
+  --control: #30363d;
+  --primary: #3fb950;
+  --primary-foreground: #0d1117;
+  --accent: #3fb950;
+  --info: #58a6ff;
+  --warning: #d29922;
+  --danger: #f85149;
+  --positive: #3fb950;
+  --negative: #f85149;
+  --status-success: #3fb950;
+  --status-warning: #d29922;
+  --pill-positive-bg: #12261a;
+  --pill-positive-fg: #8fe0b0;
+  --pill-negative-bg: #2d1416;
+  --pill-negative-fg: #ffb3b9;
+  --pill-warning-bg: #2b2111;
+  --pill-warning-fg: #fcd34d;
+  --destructive-foreground: #0d1117;
+  --chart-1: #3fb950;
+  --chart-2: #58a6ff;
+  --chart-3: #8b949e;
+  --chart-4: #6e7681;
+  --chart-5: #d29922;
+  --scrim: rgb(0 0 0 / 0.6);
+  --shadow-popover: none;
+}
+
+/* Mono everywhere. --font-mono-skin is the JetBrains Mono variable set on <html> by the root layout. */
+html[data-skin='terminal'] body {
+  font-family: var(--font-mono-skin), 'JetBrains Mono', 'Cascadia Code', ui-monospace, Consolas, monospace;
+}
+
+/* Tailwind rounded-* compile to literal px, so zero them globally. Full-round avatars and radio dots keep their shape. */
+html[data-skin='terminal'] *:not(.rounded-full):not([data-slot='radio-group-item']) {
+  border-radius: 0 !important;
+}
+
+html[data-skin='terminal'] * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--control) transparent;
+}
+
+html[data-skin='terminal'] :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Ornaments are pseudo-elements only, so the text they add is decorative and screen readers do not depend on it. */
+html[data-skin='terminal'] .workspace-main h1::before {
+  content: '# ' / '';
+  color: var(--muted);
+}
+
+html[data-skin='terminal'] table th {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* Page title and tab row follow the demo's 1.55 body leading: 22px / 34px title, 13px / 38px tabs. */
+html[data-skin='terminal'] .workspace-main h1 {
+  font-size: 22px;
+  line-height: 1.55;
+}
+html[data-skin='terminal'] [data-slot='tabs-trigger'] {
+  line-height: 1.55;
+}
+
+/* Gadget hero figures: 34px bold (demo .metric); the compact figure keeps 24px. Layout, shared by both skins. */
+.text-figure {
+  font-size: 34px;
+  line-height: 1.1;
+  font-weight: 700;
+}
+.text-figure-sm {
+  font-weight: 700;
+}
+
+/* Gadget tables (demo table.data): 8px header and 9px body cell padding, hairline rule under each row. Shared by both
+   skins; the uppercase mono header (`table th` above) stays terminal-only. */
+.dashboard-gadget-body table th {
+  padding: 8px 10px;
+  font-weight: 500;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.dashboard-gadget-body table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.dashboard-gadget-body table tr:hover td {
+  background: var(--active);
+}
+
+/* Bracketed buttons: [ label ]. Ghost, link, bare and icon buttons stay plain. The search trigger and pressed toggle
+   chips draw their own ornaments, so they are excluded too. */
+html[data-skin='terminal']
+  [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']):not([data-variant='bare']):not([data-size='icon']):not(
+    .search-trigger
+  ):not(:is(.dashboard-gadget-body, #dashboard-overview-map) [aria-pressed])::before {
+  content: '[' / '';
+  opacity: 0.55;
+}
+
+html[data-skin='terminal']
+  [data-slot='button']:not([data-variant='ghost']):not([data-variant='link']):not([data-variant='bare']):not([data-size='icon']):not(
+    .search-trigger
+  ):not(:is(.dashboard-gadget-body, #dashboard-overview-map) [aria-pressed])::after {
+  content: ']' / '';
+  opacity: 0.55;
+}
+
+/* Unlayered on purpose: these must beat Tailwind utilities and the @layer components rules in the default CSS.
+   Sizing sits inside (pointer: fine) so coarse-pointer touch targets keep the 44px minimum from the utilities. */
+@media (pointer: fine) {
+  html[data-skin='terminal'] [data-slot='button']:not([data-variant='bare']):not([data-size='icon']) {
+    min-height: 34px;
+    padding: 0 12px;
+    font-size: 13px;
+    gap: 6px;
+  }
+  html[data-skin='terminal'] [data-slot='button'][data-variant='default'] {
+    font-weight: 700;
+  }
+  /* Same specificity as the general size rule above; declared later so it wins. */
+  html[data-skin='terminal'] [data-slot='button'][data-size='sm']:not([data-variant='bare']) {
+    min-height: 26px;
+    height: 26px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+}
+
+/* Toggle chips inside gadgets and the overview map (compact layout, both skins). Icon-only toggles (bookmark) are left
+   alone. Pressed is the active tint with accent ink; the terminal skin draws `[ ]` / `[x]` glyphs instead of the tint. */
+@media (pointer: fine) {
+  :is(.dashboard-gadget-body, #dashboard-overview-map) [data-slot='button'][aria-pressed]:not([data-size='icon']) {
+    min-height: 28px;
+    height: 28px;
+    padding: 0 6px;
+    font-size: 12px;
+    font-weight: 400;
+    background: transparent;
+    border-color: transparent;
+    color: var(--muted);
+  }
+  html:not([data-skin='terminal'])
+    :is(.dashboard-gadget-body, #dashboard-overview-map)
+    [data-slot='button'][aria-pressed='true']:not([data-size='icon']) {
+    background: var(--active);
+    color: var(--accent);
+  }
+  html[data-skin='terminal']
+    :is(.dashboard-gadget-body, #dashboard-overview-map)
+    [data-slot='button'][aria-pressed='true']:not([data-size='icon']) {
+    color: var(--accent);
+  }
+  html[data-skin='terminal']
+    :is(.dashboard-gadget-body, #dashboard-overview-map)
+    [data-slot='button'][aria-pressed]:not([data-size='icon'])::before {
+    content: '[ ] ' / '';
+    color: var(--control);
+  }
+  html[data-skin='terminal']
+    :is(.dashboard-gadget-body, #dashboard-overview-map)
+    [data-slot='button'][aria-pressed='true']:not([data-size='icon'])::before {
+    content: '[x] ' / '';
+    color: var(--accent);
+  }
+}
+
+/* Focus: accent border inside the field, outline pulled inside by 1px. */
+html[data-skin='terminal'] :is(input, textarea, select, [data-slot='select-trigger']):focus-visible {
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+/* Fields: flat base colour, mono 13px. Padding stays with the component so icon-prefixed inputs keep their inset. */
+/* Fields: flat base colour, mono 13px, tight padding. */
+html[data-skin='terminal'] :is(.input, [data-slot='textarea']) {
+  background: var(--bg);
+  font-size: 13px;
+}
+
+/* Tabs: an underline row, no pill or shadow. Active tab gets strong text and an accent underline. */
+html[data-skin='terminal'] [data-slot='tabs-list'] {
+  height: auto;
+  padding: 0;
+  gap: 4px;
+  background: transparent;
+}
+
+html[data-skin='terminal'] [data-slot='tabs-trigger'] {
+  height: auto;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+  border-bottom: 2px solid transparent;
+}
+
+html[data-skin='terminal'] [data-slot='tabs-trigger'][data-state='active'] {
+  color: var(--strong);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+/* Dashboard tabs row: the tab strip hugs its tabs so "+ Add tab" sits beside them, not at the far edge. */
+html[data-skin='terminal'] div:has(> [data-slot='tabs-list']) {
+  flex: 0 1 auto;
+}
+
+/* The add-tab button is the row's trailing sibling: muted, borderless, no brackets. Its bracket ::before/::after
+   are reset with !important because the bracket rule above has higher specificity. */
+html[data-skin='terminal'] div:has(> [data-slot='tabs-list']) + [data-slot='button'] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+html[data-skin='terminal'] div:has(> [data-slot='tabs-list']) + [data-slot='button']::before,
+html[data-skin='terminal'] div:has(> [data-slot='tabs-list']) + [data-slot='button']::after {
+  content: none !important;
+}
+
+/* Top bar: desktop chrome is 52px with 24px side padding. Mobile keeps its compact bar. */
+@media (min-width: 641px) {
+  html[data-skin='terminal'] .topbar {
+    min-height: 52px;
+    padding-inline: 24px;
+  }
+}
+
+/* Workspace switcher: `[ name ]` brackets around the select value. */
+html[data-skin='terminal'] .topbar [data-slot='select-trigger']::before {
+  content: '[ ' / '';
+  opacity: 0.55;
+}
+
+html[data-skin='terminal'] .topbar [data-slot='select-trigger']::after {
+  content: ' ]' / '';
+  opacity: 0.55;
+}
+
+/* Top-bar search: 13px mono, 36px high, kbd hint pushed to the right edge. */
+html[data-skin='terminal'] .search-trigger {
+  font-size: 13px;
+  font-weight: 400;
+  min-height: 36px;
+  padding: 0 10px 0 12px;
+  gap: 10px;
+}
+
+@media (min-width: 641px) {
+  html[data-skin='terminal'] .search-trigger {
+    min-width: 280px;
+  }
+}
+
+html[data-skin='terminal'] .search-trigger kbd {
+  margin-left: auto;
+  font-size: 11px;
+  border-color: var(--control);
+}
+
+/* Badges: flat, no pill. A status dot leads the word. Destructive is a red inset outline, not a filled chip. */
+html[data-skin='terminal'] [data-slot='badge'] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+  padding: 0;
+}
+
+html[data-skin='terminal'] [data-slot='badge']::before {
+  content: '● ' / '';
+  font-size: 10px;
+}
+
+html[data-skin='terminal'] [data-slot='badge'][data-variant='destructive'] {
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1px var(--danger);
+}
+
+/* Active tab marker: `*` before the label. */
+html[data-skin='terminal'] [data-slot='tabs-trigger'][data-state='active']::before {
+  content: '*' / '';
+  color: var(--accent);
+  margin-right: 4px;
+}
+
+/* Dialogs: flat 1px frame, no floating shadow. */
+html[data-skin='terminal'] [data-slot='dialog-content'] {
+  border: 1px solid var(--control);
+  box-shadow: none;
+}
+
+/* Terminal adds no motion of its own. Inherited transitions and animations go near-instant for reduced-motion users. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-skin='terminal'] *,
+  html[data-skin='terminal'] *::before,
+  html[data-skin='terminal'] *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Legacy rules are layered so Tailwind utilities (unlayered-over-layers) win. */
@@ -359,11 +695,11 @@ html.dark[data-accent='plum'] {
     font-size: 13px;
   }
   .filters-toggle::after {
-    content: '+';
+    content: '+' / '';
     float: inline-end;
   }
   .filters-toggle[aria-expanded='true']::after {
-    content: '-';
+    content: '-' / '';
   }
   @media (max-width: 719px) {
     .filters-toggle {

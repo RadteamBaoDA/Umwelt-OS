@@ -1,0 +1,70 @@
+/*
+ * Spinner skin. Default skin shows the animated lucide icon; the terminal skin swaps it for a braille glyph
+ * stepped through its frames by a CSS keyframe on ::before (no JS interval). Reduced motion freezes the first frame.
+ */
+
+.spinner-glyph {
+  display: none;
+}
+
+html[data-skin='terminal'] .spinner-icon {
+  display: none;
+}
+
+html[data-skin='terminal'] .spinner-glyph {
+  display: inline-block;
+  font-family: inherit;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+html[data-skin='terminal'] .spinner-glyph::before {
+  content: '⠋';
+  animation: spinner-braille 1s steps(1, end) infinite;
+}
+
+@keyframes spinner-braille {
+  0% {
+    content: '⠋';
+  }
+  10% {
+    content: '⠙';
+  }
+  20% {
+    content: '⠹';
+  }
+  30% {
+    content: '⠸';
+  }
+  40% {
+    content: '⠼';
+  }
+  50% {
+    content: '⠴';
+  }
+  60% {
+    content: '⠦';
+  }
+  70% {
+    content: '⠧';
+  }
+  80% {
+    content: '⠇';
+  }
+  90% {
+    content: '⠏';
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-skin='terminal'] .spinner-glyph::before {
+    animation: none;
+  }
+}
+
+/* The icon keeps Tailwind's animate-spin for route checks; reduced motion stops it (the glyph is handled above). */
+@media (prefers-reduced-motion: reduce) {
+  .spinner-icon.animate-spin {
+    animation: none;
+  }
+}

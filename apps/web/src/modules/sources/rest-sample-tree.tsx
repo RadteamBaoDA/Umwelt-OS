@@ -58,14 +58,14 @@ export function pathForTarget(target: RestTarget, clicked: string, itemsPath: st
 function Node({ name, path, value, onPick }: { name: string; path: string; value: unknown; onPick: (path: string) => void }) {
   const isObj = typeof value === 'object' && value !== null;
   const key = (
-    <button type="button" className="font-mono text-accent underline-offset-2 hover:underline" onClick={() => onPick(path)}>
+    <button type="button" className="font-mono text-data underline-offset-2 hover:underline" onClick={() => onPick(path)}>
       {name}
     </button>
   );
   if (!isObj) {
     return (
       <div className="pl-4">
-        {key}: <span className="text-muted">{JSON.stringify(value)}</span>
+        {key}: <span className="text-muted-foreground">{JSON.stringify(value)}</span>
       </div>
     );
   }
@@ -73,7 +73,7 @@ function Node({ name, path, value, onPick }: { name: string; path: string; value
   return (
     <details className="pl-4">
       <summary className="cursor-pointer">
-        {key} <span className="text-muted">{Array.isArray(value) ? `[${entries.length}]` : '{...}'}</span>
+        {key} <span className="text-muted-foreground">{Array.isArray(value) ? `[${entries.length}]` : '{...}'}</span>
       </summary>
       {entries.map(([k, v]) => (
         <Node key={k} name={k} path={`${path}.${k}`} value={v} onPick={onPick} />
@@ -104,7 +104,7 @@ export function RestSampleTree({
         {t('rest.status')}: {result.status_code}
       </p>
       {result.truncated && (
-        <p className="m-0 text-muted" role="status">
+        <p className="m-0 text-muted-foreground" role="status">
           {t('rest.truncated')}
         </p>
       )}
@@ -122,7 +122,7 @@ export function RestSampleTree({
           ))}
         </select>
       </label>
-      <p className="m-0 text-muted">{t('rest.hint')}</p>
+      <p className="m-0 text-muted-foreground">{t('rest.hint')}</p>
       <div className="max-h-72 overflow-auto rounded-md border border-line bg-surface p-2">
         {root.map(([k, v]) => (
           <Node key={k} name={k} path={k} value={v} onPick={(p) => onFill(target, pathForTarget(target, p, itemsPath))} />

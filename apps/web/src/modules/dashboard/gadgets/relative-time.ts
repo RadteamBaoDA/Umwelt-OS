@@ -46,3 +46,22 @@ export function bucketByDay(timestamps: Array<string | null | undefined>): Chart
   }
   return points;
 }
+
+/**
+ * Formats an ISO timestamp as a compact age for dense terminal rows: `0m`, `5m`, `2h`, `3d`, `2mo` (locale-neutral
+ * unit letters). Future or unparseable timestamps clamp to `0m` / ''.
+ *
+ * @param iso ISO timestamp; unparseable values return an empty string.
+ * @param now Epoch ms treated as "now" (defaults to the current time).
+ * @returns Compact age, or '' when the timestamp is invalid.
+ */
+export function formatCompactAgo(iso: string | null | undefined, now: number = Date.now()): string {
+  const ms = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(ms)) return '';
+  const minutes = Math.max(0, Math.round((now - ms) / 60_000));
+  if (minutes < 1) return '0m';
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+  if (minutes < 43_200) return `${Math.round(minutes / 1440)}d`;
+  return `${Math.round(minutes / 43_200)}mo`;
+}

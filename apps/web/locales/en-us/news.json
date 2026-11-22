@@ -1,5 +1,7 @@
 {
   "title": "News stories",
+  "log.new": "NEW",
+  "log.info": "INFO",
   "sourceSelectionRequired": "Choose at least one source for this News gadget before stories can be shown.",
   "configureSources": "Configure data sources",
   "close": "Close",

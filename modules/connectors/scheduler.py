@@ -51,7 +51,8 @@ from modules.connectors.models import (
     ConnectorSchedule,
     ConnectorWorkspaceDispatch,
 )
-from modules.connectors.selection import RUN_DEADLINE_SECONDS
+from modules.connectors.selection import RUN_DEADLINE_SECONDS as RUN_DEADLINE_SECONDS
+from modules.connectors.selection import run_deadline_seconds
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
@@ -535,6 +536,20 @@ async def _select_admission_slot(
     return slot
 
 
+def _busy_defer_delta(source: object) -> timedelta:
+    """Return the defer interval for a request that found no free admission slot.
+
+    Realtime-tier providers retry after ``REALTIME_BUSY_DEFER``; all others after ``BUSY_DEFER``.
+    Pure lookup on the already-loaded source row; no I/O.
+    """
+    from modules.connectors.provider_specs import get_realtime_tier
+
+    tier = get_realtime_tier(
+        getattr(source, "provider", None), getattr(source, "configuration", None)
+    )
+    return REALTIME_BUSY_DEFER if tier == "realtime" else BUSY_DEFER
+
+
 async def admit_collection_request(
     session: AsyncSession,
     request_id: UUID,
@@ -545,7 +560,7 @@ async def admit_collection_request(
 
     Busy source, workspace or capacity defers without burning an attempt. Revision changes
     cancel the request; the sixth admission fails it. Commits before any provider I/O. The admission
-    stamps ``attempt_started_at`` and ``attempt_deadline_at`` (now + run deadline).
+    stamps ``attempt_started_at`` and ``attempt_deadline_at`` (now + the provider's run deadline).
     """
     peek = await session.get(ConnectorCollectionRequest, request_id)
     if peek is None or peek.status != "queued":
@@ -599,17 +614,7 @@ async def admit_collection_request(
         return None
     slot = await _select_admission_slot(session, request, now)
     if slot is None:
-        from modules.connectors.provider_specs import get_realtime_tier
-
-        defer_delta = (
-            REALTIME_BUSY_DEFER
-            if get_realtime_tier(
-                getattr(source, "provider", None),
-                getattr(source, "configuration", None),
-            )
-            == "realtime"
-            else BUSY_DEFER
-        )
+        defer_delta = _busy_defer_delta(source)
         await session.rollback()
         await _defer(session, request_id, defer_delta)
         return None
@@ -625,7 +630,7 @@ async def admit_collection_request(
     request.error_code = None
     # Stamped at admission so the manual-collect cooldown and the overdue-attempt metric have data.
     request.attempt_started_at = now
-    request.attempt_deadline_at = now + timedelta(seconds=RUN_DEADLINE_SECONDS)
+    request.attempt_deadline_at = now + timedelta(seconds=run_deadline_seconds(source.provider))
     try:
         await session.flush()
     except IntegrityError:
@@ -1072,26 +1077,17 @@ async def _recover_expired_slots(factory: async_sessionmaker[AsyncSession], now:
     return len(expired)
 
 
-async def _create_due_requests(
-    factory: async_sessionmaker[AsyncSession],
-    now: datetime,
-    multi: bool,
-    per_workspace: int = 1,
-) -> int:
-    """Create up to ``per_workspace`` scheduled requests per workspace for up to 50 workspaces.
+async def _consider_due_schedules(
+    factory: async_sessionmaker[AsyncSession], now: datetime, per_workspace: int
+) -> list[Any]:
+    """Pick due native schedules fairly, log lag, and commit their consideration stamps.
 
-    Extra requests only deepen the durable queue: the partial unique index on
-    connector_admission_slots.workspace_id keeps effective concurrency at one running
-    collection per workspace, and the global slots stay the fixed seeded pair (1, 2).
-    A schedule overdue by more than one interval is logged (at most once per hour per schedule per
-    process) so lag is visible without flooding the log every tick.
-
-    Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
-    consideration is committed before scope work so a busy workspace cannot starve others. The
-    consideration upsert carries one row per distinct workspace, however many of its sources were picked.
+    Returns at most ``TICK_WORKSPACES * per_workspace`` rows of
+    ``(source_id, workspace_id, next_due_at, interval_minutes)`` ordered by persisted
+    ``last_considered_at``; an empty list means nothing was due and nothing was written.
+    Stamps ``last_considered_at`` on the picked schedules and one dispatch row per workspace in a
+    single committed transaction, before any per-scope work, so a busy workspace cannot starve others.
     """
-    from modules.settings.public import module_is_enabled
-
     async with factory() as session:
         picked = list(
             (
@@ -1113,7 +1109,7 @@ async def _create_due_requests(
             ).all()
         )
         if not picked:
-            return 0
+            return picked
         for lag_row in picked:
             last_warned = _lag_warned_at.get(lag_row[0])
             if now - lag_row[2] > timedelta(minutes=lag_row[3]) and (
@@ -1145,6 +1141,32 @@ async def _create_due_requests(
             )
         )
         await session.commit()
+    return picked
+
+
+async def _create_due_requests(
+    factory: async_sessionmaker[AsyncSession],
+    now: datetime,
+    multi: bool,
+    per_workspace: int = 1,
+) -> int:
+    """Create up to ``per_workspace`` scheduled requests per workspace for up to 50 workspaces.
+
+    Extra requests only deepen the durable queue: the partial unique index on
+    connector_admission_slots.workspace_id keeps effective concurrency at one running
+    collection per workspace, and the global slots stay the fixed seeded pair (1, 2).
+    A schedule overdue by more than one interval is logged (at most once per hour per schedule per
+    process) so lag is visible without flooding the log every tick.
+
+    Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
+    consideration is committed before scope work so a busy workspace cannot starve others. The
+    consideration upsert carries one row per distinct workspace, however many of its sources were picked.
+    """
+    from modules.settings.public import module_is_enabled
+
+    picked = await _consider_due_schedules(factory, now, per_workspace)
+    if not picked:
+        return 0
     created = 0
     for source_id, workspace_id, _due, _interval in cast(
         "list[tuple[UUID, UUID, datetime, int]]", picked

@@ -370,3 +370,138 @@ def test_fingerprint_changes_only_with_native_params():
         po.native_fingerprint("tuoitre_news", {}) is None
         and po.native_fingerprint("usgs", {}) is None
     )
+
+
+def test_media_option_validation_and_iso_countries():
+    from typing import get_args
+
+    countries = set(get_args(po.IsoCountry))
+    assert {
+        "TW",
+        "HK",
+        "IE",
+        "NZ",
+        "SE",
+        "NO",
+        "DK",
+        "FI",
+        "PL",
+        "PT",
+        "BE",
+        "AT",
+        "AR",
+    } <= countries
+
+    for field in (
+        "media_countries",
+        "media_genres",
+        "media_languages",
+        "media_formats",
+        "content_ratings",
+    ):
+        with pytest.raises(ValueError, match="Selections must be unique"):
+            po.validate_options("anilist_anime", {field: ["a", "a"]})
+
+    for bad_rating in (-0.5, 100.1, float("nan"), float("inf"), True):
+        with pytest.raises(ValueError, match="min_rating"):
+            po.validate_options("anilist_anime", {"min_rating": bad_rating})
+
+    for bad_year in (1799, 2101, True, "2026"):
+        with pytest.raises(ValueError, match="release_year"):
+            po.validate_options("anilist_anime", {"release_year": bad_year})
+
+    po.validate_options(
+        "anilist_anime",
+        {
+            "media_countries": ["JP", "TW"],
+            "media_genres": ["action", "sci_fi"],
+            "min_rating": 82.5,
+            "release_year": 2026,
+        },
+    )
+
+
+def test_tvmaze_global_mode_requires_web_schedule_without_country():
+    for config in (
+        {"tvmaze_global": True},
+        {"tvmaze_mode": "schedule_country", "tvmaze_global": True},
+        {"tvmaze_mode": "schedule_web", "tvmaze_global": True, "media_country": "GB"},
+    ):
+        with pytest.raises(ValueError, match="Global channels"):
+            po.validate_options("tvmaze_schedule", config)
+    po.validate_options("tvmaze_schedule", {"tvmaze_mode": "schedule_web", "tvmaze_global": True})
+
+
+def test_filter_media_records_across_all_dimensions():
+    def rec(rid: str, sf: dict) -> IngestionRecord:
+        return IngestionRecord(
+            provider_id=rid,
+            content=rid,
+            observed_at=NOW,
+            metadata={"provider_record": {"source_fields": sf}},
+        )
+
+    jp = rec(
+        "jp",
+        {
+            "country": "JP",
+            "language": "ja",
+            "genres": ["action", "sci_fi"],
+            "format": "tv",
+            "release_year": 2026,
+            "release_season": "Fall 2026",
+            "content_rating": "pg_13",
+            "rating": 88.0,
+        },
+    )
+    kr = rec(
+        "kr",
+        {
+            "country": "KR",
+            "language": "ko",
+            "genres": ["romance"],
+            "format": "manhwa",
+            "release_year": 2025,
+            "content_rating": "mature",
+            "rating": 72.0,
+        },
+    )
+    sparse = rec("sparse", {"title": "Unannotated"})
+
+    rows = [jp, kr, sparse]
+    assert [r.provider_id for r in po.filter_media_records({"media_country": "JP"}, rows)] == ["jp"]
+    assert [
+        r.provider_id for r in po.filter_media_records({"media_countries": ["JP", "KR"]}, rows)
+    ] == ["jp", "kr"]
+    assert [r.provider_id for r in po.filter_media_records({"media_genres": ["sci_fi"]}, rows)] == [
+        "jp"
+    ]
+    assert [r.provider_id for r in po.filter_media_records({"media_languages": ["ko"]}, rows)] == [
+        "kr"
+    ]
+    assert [
+        r.provider_id for r in po.filter_media_records({"media_formats": ["manhwa"]}, rows)
+    ] == ["kr"]
+    assert [r.provider_id for r in po.filter_media_records({"release_year": 2026}, rows)] == ["jp"]
+    assert [r.provider_id for r in po.filter_media_records({"anime_season": "fall"}, rows)] == [
+        "jp"
+    ]
+    assert [
+        r.provider_id for r in po.filter_media_records({"content_ratings": ["pg_13"]}, rows)
+    ] == ["jp"]
+    assert [r.provider_id for r in po.filter_media_records({"exclude_adult": True}, rows)] == [
+        "jp",
+        "sparse",
+    ]
+    assert [r.provider_id for r in po.filter_media_records({"min_rating": 80.0}, rows)] == ["jp"]
+    assert [
+        r.provider_id
+        for r in po.filter_media_records({"media_country": "JP"}, rows, keep_missing=True)
+    ] == ["jp", "sparse"]
+    # filter_records delegates to filter_media_records when media options are present.
+    assert [
+        r.provider_id
+        for r in po.filter_records(
+            "anilist_anime", {"media_countries": ["JP"], "min_rating": 85.0}, rows
+        )
+    ] == ["jp"]

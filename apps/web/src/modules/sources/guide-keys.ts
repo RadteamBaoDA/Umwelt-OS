@@ -1,8 +1,48 @@
+/** Literal `sources` keys of the guide's keyless vs API-key rows per provider id; a table keeps every key type-checked. */
+export const KEY_ACCESS_KEYS = {
+  wikidata_movies: { keyless: 'guideAccess.wikidata.keyless', keyed: 'guideAccess.wikidata.keyed' },
+  tmdb_movies: { keyless: 'guideAccess.tmdbMovies.keyless', keyed: 'guideAccess.tmdbMovies.keyed' },
+  tmdb_tv: { keyless: 'guideAccess.tmdbTv.keyless', keyed: 'guideAccess.tmdbTv.keyed' },
+} as const;
+
+/** Literal keys of the guide's "Keyless" vs "With an API key" rows for one provider; undefined when it has none. */
+export function keyAccessKeys(providerId: string) {
+  return Object.hasOwn(KEY_ACCESS_KEYS, providerId) ? KEY_ACCESS_KEYS[providerId as keyof typeof KEY_ACCESS_KEYS] : undefined;
+}
+
 /**
  * Literal `sources` catalog keys of the setup-guide steps per provider id (`generic` and `genericKeyed` are the
  * fallbacks). Tables instead of runtime key building keep every key type-checked; add a row with each new guide.
  */
 export const GUIDE_STEP_KEYS = {
+  tmdb_movies: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  tmdb_tv: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  trakt_media: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  omdb_lookup: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  mal_anime: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  mal_manga: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  google_books: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  hardcover_books: ['guideSteps.hardcover.s1', 'guideSteps.hardcover.s2', 'guideSteps.media.s3'],
+  youtube_api: ['guideSteps.youtubeApi.s1', 'guideSteps.youtubeApi.s2', 'guideSteps.media.s3'],
+  podcast_index: ['guideSteps.podcastIndex.s1', 'guideSteps.podcastIndex.s2', 'guideSteps.media.s3'],
+  listenbrainz_releases: ['guideSteps.listenbrainz.s1', 'guideSteps.listenbrainz.s2', 'guideSteps.media.s3'],
+  steam_releases: ['guideSteps.steam.s1', 'guideSteps.steam.s2', 'guideSteps.media.s3'],
+  igdb_games: ['guideSteps.igdb.s1', 'guideSteps.igdb.s2', 'guideSteps.media.s3'],
+  anilist_anime: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  anilist_manga: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  livechart_episodes: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  ann_news: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  mangaupdates_releases: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  mangadex_releases: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  openlibrary_books: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  gutendex_books: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  apple_books_rss: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  wikidata_movies: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  itunes_movies: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  letterboxd_rss: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  podcast_rss: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+  tvmaze_schedule: ['guideSteps.media.s1', 'guideSteps.media.s2', 'guideSteps.media.s3'],
+
   generic: ['guideSteps.generic.s1', 'guideSteps.generic.s2', 'guideSteps.generic.s3', 'guideSteps.generic.s4'],
   genericKeyed: ['guideSteps.genericKeyed.s1', 'guideSteps.genericKeyed.s2', 'guideSteps.genericKeyed.s3', 'guideSteps.genericKeyed.s4'],
   rss: ['guideSteps.rss.s1', 'guideSteps.rss.s2', 'guideSteps.rss.s3', 'guideSteps.rss.s4'],
@@ -42,6 +82,15 @@ export const GUIDE_STEP_KEYS = {
 
 /** Literal `sources` catalog key of the input rule shown under each typed source field (see `ScopeHint`). */
 export const SCOPE_HINT_KEY = {
+  youtube_channels: 'scopeHint.youtube_channels',
+  youtube_handles: 'scopeHint.youtube_handles',
+  youtube_playlist_ids: 'scopeHint.youtube_playlist_ids',
+  youtube_video_category_id: 'scopeHint.youtube_video_category_id',
+  letterboxd_username: 'scopeHint.letterboxd_username',
+  search_terms: 'scopeHint.search_terms',
+  openlibrary_subject: 'scopeHint.openlibrary_subject',
+  openlibrary_query: 'scopeHint.openlibrary_query',
+
   news_query: 'scopeHint.news_query',
   scholarly_query: 'scopeHint.scholarly_query',
   sec_cik: 'scopeHint.sec_cik',

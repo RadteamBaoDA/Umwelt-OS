@@ -2,7 +2,8 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, Loader2Icon } from 'lucide-react';
+import { AlertCircleIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { Button } from '@/components/ui/button';
 import type { ToolStep } from './api';
 
@@ -140,7 +141,7 @@ export function ChatStepList({ steps: allSteps, streaming }: { steps: ToolStep[]
           {steps.map((step, index) => (
             <li key={`${step.tool}:${index}`} data-state={step.state} className="flex items-center gap-2">
               {step.state === 'running' ? (
-                <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+                <Spinner className="size-3.5" />
               ) : isStepFailed(step) ? (
                 <AlertCircleIcon className="size-3.5 text-danger" aria-hidden="true" />
               ) : (

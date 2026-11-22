@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 import { FeedGadget, type FeedStreamItem } from './feed-gadget';
 
+const mocks = vi.hoisted(() => ({ isOwner: true }));
+
 vi.mock('@/modules/knowledge/api', () => ({
   documentKeys: { all: ['documents'] },
   listGadgetDocumentProjections: vi.fn(async () => ({ items: [], next_cursor: null })),
@@ -14,6 +16,7 @@ vi.mock('@/modules/knowledge/api', () => ({
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: vi.fn() }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
+vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: mocks.isOwner }) }));
 
 const hour = 3_600_000;
 const items: FeedStreamItem[] = [
@@ -30,9 +33,13 @@ const items: FeedStreamItem[] = [
   { id: 'c', title: 'Third headline', sourceType: 'news', timestamp: new Date(Date.now() - 55 * hour).toISOString(), read: true },
 ];
 
-function view(feed: FeedStreamItem[] = items, sourceIds: string[] = ['s1']) {
+beforeEach(() => {
+  mocks.isOwner = true;
+});
+
+function view(feed: FeedStreamItem[] = items, sourceIds: string[] = ['s1'], renderer = 'feed') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const instance = { id: 'g1', title: '', definition: { renderer: 'feed', source_ids: sourceIds, scope: {} } } as never;
+  const instance = { id: 'g1', title: '', definition: { renderer, source_ids: sourceIds, scope: {} } } as never;
   return render(
     <QueryClientProvider client={client}>
       <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
@@ -52,6 +59,24 @@ describe('FeedGadget lead + list', () => {
     // Unread is a dot with screen-reader text, not a visible pill; read items carry none.
     expect(screen.getAllByText('1 unread')).toHaveLength(1);
     expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('offers single-item Ask AI for a non-Telegram projection identity', () => {
+    view([{ ...items[0]!, sourceId: 's1', documentVersionId: 'v1' }]);
+    expect(screen.getByRole('button', { name: 'Ask AI' })).toBeTruthy();
+  });
+
+  it('hides the newly enabled non-Telegram Ask AI action from non-owners', () => {
+    mocks.isOwner = false;
+    view([{ ...items[0]!, sourceId: 's1', documentVersionId: 'v1' }]);
+    expect(screen.queryByRole('button', { name: 'Ask AI' })).toBeNull();
+  });
+
+  it('preserves the existing Telegram Ask AI action for non-owners', () => {
+    mocks.isOwner = false;
+    view([{ ...items[0]!, sourceType: 'telegram', sourceId: 's1', documentVersionId: 'v1' }], ['s1'], 'telegram_feed');
+    expect(screen.getByRole('button', { name: 'Ask AI' })).toBeTruthy();
+    mocks.isOwner = true;
   });
 
   it('collapses the filters behind one Filter popover', async () => {
@@ -88,7 +113,7 @@ describe('FeedGadget view toggle and images', () => {
   it('switches to Cards, persists per instance and restores it', async () => {
     const { unmount } = view(withImage);
     expect(screen.queryByTestId('feed-cards')).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Cards' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Cards' })[0]);
     expect(screen.getByTestId('feed-cards').querySelectorAll('li')).toHaveLength(3);
     // Cards show an image only for items that have one.
     expect(document.querySelectorAll('img')).toHaveLength(2);
@@ -121,7 +146,7 @@ describe('FeedGadget show more and source tabs', () => {
 
   it('shows 6 cards in Cards mode', async () => {
     view(many);
-    await userEvent.click(screen.getByRole('button', { name: /cards/i }));
+    await userEvent.click(screen.getAllByRole('button', { name: /cards/i })[0]);
     expect(within(screen.getByTestId('feed-cards')).getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByRole('button', { name: 'Show 2 more' })).toBeTruthy();
   });

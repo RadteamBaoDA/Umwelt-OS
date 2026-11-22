@@ -140,7 +140,12 @@ export function IdentityPanel({ m }: { m: ConnectorEditorModel }) {
     <>
       <SettingsSection title={t('panel.identity')} description={t('panel.identityHint')}>
         <div className="form source-editor-form">
-          <p className="text-muted-foreground">{t('selectedProvider', { provider: currentEntry?.label ?? provider })}</p>
+          <p className="text-muted-foreground">
+            {t('selectedProvider', {
+              // Localized provider name when the catalog has one; the server label is English-only.
+              provider: providerKey(provider) === 'provider.label' ? (currentEntry?.label ?? provider) : t(providerKey(provider)),
+            })}
+          </p>
           <div className="field">
             <Label htmlFor="new-source-name">{t('sourceName')}</Label>
             <Input

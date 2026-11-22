@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { Loader2Icon } from 'lucide-react';
+import { Spinner } from '@/components/ui/spinner';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { AgentProfile } from '@/modules/agents';
 import { profileTitleKeys } from './chat-session-header';
@@ -62,7 +62,7 @@ export function AgentPicker({ value, disabled, onChange, profiles, onOpen }: Age
           {/* A disabled option keeps the listbox valid (no non-option child) while still announcing the pending load. */}
           {opened && !profiles && (
             <SelectItem value="__loading" disabled>
-              <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+              <Spinner className="size-3.5" />
               {tAgents('agent.profilesLoading')}
             </SelectItem>
           )}

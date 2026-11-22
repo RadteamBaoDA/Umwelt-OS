@@ -1,5 +1,7 @@
 {
   "title": "Tin tức",
+  "log.new": "MỚI",
+  "log.info": "TIN",
   "sourceSelectionRequired": "Hãy chọn ít nhất một nguồn cho tiện ích Tin tức trước khi hiển thị tin.",
   "configureSources": "Cấu hình nguồn dữ liệu",
   "close": "Đóng",

@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { fetchGoals, fetchGoalsByIds } from './api';
 import type { Goal, GoalPage } from './types';
 import { BareButton } from '@/components/bare-button';
+import { asciiProgressBar } from './goal-progress-bar';
+import './goal-skin.css';
 
 /** One goal tile: title, localized status, summary line and a clamped 0-100 progress bar; clicking calls `onSelect`. */
 function GoalCard({ goal, onSelect }: { goal: Goal; onSelect?: (goal: Goal) => void }) {
@@ -22,17 +24,25 @@ function GoalCard({ goal, onSelect }: { goal: Goal; onSelect?: (goal: Goal) => v
       <BareButton
         type="button"
         onClick={() => onSelect?.(goal)}
-        className="w-full rounded-lg border border-border p-3 text-left hover:bg-primary/30"
+        className="goal-row w-full rounded-lg border border-border p-3 text-left hover:bg-primary/30"
       >
-        <span className="flex justify-between gap-2">
+        <span className="goal-row-head flex justify-between gap-2">
           <strong className="truncate text-sm">{goal.title}</strong>
-          <span className="text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span>
+          <span className="goal-row-status text-xs text-muted-foreground">{goalStatusLabels[goal.status]}</span>
+          {/* Terminal skin: the right-hand figure of the demo `.dash-goal` row (percent; goals carry no target/current pair). */}
+          <span className="goal-row-pct" aria-hidden="true">
+            {Math.round(goal.progress)}%
+          </span>
         </span>
-        <span className="mt-1 block text-xs text-muted-foreground">
+        <span className="goal-row-summary mt-1 block text-xs text-muted-foreground">
           {t('goal.summary', { progress: goal.progress, count: goal.milestones.length, deadline: goal.deadline ?? t('no.deadline') })}
         </span>
-        <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
+        <span className="goal-progress mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
           <span className="block h-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, goal.progress))}%` }} />
+        </span>
+        {/* Terminal-skin text bar. Decorative: the summary line already states the progress. */}
+        <span className="goal-ascii-bar" aria-hidden="true">
+          {asciiProgressBar(goal.progress)}
         </span>
       </BareButton>
     </li>
@@ -214,7 +224,7 @@ export function GoalList({
         showEmpty={goals.length === 0}
         emptyKind={canAdvance ? 'page' : !ids && !include.length && !exclude.length ? 'none-yet' : 'none'}
       />
-      <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
+      <ul className="goal-list grid grid-cols-1 gap-2 md:grid-cols-2">
         {goals.map((goal) => (
           <GoalCard key={goal.id} goal={goal} onSelect={onSelectGoal} />
         ))}

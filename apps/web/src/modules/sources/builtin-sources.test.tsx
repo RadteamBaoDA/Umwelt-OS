@@ -252,3 +252,34 @@ describe('builtinEnableErrorKey', () => {
     expect(body).not.toHaveProperty('kev_ransomware_only');
   });
 });
+
+describe('media built-in option omission', () => {
+  it('omits cleared media values and preserves selected false in the enable request', async () => {
+    api.listBuiltinSources.mockResolvedValue([
+      row({
+        id: 'livechart_episodes',
+        label: 'LiveChart',
+        category: 'media',
+        data_shapes: ['media'],
+        applicable_options: ['media_genres', 'release_year', 'anime_season', 'exclude_adult'],
+      }),
+    ]);
+    api.enableBuiltinSource.mockResolvedValue(row({ enabled: true, source_id: 's' }));
+    actions.collectAndWait.mockResolvedValue({ status: 'no_changes', source_id: 's', request_id: 'r' });
+    wrap();
+    await pickAndContinue('LiveChart');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Action' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Action' }));
+    await userEvent.type(screen.getByLabelText('Release year'), '2026');
+    await userEvent.clear(screen.getByLabelText('Release year'));
+    await userEvent.click(screen.getByLabelText('Exclude adult content'));
+    await userEvent.click(screen.getByRole('option', { name: 'No' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(api.enableBuiltinSource).toHaveBeenCalled());
+    const body = api.enableBuiltinSource.mock.calls[0][4];
+    expect(body).toMatchObject({ exclude_adult: false });
+    expect(body).not.toHaveProperty('media_genres');
+    expect(body).not.toHaveProperty('release_year');
+    expect(body).not.toHaveProperty('anime_season');
+  });
+});

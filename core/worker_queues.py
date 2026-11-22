@@ -1,5 +1,7 @@
 """Arq queue routing for jobs that run on the dedicated model worker."""
 
+from datetime import UTC, datetime, timedelta
+
 from arq.connections import ArqRedis
 from arq.constants import default_queue_name
 
@@ -22,6 +24,20 @@ def queue_for(job_name: str) -> str | None:
     arq's own default queue in place.
     """
     return MODEL_QUEUE if job_name in MODEL_JOBS else None
+
+
+def ahead_of_backlog() -> datetime:
+    """Return a past ``_defer_until`` for interactive jobs on a shared queue (one hour ago, tz-aware UTC).
+
+    arq runs queued jobs in score (enqueue-time) order and ``_defer_until`` sets that score. An hour
+    in the past puts the job ahead of queued bulk work, such as extraction requeued after an AI
+    settings change, so it runs as soon as one model-worker slot frees. It does not preempt running
+    jobs. Keep it well under arq's 1-day ``expires_extra_ms``: the job key TTL is
+    ``score - now + 1 day``, so a larger jump would shorten the job's lifetime.
+    """
+    # ponytail: score-jump priority on the shared arq:model queue; add a dedicated translation worker
+    # if clicks still wait on 4 busy extraction slots.
+    return datetime.now(UTC) - timedelta(hours=1)
 
 
 def pin_default_queue(redis: ArqRedis) -> None:

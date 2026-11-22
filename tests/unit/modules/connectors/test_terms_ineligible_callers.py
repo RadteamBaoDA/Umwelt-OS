@@ -86,7 +86,7 @@ async def test_manual_collect_reraises_other_domain_errors(monkeypatch: pytest.M
 async def test_backend_transition_route_maps_terms_to_terms_not_accepted(
     monkeypatch: pytest.MonkeyPatch, make
 ) -> None:
-    source = SimpleNamespace(id=uuid4(), status="active", type="rss", generation=1)
+    source = SimpleNamespace(id=uuid4(), status="active", type="rss", provider=None, generation=1)
     patch_routes_mp(monkeypatch, "_owner_access", AsyncMock())
     patch_routes_mp(monkeypatch, "_source", AsyncMock(return_value=source))
     monkeypatch.setattr(provisioning_routes.registry, "SUPPORTED_TYPES", {"rss"})

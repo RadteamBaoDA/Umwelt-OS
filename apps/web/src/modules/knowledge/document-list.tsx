@@ -14,6 +14,7 @@ import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useWorkspace } from '@/core/workspace-context';
+import './knowledge-skin.css';
 
 /** Lists documents and consumes realtime refresh state for the knowledge document view. */
 export function DocumentList() {

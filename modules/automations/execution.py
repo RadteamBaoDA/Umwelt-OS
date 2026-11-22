@@ -69,6 +69,9 @@ from modules.automations._execution.actions import (
 from modules.automations._execution.actions import (
     _transient as _transient,
 )
+from modules.automations._execution.collect_source import (
+    _collect_source as _collect_source,
+)
 from modules.automations._execution.core import (
     _action_modules_enabled as _action_modules_enabled,
 )

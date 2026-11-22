@@ -2,11 +2,12 @@
 
 import { AlertTriangle, GripHorizontal, Info, Maximize2, MoreVertical, Settings, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import React, { useCallback, useMemo, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { GadgetSlotProvider, type GadgetSlotHosts } from '@/components/gadget-title-slot';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { collectAndWait, collectErrorKey, sourceKeys } from '@/modules/sources';
@@ -26,6 +27,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { GadgetInstance } from './api';
 import { getGadgetReadingBodyFloor } from './widget-registry';
+import { useGadgetReveal } from './use-gadget-reveal';
+import './gadget-skin.css';
+import './gadget-skin-panes.css';
 
 /** Rule match observation metadata displayed on gadget cards. */
 export interface GadgetRuleMatch {
@@ -83,11 +87,12 @@ const REVEAL_ON_HOVER =
  *
  * @param ms Epoch milliseconds of the event.
  * @param locale Display locale id.
+ * @param style `long` ("2 minutes ago") or `narrow` ("2 min. ago") phrase length.
  * @returns Relative phrase such as "2 minutes ago".
  */
-function formatAgo(ms: number, locale: string): string {
+function formatAgo(ms: number, locale: string, style: 'long' | 'narrow' = 'long'): string {
   const minutes = Math.round((Date.now() - ms) / 60_000);
-  const rtf = new Intl.RelativeTimeFormat(locale === 'vi-vi' ? 'vi' : 'en', { numeric: 'auto' });
+  const rtf = new Intl.RelativeTimeFormat(locale === 'vi-vi' ? 'vi' : 'en', { numeric: 'auto', style });
   if (Math.abs(minutes) < 60) return rtf.format(-Math.max(0, minutes), 'minute');
   if (Math.abs(minutes) < 1440) return rtf.format(-Math.round(minutes / 60), 'hour');
   return rtf.format(-Math.round(minutes / 1440), 'day');
@@ -176,6 +181,10 @@ function useHeaderMeasurement(headerRef: RefObject<HTMLElement | null>, onHeader
 /**
  * Renderer-reported freshness and attribution for the footer line.
  * Freshness comes only from data the renderer actually loaded; absent means no badge.
+ *
+ * @returns `reportFreshness` (the renderer-facing setter), the footer text, its compact terminal variant
+ * `shortText` and the footer title, and the raw
+ * `collectedAt` ISO string (null until a renderer reports one) used as the data-refresh reveal key.
  */
 function useGadgetFooter() {
   const t = useTranslations('dashboard');
@@ -191,7 +200,32 @@ function useGadgetFooter() {
   const freshnessLabel = Number.isFinite(collectedMs) ? t('freshness.updated', { time: formatAgo(collectedMs, display.locale) }) : null;
   const freshnessTitle = collectedAt ? formatDateTime(collectedAt, display.locale, display.timezone) : undefined;
   const footerText = [attribution, freshnessLabel].filter(Boolean).join(' · ');
-  return { reportFreshness, footerText, freshnessTitle };
+  // Terminal title-bar meta: narrow relative time ("5 min. ago") so the muted text never needs a mid-word ellipsis.
+  const shortAgo = Number.isFinite(collectedMs) ? formatAgo(collectedMs, display.locale, 'narrow') : null;
+  const shortText = [attribution, shortAgo].filter(Boolean).join(' · ');
+  return { reportFreshness, footerText, shortText, freshnessTitle, collectedAt, footNote: attribution, freshnessLabel };
+}
+
+/**
+ * Terminal title-bar meta: a short renderer-specific descriptor when one exists (news feed: `tail -f · N sources`
+ * from its bound sources; highlights: `rules`), otherwise the compact freshness text. Decorative; the full
+ * provenance footer stays in the accessibility tree.
+ *
+ * @param instance Gadget whose renderer and bound source count select the descriptor.
+ * @param shortText Compact attribution/freshness text used as the fallback.
+ * @returns Text for the `.gadget-meta` span (empty when nothing is known).
+ */
+function useTerminalMeta(instance: GadgetInstance, shortText: string): string {
+  const t = useTranslations('dashboard');
+  const { renderer, source_ids: sourceIds, scope } = instance.definition;
+  if (renderer === 'news_feed') return t('gadget.metaFeed', { count: sourceIds?.length ?? 0 });
+  if (renderer === 'highlights') return t('gadget.metaRules');
+  // The map and related-signals bodies drop their own "Last N days" line; the window reads in the title bar instead.
+  if (renderer === 'map') return t('map.range', { days: Math.max(1, Math.min(scope?.lookback_days ?? 30, 30)) });
+  if (renderer === 'intelligence_panel') return t('intelligence.range', { days: Math.max(1, Math.min(scope?.lookback_days ?? 30, 30)) });
+  // Tasks and goals carry their own title-bar content (summary, create action); no freshness meta.
+  if (renderer === 'tasks' || renderer === 'goals') return '';
+  return shortText;
 }
 
 /** Highlight severity badge: critical is destructive, info is muted. */
@@ -200,7 +234,7 @@ function SeverityBadge({ severity }: { severity: 'info' | 'warning' | 'critical'
   return (
     <Badge
       variant={severity === 'critical' ? 'destructive' : 'outline'}
-      className={`shrink-0 text-xs font-semibold ${severity === 'info' ? 'text-muted-foreground' : ''}`}
+      className={`gadget-severity shrink-0 text-xs font-semibold ${severity === 'info' ? 'text-muted-foreground' : ''}`}
     >
       {severity === 'critical' ? t('severity.critical') : severity === 'warning' ? t('severity.warning') : t('severity.info')}
     </Badge>
@@ -208,58 +242,104 @@ function SeverityBadge({ severity }: { severity: 'info' | 'warning' | 'critical'
 }
 
 /**
- * Stale/failing badge for the gadget's bound sources plus a "Collect now" action for the worst one (failing first).
- * A failing source shows its plain-language reason (`collectErrorKey`, raw code as fallback) as the badge title.
- * Collect now triggers one collection with the owner CSRF token, waits for the terminal state and then refreshes
- * every source query; failures are announced, never thrown. Renders nothing while every source is fresh.
+ * Collection runner shared by the Collect now button: collects each source in order with the owner CSRF token, waits
+ * for the terminal state, then refreshes the source queries. Failures set `state` to `failed`; nothing is thrown.
  *
- * @param sourceHealth Freshness ticks of the bound sources.
+ * @param targets Sources to collect, in order.
+ * @returns The run state and the `collect` trigger.
  */
-function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessTick[] }) {
-  const t = useTranslations('dashboard');
-  const ts = useTranslations('sources');
+function useCollectSources(targets: readonly FreshnessTick[]) {
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
   const [state, setState] = useState<'idle' | 'running' | 'failed'>('idle');
+  /** Runs one collection per target source and refreshes the freshness data once they settle. */
+  const collect = async () => {
+    setState('running');
+    let next: 'idle' | 'failed' = 'idle';
+    try {
+      for (const target of targets) {
+        const result = await collectAndWait(target.id, csrfToken, { signal: new AbortController().signal });
+        if (result && result.status !== 'succeeded' && result.status !== 'no_changes') next = 'failed';
+      }
+    } catch {
+      next = 'failed';
+    }
+    setState(next);
+    await client.invalidateQueries({ queryKey: sourceKeys.list });
+  };
+  return { state, collect };
+}
+
+/**
+ * Stale/failing badge for the gadget's bound sources plus a "Collect now" action for the worst one (failing first).
+ * A failing source shows its plain-language reason (`collectErrorKey`, raw code as fallback) as the badge title.
+ * Collect now triggers one collection with the owner CSRF token, waits for the terminal state and then refreshes
+ * every source query; failures are announced, never thrown. Renders nothing while every source is fresh, except with
+ * `alwaysCollect` (terminal News feed title bar, demo `[ collect now ]`): then a fresh gadget shows only the same Collect
+ * now button, which collects each bound source in turn with the same handler and CSRF token.
+ *
+ * @param sourceHealth Freshness ticks of the bound sources.
+ * @param alwaysCollect Show the Collect now action even while every source is fresh.
+ */
+function SourceHealthBadge({ sourceHealth, alwaysCollect = false }: { sourceHealth: readonly FreshnessTick[]; alwaysCollect?: boolean }) {
+  const t = useTranslations('dashboard');
+  const ts = useTranslations('sources');
   const worst = sourceHealth.find((tick) => tick.status === 'failing') ?? sourceHealth.find((tick) => tick.status === 'stale');
-  if (!worst) return null;
+  // An unhealthy gadget collects its worst source; the always-visible fresh button collects every bound source in turn.
+  const run = useCollectSources(worst ? [worst] : sourceHealth);
+  if (!worst) return alwaysCollect ? <CollectNowButton run={run} /> : null;
   const failing = worst.status === 'failing';
   const key = failing ? collectErrorKey(worst.errorCode) : null;
   const reason = failing ? (key ? ts(key) : (worst.errorCode ?? '')) : t('source.staleTitle');
-  /** Runs one collection for the worst source and refreshes the freshness data once it settles. */
-  const collect = async () => {
-    setState('running');
-    try {
-      const result = await collectAndWait(worst.id, csrfToken, { signal: new AbortController().signal });
-      setState(result && result.status !== 'succeeded' && result.status !== 'no_changes' ? 'failed' : 'idle');
-    } catch {
-      setState('failed');
-    }
-    await client.invalidateQueries({ queryKey: sourceKeys.list });
-  };
   return (
     <>
       <Badge variant={failing ? 'destructive' : 'secondary'} className="shrink-0 gap-1 text-[11px]" title={reason}>
         <AlertTriangle className="w-3 h-3" aria-hidden />
         <span>{t(failing ? 'source.failingBadge' : 'source.staleBadge')}</span>
       </Badge>
+      <CollectNowButton run={run} />
+    </>
+  );
+}
+
+/**
+ * Collect now button with its failure announcement; disabled while a collection runs.
+ *
+ * @param props.run State and trigger from {@link useCollectSources}.
+ */
+function CollectNowButton({ run }: { run: ReturnType<typeof useCollectSources> }) {
+  const t = useTranslations('dashboard');
+  const ts = useTranslations('sources');
+  return (
+    <>
       <Button
         type="button"
         size="sm"
         variant="ghost"
-        className="h-6 shrink-0 px-1.5 text-[11px]"
-        disabled={state === 'running'}
-        onClick={() => void collect()}
+        className="gadget-collect h-6 shrink-0 px-1.5 text-[11px]"
+        disabled={run.state === 'running'}
+        onClick={() => void run.collect()}
       >
-        {state === 'running' ? ts('collecting') : ts('collect.now')}
+        {run.state === 'running' ? ts('collecting') : ts('collect.now')}
       </Button>
-      {state === 'failed' && (
+      {run.state === 'failed' && (
         <span role="alert" className="shrink-0 text-[11px] text-destructive">
           {t('source.collectFailed')}
         </span>
       )}
     </>
   );
+}
+
+/**
+ * Source-health badge slot of the status row: renders the badge for gadgets with bound sources; a
+ * News feed also keeps the Collect now button while its sources are fresh (demo `[ collect now ]`).
+ *
+ * @param props.sourceHealth Freshness ticks of the bound sources; `props.renderer` the gadget's renderer id.
+ */
+function SourceHealthSlot({ sourceHealth, renderer }: { sourceHealth: GadgetFrameProps['sourceHealth']; renderer: string }) {
+  if (!sourceHealth || sourceHealth.length === 0) return null;
+  return <SourceHealthBadge sourceHealth={sourceHealth} alwaysCollect={renderer === 'news_feed'} />;
 }
 
 /** Status badges that share the header row; overflow is clipped so streaming counts never change grid height. */
@@ -292,7 +372,7 @@ function StatusBadges({
           <span>{t('ruleMatch.badge')}</span>
         </Badge>
       )}
-      {sourceHealth && sourceHealth.length > 0 && <SourceHealthBadge sourceHealth={sourceHealth} />}
+      <SourceHealthSlot sourceHealth={sourceHealth} renderer={definition.renderer} />
       {effectiveSeverity && <SeverityBadge severity={effectiveSeverity} />}
       {definition.warnings && definition.warnings.length > 0 && (
         <Badge variant="secondary" className="shrink-0 gap-0.5 text-xs" title={ts('frame.setupTitle')}>
@@ -357,7 +437,11 @@ function HeaderActions({
 } & Pick<GadgetFrameProps, 'onConfigure' | 'onRemove'>) {
   const t = useTranslations('dashboard');
   return (
-    <div className="flex shrink-0 flex-nowrap items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className="gadget-head-actions flex shrink-0 flex-nowrap items-center gap-1"
+      data-edit={isEditMode ? '' : undefined}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
       {!isEditMode && (
         <Button
           type="button"
@@ -480,6 +564,76 @@ function ExpandedDialog({
   );
 }
 
+/**
+ * Renderer subtree with the frame's freshness reporter and slot hosts. `slotHosts` is undefined while expanded: the
+ * dialog has no title-bar or foot slot, so toolbars and notes render in place there. the planned-gadget body shows when
+ * the gadget supplies no renderer children.
+ */
+function RendererSubtree(p: {
+  report: (collectedAt: string | null, attribution?: string | null) => void;
+  slotHosts: GadgetSlotHosts | undefined;
+  instance: GadgetInstance;
+  children: React.ReactNode;
+}) {
+  return (
+    <GadgetFreshnessProvider report={p.report}>
+      <GadgetSlotProvider value={p.slotHosts}>{p.children ? p.children : <PlannedGadgetBody instance={p.instance} />}</GadgetSlotProvider>
+    </GadgetFreshnessProvider>
+  );
+}
+
+/** Title-bar and foot-note host elements for terminal slot portals; each is null until its element mounts. */
+function useSlotHosts() {
+  const [title, setSlotHost] = useState<HTMLElement | null>(null);
+  const [foot, setFootHost] = useState<HTMLElement | null>(null);
+  const slotHosts = useMemo(() => ({ title, foot }), [title, foot]);
+  return { slotHosts, setSlotHost, setFootHost };
+}
+
+/** Renderers whose design shows a pane foot (attribution/note left, "updated ..." right) in the terminal skin. */
+const FOOT_RENDERERS: ReadonlySet<string> = new Set([
+  'news_feed',
+  'feed',
+  'table_panel',
+  'finance_chart',
+  'metrics_chart',
+  'provider_observation',
+  'daily_brief',
+]);
+
+/**
+ * Terminal-only pane foot (demo `.pane-foot`): the renderer's attribution plus any note portaled via `FootBarSlot` on
+ * the left, "updated ..." on the right. Decorative (aria-hidden): the same facts stay in the visually hidden provenance
+ * footer. Hidden in the default skin and when the renderer has nothing to report.
+ *
+ * @param props.attachNote Callback ref of the note host that `FootBarSlot` portals into.
+ * @param props.renderer Renderer id; only those in `FOOT_RENDERERS` (and with something to show) get a foot.
+ * @param props.note Attribution text reported by the renderer, or null.
+ * @param props.updated Localized "updated ..." label, or null while freshness is unknown.
+ */
+function TerminalFoot({
+  attachNote,
+  renderer,
+  note,
+  updated,
+}: {
+  attachNote: (el: HTMLElement | null) => void;
+  renderer: string;
+  note: string | null;
+  updated: string | null;
+}) {
+  if (!FOOT_RENDERERS.has(renderer) || !(note || updated)) return null;
+  return (
+    <div className="gadget-foot hidden" aria-hidden="true">
+      <span className="gadget-foot-note">
+        {note}
+        <span ref={attachNote} />
+      </span>
+      <span className="gadget-foot-time">{updated}</span>
+    </div>
+  );
+}
+
 /** Provenance footer: a fixed one-line row inside the flex column; hidden when freshness is unknown. */
 function ProvenanceFooter({ text, title }: { text: string; title: string | undefined }) {
   if (!text) return null;
@@ -541,30 +695,55 @@ function GadgetHeader(p: {
   unreadCount: number;
   ruleMatch: GadgetFrameProps['ruleMatch'];
   sourceHealth: GadgetFrameProps['sourceHealth'];
+  /** Provenance/freshness text shown as the muted title-bar meta in the terminal skin (hidden in the default skin). */
+  metaText: string;
   onDragHandlePointerDown: GadgetFrameProps['onDragHandlePointerDown'];
   onAsk: () => void;
   onExpand: () => void;
   expandRef: React.RefObject<HTMLButtonElement | null>;
   onConfigure: GadgetFrameProps['onConfigure'];
   onRemove: GadgetFrameProps['onRemove'];
+  /** Callback ref of the terminal title-bar slot that gadget toolbars portal into. */
+  attachSlot: (el: HTMLElement | null) => void;
 }) {
-  const { headerRef, titleId, displayTitle, instance, isEditMode, unreadCount, ruleMatch, sourceHealth } = p;
-  const { onDragHandlePointerDown, onAsk, onExpand, expandRef, onConfigure, onRemove } = p;
+  const { headerRef, titleId, displayTitle, instance, isEditMode, unreadCount, ruleMatch, sourceHealth, metaText } = p;
+  // Terminal title-bar dot: failing sources read danger, stale ones warning, otherwise healthy (accent).
+  const dotTone = sourceHealth?.some((tick) => tick.status === 'failing')
+    ? 'danger'
+    : sourceHealth?.some((tick) => tick.status === 'stale')
+      ? 'warn'
+      : 'ok';
+  const { onDragHandlePointerDown, onAsk, onExpand, expandRef, onConfigure, onRemove, attachSlot } = p;
   return (
     <header
       ref={headerRef}
-      className={`@container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}
+      className={`gadget-header @container flex shrink-0 items-center gap-2 px-3.5 py-1.5 border-b border-border select-none ${isEditMode ? 'bg-muted/20' : 'bg-card'}`}
     >
       <div
-        className={`flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
+        className={`gadget-head-main flex min-w-0 flex-1 items-center gap-2 ${isEditMode ? 'cursor-grab active:cursor-grabbing hover:bg-muted/30' : ''}`}
         onPointerDown={isEditMode ? onDragHandlePointerDown : undefined}
       >
         {isEditMode && <GripHorizontal className="w-4 h-4 text-muted-foreground shrink-0 opacity-70 group-hover:opacity-100" />}
-        <h3 id={titleId} className="min-w-0 truncate font-semibold text-sm text-foreground leading-tight" title={displayTitle}>
-          {displayTitle}
-        </h3>
+        {/* Dot and title stay one flex unit so the terminal meta can wrap away from them (gadget-skin.css). */}
+        <span className="gadget-head-id flex min-w-0 max-w-full items-center gap-2">
+          <span className="gadget-dot rounded-full" data-tone={dotTone} aria-hidden="true" />
+          <h3
+            id={titleId}
+            className="gadget-title min-w-0 truncate font-semibold text-sm text-foreground leading-tight"
+            title={displayTitle}
+          >
+            {displayTitle}
+          </h3>
+        </span>
+        {metaText && (
+          <span className="gadget-meta" aria-hidden="true">
+            {metaText}
+          </span>
+        )}
       </div>
       <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} sourceHealth={sourceHealth} />
+      {/* Terminal only: gadget toolbars portal here (components/gadget-title-slot.tsx); hidden otherwise. */}
+      <div ref={attachSlot} className="gadget-head-slot hidden" onPointerDown={(event) => event.stopPropagation()} />
       <HeaderActions
         isEditMode={isEditMode}
         onAsk={onAsk}
@@ -610,18 +789,20 @@ export function GadgetFrame({
   const inlineScrollRef = useRef<HTMLDivElement>(null);
   const expandTriggerRef = useRef<HTMLButtonElement>(null);
   const headerRef = useRef<HTMLElement>(null);
+  const { slotHosts, setSlotHost, setFootHost } = useSlotHosts();
   const titleId = useId();
   const definition = instance.definition;
   const bodyFloor = getGadgetReadingBodyFloor(definition.renderer);
   const { rendererHost, attachExpandedHost } = useRendererHost(isExpanded, { inlineHostRef, inlineScrollRef, expandedHostRef });
   useHeaderMeasurement(headerRef, onHeaderMeasured);
-  const { reportFreshness, footerText, freshnessTitle } = useGadgetFooter();
+  const { reportFreshness, footerText, shortText, freshnessTitle, collectedAt, footNote, freshnessLabel } = useGadgetFooter();
+  const metaText = useTerminalMeta(instance, shortText);
+  // Each new collectedAt replays the data-refresh reveal on the body; the element itself is never remounted.
+  useGadgetReveal(inlineScrollRef, collectedAt);
   const displayTitle = useDisplayTitle(instance);
 
-  /** Toggles expanded fullscreen modal view without modifying underlying grid layout. */
-  const toggleExpanded = useCallback(() => {
-    setIsExpanded((prev) => !prev);
-  }, []);
+  // Toggles the expanded fullscreen modal view without modifying the underlying grid layout.
+  const toggleExpanded = useCallback(() => setIsExpanded((prev) => !prev), []);
   const handleAskWithUmwelt = useAskWithUmwelt(instance, displayTitle);
 
   return (
@@ -643,12 +824,14 @@ export function GadgetFrame({
           unreadCount={unreadCount}
           ruleMatch={ruleMatch}
           sourceHealth={sourceHealth}
+          metaText={metaText}
           onDragHandlePointerDown={onDragHandlePointerDown}
           onAsk={handleAskWithUmwelt}
           onExpand={toggleExpanded}
           expandRef={expandTriggerRef}
           onConfigure={onConfigure}
           onRemove={onRemove}
+          attachSlot={setSlotHost}
         />
 
         <div ref={inlineScrollRef} className="dashboard-gadget-body @container/gadget min-h-0 flex-1 overflow-auto overscroll-contain">
@@ -664,6 +847,7 @@ export function GadgetFrame({
           />
         </div>
         <ProvenanceFooter text={footerText} title={freshnessTitle} />
+        <TerminalFoot attachNote={setFootHost} renderer={definition.renderer} note={footNote} updated={freshnessLabel} />
       </Card>
 
       {/* Expanded Modal View (preserves filters, scroll position and local state) */}
@@ -677,9 +861,9 @@ export function GadgetFrame({
       {/* Supplies exactly one renderer subtree to the stable host; it is never invoked in two surfaces. */}
       {rendererHost &&
         createPortal(
-          <GadgetFreshnessProvider report={reportFreshness}>
-            {children ? children : <PlannedGadgetBody instance={instance} />}
-          </GadgetFreshnessProvider>,
+          <RendererSubtree report={reportFreshness} slotHosts={isExpanded ? undefined : slotHosts} instance={instance}>
+            {children}
+          </RendererSubtree>,
           rendererHost,
         )}
     </>

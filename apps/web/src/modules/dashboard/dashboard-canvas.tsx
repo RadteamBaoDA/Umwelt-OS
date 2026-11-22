@@ -11,6 +11,9 @@ import type { useGadgetMembership } from './use-gadget-membership';
 import type { useLayoutSave } from './use-layout-save';
 import type { LayoutSession } from './use-layout-session';
 
+/** Overview: a panel at least this wide (the 2/3 column at 1440px) keeps the desktop geometry instead of the tablet flow. */
+const OVERVIEW_TABLET_MAX_WIDTH = 840;
+
 /** Operations produced by the layout hooks that the editor bar and grid consume. */
 export interface CanvasOperations {
   session: LayoutSession;
@@ -148,6 +151,7 @@ export function DashboardCanvas(props: CanvasProps) {
       visibleInstanceIds={visibleInstances.map((instance) => instance.id)}
       isMobileView={session.currentBreakpoint === 'mobile'}
       isTabletView={true}
+      tabletMaxWidth={OVERVIEW_TABLET_MAX_WIDTH}
       onReadableProjectionChange={setPanelProjection}
       onGridMetricsChange={session.setGridMetrics}
       columns={session.layoutColumns}

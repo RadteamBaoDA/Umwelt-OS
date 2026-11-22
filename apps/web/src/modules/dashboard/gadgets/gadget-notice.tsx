@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -25,6 +25,8 @@ export interface GadgetNoticeProps {
   action?: GadgetNoticeAction;
   /** Extra layout classes for the wrapper. */
   className?: string;
+  /** Optional muted detail rendered under the message, inside the notice (e.g. last good data / next retry). */
+  detail?: ReactNode;
 }
 
 /**
@@ -32,7 +34,7 @@ export interface GadgetNoticeProps {
  * Errors announce as `role="alert"`; setup and empty states as polite `role="status"`.
  * Pure presentation: callers keep their existing message strings and decide when it shows.
  */
-export function GadgetNotice({ kind, message, action, className }: GadgetNoticeProps) {
+export function GadgetNotice({ kind, message, action, className, detail }: GadgetNoticeProps) {
   const isError = kind === 'error';
   const actionClass =
     'inline-flex min-h-9 pointer-coarse:min-h-11 items-center text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -43,6 +45,7 @@ export function GadgetNotice({ kind, message, action, className }: GadgetNoticeP
       className={cn('flex flex-col items-start gap-1 p-3 text-sm', isError ? 'text-destructive' : 'text-muted-foreground', className)}
     >
       <p className="break-words">{message}</p>
+      {detail}
       {action?.href ? (
         <Link href={action.href} className={actionClass}>
           {action.label}

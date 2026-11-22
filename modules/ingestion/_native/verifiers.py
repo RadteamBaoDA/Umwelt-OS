@@ -722,9 +722,17 @@ class RedditVerifier(BaseNativeVerifier):
 
 
 class RevisionedRestVerifier(BaseNativeVerifier):
-    """Notion, Slack and X: an immutable provider credential revision proof is mandatory."""
+    """Native bearer providers require credential revision proof validated by the REST slot owner."""
 
-    providers: ClassVar[tuple[str, ...]] = ("notion", "slack", "x")
+    providers: ClassVar[tuple[str, ...]] = (
+        "notion",
+        "slack",
+        "x",
+        "hardcover_books",
+        "youtube_api",
+        "podcast_index",
+        "igdb_games",
+    )
     revision_policy: ClassVar[RevisionPolicy] = "required"
 
 

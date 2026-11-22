@@ -1,15 +1,231 @@
 """Pure-helper tests for provider feed parsing and rate-limit deadline derivation."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from xml.etree import ElementTree
 
 import httpx
 import pytest
 
 from modules.connectors.providers import feed_catalog as fc
+from modules.connectors.providers.rest import Fetched
 
 NOW = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
 INVALID = "provider_rate_deadline_invalid"
+
+
+@pytest.mark.asyncio
+async def test_youtube_feed_uses_bounded_transport_with_send_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors.providers import rest
+
+    fetch = AsyncMock(return_value=Fetched(b'<feed xmlns="http://www.w3.org/2005/Atom"/>'))
+    monkeypatch.setattr(rest, "fetch_bounded", fetch)
+    source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={"youtube_channel_id": "UC" + "A" * 22, "history_mode": "returned_snapshot"},
+    )
+    gate = AsyncMock()
+    page = await fc.collect_provider_feed(
+        source,  # type: ignore[arg-type]
+        collected_at=NOW,
+        session_factory=AsyncMock(),
+        before_request=gate,
+    )
+    assert page.records == ()
+    assert fetch.await_args.kwargs["before_send"] is gate
+    assert fetch.await_args.kwargs["max_bytes"] == fc._MAX_PAGE_BYTES
+
+
+@pytest.mark.asyncio
+async def test_youtube_snapshot_reuses_and_refreshes_url_scoped_validators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors.providers import rest
+
+    channel = "UC" + "A" * 22
+    feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel}"
+    fetch = AsyncMock(
+        return_value=Fetched(
+            b'<feed xmlns="http://www.w3.org/2005/Atom"/>',
+            etag='"next"',
+            last_modified="Sat, 01 May 2026 12:00:00 GMT",
+        )
+    )
+    monkeypatch.setattr(rest, "fetch_bounded", fetch)
+    source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={"youtube_channel_id": channel, "history_mode": "returned_snapshot"},
+    )
+
+    page = await fc.collect_youtube_snapshot(
+        source,  # type: ignore[arg-type]
+        collected_at=NOW,
+        before_request=AsyncMock(),
+        validators={feed_url: {"etag": '"old"', "last_modified": "Fri, 01 May 2026 12:00:00 GMT"}},
+    )
+
+    assert fetch.await_args.kwargs["headers"]["If-None-Match"] == '"old"'
+    assert (
+        fetch.await_args.kwargs["headers"]["If-Modified-Since"] == "Fri, 01 May 2026 12:00:00 GMT"
+    )
+    assert page.validators == {
+        feed_url: {"etag": '"next"', "last_modified": "Sat, 01 May 2026 12:00:00 GMT"}
+    }
+
+
+@pytest.mark.asyncio
+async def test_youtube_snapshot_retains_validators_on_not_modified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from modules.connectors.providers import rest
+
+    channel = "UC" + "A" * 22
+    feed_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel}"
+    fetch = AsyncMock(return_value=Fetched(None))
+    monkeypatch.setattr(rest, "fetch_bounded", fetch)
+    source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={"youtube_channel_id": channel, "history_mode": "returned_snapshot"},
+    )
+    saved = {feed_url: {"etag": '"stable"'}}
+
+    page = await fc.collect_youtube_snapshot(
+        source,  # type: ignore[arg-type]
+        collected_at=NOW,
+        before_request=AsyncMock(),
+        validators=saved,
+    )
+
+    assert page.records == ()
+    assert page.validators == saved
+
+
+def test_youtube_validator_cursor_is_bound_to_query_scope() -> None:
+    state = {"https://www.youtube.com/feeds/videos.xml?channel_id=UC" + "A" * 22: {"etag": '"v1"'}}
+    cursor = fc.encode_youtube_validator_cursor("a" * 24, state)
+
+    assert fc.decode_youtube_validator_cursor(cursor, "a" * 24) == state
+    assert fc.decode_youtube_validator_cursor(cursor, "b" * 24) == {}
+
+
+def test_youtube_targets_build_bounded_channel_and_playlist_scopes() -> None:
+    from modules.connectors.public import ConnectorConfig
+
+    channel = "UC" + "A" * 22
+    config = ConnectorConfig.model_validate(
+        {"youtube_channels": [channel], "youtube_filter": "shorts"}
+    )
+    assert fc._youtube_targets(config) == (
+        fc._YoutubeTarget(
+            f"https://www.youtube.com/feeds/videos.xml?playlist_id=UUSH{'A' * 22}",
+            None,
+            channel,
+        ),
+    )
+    handle = ConnectorConfig.model_validate({"youtube_handles": ["@Example_Channel"]})
+    assert fc._youtube_targets(handle) == (fc._YoutubeTarget(None, "example_channel", None),)
+    assert (
+        fc._youtube_channel_id_from_page(
+            f'<link rel="canonical" href="https://www.youtube.com/channel/{channel}">'.encode()
+        )
+        == channel
+    )
+    legacy_source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={"youtube_channel_id": channel, "history_mode": "returned_snapshot"},
+    )
+    assert fc.provider_feed_url(legacy_source) == (
+        f"https://www.youtube.com/feeds/videos.xml?channel_id={channel}"
+    )
+    multi_source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={
+            "youtube_channels": [channel, "UC" + "B" * 22],
+            "history_mode": "returned_snapshot",
+        },
+    )
+    with pytest.raises(ValueError, match="youtube_multiple_targets"):
+        fc.provider_feed_url(multi_source)
+    with pytest.raises(ValueError, match="provider_scope_invalid"):
+        fc._youtube_targets(
+            ConnectorConfig.model_validate(
+                {"youtube_channel_id": channel, "youtube_handles": ["example_channel"]}
+            )
+        )
+    with pytest.raises(ValueError, match="youtube_filter_requires_channel_scope"):
+        fc._youtube_targets(
+            ConnectorConfig.model_validate(
+                {"youtube_playlist_ids": ["PL" + "A" * 20], "youtube_filter": "shorts"}
+            )
+        )
+    with pytest.raises(ValueError, match="provider_scope_invalid"):
+        fc._youtube_targets(ConnectorConfig.model_validate({}))
+
+
+@pytest.mark.parametrize(
+    ("youtube_filter", "feed_prefix"),
+    [
+        ("all", None),
+        ("long_form", "playlist_id=UULF"),
+        ("shorts", "playlist_id=UUSH"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_youtube_handle_resolution_and_feed_are_both_send_gated(
+    monkeypatch: pytest.MonkeyPatch,
+    youtube_filter: str,
+    feed_prefix: str | None,
+) -> None:
+    from modules.connectors.providers import rest
+
+    channel = "UC" + "A" * 22
+    feed = (
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:yt="http://www.youtube.com/xml/schemas/2015"><entry>'
+        f"<yt:videoId>{'v' * 11}</yt:videoId><yt:channelId>{channel}</yt:channelId>"
+        "<title>Example video</title><published>2026-01-01T00:00:00+00:00</published></entry></feed>"
+    ).encode()
+    handle_page = f'<meta itemprop="channelId" content="{channel}">'.encode()
+    calls: list[tuple[str, object]] = []
+    gate = AsyncMock()
+
+    async def fake_fetch(url: str, **kwargs: object) -> Fetched:
+        calls.append((url, kwargs.get("before_send")))
+        return Fetched(handle_page if "/@" in url else feed)
+
+    monkeypatch.setattr(rest, "fetch_bounded", fake_fetch)
+    source = SimpleNamespace(
+        provider="youtube",
+        type="rss",
+        configuration={
+            "youtube_handles": ["@Example_Channel"],
+            "youtube_filter": youtube_filter,
+            "history_mode": "returned_snapshot",
+        },
+    )
+    page = await fc.collect_provider_feed(
+        source,  # type: ignore[arg-type]
+        collected_at=NOW,
+        session_factory=AsyncMock(),
+        before_request=gate,
+    )
+    expected_scope = (
+        f"channel_id={channel}" if feed_prefix is None else f"{feed_prefix}{channel[2:]}"
+    )
+    assert [url for url, _ in calls] == [
+        "https://www.youtube.com/@example_channel",
+        f"https://www.youtube.com/feeds/videos.xml?{expected_scope}",
+    ]
+    assert all(callback is gate for _, callback in calls)
+    assert [record.provider_id for record in page.records] == [f"youtube:{channel}:{'v' * 11}"]
 
 
 def test_plain_text_strips_markup_and_active_content() -> None:
@@ -165,3 +381,13 @@ async def test_send_fence_trace_uses_explicit_recheck_for_wrapped_gates():
     await hook("http11.send_request_headers.started", {})
     await hook("http11.send_request_body.started", {})
     assert calls == ["recheck"]
+
+
+def test_youtube_handle_page_accepts_current_identifier_itemprop() -> None:
+    """YouTube now emits ``itemprop="identifier"`` for the channel id; the legacy ``channelId`` still works."""
+    from modules.connectors.providers.feed_catalog import _youtube_channel_id_from_page
+
+    channel = "UC" + "a" * 22
+    for prop in ("identifier", "channelId"):
+        page = f'<meta itemprop="{prop}" content="{channel}">'.encode()
+        assert _youtube_channel_id_from_page(page) == channel

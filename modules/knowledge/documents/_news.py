@@ -3,13 +3,15 @@
 import base64
 import binascii
 import json
+import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import (
     Select,
     func,
@@ -25,6 +27,17 @@ from core.workspaces.schemas import (
     Scope,
 )
 from modules.knowledge.documents._language import FEED_LANGUAGES
+from modules.knowledge.documents._news_media import (
+    DEFAULT_CALENDAR_WINDOW_DAYS as DEFAULT_CALENDAR_WINDOW_DAYS,
+)
+from modules.knowledge.documents._news_media import (
+    _apply_media_statement_filters,
+    _coalesced_release_ts,
+    _media_provenance_predicates,
+    _release_candidates_cte,
+    _release_window_bounds,
+    _validate_media_filter_params,
+)
 from modules.knowledge.documents._scope import _admit_document_scope, _document_scope
 from modules.knowledge.documents.models import (
     Document,
@@ -43,10 +56,13 @@ from modules.knowledge.documents.schemas import (
     GadgetProviderMetadataRead,
     GadgetTelegramMediaRead,
     GadgetTelegramRecordRead,
+    MediaProjectionRead,
     ProviderRecordMetadata,
 )
 from modules.sources import public as sources
 from modules.sources.public import SourceReadProjection as Source
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,6 +111,46 @@ class NewsProjectionStatus:
     incomplete_reasons: tuple[str, ...]
 
 
+# ponytail: process-local, bounded dedupe of contract-skip warnings; clears when full.
+_CONTRACT_SKIP_WARNED: set[tuple[UUID, UUID]] = set()
+_CONTRACT_SKIP_WARNED_MAX = 4096
+
+
+def _hydrate_provider_record(
+    raw: Any, *, document_id: UUID, version_id: UUID
+) -> tuple[bool, ProviderRecordMetadata | None]:
+    """Validate a stored ``provider_record`` against the current ``ProviderRecordMetadata``.
+
+    Returns ``(True, metadata)`` (``metadata`` is ``None`` when no record is stored) or
+    ``(False, None)`` when the stored record violates the contract. Side effect: logs a
+    warning (once per document/version per process, bounded) with the ids and the
+    error type only (no content).
+    """
+    if raw is None:
+        return True, None
+    try:
+        return True, ProviderRecordMetadata.model_validate(raw)
+    except ValidationError as exc:
+        # Legacy or hand-edited rows may predate the current contract. Treat them like
+        # ambiguous-provenance rows (not hydratable) rather than letting the ValueError
+        # surface as a 422 for the whole page. Warn once per version per process: the same
+        # row is re-read on every page and worker pass.
+        key = (document_id, version_id)
+        if key in _CONTRACT_SKIP_WARNED:
+            return False, None
+        if len(_CONTRACT_SKIP_WARNED) >= _CONTRACT_SKIP_WARNED_MAX:
+            _CONTRACT_SKIP_WARNED.clear()
+        _CONTRACT_SKIP_WARNED.add(key)
+        _log.warning(
+            "News projection skipped: provider_record violates contract "
+            "(document_id=%s version_id=%s error=%s)",
+            document_id,
+            version_id,
+            type(exc).__name__,
+        )
+        return False, None
+
+
 async def get_news_document_projection(
     session: AsyncSession,
     document_id: UUID,
@@ -109,6 +165,9 @@ async def get_news_document_projection(
     This read excludes deleted, paused, replaced, or incomplete versions and caps
     chunks at 100. Legacy/manual documents remain readable with explicitly
     non-snapshot metadata provenance rather than inferred historical metadata.
+    A stored ``provider_record`` that violates the current ``ProviderRecordMetadata``
+    contract makes the row non-hydratable: it returns ``None`` (logged as a warning with
+    ids and the error type only) instead of raising, so one bad row cannot fail a page.
     """
     components = await _current_document_components(
         session,
@@ -131,6 +190,13 @@ async def get_news_document_projection(
         ).all()
     )
     if not chunk_rows:
+        return None
+    hydrated, provider_metadata = _hydrate_provider_record(
+        provenance.provenance_json.get("provider_record") if provenance else None,
+        document_id=document.id,
+        version_id=version.id,
+    )
+    if not hydrated:
         return None
     chunk_count = (
         len(chunk_rows)
@@ -179,11 +245,7 @@ async def get_news_document_projection(
         normalization_version=provenance.normalization_version if provenance else None,
         chunk_count=chunk_count,
         chunks_truncated=chunks_truncated,
-        provider_metadata=(
-            ProviderRecordMetadata.model_validate(provenance.provenance_json["provider_record"])
-            if provenance and provenance.provenance_json.get("provider_record") is not None
-            else None
-        ),
+        provider_metadata=provider_metadata,
     )
 
 
@@ -531,20 +593,61 @@ async def news_current_scope_status(
     return NewsProjectionStatus(incomplete_reasons=tuple(sorted(reasons)))
 
 
+_ARTWORK_ASPECTS = frozenset({"poster", "square", "video", "landscape"})
+
+
 def _news_projection_statement(
     scope: Scope,
     source_ids: tuple[UUID, ...],
     observed_since: datetime | None,
     channel_ids: tuple[str, ...] | None,
     language: str | None,
-) -> Select[UUID, datetime]:
-    """Build the id/created_at selection of current ready versions for the given news filters.
-
-    Pure statement construction (no I/O): active sources only, current version with at least one
-    chunk, optional observed-since, language (stored normalized) and Telegram channel filters.
-    """
-    statement = (
-        select(Document.id, Document.created_at)
+    *,
+    countries: tuple[str, ...] | None = None,
+    genres: tuple[str, ...] | None = None,
+    languages: tuple[str, ...] | None = None,
+    media_types: tuple[str, ...] | None = None,
+    formats: tuple[str, ...] | None = None,
+    content_ratings: tuple[str, ...] | None = None,
+    release_statuses: tuple[str, ...] | None = None,
+    release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    release_season: str | None = None,
+    min_rating: float | None = None,
+    release_window_days: int | None = None,
+    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
+) -> tuple[Select[Any], Any]:
+    """Build the current-version projection statement and ordering timestamp expression."""
+    sf = NormalizedVersionProvenance.provenance_json["provider_record"]["source_fields"]
+    media_preds = _media_provenance_predicates(
+        countries=countries,
+        genres=genres,
+        languages=languages,
+        media_types=media_types,
+        formats=formats,
+        content_ratings=content_ratings,
+        release_statuses=release_statuses,
+        release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        release_season=release_season,
+        min_rating=min_rating,
+    )
+    candidates: Any = None
+    order_ts_expr: Any = Document.created_at
+    if sort == "release_date_asc":
+        # Order by the CTE's already-parsed date so the date expression is evaluated once per
+        # provenance row (not per join row / sort comparison); see _release_candidates_cte.
+        candidates = _release_candidates_cte(
+            sf,
+            source_ids=source_ids,
+            media_preds=media_preds,
+            window_bounds=_release_window_bounds(sort, release_window_days),
+        )
+        order_ts_expr = _coalesced_release_ts(candidates.c.release_ts)
+    statement: Select[Any] = (
+        select(Document.id, order_ts_expr)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
@@ -564,7 +667,8 @@ def _news_projection_statement(
         )
     if language is not None:
         # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
-        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_workspace_language_created_at_id.
+        # Stored normalized (primary subtag, lowercase) so this equality can use
+        # ix_documents_workspace_language_created_at_id.
         statement = statement.where(Document.language == language)
     if channel_ids is not None:
         statement = statement.where(
@@ -579,7 +683,62 @@ def _news_projection_statement(
             )
             .exists(),
         )
-    return statement
+    statement = _apply_media_statement_filters(
+        statement,
+        order_ts_expr,
+        sf,
+        sort=sort,
+        release_window_days=release_window_days,
+        media_preds=media_preds,
+        candidates=candidates,
+    )
+    return statement, order_ts_expr
+
+
+async def _load_filtered_news_projections(
+    session: AsyncSession,
+    rows: list[Any],
+    *,
+    source_ids: tuple[UUID, ...],
+    channel_ids: tuple[str, ...] | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[NewsDocumentProjection]:
+    """Hydrate ``NewsDocumentProjection`` rows while preserving active source and channel fences."""
+    projections: list[NewsDocumentProjection] = []
+    for document_id, _order_ts in rows:
+        item = await get_news_document_projection(
+            session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if item is None or item.source_id not in source_ids:
+            continue
+        if channel_ids is not None and (
+            item.provider_metadata is None
+            or item.provider_metadata.provider != "telegram"
+            or item.provider_metadata.telegram is None
+            or item.provider_metadata.telegram.channel_id not in channel_ids
+        ):
+            continue
+        projections.append(item)
+    return projections
+
+
+def _validate_language_and_channels(
+    language: str | None, channel_ids: tuple[str, ...] | None
+) -> None:
+    """Reject a non-allowlisted ``language`` or a channel scope that is oversized, duplicated or non-numeric.
+
+    Raises:
+        ValueError: language outside ``FEED_LANGUAGES``, or more than 32 / non-unique / non-numeric channel ids.
+    """
+    if language is not None and language not in FEED_LANGUAGES:
+        raise ValueError("Language filter must be an allowlisted code")
+    if channel_ids is not None and (
+        len(channel_ids) > 32
+        or len(set(channel_ids)) != len(channel_ids)
+        or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
+    ):
+        raise ValueError("Channel scope must contain at most 32 unique numeric identifiers")
 
 
 async def list_news_document_projections(
@@ -591,6 +750,20 @@ async def list_news_document_projections(
     observed_since: datetime | None = None,
     channel_ids: tuple[str, ...] | None = None,
     language: str | None = None,
+    countries: tuple[str, ...] | None = None,
+    genres: tuple[str, ...] | None = None,
+    languages: tuple[str, ...] | None = None,
+    media_types: tuple[str, ...] | None = None,
+    formats: tuple[str, ...] | None = None,
+    content_ratings: tuple[str, ...] | None = None,
+    release_statuses: tuple[str, ...] | None = None,
+    release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    release_season: str | None = None,
+    min_rating: float | None = None,
+    release_window_days: int | None = None,
+    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> tuple[list[NewsDocumentProjection], str | None]:
@@ -605,60 +778,61 @@ async def list_news_document_projections(
     access_fence = await _admit_document_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-    if language is not None and language not in FEED_LANGUAGES:
-        raise ValueError("Language filter must be an allowlisted code")
-    if channel_ids is not None and (
-        len(channel_ids) > 32
-        or len(set(channel_ids)) != len(channel_ids)
-        or any(re.fullmatch(r"-?[1-9][0-9]{0,19}", item) is None for item in channel_ids)
-    ):
-        raise ValueError("Channel scope must contain at most 32 unique numeric identifiers")
+    _validate_language_and_channels(language, channel_ids)
+    media_kw: dict[str, Any] = {
+        "countries": countries,
+        "genres": genres,
+        "languages": languages,
+        "media_types": media_types,
+        "formats": formats,
+        "content_ratings": content_ratings,
+        "release_statuses": release_statuses,
+        "release_year": release_year,
+        "release_year_from": release_year_from,
+        "release_year_to": release_year_to,
+        "release_season": release_season,
+        "min_rating": min_rating,
+        "release_window_days": release_window_days,
+        "sort": sort,
+    }
+    _validate_media_filter_params(**media_kw)
     fingerprint = _news_projection_cursor_fingerprint(
         access_fence=access_fence,
         source_ids=source_ids,
         observed_since=observed_since,
         channel_ids=channel_ids,
         language=language,
+        **media_kw,
     )
-    statement = _news_projection_statement(scope, source_ids, observed_since, channel_ids, language)
+    statement, order_ts_expr = _news_projection_statement(
+        scope, source_ids, observed_since, channel_ids, language, **media_kw
+    )
     if cursor:
-        created_at, document_cursor = _decode_news_projection_cursor(cursor, fingerprint)
-        statement = statement.where(
-            tuple_(Document.created_at, Document.id) < (created_at, document_cursor)
+        cursor_ts, document_cursor = _decode_news_projection_cursor(cursor, fingerprint)
+        cmp = (
+            tuple_(order_ts_expr, Document.id) > (cursor_ts, document_cursor)
+            if sort == "release_date_asc"
+            else tuple_(Document.created_at, Document.id) < (cursor_ts, document_cursor)
         )
-    rows = list(
-        (
-            await session.execute(
-                statement.order_by(Document.created_at.desc(), Document.id.desc()).limit(limit + 1)
-            )
-        ).all()
+        statement = statement.where(cmp)
+    ordered = (
+        statement.order_by(order_ts_expr.asc(), Document.id.asc())
+        if sort == "release_date_asc"
+        else statement.order_by(Document.created_at.desc(), Document.id.desc())
     )
-    more = len(rows) > limit
-    rows = rows[:limit]
-    projections = []
-    for document_id, _created_at in rows:
-        item = await get_news_document_projection(
-            session,
-            document_id,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if item is not None and item.source_id in source_ids:
-            if channel_ids is not None and (
-                item.provider_metadata is None
-                or item.provider_metadata.provider != "telegram"
-                or item.provider_metadata.telegram is None
-                or item.provider_metadata.telegram.channel_id not in channel_ids
-            ):
-                continue
-            projections.append(item)
+    rows = list((await session.execute(ordered.limit(limit + 1))).all())
+    more, page_rows = len(rows) > limit, rows[:limit]
+    projections = await _load_filtered_news_projections(
+        session,
+        page_rows,
+        source_ids=source_ids,
+        channel_ids=channel_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     next_cursor = (
-        _encode_news_projection_cursor(
-            rows[-1][1],
-            rows[-1][0],
-            fingerprint,
-        )
-        if more and rows
+        _encode_news_projection_cursor(page_rows[-1][1], page_rows[-1][0], fingerprint)
+        if more and page_rows
         else None
     )
     return projections, next_cursor
@@ -681,6 +855,20 @@ async def list_gadget_document_projections(
     since: datetime | None = None,
     include_dismissed: bool = False,
     image_signer: ImageSigner | None = None,
+    countries: tuple[str, ...] | None = None,
+    genres: tuple[str, ...] | None = None,
+    languages: tuple[str, ...] | None = None,
+    media_types: tuple[str, ...] | None = None,
+    formats: tuple[str, ...] | None = None,
+    content_ratings: tuple[str, ...] | None = None,
+    release_statuses: tuple[str, ...] | None = None,
+    release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    release_season: str | None = None,
+    min_rating: float | None = None,
+    release_window_days: int | None = None,
+    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> GadgetDocumentProjectionList:
@@ -711,6 +899,20 @@ async def list_gadget_document_projections(
         channel_ids=channel_ids,
         language=language,
         observed_since=since,
+        countries=countries,
+        genres=genres,
+        languages=languages,
+        media_types=media_types,
+        formats=formats,
+        content_ratings=content_ratings,
+        release_statuses=release_statuses,
+        release_year=release_year,
+        release_year_from=release_year_from,
+        release_year_to=release_year_to,
+        release_season=release_season,
+        min_rating=min_rating,
+        release_window_days=release_window_days,
+        sort=sort,
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -741,6 +943,81 @@ async def list_gadget_document_projections(
         )
     ]
     return GadgetDocumentProjectionList(items=items, next_cursor=next_cursor)
+
+
+def _extract_media_projection(provider_metadata: Any) -> MediaProjectionRead | None:
+    """Build the media DTO from allowlisted provider fields, or synthesize one for YouTube."""
+    if provider_metadata is None:
+        return None
+    sf = getattr(provider_metadata, "source_fields", None)
+    if not isinstance(sf, Mapping):
+        sf = {}
+    media_type = sf.get("media_type")
+    if isinstance(media_type, str) and media_type:
+        raw_aspect = sf.get("artwork_aspect")
+        aspect: Literal["poster", "square", "video", "landscape"] = (
+            cast(Literal["poster", "square", "video", "landscape"], raw_aspect)
+            if raw_aspect in _ARTWORK_ASPECTS
+            else "poster"
+        )
+        raw_genres = sf.get("genres")
+        genres = (
+            [g for g in raw_genres if isinstance(g, str)] if isinstance(raw_genres, list) else []
+        )
+        raw_ext = sf.get("external_ids")
+        external_ids = (
+            {str(k): str(v) for k, v in raw_ext.items() if isinstance(v, str)}
+            if isinstance(raw_ext, Mapping)
+            else {}
+        )
+        raw_rating = sf.get("rating")
+        rating = (
+            float(raw_rating)
+            if isinstance(raw_rating, (int, float)) and not isinstance(raw_rating, bool)
+            else None
+        )
+        return MediaProjectionRead(
+            media_type=media_type,
+            artwork_aspect=aspect,
+            country=sf.get("country") if isinstance(sf.get("country"), str) else None,
+            language=sf.get("language") if isinstance(sf.get("language"), str) else None,
+            genres=genres,
+            release_year=sf.get("release_year") if type(sf.get("release_year")) is int else None,
+            release_season=sf.get("release_season")
+            if isinstance(sf.get("release_season"), str)
+            else None,
+            format=sf.get("format") if isinstance(sf.get("format"), str) else None,
+            content_rating=sf.get("content_rating")
+            if isinstance(sf.get("content_rating"), str)
+            else None,
+            rating=rating,
+            release_status=sf.get("release_status")
+            if isinstance(sf.get("release_status"), str)
+            else None,
+            release_date=sf.get("release_date")
+            if isinstance(sf.get("release_date"), str)
+            else None,
+            creator=sf.get("creator") if isinstance(sf.get("creator"), str) else None,
+            season=sf.get("season") if isinstance(sf.get("season"), str) else None,
+            episode=sf.get("episode") if isinstance(sf.get("episode"), str) else None,
+            chapter=sf.get("chapter") if isinstance(sf.get("chapter"), str) else None,
+            volume=sf.get("volume") if isinstance(sf.get("volume"), str) else None,
+            duration_seconds=(
+                sf.get("duration_seconds") if type(sf.get("duration_seconds")) is int else None
+            ),
+            page_count=sf.get("page_count") if type(sf.get("page_count")) is int else None,
+            trailer_url=sf.get("trailer_url") if isinstance(sf.get("trailer_url"), str) else None,
+            attribution=sf.get("attribution") if isinstance(sf.get("attribution"), str) else None,
+            external_ids=external_ids,
+        )
+    if getattr(provider_metadata, "provider", None) == "youtube":
+        author = sf.get("author")
+        return MediaProjectionRead(
+            media_type="youtube",
+            artwork_aspect="video",
+            creator=author[:240] if isinstance(author, str) and author else None,
+        )
+    return None
 
 
 def _as_gadget_document_projection(
@@ -804,6 +1081,7 @@ def _as_gadget_document_projection(
         bookmarked_at=interaction.bookmarked_at if interaction else None,
         dismissed_at=interaction.dismissed_at if interaction else None,
         image_url=image_url,
+        media=_extract_media_projection(provider_metadata),
     )
 
 
@@ -1008,8 +1286,22 @@ def _news_projection_cursor_fingerprint(
     observed_since: datetime | None,
     channel_ids: tuple[str, ...] | None,
     language: str | None = None,
+    countries: tuple[str, ...] | None = None,
+    genres: tuple[str, ...] | None = None,
+    languages: tuple[str, ...] | None = None,
+    media_types: tuple[str, ...] | None = None,
+    formats: tuple[str, ...] | None = None,
+    content_ratings: tuple[str, ...] | None = None,
+    release_statuses: tuple[str, ...] | None = None,
+    release_year: int | None = None,
+    release_year_from: int | None = None,
+    release_year_to: int | None = None,
+    release_season: str | None = None,
+    min_rating: float | None = None,
+    release_window_days: int | None = None,
+    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
 ) -> str:
-    """Hash News filters with the admitted actor/workspace and membership/configuration revisions."""
+    """Hash News and media projection filters with the admitted actor/workspace revisions."""
     context = {
         "workspace": str(access_fence.workspace_id),
         "actor": access_fence.user_id,
@@ -1019,6 +1311,20 @@ def _news_projection_cursor_fingerprint(
         "observed_since": observed_since.astimezone(UTC).isoformat() if observed_since else None,
         "channels": sorted(channel_ids) if channel_ids is not None else None,
         "language": language,
+        "countries": sorted(countries) if countries is not None else None,
+        "genres": sorted(genres) if genres is not None else None,
+        "languages": sorted(languages) if languages is not None else None,
+        "media_types": sorted(media_types) if media_types is not None else None,
+        "formats": sorted(formats) if formats is not None else None,
+        "content_ratings": sorted(content_ratings) if content_ratings is not None else None,
+        "release_statuses": sorted(release_statuses) if release_statuses is not None else None,
+        "release_year": release_year,
+        "release_year_from": release_year_from,
+        "release_year_to": release_year_to,
+        "release_season": release_season.strip().lower() if release_season else None,
+        "min_rating": float(min_rating) if min_rating is not None else None,
+        "release_window_days": release_window_days,
+        "sort": sort,
     }
     return fingerprint_payload(
         context

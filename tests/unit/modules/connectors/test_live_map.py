@@ -31,6 +31,17 @@ def test_feed_refuses_dtd_and_normalizes_rss_time():
     assert items[0]["observed_at"] == "2026-11-04T10:00:00+00:00"
 
 
+def test_feed_summary_drops_html_markup_and_decodes_entities():
+    body = (
+        b"<rss><channel><item><guid>1</guid><title>Bitcoin &amp; USD</title>"
+        b"<description><![CDATA[<a href=\"https://vnexpress.net/x.html\"><img src=\"https://i.vnecdn.net/a.jpg\"></a>"
+        b"</br>Bitcoin tr&ecirc;n s&agrave;n Kraken]]></description></item></channel></rss>"
+    )
+    items, _ = live_map._parse("vnexpress_news", body)
+    assert items[0]["title"] == "Bitcoin & USD"
+    assert items[0]["summary"] == "Bitcoin trên sàn Kraken"
+
+
 def test_catalog_uses_distinct_reviewed_tile_and_release_identities():
     from modules.connectors.provider_specs import get_quota_policies
     from modules.connectors.public import CATALOG_IDS, live_terms_catalog

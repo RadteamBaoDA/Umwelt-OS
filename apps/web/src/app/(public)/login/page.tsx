@@ -17,6 +17,8 @@ import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { LegalLinks } from '@/modules/legal';
+import './public-skin.css';
+import { TerminalBanner } from './terminal-banner';
 import { AppearanceControl } from '@/modules/account';
 import { useDisplayPreferences } from '@/core/query-provider';
 
@@ -57,6 +59,8 @@ export default function LoginPage() {
       </header>
       <main id="main-content" className="flex flex-1 items-center justify-center px-4 py-10 sm:py-12">
         <section aria-labelledby="login-title" className="auth-panel flex flex-col gap-6">
+          {/* Terminal-only wordmark (hidden by CSS in the default skin); aria-hidden because it is decoration. */}
+          <TerminalBanner />
           <div className="grid gap-1">
             <h1 id="login-title" className="m-0 text-2xl font-semibold leading-tight">
               {t('welcome')}

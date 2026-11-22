@@ -10,10 +10,21 @@ const api = vi.hoisted(() => ({
   readTranslationBatch: vi.fn(),
 }));
 const ws = vi.hoisted(() => ({ id: 'w1', generation: 1 }));
+const core = vi.hoisted(() => {
+  class ApiError extends Error {
+    constructor(
+      readonly status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+  return { ApiError };
+});
 vi.mock('./api', () => api);
-vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
+vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: ws.id } }) }));
-vi.mock('@/core/api', () => ({ workspaceGeneration: () => ws.generation }));
+vi.mock('@/core/api', () => ({ workspaceGeneration: () => ws.generation, ApiError: core.ApiError }));
 
 const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children);
@@ -42,11 +53,18 @@ describe('useContentTranslation', () => {
     expect(chunk(ids(60)).map((g) => g.length)).toEqual([25, 25, 10]);
   });
 
-  it('requests only the supplied page ids, in chunks of at most 25', async () => {
+  it('does not auto-submit on mount and only translates when requested, in chunks of at most 25', async () => {
     api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) =>
       accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))),
     );
-    renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
+    await settle();
+    await settle();
+    expect(api.submitTranslationBatch).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.translate();
+    });
     await settle();
     await settle();
     const sizes = api.submitTranslationBatch.mock.calls.map((c: unknown[][]) => c[0].length).sort((a: number, b: number) => a - b);
@@ -58,6 +76,48 @@ describe('useContentTranslation', () => {
     ).toBe(true);
   });
 
+  it('hydrates DB cache hits (status=ready without payload) and cached blocked error codes immediately via readTranslationBatch', async () => {
+    api.submitTranslationBatch.mockResolvedValue(
+      accepted([
+        { resource_id: 's0', status: 'ready' },
+        { resource_id: 's1', status: 'blocked' },
+      ]),
+    );
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      target_language: 'vi',
+      items: [
+        {
+          resource_type: 'news_story',
+          resource_id: 's0',
+          status: 'ready',
+          translation: { title: 'Tieu de da dich' },
+          original_revision: 'r',
+          error_code: null,
+        },
+        {
+          resource_type: 'news_story',
+          resource_id: 's1',
+          status: 'blocked',
+          translation: null,
+          original_revision: 'r',
+          error_code: 'model_capability_missing',
+        },
+      ],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(api.readTranslationBatch).toHaveBeenCalledTimes(1);
+    expect(api.readTranslationBatch).toHaveBeenCalledWith('b1', expect.any(AbortSignal));
+    expect(result.current.results.get('s0')?.translation?.title).toBe('Tieu de da dich');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('model_capability_missing');
+  });
+
   it('drops a late result after a workspace switch', async () => {
     let resolve!: (value: unknown) => void;
     api.submitTranslationBatch.mockReturnValue(
@@ -67,6 +127,9 @@ describe('useContentTranslation', () => {
     );
     const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
     await settle();
+    act(() => {
+      result.current.translate();
+    });
     ws.generation = 2;
     await act(async () => {
       resolve({
@@ -84,7 +147,11 @@ describe('useContentTranslation', () => {
       batch_id: 'b1',
       items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
     });
-    renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
     await settle();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(MAX_POLL_MS + POLL_MS * 3);
@@ -108,6 +175,9 @@ describe('useContentTranslation', () => {
     });
     const first = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
     await settle();
+    act(() => {
+      first.result.current.translate();
+    });
     await settle();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);
@@ -121,5 +191,234 @@ describe('useContentTranslation', () => {
       expect(hook.result.current.results.get('s0')?.translation?.title).toBe('x');
       expect(hook.result.current.issues.get('s1')?.errorCode).toBe('privacy_blocked');
     }
+  });
+
+  it('clears a batch that stays pending past the deadline so the button is not stuck', async () => {
+    api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'pending' }]));
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MAX_POLL_MS + POLL_MS * 3);
+    });
+    expect(result.current.pendingIds.size).toBe(0);
+  });
+
+  it('drops a pending cache entry on unmount so a remounted hook is not stuck', async () => {
+    api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'pending' }]));
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
+    });
+    const first = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      first.result.current.translate();
+    });
+    await settle();
+    first.unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+    });
+    const second = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    expect(second.result.current.pendingIds.size).toBe(0);
+  });
+
+  it('records rate_limited for every target when the submit is rejected with 429', async () => {
+    api.submitTranslationBatch.mockRejectedValue(new core.ApiError(429, 'slow down'));
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(result.current.issues.get('s0')?.errorCode).toBe('rate_limited');
+    expect(result.current.issues.get('s0')?.status).toBe('failed');
+    expect(result.current.pendingIds.size).toBe(0);
+  });
+
+  it('records stale_request for every group item when the submit is rejected with 409', async () => {
+    api.submitTranslationBatch.mockRejectedValue(new core.ApiError(409, 'stale'));
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(result.current.issues.get('s0')?.errorCode).toBe('stale_request');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('stale_request');
+  });
+
+  it('marks an accepted unchanged item as unchanged', async () => {
+    api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'unchanged' }], null as never));
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(result.current.unchanged.has('s0')).toBe(true);
+  });
+  it('settles POST items that carry an error_code immediately and hydrates only the ones without one', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      items: [
+        { resource_type: 'news_story', resource_id: 's0', status: 'failed', error_code: 'resource_unavailable', translation: null },
+        { resource_type: 'news_story', resource_id: 's1', status: 'failed', error_code: 'stale_request', translation: null },
+        { resource_type: 'news_story', resource_id: 's2', status: 'ready' },
+      ],
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    });
+    // The GET only carries the item that still lacks a payload, so s0/s1 can only come from the POST.
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      target_language: 'vi',
+      items: [
+        {
+          resource_type: 'news_story',
+          resource_id: 's2',
+          status: 'ready',
+          translation: { title: 'Hydrated' },
+          original_revision: 'r',
+          error_code: null,
+        },
+      ],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(3)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await settle();
+    expect(api.readTranslationBatch).toHaveBeenCalledTimes(1);
+    expect(result.current.issues.get('s0')?.errorCode).toBe('resource_unavailable');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('stale_request');
+    expect(result.current.results.get('s2')?.translation?.title).toBe('Hydrated');
+  });
+
+  it('settles an all-invalid batch (batch_id null) from POST alone with no GET or polling', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      batch_id: null,
+      items: [
+        { resource_type: 'news_story', resource_id: 's0', status: 'failed', error_code: 'resource_unavailable', translation: null },
+        { resource_type: 'news_story', resource_id: 's1', status: 'failed', error_code: 'stale_request', translation: null },
+      ],
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    });
+    expect(api.readTranslationBatch).not.toHaveBeenCalled();
+    expect(result.current.issues.get('s0')?.errorCode).toBe('resource_unavailable');
+    expect(result.current.issues.get('s1')?.errorCode).toBe('stale_request');
+    expect(result.current.pendingIds.size).toBe(0);
+  });
+
+  it('exposes run progress for a collection submission and clears it once every submitted item settles', async () => {
+    api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) => ({
+      ...accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'pending' }))),
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    }));
+    const settledItems = (count: number, status: string) =>
+      Array.from({ length: 25 }, (_, i) => ({
+        resource_type: 'news_story',
+        resource_id: `s${i}`,
+        status: i < count ? status : 'pending',
+        original_revision: 'r',
+      }));
+    api.readTranslationBatch.mockResolvedValueOnce({ items: settledItems(3, 'unchanged') });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate(ids(30).slice(0, 25), { collection: true });
+    });
+    await settle();
+    expect(result.current.progress).toEqual({ done: 0, total: 25 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    await settle();
+    expect(result.current.progress).toEqual({ done: 3, total: 25 });
+    api.readTranslationBatch.mockResolvedValue({ items: settledItems(25, 'unchanged') });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    await settle();
+    expect(result.current.progress).toBeNull();
+  });
+
+  it('shows a polled ready item while another item in the run is still pending', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      ...accepted([
+        { resource_id: 's0', status: 'pending' },
+        { resource_id: 's1', status: 'pending' },
+      ]),
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    });
+    api.readTranslationBatch.mockResolvedValue({
+      items: [
+        {
+          resource_type: 'news_story',
+          resource_id: 's0',
+          status: 'ready',
+          original_revision: 'r',
+          translation: { title: 'T', excerpt: null },
+        },
+        { resource_type: 'news_story', resource_id: 's1', status: 'pending', original_revision: 'r' },
+      ],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(2)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+    });
+    await settle();
+    expect(result.current.results.has('s0')).toBe(true);
+  });
+
+  it('keeps a batch still pending at the deadline as still_queued and retryable instead of reverting it silently', async () => {
+    api.submitTranslationBatch.mockResolvedValue({
+      ...accepted([{ resource_id: 's0', status: 'pending' }]),
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
+    });
+    api.readTranslationBatch.mockResolvedValue({
+      items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
+    });
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MAX_POLL_MS + POLL_MS * 3);
+    });
+    expect(result.current.issues.get('s0')).toMatchObject({ status: 'failed', errorCode: 'still_queued' });
+    expect(result.current.pendingIds.size).toBe(0);
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    expect(api.submitTranslationBatch).toHaveBeenCalledTimes(2);
   });
 });

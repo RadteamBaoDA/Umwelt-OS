@@ -6,6 +6,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useChatController } from '@/core/app-shell/chat-controller';
+import { useWorkspace } from '@/core/workspace-context';
 import { NewsFeed } from './news-feed';
 import { Sparkline } from './sparkline';
 import { bucketByDay } from './relative-time';
@@ -34,6 +35,7 @@ import {
 import { ShowMoreButton, useShowMore } from './show-more';
 import { useLocalPref } from '@/core/use-local-pref';
 import { useAutoFetchWhenEmpty, useFeedFilters, useFeedModeration, useFeedQueries } from './use-feed-state';
+import { CollectionTranslationBar, TranslationStatusBanner, useItemTranslation } from '@/modules/translations';
 
 export type { FeedStreamItem } from './feed-model';
 
@@ -47,6 +49,11 @@ export interface FeedGadgetProps {
   onUnreadCountChange?: (count: number) => void;
 }
 
+/** Feed stream inputs plus the resolved workspace role used for owner-only actions. */
+interface FeedStreamProps extends FeedGadgetProps {
+  isOwner: boolean;
+}
+
 /**
  * Standard Feed Stream gadget template.
  * Displays real-time or polled items from news feeds, RSS channels, Telegram messages,
@@ -58,9 +65,10 @@ export interface FeedGadgetProps {
  */
 export function FeedGadget(props: FeedGadgetProps) {
   const t = useTranslations('dashboard');
+  const { isOwner } = useWorkspace();
   const [tab, setTab] = useState<'items' | 'stories'>('items');
   // Story clusters come from the news module; Telegram records have no story clusters.
-  if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} />;
+  if (props.instance.definition.renderer === 'telegram_feed') return <FeedStream {...props} isOwner={isOwner} />;
   return (
     <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
       <TabsList aria-label={t('feed.tabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
@@ -78,7 +86,7 @@ export function FeedGadget(props: FeedGadgetProps) {
         </TabsTrigger>
       </TabsList>
       <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
-        <FeedStream {...props} />
+        <FeedStream {...props} isOwner={isOwner} />
       </TabsContent>
       <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden">
         <NewsFeed instance={props.instance} />
@@ -351,13 +359,38 @@ function useFeedSignals(feedItems: FeedStreamItem[], onUnreadCountChange: FeedGa
   return { unreadCount, volume };
 }
 
-/** Renders the scrollable feed item stream with selection and Ask AI affordances. */
-function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetProps) {
+/** Builds the on-demand document translation controller for the currently visible feed items. */
+function useFeedTranslation(items: FeedStreamItem[]) {
+  const targets = useMemo(
+    () =>
+      items
+        .filter((item): item is FeedStreamItem & { documentVersionId: string } => Boolean(item.documentVersionId))
+        .map((item) => ({ id: item.id, revision: item.documentVersionId })),
+    [items],
+  );
+  return useItemTranslation('document', targets);
+}
+
+/**
+ * Fetches once when the feed settles empty for the current server scope (sources, channels, language, window).
+ * Thin wrapper over `useAutoFetchWhenEmpty` that keeps `FeedStream` within the function-length limit.
+ */
+function useFeedAutoFetch(
+  docsQuery: Parameters<typeof useAutoFetchWhenEmpty>[0]['docsQuery'],
+  displayedCount: number,
+  filtering: boolean,
+  hasInitialItems: boolean,
+  scopeParts: string[],
+) {
+  useAutoFetchWhenEmpty({ docsQuery, displayedCount, filtering, hasInitialItems, serverScope: scopeParts.join('|') });
+}
+
+/** Renders the scrollable feed item stream with owner-aware Ask AI affordances and existing Telegram controls. */
+function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: FeedStreamProps) {
   const { openDrawer } = useChatController();
   const definition = instance.definition;
-  const isTelegram = definition.renderer === 'telegram_feed';
   const sourceIds = [...new Set(definition.source_ids)].slice(0, 32);
-  const channelIds = isTelegram ? (definition.scope.channel_ids ?? []).slice(0, 32) : [];
+  const channelIds = definition.renderer === 'telegram_feed' ? (definition.scope.channel_ids ?? []).slice(0, 32) : [];
   const filters = useFeedFilters();
   // Layout choice is per gadget instance and survives reloads (unlike the transient filters).
   const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.feedView.${instance.id}`, 'list', FEED_VIEWS);
@@ -376,25 +409,22 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
   const more = useFeedShowMore(displayedItems, view, `${sourceFilter}|${needle}|${onlyUnread}|${language}|${timeWindow}`);
   // Search/language/time controls are noise on a settled empty feed with nothing active to clear.
   const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
-  const serverScope = `${sourceIds.join()}|${channelIds.join()}|${language}|${timeWindow}`;
-  useAutoFetchWhenEmpty({
-    docsQuery,
-    displayedCount: displayedItems.length,
-    filtering,
-    hasInitialItems: Boolean(initialItems?.length),
-    serverScope,
-  });
+  const scope = [sourceIds.join(), channelIds.join(), language, timeWindow];
+  useFeedAutoFetch(docsQuery, displayedItems.length, filtering, Boolean(initialItems?.length), scope);
 
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
+  const translation = useFeedTranslation(more.visible);
   const rowContext: FeedRowContext = {
     view,
-    isTelegram,
+    isTelegram: definition.renderer === 'telegram_feed',
+    isOwner,
     selectMode,
     selected: selectedTelegram,
     setSelected: setSelectedTelegram,
     interactionPending: moderation.interactionMutation.isPending,
     onInteract: (change) => moderation.interactionMutation.mutate(change),
     onAskAbout: askAbout,
+    translation,
   };
 
   return (
@@ -436,6 +466,8 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
         undoRef={undoRef}
         onAskAbout={askAbout}
       />
+      {more.visible.length > 0 ? <CollectionTranslationBar controller={translation} /> : null}
+      <TranslationStatusBanner issues={translation.issues} />
       <FeedStatus
         docsQuery={docsQuery}
         feedItemCount={feedItems.length}

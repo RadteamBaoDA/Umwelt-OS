@@ -7,6 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError } from '@/core/api';
+import { MEDIA_FILTER_SPECS, type OptionSpec } from './builtin-option-specs';
+import { TypedOption } from './builtin-options';
+import type { ScopeSectionProps } from './provider-scope';
 import { scopeHintKey } from './guide-keys';
 import { connectorKeys, searchCoinGeckoCoins, type CoinGeckoCoin, type ConnectorConfig } from './api';
 
@@ -25,7 +28,7 @@ export function ScopeHint({ field }: { field: string }) {
   );
 }
 
-/** Pairs a scope field with its translated label, constrained native input and hint (`id` = `source-scope-<name>`). */
+/** Pairs a scope field with its translated label, bounds and hint. Required defaults to true; alternative targets can opt out. */
 export function ScopeField({
   name,
   label,
@@ -34,6 +37,7 @@ export function ScopeField({
   disabled,
   maxLength,
   pattern,
+  required = true,
 }: {
   name: keyof ConnectorConfig;
   label: string;
@@ -42,6 +46,7 @@ export function ScopeField({
   disabled: boolean;
   maxLength?: number;
   pattern?: string;
+  required?: boolean;
 }) {
   return (
     <div className="field">
@@ -50,7 +55,7 @@ export function ScopeField({
         id={`source-scope-${name}`}
         value={value}
         disabled={disabled}
-        required
+        required={required}
         aria-describedby={`source-hint-${name}`}
         onChange={(event) => onValue(event.target.value)}
         maxLength={maxLength}
@@ -230,6 +235,43 @@ export function LocationButton({ disabled, onLocate }: { disabled: boolean; onLo
           {t(state === 'denied' ? 'location.denied' : 'location.unavailable')}
         </small>
       )}
+    </div>
+  );
+}
+
+/**
+ * Narrows a shared media filter to what one provider accepts: Open Library takes a single language and podcast
+ * feeds only classify as episodic or serial. Returns the spec unchanged for every other provider and key.
+ */
+function filterSpecFor(provider: string, spec: OptionSpec): OptionSpec {
+  if (provider === 'openlibrary_books' && spec.key === 'media_languages') return { ...spec, max: 1 };
+  if (provider === 'podcast_rss' && spec.key === 'media_formats') return { ...spec, values: ['episodic', 'serial'] };
+  return spec;
+}
+
+/**
+ * Renders only accepted optional media filters using the shared bounded option controls.
+ * Empty values emit explicit null so editing a saved source clears its prior filter. No field is required.
+ */
+export function MediaFilterFields({
+  provider,
+  configuration,
+  disabled,
+  resetEpoch,
+  onChange,
+  fields,
+}: ScopeSectionProps & { fields: readonly string[] }) {
+  return (
+    <div className="grid gap-3">
+      {MEDIA_FILTER_SPECS.filter((spec) => fields.includes(spec.key)).map((spec) => (
+        <TypedOption
+          key={`${resetEpoch}-${spec.key}`}
+          spec={filterSpecFor(provider, spec)}
+          value={configuration[spec.key]}
+          disabled={disabled}
+          onValue={(next) => onChange(spec.key, (next === undefined || (Array.isArray(next) && next.length === 0) ? null : next) as never)}
+        />
+      ))}
     </div>
   );
 }

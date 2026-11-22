@@ -161,6 +161,13 @@ def test_unknown_official_caps_are_counted_not_invented() -> None:
     assert {"official_calls_per_minute", "official_call_credits_per_month"} <= keys
 
 
+def test_tvmaze_has_a_shared_short_window_pilot_quota() -> None:
+    spec = get_provider_spec("tvmaze_schedule")
+    assert spec is not None
+    minute = next(window for window in spec.quota if window.window == "minute")
+    assert minute.budget_kind == "provider" and minute.limit_units == 20
+
+
 def test_catalog_exposes_all_specs_additively_and_honestly() -> None:
     catalog_ids = {entry.provider_id for entry in list_catalog()}
     assert {spec.id for spec in FREE_PROVIDER_SPECS} <= catalog_ids
@@ -353,3 +360,30 @@ def test_fixed_providers_have_static_example_config_and_sample():
             )
             assert e.sample_output
     assert entries["youtube"].example_config is None
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "tmdb_movies",
+        "tmdb_tv",
+        "trakt_media",
+        "omdb_lookup",
+        "mal_anime",
+        "mal_manga",
+        "hardcover_books",
+        "google_books",
+        "youtube_api",
+        "podcast_index",
+        "listenbrainz_releases",
+        "steam_releases",
+        "igdb_games",
+    ],
+)
+def test_all_phase_four_providers_expose_media_shape(provider):
+    from modules.connectors.data_shapes import source_data_shapes
+
+    shapes = source_data_shapes(provider, "api")
+    assert "media" in shapes
+    if provider == "youtube_api":
+        assert "video" in shapes

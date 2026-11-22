@@ -7,13 +7,33 @@ import { CheckboxField } from '@/components/settings-layout';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  inactiveMediaModeFilters,
+  MAL_MANGA_RANKINGS,
+  MEDIA_FILTER_SPECS,
+  MEDIA_PROVIDER_FIELDS,
+  OPTION_SPECS,
+} from './builtin-option-specs';
+import { TypedOption } from './builtin-options';
 import type { ConnectorConfig } from './api';
-import { CoinGeckoPicker, LocationButton, ScopeField, ScopeHint, useIdListText } from './scope-fields';
+import { CoinGeckoPicker, LocationButton, ScopeField, ScopeHint, MediaFilterFields, useIdListText } from './scope-fields';
 
 export { ProviderGuide, ProviderTerms } from './provider-guide';
 export { ScopeHint } from './scope-fields';
 
+/** Providers with a dedicated native source scope, including media providers using `MediaScope`. */
 export type NativeProvider =
+  | 'tmdb_movies'
+  | 'tmdb_tv'
+  | 'trakt_media'
+  | 'omdb_lookup'
+  | 'mal_anime'
+  | 'mal_manga'
+  | 'google_books'
+  | 'hardcover_books'
+  | 'youtube_api'
+  | 'podcast_index'
+  | 'listenbrainz_releases'
   | 'youtube'
   | 'arxiv'
   | 'huggingface'
@@ -35,7 +55,8 @@ export type NativeProvider =
   | 'openaq'
   | 'nasa_firms'
   | 'notion'
-  | 'slack';
+  | 'slack'
+  | keyof typeof MEDIA_PROVIDER_FIELDS;
 
 type ScopeChange = <K extends keyof ConnectorConfig>(key: K, value: ConnectorConfig[K]) => void;
 
@@ -241,19 +262,392 @@ function NasaFirmsScope({ configuration, disabled, onChange }: ScopeSectionProps
   );
 }
 
-/** YouTube scope: channel id. */
-function YoutubeScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+/** Raw-text length bound of each bounded YouTube target list input. */
+const YOUTUBE_LIST_MAX_LENGTH = { youtube_channels: 208, youtube_handles: 264, youtube_playlist_ids: 528 } as const;
+
+/** Selects the YouTube target family present in a draft; legacy single-channel configurations are the fallback. */
+function youtubeTargetMode(
+  configuration: ConnectorConfig,
+): 'youtube_channels' | 'youtube_handles' | 'youtube_playlist_ids' | 'youtube_channel_id' {
+  if (configuration.youtube_channels != null) return 'youtube_channels';
+  if (configuration.youtube_handles != null) return 'youtube_handles';
+  if (configuration.youtube_playlist_ids != null) return 'youtube_playlist_ids';
+  return 'youtube_channel_id';
+}
+
+/**
+ * Preserves legacy channel scopes and selects exactly one bounded target list (IDs, handles, or playlists).
+ * Target-mode changes clear other identifiers explicitly; filter selection leaves target identity untouched.
+ */
+function YoutubeScope(props: ScopeSectionProps) {
+  const { provider, configuration, disabled, resetEpoch, onChange } = props;
+  const t = useTranslations('sources');
+  const mode = youtubeTargetMode(configuration);
+  const channels = useIdListText(configuration.youtube_channels ?? [], resetEpoch);
+  const handles = useIdListText(configuration.youtube_handles ?? [], resetEpoch);
+  const popular = provider === 'youtube_api' && configuration.youtube_api_mode === 'most_popular';
+  const playlists = useIdListText(configuration.youtube_playlist_ids ?? [], resetEpoch);
+  const lists = { youtube_channels: channels, youtube_handles: handles, youtube_playlist_ids: playlists };
+  const targetLabels = {
+    youtube_channel_id: 'youtube.channelId',
+    youtube_channels: 'youtube.channels',
+    youtube_handles: 'youtube.handles',
+    youtube_playlist_ids: 'youtube.playlists',
+  } as const;
+  if (popular) return <YoutubePopularScope {...props} />;
+  return (
+    <>
+      {provider === 'youtube_api' && <YoutubeApiModeSelect {...props} mode="uploads" />}
+      <div className="field">
+        <Label htmlFor="youtube-target-mode">{t('youtube.targetMode')}</Label>
+        <Select
+          value={mode}
+          disabled={disabled}
+          onValueChange={(next) => {
+            // The backend accepts exactly one target family, including legacy single-channel configurations.
+            for (const key of Object.keys(targetLabels) as (keyof typeof targetLabels)[]) {
+              onChange(key, (key === next ? (key === 'youtube_channel_id' ? '' : []) : null) as never);
+            }
+            if (provider === 'youtube_api' && next === 'youtube_playlist_ids') {
+              onChange('youtube_filter', 'all');
+              onChange('media_countries', null as never);
+            }
+          }}
+        >
+          <SelectTrigger id="youtube-target-mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(targetLabels) as (keyof typeof targetLabels)[]).map((key) => (
+              <SelectItem key={key} value={key}>
+                {t(targetLabels[key])}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {mode === 'youtube_channel_id' ? (
+        <ScopeField
+          name={mode}
+          label={t('youtube.channelId')}
+          value={configuration.youtube_channel_id ?? ''}
+          onValue={(value) => onChange(mode, value)}
+          disabled={disabled}
+          maxLength={24}
+          pattern="UC[A-Za-z0-9_-]{22}"
+        />
+      ) : (
+        <ScopeField
+          name={mode}
+          label={t(targetLabels[mode])}
+          value={lists[mode].value}
+          disabled={disabled}
+          maxLength={YOUTUBE_LIST_MAX_LENGTH[mode]}
+          onValue={(value) => onChange(mode, lists[mode].edit(value))}
+        />
+      )}
+      <div className="field">
+        <Label htmlFor="youtube-filter">{t('youtube.filter')}</Label>
+        <Select
+          value={configuration.youtube_filter ?? 'all'}
+          disabled={disabled || (provider === 'youtube_api' && mode === 'youtube_playlist_ids')}
+          onValueChange={(next) => onChange('youtube_filter', next as ConnectorConfig['youtube_filter'])}
+        >
+          <SelectTrigger id="youtube-filter">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('youtube.all')}</SelectItem>
+            <SelectItem value="long_form">{t('youtube.longForm')}</SelectItem>
+            <SelectItem value="shorts">{t('youtube.shorts')}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {provider === 'youtube_api' && (
+        <MediaFilterFields
+          {...props}
+          fields={MEDIA_PROVIDER_FIELDS.youtube_api.filter((key) => mode !== 'youtube_playlist_ids' || key !== 'media_countries')}
+        />
+      )}
+      {provider === 'youtube' && <MediaFilterFields {...props} fields={MEDIA_PROVIDER_FIELDS.youtube} />}
+    </>
+  );
+}
+
+/**
+ * YouTube Data API mode select (channel uploads vs most-popular chart). Switching clears the fields of the other
+ * mode (targets and filter for the chart; region and category for uploads) because the server rejects stale ones;
+ * "uploads" is stored as null, the server default.
+ */
+function YoutubeApiModeSelect({ mode, disabled, onChange }: ScopeSectionProps & { mode: 'uploads' | 'most_popular' }) {
   const t = useTranslations('sources');
   return (
-    <ScopeField
-      name="youtube_channel_id"
-      label={t('youtube.channelId')}
-      value={configuration.youtube_channel_id ?? ''}
-      onValue={(value) => onChange('youtube_channel_id', value)}
-      disabled={disabled}
-      maxLength={24}
-      pattern="UC[A-Za-z0-9_-]{22}"
-    />
+    <div className="field">
+      <Label htmlFor="youtube-api-mode">{t('youtube.apiMode')}</Label>
+      <Select
+        value={mode}
+        disabled={disabled}
+        onValueChange={(next) => {
+          if (next === 'most_popular') {
+            onChange('youtube_api_mode', 'most_popular');
+            // The server rejects channel targets and the channel-country filter in chart mode.
+            for (const key of [
+              'youtube_channel_id',
+              'youtube_channels',
+              'youtube_handles',
+              'youtube_playlist_ids',
+              'media_countries',
+            ] as const) {
+              onChange(key, null as never);
+            }
+            onChange('youtube_filter', 'all');
+            return;
+          }
+          onChange('youtube_api_mode', null as never);
+          onChange('youtube_channel_id', '');
+          onChange('youtube_video_category_id', null as never);
+          onChange('media_country', null as never);
+        }}
+      >
+        <SelectTrigger id="youtube-api-mode">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="uploads">{t('youtube.modeUploads')}</SelectItem>
+          <SelectItem value="most_popular">{t('youtube.modePopular')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+/** Most-popular chart scope: optional region (ISO 3166-1 alpha-2) and numeric video category id; no channel target. */
+function YoutubePopularScope(props: ScopeSectionProps) {
+  const { configuration, disabled, resetEpoch, onChange } = props;
+  const t = useTranslations('sources');
+  const region = MEDIA_FILTER_SPECS.find((spec) => spec.key === 'media_country')!;
+  return (
+    <>
+      <YoutubeApiModeSelect {...props} mode="most_popular" />
+      <TypedOption
+        key={`${resetEpoch}-media_country`}
+        spec={region}
+        value={configuration.media_country}
+        disabled={disabled}
+        onValue={(next) => onChange('media_country', (next === undefined ? null : next) as never)}
+      />
+      <ScopeField
+        name="youtube_video_category_id"
+        label={t('youtube.categoryId')}
+        value={configuration.youtube_video_category_id ?? ''}
+        onValue={(value) => onChange('youtube_video_category_id', (value || null) as never)}
+        disabled={disabled}
+        maxLength={4}
+        pattern="[0-9]{1,4}"
+        required={false}
+      />
+      {/* The server still applies these post-fetch filters to the chart, so keep them visible and clearable. */}
+      <MediaFilterFields {...props} fields={MEDIA_PROVIDER_FIELDS.youtube_api.filter((field) => field !== 'media_countries')} />
+    </>
+  );
+}
+
+/** Returns whether an Open Library field belongs to the currently selected search mode. */
+function acceptsOpenLibraryField(key: string, configuration: ConnectorConfig): boolean {
+  const mode = configuration.openlibrary_mode ?? 'subject';
+  switch (key) {
+    case 'openlibrary_subject':
+      return mode === 'subject';
+    case 'openlibrary_query':
+    case 'media_languages':
+      return mode === 'search';
+    case 'ebooks_only':
+      return mode !== 'recent';
+    default:
+      return true;
+  }
+}
+
+/** Returns whether a Trakt query or calendar field matches the selected endpoint mode. */
+function acceptsTraktField(key: string, configuration: ConnectorConfig): boolean | undefined {
+  if (key === 'trakt_query') return (configuration.trakt_mode ?? 'movies_trending').endsWith('_search');
+  if (key === 'trakt_calendar_days') return (configuration.trakt_mode ?? 'movies_trending').endsWith('_calendar');
+  return undefined;
+}
+
+/** Returns whether an OMDb target field matches the selected lookup mode. */
+function acceptsOmdbField(key: string, configuration: ConnectorConfig): boolean | undefined {
+  if (key === 'omdb_imdb_id') return (configuration.omdb_mode ?? 'title') === 'imdb_id';
+  if (key === 'omdb_title') return (configuration.omdb_mode ?? 'title') === 'title';
+  if (key === 'omdb_search') return (configuration.omdb_mode ?? 'title') === 'search';
+  return undefined;
+}
+
+/** Returns whether a provider mode permits one of its conditional fields to be shown. */
+function acceptsProviderModeField(provider: NativeProvider, key: string, configuration: ConnectorConfig): boolean {
+  if (key === 'mal_season' || key === 'mal_season_year') return configuration.mal_mode === 'season';
+  if (key === 'mal_ranking_type') return configuration.mal_mode !== 'season';
+  if (key === 'ann_media_type') return configuration.ann_mode === 'encyclopedia';
+  if (key === 'tvmaze_global') return configuration.tvmaze_mode === 'schedule_web';
+  if (key === 'tvmaze_show_ids') return configuration.tvmaze_mode === 'followed_shows';
+  // Followed shows ignore the schedule country; global channels exclude it (server rule), so the country hides.
+  if (provider === 'tvmaze_schedule' && key === 'media_country') {
+    return configuration.tvmaze_mode !== 'followed_shows' && !configuration.tvmaze_global;
+  }
+  const traktField = acceptsTraktField(key, configuration);
+  if (traktField !== undefined) return traktField;
+  const omdbField = acceptsOmdbField(key, configuration);
+  if (omdbField !== undefined) return omdbField;
+  return true;
+}
+
+/** Selects the mode-aware visibility rule for one provider field. */
+function acceptsMediaScopeField(provider: NativeProvider, key: string, configuration: ConnectorConfig): boolean {
+  return provider === 'openlibrary_books'
+    ? acceptsOpenLibraryField(key, configuration)
+    : acceptsProviderModeField(provider, key, configuration);
+}
+
+/** Clears MAL fields from the inactive endpoint so they stay out of the source's identity. */
+function clearMalTargets(key: string, next: unknown, onChange: ScopeChange): void {
+  if (key !== 'mal_mode') return;
+  if (next === 'season') onChange('mal_ranking_type', null as never);
+  else {
+    onChange('mal_season_year', null as never);
+    onChange('mal_season', null as never);
+  }
+}
+
+/** Clears fields that become invalid when a media provider's selected endpoint changes. */
+function clearDependentMediaFields(key: string, next: unknown, onChange: ScopeChange): void {
+  clearSteamNewsTargets(key, next, onChange);
+  if (key === 'itunes_podcast_id' && next) onChange('feed_url', null as never);
+  if (key === 'openlibrary_mode') {
+    onChange('openlibrary_subject', null as never);
+    onChange('openlibrary_query', null as never);
+    onChange('media_languages', null as never);
+    onChange('ebooks_only', null as never);
+  }
+  if (key === 'ann_mode' && next !== 'encyclopedia') onChange('ann_media_type', null as never);
+  clearTvmazeFields(key, next, onChange);
+  if (key === 'trakt_mode') {
+    if (typeof next !== 'string' || !next.endsWith('_search')) onChange('trakt_query', null as never);
+    if (typeof next !== 'string' || !next.endsWith('_calendar')) onChange('trakt_calendar_days', null as never);
+  }
+  inactiveMediaModeFilters(key, next).forEach((inactive) => onChange(inactive, null as never));
+  clearMalTargets(key, next, onChange);
+  if (key === 'omdb_mode') {
+    onChange('omdb_imdb_id', null as never);
+    onChange('omdb_title', null as never);
+    onChange('omdb_search', null as never);
+  }
+}
+
+/**
+ * Clears TVMaze fields a changed mode or toggle makes invalid, because the server rejects stale ones (422): global
+ * channels reset on any mode change, show IDs outside followed shows, the country in followed shows, and the country
+ * when global channels turn on.
+ */
+function clearTvmazeFields(key: string, next: unknown, onChange: ScopeChange): void {
+  if (key === 'tvmaze_mode') {
+    onChange('tvmaze_global', null as never);
+    if (next !== 'followed_shows') onChange('tvmaze_show_ids', null as never);
+    else onChange('media_country', null as never);
+  }
+  if (key === 'tvmaze_global' && next === true) {
+    onChange('media_country', null as never);
+    onChange('media_countries', null as never);
+  }
+}
+
+/** Clears Steam app IDs when leaving the only mode that consumes them. */
+function clearSteamNewsTargets(key: string, next: unknown, onChange: ScopeChange): void {
+  if (key === 'steam_mode' && next !== 'news') onChange('steam_appids', null as never);
+}
+
+/**
+ * Renders media source targets and provider options, followed by optional shared media filters.
+ * Clears incompatible target values when the owner changes endpoint modes.
+ */
+function MediaScope(props: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  const { provider, configuration, disabled, resetEpoch, onChange } = props;
+  const fields: readonly string[] = MEDIA_PROVIDER_FIELDS[provider as keyof typeof MEDIA_PROVIDER_FIELDS];
+  const filters = MEDIA_FILTER_SPECS.map((spec) => spec.key);
+  const inactive = new Set<string>(
+    provider === 'tmdb_movies'
+      ? inactiveMediaModeFilters('tmdb_mode', configuration.tmdb_mode)
+      : inactiveMediaModeFilters('omdb_mode', provider === 'omdb_lookup' ? configuration.omdb_mode : undefined),
+  );
+  const accepted = fields.filter((key) => !inactive.has(key) && acceptsMediaScopeField(provider, key, configuration));
+  const filtered =
+    provider === 'podcast_index'
+      ? accepted.filter((key) => {
+          if (key === 'content_ratings') return Boolean(configuration.podcast_index_query);
+          return (
+            key === 'podcast_index_query' ||
+            !key.startsWith('podcast_index_') ||
+            (configuration.podcast_index_query ? key === 'podcast_index_value' : key !== 'podcast_index_value')
+          );
+        })
+      : accepted;
+  return (
+    <>
+      {provider === 'podcast_rss' && (
+        <ScopeField
+          name="feed_url"
+          label={t('media.podcastFeed')}
+          value={configuration.feed_url ?? ''}
+          required={!configuration.itunes_podcast_id}
+          maxLength={2048}
+          disabled={disabled}
+          onValue={(next) => {
+            onChange('feed_url', (next || null) as never);
+            if (next) onChange('itunes_podcast_id', null as never);
+          }}
+        />
+      )}
+      {OPTION_SPECS.filter((spec) => filtered.includes(spec.key) && !filters.includes(spec.key)).map((item) => {
+        const tmdbModes =
+          provider === 'tmdb_movies'
+            ? (['now_playing', 'upcoming', 'changes'] as const)
+            : provider === 'tmdb_tv'
+              ? (['airing_today', 'on_the_air'] as const)
+              : undefined;
+        const values =
+          item.key === 'tmdb_mode'
+            ? tmdbModes
+            : item.key === 'mal_ranking_type' && provider === 'mal_manga'
+              ? MAL_MANGA_RANKINGS
+              : undefined;
+        const spec = values ? { ...item, values } : item;
+        return (
+          <TypedOption
+            key={`${resetEpoch}-${spec.key}`}
+            spec={spec}
+            value={configuration[spec.key]}
+            disabled={disabled}
+            onValue={(next) => {
+              onChange(spec.key, (next === undefined || (Array.isArray(next) && next.length === 0) ? null : next) as never);
+              // Recent-feed filters and search value blocks belong to different Podcast Index endpoints.
+              if (spec.key === 'podcast_index_query') {
+                const cleared = next
+                  ? ([
+                      'podcast_index_languages',
+                      'podcast_index_categories',
+                      'podcast_index_excluded_categories',
+                      'podcast_index_since',
+                    ] as const)
+                  : (['podcast_index_value', 'content_ratings'] as const);
+                for (const key of cleared) onChange(key, null as never);
+              }
+              clearDependentMediaFields(spec.key, next, onChange);
+            }}
+          />
+        );
+      })}
+      <MediaFilterFields {...props} fields={filtered} />
+    </>
   );
 }
 
@@ -656,6 +1050,33 @@ function IdListScope({
  * `NativeProvider`); `ProviderScope` itself does not change.
  */
 const SCOPE_SECTIONS: Record<NativeProvider, ComponentType<ScopeSectionProps>> = {
+  tmdb_movies: MediaScope,
+  tmdb_tv: MediaScope,
+  trakt_media: MediaScope,
+  omdb_lookup: MediaScope,
+  mal_anime: MediaScope,
+  mal_manga: MediaScope,
+  google_books: MediaScope,
+  hardcover_books: MediaScope,
+  podcast_index: MediaScope,
+  listenbrainz_releases: MediaScope,
+  steam_releases: MediaScope,
+  igdb_games: MediaScope,
+  youtube_api: YoutubeScope,
+  anilist_anime: MediaScope,
+  anilist_manga: MediaScope,
+  livechart_episodes: MediaScope,
+  tvmaze_schedule: MediaScope,
+  openlibrary_books: MediaScope,
+  gutendex_books: MediaScope,
+  ann_news: MediaScope,
+  mangaupdates_releases: MediaScope,
+  mangadex_releases: MediaScope,
+  apple_books_rss: MediaScope,
+  podcast_rss: MediaScope,
+  wikidata_movies: MediaScope,
+  itunes_movies: MediaScope,
+  letterboxd_rss: MediaScope,
   sec_edgar: SecEdgarScope,
   google_news: GoogleNewsScope,
   openalex: OpenAlexScope,

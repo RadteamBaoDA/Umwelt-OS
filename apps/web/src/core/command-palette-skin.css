@@ -1,0 +1,39 @@
+/*
+ * Terminal skin for the command palette (Ctrl K). Imported by command-palette.tsx.
+ * Scoped under html[data-skin='terminal']; the default skin is unchanged. Markup, roles and ids are untouched.
+ */
+
+/* Command prompt: a `$` before the combobox input row. */
+html[data-skin='terminal'] div:has(> input[role='combobox'])::before {
+  content: '$ ' / '';
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Group headings (navigate, actions, sources, recent) get a `//` comment prefix. */
+html[data-skin='terminal'] #palette-listbox [role='group'] > div:first-child::before {
+  content: '// ' / '';
+}
+
+/* Prompt input: no box of its own, the row's underline carries focus. */
+html[data-skin='terminal'] input[role='combobox'] {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+html[data-skin='terminal'] div:has(> input[role='combobox']):focus-within {
+  box-shadow: inset 0 -1px 0 var(--accent);
+}
+
+/* Selected option: flat row, accent inset bar on the left, no rounded corners. */
+html[data-skin='terminal'] #palette-listbox [role='option'] {
+  border-radius: 0;
+}
+
+html[data-skin='terminal'] #palette-listbox [role='option'][aria-selected='true'] {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--active);
+  color: var(--strong);
+}

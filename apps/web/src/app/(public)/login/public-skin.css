@@ -1,0 +1,64 @@
+/*
+ * Terminal skin for the public login and setup card: a terminal window around the auth panel.
+ * Imported by login/page.tsx; setup uses the same .auth-panel card. Scoped under html[data-skin='terminal'].
+ */
+
+/* Public pages: the page is the terminal background; the header and footer bars are transparent. */
+html[data-skin='terminal'] .min-h-dvh.bg-secondary {
+  background: var(--bg);
+}
+
+html[data-skin='terminal'] .min-h-dvh.bg-secondary > header,
+html[data-skin='terminal'] .min-h-dvh.bg-secondary > footer {
+  background: transparent;
+}
+
+html[data-skin='terminal'] .auth-panel {
+  width: min(440px, 100%);
+  padding: 0 0 20px;
+  border: 1px solid var(--control);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Title bar: `ssh owner@umwelt.local` (design `.sp-term-bar`) drawn as a pseudo-element over a raised strip. */
+html[data-skin='terminal'] .auth-panel::before {
+  content: '● ssh owner@umwelt.local' / '';
+  display: block;
+  padding: 6px 12px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+html[data-skin='terminal'] .auth-panel > * {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+html[data-skin='terminal'] .auth-panel > :first-child {
+  padding-top: 8px;
+}
+
+/* ASCII wordmark at the top of the card. Terminal only; the default skin has no box for it. Clipped, never wrapped,
+   so the 440px card cannot overflow on narrow screens. */
+.sp-banner {
+  display: none;
+}
+
+html[data-skin='terminal'] .sp-banner {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 12px;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+}
+
+html[data-skin='terminal'] .auth-panel h1::before {
+  content: '> ' / '';
+  color: var(--accent);
+}

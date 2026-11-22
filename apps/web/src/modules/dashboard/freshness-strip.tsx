@@ -224,7 +224,7 @@ export function FreshnessStrip({ sources, locale }: { sources: readonly TickSour
     }));
 
   return (
-    <div className="flex w-full flex-col items-stretch gap-1 text-xs text-muted-foreground min-[721px]:flex-row min-[721px]:items-start min-[721px]:gap-3">
+    <div className="freshness-strip-root flex w-full flex-col items-stretch gap-1 text-xs text-muted-foreground min-[721px]:flex-row min-[721px]:items-start min-[721px]:gap-3">
       <div
         role="group"
         aria-label={t('freshness.summary', {

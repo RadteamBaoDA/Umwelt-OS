@@ -1,3 +1,69 @@
+<!-- scheduled-tasks-phase1-status:start -->
+## Scheduled tasks - Daily brief, Topic watch, create from chat - 2026-11-18, branch claude/ai-datasource-scheduling-chat-0a33cb
+
+- Phase 1 (Daily brief), delivered:
+  - A Scheduled tasks settings page with the Daily brief template: schedule, section selection, extra instruction, per-task model role, enable/pause/delete.
+  - Each task posts its brief into a dedicated chat thread as a scheduled-task message. The brief slot stays single-owner (internal cron or one task).
+  - The brief can include market, weather, hazard and source-health facts. Migration `0027_brief_evidence_kinds` widens the `daily_brief_evidence.fact_kind` CHECK to these kinds.
+  - Every observation source used in the prompt is re-checked for eligibility on every read, and withheld briefs are scrubbed on read and export and excluded from Memory.
+  - Retry reuses a saved brief. The thread header shows the schedule with Pause/Resume. The gadget opens the task thread, and story citations link to /news.
+- Phase 2 (Topic watch), delivered:
+  - The owner enters a topic. A first-party `topic_watch` source plans queries, searches through `chat.search_web_for_collection` (SearXNG), fetches pages with the SSRF-safe bounded fetch, de-duplicates, reviews and summarises with the role-bound model, and settles one native page.
+  - One-time consent covers the server token estimate and the mapped model id. The token cap and a 240 s deadline apply.
+  - A settle sweep posts one message per run into the task thread with stats, items and the partial reason.
+  - "Show on dashboard" deep-links Add gadget with the Feed template and the task source.
+  - Delete asks whether to keep items (default keep; the source is archived).
+  - Generic connector routes refuse task-managed sources with `managed_by_scheduled_task`.
+- Phase 3 (create from chat), delivered: the `draft_scheduled_task` chat tool attaches an unsaved task card; Review and create hands the draft to Settings › Scheduled tasks (this tab's sessionStorage, validated on read, never the URL), which opens the Daily brief editor pre-filled. Save there is the only write.
+- Production-readiness fixes found by the full suites: arq kept results for `process_graph_operation` (fixed id `graph:{id}`) made recovery re-enqueues no-ops for an hour after an unclaimed attempt (heavy-slot jobs now keep no result); built-in enable failed for every provider (keyed media options missing on `BuiltinEnableRequest`); `provider_specs` lost its `CHECKED_ON` import in the media merge; two Alembic heads (brief evidence migration re-chained as `0027_brief_evidence_kinds`); the Scheduled tasks editors shipped on every workspace route through chained module indexes; Topic watch failures now show the collector's own code with an en-us/vi-vi explanation; the chat volume benchmark is opt-in (`CHAT_VOLUME_BENCH=1`) and its fixture writes contract-valid provider records.
+- Real-e2e fixes:
+  - Phase 1: brief `max_tokens` raised from 500 to 2048; driver UUID subclass in the lock-free support check; MissingGreenlet on pause; no-Markdown brief prompt.
+  - Phase 2: topic watch now settles through the native leased path (ingestion refuses the generic batch path for native providers); the settle stays pending while the ingestion run is in flight; task-managed `topic_watch` gets a fixed provider scope (topic, keep rule, languages, site lists), so Feed and News show its items; dashboard deep-link params are stripped only once the dashboard is ready.
+- Validation:
+  - Gates on the merged `feature/more-datasource` tree: `pytest tests/unit` 8000 passed, 2 skipped; Vitest 1825 passed; ruff format/check, mypy (core, apps, modules), lint-imports, function-length, file-size and GenUI parity ratchets, web lint/typecheck and API types all pass. `tests/test_migrations.py` 16 passed.
+  - Docker integration suite: 181 passed, 3 skipped (opt-in benchmarks), 0 dead letters. Bundle budget OK (largest route 819.4 KB / 827, chat 818.5 KB / 822).
+  - E2E: Docker with real sources, a real model from `.env.e2e-real` and SearXNG via `E2E_REAL_SEARCH=1`. Final run 23/23 (run 30, after the second merge of `feature/more-datasource`): `scheduled-tasks-chat-real` 2/2, `scheduled-tasks-real` 6/6, `scheduled-tasks-topic-real` 5/5, `dashboard-ux` 8/8, bootstrap 2/2.
+  - Report: `reports/scheduled-tasks-phase1-report.html` (not committed).
+- Not delivered:
+  - SearXNG engines vary: DuckDuckGo returns a CAPTCHA and Brave returns 429, so production needs a stable engine.
+  - Telegram delivery is deferred.
+  - Brief citations open the story (`/news?story=<id>`), the Timeline event or Sources; market, weather and hazard facts stay plain text because no page shows a single such fact. Hazards are global, not filtered by the owner's location.
+<!-- scheduled-tasks-phase1-status:end -->
+
+## 2026-11-19 - Media datasource review complete
+
+All four phases of `specs/new-datasource-v2.md` are implemented and reviewed, with unit, type, lint, build and bundle gates green. Remaining acceptance work needs owner approval: PostgreSQL integration coverage for the media projection SQL, Docker/E2E, live provider checks (including the corrected Wikidata genre QIDs) and authenticated browser acceptance. See `docs/superpowers/plans/EXECUTION.md`.
+
+## 2026-11-18 - Media datasource Phase 4 complete
+
+- All Phase 4 tasks have implementation, focused validation and independent review evidence in `docs/superpowers/plans/EXECUTION.md` and the Phase 4 handoffs.
+- The independent whole-phase review is complete. It found and re-reviewed a Podcast Index cursor fix: effective filter changes now reset continuation state while provider source identity remains query-only. The updated backend regression plus scope identity tests passed (21); attribution UI test, TypeScript, ESLint, Prettier, Ruff and whitespace checks passed. Final pre-commit GitNexus analysis reported 72 changed files, 42 changed symbols, 926 affected processes and CRITICAL aggregate risk, with no partial/truncated result. Phase 4 was committed locally on `codex/media-datasource-phase3`. The local TMDB SVG's official provenance has not been independently verified. Live providers, authenticated browser, PostgreSQL runtime, Docker/E2E and production acceptance remain unverified; the production build is also unverified after an earlier `next/package.json` resolution failure in the junction-based worktree.
+
+## 2026-11-17 - Chat collected-data correctness
+
+Chat answers from collected data through `query_collected_data` (`modules/chat/db_query.py`). Correctness fixes are committed on `feature/more-datasource`; the scope fence is migration `0024_chat_sql_scope_fence`.
+
+| State | Work |
+| --- | --- |
+| Done | `3c902f5a` tool input contract (malformed JSON and unknown keys rejected, owner-timezone dates, truncation flag, aggregate region/citation, untrusted `data_notice`, bind-colon escaping); `8d25190b` readable record titles and open_meteo/openaq/ioda/cisa_kev/nvd/nasa_eonet metric catalog entries; `784a5d2c` separate round budget for collected-data queries; `b840584f` current-configuration scope fence (migration 0024, `chat_sql.query_fence_scope`, current revisions only, paused sources readable); `fd476c6f` deterministic grounding check (`unverified_numbers`, `partially_uncited`, widget relabel); `f5e1797c` scripted full-turn tests through the real tool loop |
+| Done | `44a94a18` `attributes`, coordinates and accent-insensitive `text_query` (migration `0025_chat_attributes_unaccent`); `0aabf4d1` `source_name` on observation rows; `dacf2001` bounded dedup anti-join and single-lookup document scope; `b355cdbf` series history instead of `is_current` (migration `0026_chat_sql_history`), SQL rows cited by version id, grounding date/URL/coordinate false positives |
+| Verified on Docker | `test_chat_sql_reader_role.py`, `test_p12_migrations.py` (0024-0026 down to base and back), `test_chat_collected_data_matrix.py` (72 passed, 1 skipped), `test_chat_collected_data_volume.py` at 2M observations / 50k documents: latest 0.15/0.21 s, 90-day all-source aggregate 0.53/0.72 s, SQL daily average 0.36/0.38 s, unaccent search 0.19/0.21 s (p50/p95, compose Postgres settings) |
+| Real-model eval | `test_chat_real_model_eval.py` (opt-in, 45 en/vi questions, claude-haiku-5-5): numbers correct 100%, empty/no-data 6/6, 7 flagged numbers all model-derived (differences, percentages) or corrected stale follow-up values, citation markers missing in 18% of answers (flagged `partially_uncited`) |
+| Done (later) | Hashable null-safe dedup keys and unordered aggregates with a LATERAL newest-row citation (`modules/chat/_db_aggregates.py`); chat SQL reader pool 2 + 2, so the connection budget is 116 of 120 and the reader role fits two chat-worker replicas |
+| Done (later) | `04d4ac2a` grounding reports precise differences, sums, means and % changes of two data values as `derived` instead of unverified; `b58a69be` prompt asks the model to query before answering and to cite in the same sentence; `aaf93fc0` FRED `attributes.units` for common series; `1222f633`/`b108a218` SQL results with no citable row return a `citation_hint` and the prompt asks for `document_version_id`; `e316aaf0` elapsed durations, year-less dates and day ranges are not checked as data claims |
+| Real-model eval (rerun) | After the prompt, `citation_hint` and grounding date fixes: numbers correct 100%, citation validity 100% (was 81.6%), empty/no-data 6/6, grounded 95.6%, 41/45 cases pass every criterion. The 4 others are expected behaviour the rubric scores strictly: two follow-ups quote the earlier wrong figure while correcting it, and two calendar questions are declined without a tool call because no calendar source exists |
+| Done (later) | `ef357960` FRED series outside `FRED_UNITS` take their physical unit from `fred/series` (one extra gated send before the data send; a metadata failure collects without a unit) |
+| Done (later) | Grounding reports a retracted earlier-answer figure (next to a correction cue) as `restated`, and a figure that exists in the data but only under another row than its sentence's `[n]` as `misattributed` (stored in `misattributed_numbers`); a restated-looking figure with no correction cue stays unverified |
+| Open | Grounding is a deterministic heuristic, not proof: it cannot see a wrong figure whose value sits in the row it cites (for example "highest" for the lowest value), a sentence with no `[n]`, or an evidence/web marker; the correction cue list is English and Vietnamese only |
+
+Grounding is a numeric heuristic: derived values are flagged and near-matches pass.
+
+## 2026-11-17 - Media datasource contracts
+
+Phase 1 of `specs/new-datasource-v2.md` has code and focused test evidence for media types, metadata, filters, projection and shared normalization. PostgreSQL runtime acceptance remains open. Phase 3 Tasks 1 and 2 deliver the media editor, available `media_feed` and `media_calendar` renderers, lazy registration, adaptive artwork, bounded multi-dimensional filters, source selection/grouping, cursor pagination, localized release buckets, attribution and privacy notice, and owner-only interaction/identity-only Ask AI actions. Expanded state uses the existing stable renderer host. Source configuration and general video/feed upgrades remain later Phase 3 tasks. See `docs/superpowers/plans/EXECUTION.md` for phase progress and existing collection limitations.
+
+Task 2 validation covers media shelf/calendar rendering, timezone and DST buckets, numeric filter edits, effective scope/filter precedence, server sort/window/cursor queries, source changes, remote-media settings, immutable chat identities, ownership, interactions and expanded-state preservation. Focused feed/video, dashboard API/lazy registry, locale and renderer/template parity results are recorded in the Task 2 handoff. Browser, Docker/E2E, live-provider and production-build acceptance remain unrun for this task. The unrelated metric-catalog fixture has formatting differences and lacks the existing `cisa_kev`, `ioda`, `nasa_eonet` and `nvd` catalog entries.
+
 <!-- audit-remediation-status:start -->
 ## Repository audit remediation - 2026-11-11, branch feature/fix-ui
 

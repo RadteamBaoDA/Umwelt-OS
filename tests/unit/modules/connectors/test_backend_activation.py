@@ -654,7 +654,7 @@ async def test_bearer_routes_reject_native_and_transitioning_rows():
 
 
 def test_backend_choice_preserves_existing_and_defaults_fresh_supported_to_native():
-    from modules.connectors.provisioning import routes
+    from modules.connectors.provisioning._routes import activation as routes
 
     fresh = row(
         applied_revision=0, applied_backend_revision=0, workflow_id=None, state="saved_not_active"
@@ -675,14 +675,32 @@ def test_backend_choice_preserves_existing_and_defaults_fresh_supported_to_nativ
 
 
 @pytest.mark.asyncio
-async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate():
+@pytest.mark.parametrize(
+    ("provider", "desired_configuration", "header", "secret"),
+    [
+        (None, {"auth_method": "http_header", "auth_header_name": "X-Key"}, "X-Key", "test-secret"),
+        ("hardcover_books", {"hardcover_mode": "catalog"}, "Authorization", "h" * 300),
+        ("youtube_api", {}, "Authorization", "top-secret-value"),
+        ("podcast_index", {}, "Authorization", "top-secret-value"),
+        ("igdb_games", {}, "Authorization", "top-secret-value"),
+    ],
+)
+async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate(
+    provider,
+    desired_configuration,
+    header,
+    secret,
+):
     from modules.connectors.provisioning import routes
+    from modules.connectors.provisioning._routes.common import PodcastIndexCredentialRequest
 
     r = row(
-        desired_configuration={"auth_method": "http_header", "auth_header_name": "X-Key"},
+        desired_configuration=desired_configuration,
         credential_revision=4,
     )
-    source = SimpleNamespace(id=SOURCE_ID, status="active", type="api", provider=None, generation=1)
+    source = SimpleNamespace(
+        id=SOURCE_ID, status="active", type="api", provider=provider, generation=1
+    )
     stored = []
     session = SimpleNamespace(
         rollback=AsyncMock(), add=stored.append, get=AsyncMock(return_value=None)
@@ -692,7 +710,13 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: KEY),
     )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
-    payload = routes.NativeRestCredentialRequest(expected_revision=3, secret="top-secret-value")
+    payload = (
+        PodcastIndexCredentialRequest(
+            expected_revision=3, apiKey="top-secret-key", apiSecret=secret
+        )
+        if provider in {"podcast_index", "igdb_games"}
+        else routes.NativeRestCredentialRequest(expected_revision=3, secret=secret)
+    )
     clear = AsyncMock(return_value=True)
     fence = SimpleNamespace(status="active", generation=1)
     with (
@@ -714,18 +738,21 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
     assert clear.await_args.kwargs == {"credential_revision": 5, "workspace_id": owner.workspace_id}
     (credential,) = stored
     assert credential.state == "ready" and credential.configuration_revision == 3
-    assert "top-secret" not in credential.encrypted_secret
-    assert (
-        decrypt_rest_secret(
-            KEY,
-            credential.encrypted_secret,
-            source_id=SOURCE_ID,
-            operation_id=credential.operation_id,
-            source_generation=1,
-            configuration_revision=3,
-            header_name="X-Key",
-        )
-        == "top-secret-value"
+    assert credential.header_name == header
+    assert secret not in credential.encrypted_secret
+    assert "top-secret-key" not in credential.encrypted_secret
+    assert decrypt_rest_secret(
+        KEY,
+        credential.encrypted_secret,
+        source_id=SOURCE_ID,
+        operation_id=credential.operation_id,
+        source_generation=1,
+        configuration_revision=3,
+        header_name=header,
+    ) == (
+        '{"apiKey":"top-secret-key","apiSecret":"top-secret-value"}'
+        if provider in {"podcast_index", "igdb_games"}
+        else secret
     )
 
 
@@ -754,6 +781,76 @@ async def test_reentry_refuses_sources_without_header_authentication():
             SimpleNamespace(workspace_id=uuid4()),
         )
     assert caught.value.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["hardcover_books", "tmdb_movies", "podcast_index"])
+async def test_remove_provider_credential_deletes_local_ciphertext_for_native_slots(provider):
+    """Credential removal erases keyed and native REST ciphertext while advancing its fence."""
+    from modules.connectors.provisioning._routes import activation as routes
+
+    activation = row(
+        desired_revision=3,
+        state="disabled",
+        desired_configuration={"auth_method": "api_key"},
+        credential_revision=7,
+    )
+    source = SimpleNamespace(
+        id=SOURCE_ID,
+        status="paused",
+        type="api",
+        provider=provider,
+        generation=1,
+        configuration={},
+    )
+    from modules.connectors.models import ConnectorRestCredential
+
+    credential = ConnectorRestCredential(
+        source_id=SOURCE_ID,
+        source_generation=1,
+        configuration_revision=3,
+        operation_id=uuid4(),
+        header_name="Authorization",
+        encrypted_secret="ciphertext",
+        secret_fingerprint="f" * 64,
+        state="ready",
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=credential), delete=AsyncMock())
+    scope = SimpleNamespace(workspace_id=uuid4())
+    updated_source = source
+
+    with (
+        patch_routes("_owner_access", AsyncMock(return_value=object())),
+        patch.object(routes.sources, "get_connector_source", AsyncMock(return_value=source)),
+        patch.object(routes.provisioning, "activation_status", AsyncMock(return_value=activation)),
+        patch.object(
+            routes.connector_owner,
+            "save_connector_configuration",
+            AsyncMock(return_value=(updated_source, activation)),
+        ),
+        patch.object(
+            routes.provisioning, "create_delete_intent_in_uow", AsyncMock(return_value=None)
+        ),
+        patch.object(routes.provisioning, "get_managed_credential", AsyncMock(return_value=None)),
+        patch_routes("commit_with_replay", AsyncMock()),
+        patch_routes("make_source_change", lambda *args, **kwargs: None),
+        patch_routes("_activation_read", AsyncMock(return_value="read")),
+    ):
+        result = await routes.remove_provider_credential(
+            SOURCE_ID,
+            3,
+            session,
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=True))
+                )
+            ),
+            scope,
+        )
+
+    assert result == "read"
+    session.delete.assert_awaited_once_with(credential)
+    assert activation.credential_revision == 8
 
 
 @pytest.mark.asyncio
@@ -786,3 +883,9 @@ def test_local_only_refusal_has_a_stable_api_code():
 
     status, detail = _NATIVE_ERRORS["local_only_source"]
     assert status == 409 and detail["code"] == "local_only_source"
+
+
+def test_igdb_receipt_requires_its_captured_native_credential_revision():
+    from modules.ingestion._native.verifiers import native_verifier_for
+
+    assert native_verifier_for("igdb_games").revision_policy == "required"

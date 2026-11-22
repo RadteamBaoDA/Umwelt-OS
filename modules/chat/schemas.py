@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from modules.chat.task_drafts import ScheduledTaskDraft
 from modules.chat.web_search import sanitize_url
 from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
@@ -178,7 +179,7 @@ class AnswerContextRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=MAX_QUERY_LENGTH)
     source_scope: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCE_SCOPE)
-    # True on gadget turns: ``source_scope`` is then a hard allow-list, so an empty one means "no sources"
+    # True on gadget and scheduled-task-thread turns: ``source_scope`` is then a hard allow-list, so an empty one means "no sources"
     # (search is skipped) instead of the plain-chat meaning "no filter".
     source_scope_enforced: bool = False
     entity_ids: list[UUID] = Field(default_factory=list, max_length=MAX_ENTITY_SCOPE)
@@ -411,6 +412,118 @@ def parse_generative_ui_parts(metadata: Any) -> list[GenerativeUIPayload]:
     return [part for part in (parse_generative_ui(item) for item in raw) if part is not None]
 
 
+class TaskBriefCitationRead(BaseModel):
+    """One citation of a brief posted by a scheduled task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: int
+    kind: str
+    id: str
+    title: str
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class DailyBriefMessageMeta(BaseModel):
+    """Allowlisted view of the Daily brief keys stored in a message's private ``metadata_json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_kind: Literal["daily_brief"]
+    run_id: str
+    brief_id: str
+    brief_revision: int
+    brief_citations: list[TaskBriefCitationRead] = Field(default_factory=list)
+
+
+class TopicWatchItemRead(BaseModel):
+    """One collected item of a Topic watch post; every field is untrusted text shown as plain text."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(max_length=500)
+    url: str | None = Field(default=None, max_length=2048)
+    site: str | None = Field(default=None, max_length=255)
+    summary: str | None = Field(default=None, max_length=400)
+    document_id: str | None = Field(default=None, max_length=64)
+    story_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("url")
+    @classmethod
+    def _http_only(cls, value: str | None) -> str | None:
+        """Drop any non-http(s) URL so a stored ``javascript:`` or ``data:`` link can never be rendered."""
+        return (
+            value
+            if value is not None and value.lower().startswith(("http://", "https://"))
+            else None
+        )
+
+
+class TopicWatchStatsRead(BaseModel):
+    """Bounded run telemetry of a Topic watch post (counts plus an optional partial-run reason)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    queries: int = 0
+    results: int = 0
+    fetched: int = 0
+    blocked: int = 0
+    timeout: int = 0
+    failed: int = 0
+    seen: int = 0
+    duplicates: int = 0
+    off_topic: int = 0
+    items: int = 0
+    tokens: int = 0
+    reason: str | None = Field(default=None, max_length=32)
+
+
+class TopicWatchMessageMeta(BaseModel):
+    """Allowlisted view of the Topic watch keys stored in a message's private ``metadata_json``.
+
+    ``source_id`` is deliberately absent: it is stored for withholding only and never sent to clients.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_kind: Literal["topic_watch"]
+    run_id: str
+    automation_id: str | None = None
+    coverage: Literal["complete", "partial"]
+    stats: TopicWatchStatsRead = Field(default_factory=TopicWatchStatsRead)
+    items: list[TopicWatchItemRead] = Field(default_factory=list, max_length=50)
+
+
+TaskMessageMeta = Annotated[
+    DailyBriefMessageMeta | TopicWatchMessageMeta, Field(discriminator="task_kind")
+]
+_TASK_META_MODELS: dict[str, type[DailyBriefMessageMeta] | type[TopicWatchMessageMeta]] = {
+    "daily_brief": DailyBriefMessageMeta,
+    "topic_watch": TopicWatchMessageMeta,
+}
+
+
+def parse_task_message_meta(
+    metadata: Any,
+) -> DailyBriefMessageMeta | TopicWatchMessageMeta | None:
+    """Return the allowlisted task metadata of a message posted by a scheduled task, else ``None``.
+
+    Only rows whose ``metadata_json["origin"] == "scheduled_task"`` qualify; the variant is chosen by
+    ``task_kind`` and every key outside that variant's allowlist is dropped so private metadata
+    (for example a topic post's ``source_id``) never reaches clients. Malformed, incomplete or
+    unknown-kind data yields ``None`` rather than an error.
+    """
+    if not isinstance(metadata, dict) or metadata.get("origin") != "scheduled_task":
+        return None
+    model = _TASK_META_MODELS.get(str(metadata.get("task_kind")))
+    if model is None:
+        return None
+    try:
+        return model.model_validate({k: v for k, v in metadata.items() if k in model.model_fields})
+    except ValueError:
+        return None
+
+
 class MessageRead(BaseModel):
     """Public representation of a chat message within a conversation."""
 
@@ -435,6 +548,10 @@ class MessageRead(BaseModel):
     # True when the stored answer carries no verified citation; the text is kept as streamed and the UI
     # shows a "not based on your documents" label instead of a prefix inside the content.
     uncited: bool = False
+    # Scheduled-task posts only (allowlisted keys of metadata_json); None for ordinary messages.
+    task: TaskMessageMeta | None = None
+    # Model-proposed scheduled task awaiting the owner's confirmation in the editor; never saved server-side.
+    task_draft: ScheduledTaskDraft | None = None
 
 
 class ChatExportCitation(BaseModel):
@@ -538,6 +655,9 @@ class ChatExportFence(BaseModel):
     message_created_at: datetime | None = None
     message_updated_at: datetime | None = None
     citations: list[ChatExportCitationFence] = Field(default_factory=list, max_length=100)
+    # None for non-task messages; False/True when a scheduled-task brief was published live/withheld,
+    # so the final fence check can reject a brief that became withheld after the page was built.
+    brief_withheld: bool | None = None
 
 
 class ChatExportPage(BaseModel):

@@ -100,6 +100,23 @@ describe('wizard gates', () => {
     expect(connectGate({ ...base, provider: 'alpha_vantage' })).toBe(false);
   });
 
+  it('requires both Podcast Index credentials and blocks incomplete replacements', () => {
+    const podcast = { ...base, provider: 'podcast_index' };
+    expect(connectGate(podcast)).toBe(false);
+    expect(connectGate({ ...podcast, secret: 'key' })).toBe(false);
+    expect(connectGate({ ...podcast, credentialConfigured: true, apiSecret: 'secret' })).toBe(false);
+    expect(connectGate({ ...podcast, secret: 'key', apiSecret: 'secret' })).toBe(true);
+    expect(connectGate({ ...podcast, credentialConfigured: true })).toBe(true);
+  });
+
+  it('requires both Twitch client credentials for IGDB', () => {
+    const igdb = { ...base, provider: 'igdb_games' };
+    expect(connectGate(igdb)).toBe(false);
+    expect(connectGate({ ...igdb, secret: 'client-id' })).toBe(false);
+    expect(connectGate({ ...igdb, secret: 'client-id', apiSecret: 'client-secret' })).toBe(true);
+    expect(connectGate({ ...igdb, credentialConfigured: true })).toBe(true);
+  });
+
   it('requires scope fields and exactly one side of the either-or scopes', () => {
     const config = (patch: object) => ({ ...patch }) as unknown as ConnectorConfig;
     expect(scopeGate('youtube', config({}))).toBe(false);
@@ -126,6 +143,19 @@ describe('useConnectorDraft', () => {
     act(() => result.current.setSecret('s3cret'));
     expect(result.current.dirty).toBe(false);
     expect(result.current.dirtyRef.current).toBe(true);
+  });
+
+  it('keeps the paired apiSecret when the primary secret is emptied, and clearSecrets clears both', () => {
+    const { result } = renderHook(() => useConnectorDraft(undefined));
+    act(() => {
+      result.current.setSecret('key');
+      result.current.setApiSecret('secret');
+    });
+    act(() => result.current.setSecret(''));
+    expect(result.current.apiSecret).toBe('secret');
+    act(() => result.current.clearSecrets());
+    expect(result.current.secret).toBe('');
+    expect(result.current.apiSecret).toBe('');
   });
 
   it('exposes stable setters for field handlers', () => {

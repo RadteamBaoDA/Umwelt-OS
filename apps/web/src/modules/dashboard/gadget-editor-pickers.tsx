@@ -448,7 +448,7 @@ export function MetricPicker({
   const t = useTranslations('gadgetSettings');
   /** Localized metric name (see {@link METRIC_NAME_KEY}) falling back to the raw id, with the unit appended when known. */
   const label = (metric: string) => {
-    const name = metric in METRIC_NAME_KEY ? t(METRIC_NAME_KEY[metric as keyof typeof METRIC_NAME_KEY]) : metric;
+    const name = Object.hasOwn(METRIC_NAME_KEY, metric) ? t(METRIC_NAME_KEY[metric as keyof typeof METRIC_NAME_KEY]) : metric;
     const unit = catalog.metrics.find((item) => item.id === metric)?.unit;
     return unit ? `${name} (${unit})` : name;
   };
@@ -670,6 +670,63 @@ export function HighlightRulesField({ rules, onChange }: { rules: HighlightRule[
           </Label>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Limits media additions to the field's API bound while keeping saved chips removable, including over-limit lists. */
+export function MediaMultiChipPicker<T extends string>({
+  value,
+  options,
+  label,
+  onChange,
+  labelId,
+  maxItems,
+  country = false,
+}: {
+  value: T[];
+  options: readonly T[];
+  label: (value: T) => string;
+  onChange: (next: T[]) => void;
+  labelId: string;
+  maxItems: number;
+  country?: boolean;
+}) {
+  const t = useTranslations('gadgetSettings');
+  return (
+    <div className="space-y-2">
+      <ul className="flex flex-wrap gap-1.5">
+        {value.map((item) => (
+          <li key={item}>
+            <Badge variant="outline" className="gap-1">
+              {label(item)}
+              <BareButton
+                type="button"
+                aria-label={t('media.remove', { name: label(item) })}
+                onClick={() => onChange(value.filter((entry) => entry !== item))}
+              >
+                <Trash2 className="size-3" aria-hidden="true" />
+              </BareButton>
+            </Badge>
+          </li>
+        ))}
+      </ul>
+      <SearchableSelect
+        value=""
+        options={options.filter((item) => !value.includes(item)).map(label)}
+        allowCustom={country}
+        aria-labelledby={labelId}
+        placeholder={t('media.select')}
+        searchLabel={t('media.search')}
+        emptyLabel={t('media.empty')}
+        disabled={value.length >= maxItems}
+        onValueChange={(raw) => {
+          const next = (options.find((item) => label(item) === raw) ?? (country ? raw.trim().toUpperCase() : raw)) as T;
+          if (value.length < maxItems && !value.includes(next) && (country ? /^[A-Z]{2}$/.test(next) : options.includes(next)))
+            onChange([...value, next]);
+        }}
+      />
+      <p className="text-xs text-muted-foreground">{t('media.limit', { count: maxItems })}</p>
     </div>
   );
 }

@@ -24,6 +24,11 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
+from modules.chat._public.scheduled_task_threads import (
+    RESERVED_METADATA_KEYS,
+    withheld_brief_ids,
+    withheld_topic_messages,
+)
 from modules.chat._routes.guards import (
     _TOKEN_RE as _TOKEN_RE,
 )
@@ -260,11 +265,13 @@ async def list_conversations(
                     Conversation.workspace_id == scope.workspace_id,
                     Conversation.archived == archived,
                 )
-                # Per-rule automation threads stay reachable from automation run detail, not the Chat list.
+                # Per-rule automation threads stay reachable from automation run detail, not the Chat list;
+                # scheduled-task threads (metadata key ``scheduled_task``) are the exception and are listed.
                 .where(
                     or_(
                         Conversation.context_kind.is_(None),
                         Conversation.context_kind != "automation",
+                        Conversation.metadata_json.has_key("scheduled_task"),
                     )
                 )
                 .where(or_(Conversation.ephemeral.is_(False), Conversation.expires_at > now))
@@ -373,7 +380,10 @@ async def create_conversation(
         title=title,
         context_kind=payload.context_kind,
         context_resource_id=payload.context_resource_id,
-        metadata_json=payload.metadata,
+        # Reserved scheduler keys are dropped so a client cannot mint a task thread or its pinned scope.
+        metadata_json={
+            k: v for k, v in payload.metadata.items() if k not in RESERVED_METADATA_KEYS
+        },
         ephemeral=is_ephemeral,
         expires_at=datetime.now(UTC) + EPHEMERAL_TTL if is_ephemeral else None,
     )
@@ -413,7 +423,8 @@ async def get_conversation(
         response: HTTP response object for no-store header attachment.
 
     Returns:
-        ConversationDetailRead schema containing conversation metadata and messages.
+        ConversationDetailRead schema containing conversation metadata and messages. Scheduled-task
+        brief messages whose sources are no longer eligible come back as the scrub placeholder.
 
     Raises:
         HTTPException: 404 if conversation is not found.
@@ -446,11 +457,19 @@ async def get_conversation(
     current_citations = await _filter_citation_lists(
         session, [m.citations or [] for m in messages_rows], scope
     )
+    task_metadatas = [getattr(m, "metadata_json", None) for m in messages_rows]
     messages_list = _message_reads(
         messages_rows,
         current_citations,
         response_ids_by_user_message,
         web_search_by_assistant,
+        # Lock-free, fail-closed: withholding only decides what to display.
+        await withheld_brief_ids(
+            session, task_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+        ),
+        await withheld_topic_messages(
+            session, task_metadatas, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
+        ),
     )
     return ConversationDetailRead(
         id=conv.id,
@@ -511,7 +530,10 @@ async def patch_conversation(
         conv.archived = payload.archived
     if payload.metadata is not None:
         current_meta = dict(conv.metadata_json or {})
-        current_meta.update(payload.metadata)
+        # Reserved scheduler keys keep their stored values: the client cannot rewrite the pinned scope.
+        current_meta.update(
+            {k: v for k, v in payload.metadata.items() if k not in RESERVED_METADATA_KEYS}
+        )
         conv.metadata_json = current_meta
 
     conv.updated_at = func.now()

@@ -6,6 +6,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { applyAccent, previewAccent, readAccent, type AccentId } from '@/core/accent';
 import { AccentPicker } from './accent-picker';
+import { SkinPicker } from './skin-picker';
+import { useSkin } from '@/core/use-skin';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -227,9 +229,13 @@ function TimezoneField({
   );
 }
 
-/** Preference form shown once a draft exists and no save conflict is pending. */
+/**
+ * Preference form shown once a draft exists and no save conflict is pending. Under the Terminal skin the theme and
+ * accent fields are hidden (they do not affect that skin); their draft values are kept and still saved unchanged.
+ */
 function PreferencesForm({ vm, draft }: { vm: PreferencesDialogVm; draft: OwnerPreferences }) {
   const { t, setDraft, accentDraft, setAccentDraft, preferences, savingDisabled, save, dismiss, dirty } = vm;
+  const terminal = useSkin() === 'terminal';
   return (
     <form
       className="preferences-form"
@@ -240,7 +246,9 @@ function PreferencesForm({ vm, draft }: { vm: PreferencesDialogVm; draft: OwnerP
     >
       <fieldset disabled={save.isPending || savingDisabled} className="preferences-fields">
         <legend>{t('appearance')}</legend>
-        <ThemeField t={t} draft={draft} setDraft={setDraft} />
+        <SkinPicker />
+        {/* Terminal is a fixed dark palette, so light/dark/system and accent only apply to the Default skin. */}
+        {!terminal && <ThemeField t={t} draft={draft} setDraft={setDraft} />}
         <div className="field">
           <Label htmlFor="preference-display-name">{t('displayName')}</Label>
           <Input
@@ -256,7 +264,7 @@ function PreferencesForm({ vm, draft }: { vm: PreferencesDialogVm; draft: OwnerP
             {t('displayNameHelp')}
           </p>
         </div>
-        <AccentPicker value={accentDraft} onChange={setAccentDraft} />
+        {!terminal && <AccentPicker value={accentDraft} onChange={setAccentDraft} />}
         <div className="field">
           <Label htmlFor="preference-locale">{t('language')}</Label>
           <Select

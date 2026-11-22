@@ -14,7 +14,7 @@ export interface DashboardDeepLink {
 }
 
 /**
- * Reads `?preset` / `?addTemplate` / `?source` once on mount, then strips them with `router.replace` so a reload or
+ * Reads `?preset` / `?addTemplate` / `?source` once on mount and, once `ready`, strips them with `router.replace` so a reload or
  * back-navigation never reopens the dialog. Malformed ids are dropped. Each intent is delivered at most once.
  *
  * @param options Readiness flag and the callbacks that act on the intent.
@@ -40,13 +40,15 @@ export function useDashboardDeepLink({
   const stripped = useRef(false);
 
   useEffect(() => {
-    if (stripped.current || !['preset', 'addTemplate', 'source'].some((key) => params.has(key))) return;
+    // Strip only once the dashboard is ready: the page first mounts under a pending workspace and remounts when
+    // the selection resolves, so stripping earlier would hand the remounted page a URL without its intent.
+    if (!ready || stripped.current || !['preset', 'addTemplate', 'source'].some((key) => params.has(key))) return;
     stripped.current = true;
     const rest = new URLSearchParams(params.toString());
     ['preset', 'addTemplate', 'source'].forEach((key) => rest.delete(key));
     const query = rest.toString();
     router.replace(query ? `${pathname}?${query}` : pathname);
-  }, [params, router, pathname]);
+  }, [ready, params, router, pathname]);
 
   useEffect(() => {
     if (!ready || delivered.current || (!link.presetId && !link.addTemplate)) return;

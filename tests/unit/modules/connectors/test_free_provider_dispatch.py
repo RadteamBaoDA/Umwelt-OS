@@ -239,6 +239,7 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         PROVIDER_SOURCE_TYPES,
         native_dispatch_supported,
     )
+    from modules.connectors.service.scope import OPTIONAL_SCOPE_FIELDS
     from modules.sources.schemas import SourceCreate
 
     source_type = PROVIDER_SOURCE_TYPES[provider]
@@ -269,10 +270,42 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
         "openaq": {"openaq_location_id": 8118},
         "nasa_firms": {"firms_country": "VNM"},
         "coingecko": {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}]},
+        "anilist_anime": {"media_ids": [1]},
+        "anilist_manga": {"media_ids": [1]},
+        "ann_news": {
+            "ann_mode": "encyclopedia",
+            "ann_media_type": "anime",
+            "ann_category": "review",
+            "ann_edition": "us",
+        },
+        "apple_books_rss": {"country": "US", "kind": "books", "chart": "top-free"},
+        "gutendex_books": {"gutendex_topic": "fiction", "gutendex_search": "novel"},
+        "itunes_movies": {"search_terms": "science fiction", "country": "US"},
+        "letterboxd_rss": {"letterboxd_username": "example"},
+        "mangadex_releases": {"manga_ids": ["5e7d5a22-3d67-49c5-89d3-9cd9a49a91de"]},
+        "mangaupdates_releases": {"series_ids": [41]},
+        "openlibrary_books": {"openlibrary_mode": "subject", "openlibrary_subject": "fiction"},
+        "podcast_rss": {"feed_url": "https://example.org/feed.xml", "itunes_podcast_id": None},
+        "wikidata_movies": {"lookback_days": 365, "language": "en"},
+        "mal_anime": {"mal_mode": "season", "mal_season_year": 2026, "mal_season": "fall"},
+        "mal_manga": {"mal_ranking_type": "manhwa"},
+        "google_books": {"google_books_subject": "History"},
+        "hardcover_books": {"hardcover_mode": "upcoming"},
+        "youtube_api": {"youtube_handles": ["@example"]},
+        "igdb_games": {"igdb_region": "world"},
+        "omdb_lookup": {
+            "omdb_mode": "title",
+            "omdb_imdb_id": "tt1234567",
+            "omdb_title": "Example movie",
+            "omdb_search": "Example movie",
+        },
     }.get(provider, {})
-    assert native_dispatch_supported(source_type, provider) and PROVIDER_SCOPE_FIELDS[
-        provider
-    ] == frozenset(scope)
+    assert native_dispatch_supported(source_type, provider)
+    required = PROVIDER_SCOPE_FIELDS[provider] - frozenset(OPTIONAL_SCOPE_FIELDS.get(provider, ()))
+    assert (
+        provider in PROVIDER_SCOPE_FIELDS
+        and required <= frozenset(scope) <= PROVIDER_SCOPE_FIELDS[provider]
+    )
     source = SimpleNamespace(
         id=uuid4(),
         status="active",
@@ -285,7 +318,9 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
     source.configuration = {
         "history_mode": "returned_snapshot",
         **scope,
-        "feed_url": "https://x.example/f",
+        "unexpected_owner_field": "not-a-provider-scope",
     }
+    if "feed_url" in PROVIDER_SCOPE_FIELDS[provider]:
+        return  # the owner's feed URL is this provider's own scope (podcast_rss)
     with pytest.raises(ValueError):
         registry.validate(source)  # owner-supplied scope is refused for fixed endpoints

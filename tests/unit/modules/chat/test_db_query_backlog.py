@@ -80,11 +80,11 @@ def test_aggregates_always_use_current_revisions(
             date_to=None,
         )
     )
-    assert ("is_current IS true" in sql) is expects_current
+    assert ("NOT (EXISTS" in sql) is expects_current and "is_current" not in sql
 
 
 def test_text_query_uses_stored_tsv_and_no_content_ilike() -> None:
-    """Lexical match goes through document_chunks.content_tsv; title ILIKE only."""
+    """Lexical match is an f_unaccent tsvector over chunks (indexed expression); no content ILIKE."""
     sql = _sql(
         _document_filters(
             _args(text_query="rate cut"),
@@ -95,10 +95,9 @@ def test_text_query_uses_stored_tsv_and_no_content_ilike() -> None:
         ),
         literal=False,
     )
-    assert "document_chunks.content_tsv @@" in sql
-    assert "to_tsvector" not in sql
+    assert "to_tsvector(" in sql and "f_unaccent(document_chunks.content)" in sql
     assert "document_versions.content ILIKE" not in sql
-    assert "documents.title ILIKE" in sql
+    assert "f_unaccent(documents.title) ILIKE" in sql
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,707 @@
+<style>
+/* Design-system gallery. Specimens reuse base.html classes; .cmp- adds only what the gallery needs. */
+/* Overlay tokens live in globals.css (html { --scrim; --shadow-popover }); mirrored here because the demo base omits them. */
+[id^='components'] { --scrim: rgb(0 0 0 / .6); --shadow-popover: 0 8px 28px rgb(0 0 0 / .45); }
+.cmp-rule { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 11px; color: var(--muted); }
+html[data-skin='terminal'] .cmp-rule::before { content: '// '; color: var(--accent); }
+.cmp-grid { display: grid; grid-template-columns: auto repeat(4, auto); gap: 8px 10px; align-items: center; justify-content: start; justify-items: start; font-size: 12px; }
+.cmp-grid .h { color: var(--muted); font-size: 11px; }
+.cmp-spec { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cmp-spec + .cmp-spec { margin-top: 10px; }
+.cmp-cap { font-size: 11px; color: var(--muted); min-width: 9ch; }
+/* button variants the base set lacks */
+.btn.cmp-secondary { background: var(--active); border-color: var(--active); }
+.btn.cmp-secondary:hover { background: var(--control); }
+.btn.cmp-link { border-color: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; padding: 0 4px; }
+.btn.cmp-link:hover { background: none; }
+html[data-skin='terminal'] .btn.cmp-link::before, html[data-skin='terminal'] .btn.cmp-link::after { content: none; }
+.btn.cmp-lg { height: 40px; padding: 0 18px; font-size: 14px; }
+.btn.icon-only { width: 34px; padding: 0; justify-content: center; }
+.btn.sm.icon-only { width: 26px; }
+.btn.cmp-hover { background: var(--active); }
+.btn.primary.cmp-hover { filter: brightness(1.12); }
+.btn.cmp-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cmp-bare { font: inherit; font-size: 13px; background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; }
+.cmp-bare:hover { color: var(--accent); }
+/* badges */
+.cmp-badge { display: inline-flex; align-items: center; font-size: 12px; padding: 1px 8px; border-radius: var(--radius-pill); border: 1px solid transparent; white-space: nowrap; }
+.cmp-badge.b-default { background: var(--primary); color: var(--primary-foreground); font-weight: 600; }
+.cmp-badge.b-secondary { background: var(--active); color: var(--text); }
+.cmp-badge.b-destructive { background: var(--danger); color: var(--primary-foreground); font-weight: 600; }
+html[data-skin='terminal'] .cmp-badge.b-destructive { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); }
+.cmp-badge.b-outline { border-color: var(--control); color: var(--text); }
+.cmp-badge.b-ghost { color: var(--text); }
+.cmp-badge.b-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+html[data-skin='terminal'] .cmp-badge { border-radius: 0; }
+html[data-skin='terminal'] .cmp-badge.b-outline::before { content: '<'; opacity: .6; }
+html[data-skin='terminal'] .cmp-badge.b-outline::after { content: '>'; opacity: .6; }
+/* card */
+.cmp-card { border: 1px solid var(--line); background: var(--raised); border-radius: var(--radius); }
+.cmp-card-h { padding: 12px 14px 4px; }
+.cmp-card-b { padding: 6px 14px 12px; font-size: 13px; }
+.cmp-card-f { padding: 8px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px; justify-content: flex-end; }
+/* tooltip */
+.cmp-tipwrap { position: relative; display: inline-block; margin-top: 34px; }
+.cmp-tip { position: absolute; bottom: calc(100% + 6px); left: 0; white-space: nowrap; font-size: 11px; padding: 3px 8px; background: var(--strong); color: var(--bg); border-radius: var(--radius); }
+html[data-skin='terminal'] .cmp-tip { background: var(--raised); color: var(--text); border: 1px solid var(--accent); }
+html[data-skin='terminal'] .cmp-tip::before { content: '? '; color: var(--accent); }
+/* pagination */
+.cmp-pager { display: flex; gap: 4px; align-items: center; font-size: 13px; }
+.cmp-pager a { min-width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; border-radius: var(--radius); color: var(--text); text-decoration: none; white-space: nowrap; border: 1px solid transparent; }
+.cmp-pager a:hover { background: var(--active); }
+.cmp-pager a[aria-current='page'] { border-color: var(--control); color: var(--strong); font-weight: 600; }
+html[data-skin='terminal'] .cmp-pager a[aria-current='page'] { border-color: transparent; color: var(--accent); }
+html[data-skin='terminal'] .cmp-pager a[aria-current='page']::before { content: '['; }
+html[data-skin='terminal'] .cmp-pager a[aria-current='page']::after { content: ']'; }
+.cmp-pager .gap { color: var(--muted); padding: 0 4px; }
+/* brand */
+.cmp-brand { display: flex; align-items: center; gap: 10px; }
+.cmp-mark { width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--accent); display: grid; place-items: center; }
+.cmp-mark::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.cmp-word { font-weight: 700; color: var(--strong); font-size: 16px; }
+.cmp-ascii { display: none; color: var(--accent); font-size: 11px; line-height: 1.15; margin: 0; white-space: pre; }
+html[data-skin='terminal'] .cmp-mark { border-radius: 0; border-width: 2px; }
+html[data-skin='terminal'] .cmp-mark::after { border-radius: 0; }
+html[data-skin='terminal'] .cmp-word::before { content: '~/'; color: var(--muted); font-weight: 400; }
+html[data-skin='terminal'] .cmp-ascii { display: block; }
+/* show-more */
+.cmp-clamp { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cmp-clamp.open { display: block; }
+/* feed view toggle + feed image */
+.cmp-seg { display: inline-flex; border: 1px solid var(--control); border-radius: var(--radius); overflow: hidden; }
+.cmp-seg button { font: inherit; font-size: 12px; background: none; border: 0; color: var(--muted); padding: 4px 10px; cursor: pointer; }
+.cmp-seg button + button { border-left: 1px solid var(--control); }
+.cmp-seg button[aria-pressed='true'] { background: var(--active); color: var(--strong); }
+html[data-skin='terminal'] .cmp-seg button[aria-pressed='true'] { color: var(--accent); }
+.cmp-img { aspect-ratio: 16 / 9; border: 1px solid var(--line); background: var(--bg); display: grid; place-items: center; color: var(--muted); font-size: 11px; position: relative; overflow: hidden; border-radius: var(--radius); }
+.cmp-img pre { margin: 0; font-size: 10px; line-height: 1.2; color: var(--control); }
+.cmp-img .cap { position: absolute; left: 8px; bottom: 6px; right: 8px; display: flex; justify-content: space-between; }
+.cmp-img.loaded { background: var(--raised); }
+.cmp-img.loaded .pix { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(16, 1fr); }
+.cmp-img.loaded .pix i { background: var(--chart-1); }
+/* avatar */
+.cmp-ava { width: 32px; height: 32px; border-radius: var(--radius-pill); display: inline-grid; place-items: center; font-weight: 700; font-size: 12px; border: 1px solid var(--control); background: var(--raised); }
+.cmp-ava.lg { width: 44px; height: 44px; font-size: 15px; }
+.cmp-ava.on { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+/* forms */
+.cmp-states { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.input.cmp-focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+.input:disabled { opacity: .5; cursor: not-allowed; }
+.cmp-pw { position: relative; }
+.cmp-pw .input { padding-right: 64px; }
+.cmp-pw button { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); font: inherit; font-size: 11px; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 4px 6px; }
+textarea.input { min-height: 84px; resize: vertical; line-height: 1.5; }
+.cmp-count { text-align: right; font-size: 11px; color: var(--muted); }
+.cmp-cb { display: grid; gap: 8px; }
+/* terminal checkbox / radio: drawn as [x] / (*) */
+html[data-skin='terminal'] .cmp-tcheck input { appearance: none; width: auto; height: auto; margin: 0; font: inherit; color: var(--muted); }
+html[data-skin='terminal'] .cmp-tcheck input::before { content: '[ ]'; }
+html[data-skin='terminal'] .cmp-tcheck input:checked::before { content: '[x]'; color: var(--accent); }
+html[data-skin='terminal'] .cmp-tcheck input:indeterminate::before { content: '[-]'; color: var(--accent); }
+html[data-skin='terminal'] .cmp-tcheck input[type='radio']::before { content: '( )'; }
+html[data-skin='terminal'] .cmp-tcheck input[type='radio']:checked::before { content: '(*)'; color: var(--accent); }
+html[data-skin='terminal'] .cmp-tcheck input:focus-visible { outline: 1px solid var(--accent); }
+.cmp-tcheck input:disabled + span, .cmp-tcheck input:disabled { opacity: .5; }
+.cmp-swrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--rule); }
+/* select / combobox */
+.cmp-trigger { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 36px; padding: 0 10px; font: inherit; font-size: 13px; background: var(--bg); color: var(--text); border: 1px solid var(--control); border-radius: var(--radius); cursor: pointer; }
+.cmp-trigger.open { border-color: var(--accent); }
+.cmp-trigger .ch { color: var(--muted); }
+.cmp-list { margin-top: 4px; border: 1px solid var(--control); background: var(--surface); border-radius: var(--radius); padding: 4px; box-shadow: var(--shadow-popover); list-style: none; font-size: 13px; }
+html[data-skin='terminal'] .cmp-list { box-shadow: none; }
+.cmp-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
+.cmp-list li .r { margin-left: auto; color: var(--muted); font-size: 11px; }
+.cmp-list li[aria-selected='true'] { color: var(--strong); }
+.cmp-list li[aria-selected='true']::after { content: '✓'; margin-left: auto; color: var(--accent); }
+.cmp-list li.hi { background: var(--active); }
+html[data-skin='terminal'] .cmp-list li.hi { box-shadow: inset 2px 0 0 var(--accent); }
+html[data-skin='terminal'] .cmp-list li.hi::before { content: '>'; color: var(--accent); }
+.cmp-list .grp { font-size: 11px; color: var(--muted); padding: 6px 8px 2px; cursor: default; }
+html[data-skin='terminal'] .cmp-list .grp::before { content: '// '; }
+.cmp-list .sep { height: 1px; background: var(--line); margin: 4px 0; padding: 0; }
+.cmp-list .danger { color: var(--danger); }
+.cmp-list li.dis { opacity: .45; cursor: not-allowed; }
+.cmp-list mark { background: none; color: var(--accent); font-weight: 700; }
+.cmp-list .filter { padding: 4px; cursor: default; }
+.cmp-list .filter .input { height: 30px; }
+/* overlays rendered inline */
+.cmp-stage { position: relative; border: 1px dashed var(--control); background: var(--bg); border-radius: var(--radius); padding: 24px 16px; min-height: 220px; overflow: hidden; }
+.cmp-stage .scrimfill { position: absolute; inset: 0; background: var(--scrim); }
+.cmp-stage .lbl { position: absolute; left: 8px; top: 4px; font-size: 10px; color: var(--muted); z-index: 2; }
+.cmp-dlg { position: relative; z-index: 1; max-width: 460px; margin: 0 auto; background: var(--surface); border: 1px solid var(--control); border-radius: var(--radius); box-shadow: var(--shadow-popover); }
+html[data-skin='terminal'] .cmp-dlg { box-shadow: none; border-color: var(--accent); }
+.cmp-dlg .x { position: absolute; right: 8px; top: 8px; }
+.cmp-sheet { position: absolute; z-index: 1; top: 0; right: 0; bottom: 0; width: 62%; background: var(--surface); border-left: 1px solid var(--control); display: flex; flex-direction: column; }
+html[data-skin='terminal'] .cmp-sheet { border-left-color: var(--accent); }
+.cmp-pop { width: 280px; border: 1px solid var(--control); background: var(--surface); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow-popover); font-size: 13px; }
+html[data-skin='terminal'] .cmp-pop { box-shadow: none; }
+.cmp-arrow { font-size: 11px; color: var(--muted); margin: 4px 0; }
+/* feedback */
+.cmp-toast { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--positive); background: var(--raised); border-radius: var(--radius); font-size: 13px; }
+.cmp-toast + .cmp-toast { margin-top: 8px; }
+.cmp-toast.err { border-left-color: var(--danger); } .cmp-toast.info { border-left-color: var(--info); }
+.cmp-toast time { color: var(--muted); font-size: 11px; }
+.cmp-toast .act { margin-left: auto; display: flex; gap: 4px; }
+.cmp-spin { display: inline-block; width: 1ch; color: var(--accent); }
+.cmp-skel { display: grid; gap: 8px; }
+.cmp-skel i { display: block; height: 12px; background: var(--active); border-radius: var(--radius); animation: cmp-pulse 1.4s ease-in-out infinite; }
+html[data-skin='terminal'] .cmp-skel i { height: auto; background: none; color: var(--muted); font-style: normal; font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; }
+html[data-skin='terminal'] .cmp-skel i::before { content: '░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░'; }
+@keyframes cmp-pulse { 50% { opacity: .45; } }
+.cmp-prog { height: 6px; background: var(--active); border-radius: var(--radius-pill); overflow: hidden; }
+.cmp-prog b { display: block; height: 100%; background: var(--accent); }
+.cmp-prog-ascii { display: none; font-size: 12px; color: var(--accent); white-space: pre; }
+html[data-skin='terminal'] .cmp-prog { display: none; }
+html[data-skin='terminal'] .cmp-prog-ascii { display: block; }
+.cmp-prog-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 12px; }
+.cmp-prog-row + .cmp-prog-row { margin-top: 10px; }
+@media (prefers-reduced-motion: reduce) { .cmp-skel i { animation: none; } }
+@media (max-width: 900px) { .cmp-states { grid-template-columns: 1fr; } .cmp-sheet { width: 88%; } }
+</style>
+
+<!-- ============================================================ 1. ACTIONS & DISPLAY -->
+<section class="view" id="components" data-group="Design system" data-title="Components — actions &amp; display" data-path="design-system/components" data-rail="settings" data-status="27 components · ui/ + app-level · terminal skin">
+  <div class="page-head">
+    <div><h1>Components</h1><p class="meta">Every primitive in <code>apps/web/src/components</code>, drawn in the Developer skin. Switch skin in the demo bar to compare.</p></div>
+    <div class="actions"><a class="btn" href="#components-forms">forms →</a><a class="btn" href="#components-overlays">overlays &amp; feedback →</a></div>
+  </div>
+  <div class="tabs" role="tablist">
+    <a role="tab" aria-selected="true" href="#components">Actions &amp; display</a>
+    <a role="tab" aria-selected="false" href="#components-forms">Forms</a>
+    <a role="tab" aria-selected="false" href="#components-overlays">Overlays &amp; feedback</a>
+  </div>
+
+  <div class="grid">
+    <article class="pane s12">
+      <div class="pane-title"><b>button</b><span>ui/button.tsx · variant × size</span></div>
+      <div class="pane-body">
+        <div class="cmp-grid">
+          <span class="h">variant</span><span class="h">default</span><span class="h">sm</span><span class="h">lg</span><span class="h">icon</span>
+          <span class="cmp-cap">default</span><button class="btn primary">Save AI settings</button><button class="btn primary sm">Save</button><button class="btn primary cmp-lg">Add datasource</button><button class="btn primary icon-only" aria-label="Add">+</button>
+          <span class="cmp-cap">destructive</span><button class="btn danger">Delete source</button><button class="btn danger sm">Remove</button><button class="btn danger cmp-lg">Delete workspace</button><button class="btn danger icon-only" aria-label="Delete">✕</button>
+          <span class="cmp-cap">outline</span><button class="btn">Collect now</button><button class="btn sm">Retry</button><button class="btn cmp-lg">Starter packs</button><button class="btn icon-only" aria-label="Refresh">↻</button>
+          <span class="cmp-cap">secondary</span><button class="btn cmp-secondary">Test connection</button><button class="btn cmp-secondary sm">Test</button><button class="btn cmp-secondary cmp-lg">Open settings</button><button class="btn cmp-secondary icon-only" aria-label="Settings">⚙</button>
+          <span class="cmp-cap">ghost</span><button class="btn ghost">Cancel changes</button><button class="btn ghost sm">Cancel</button><button class="btn ghost cmp-lg">Skip for now</button><button class="btn ghost icon-only" aria-label="More">⋯</button>
+          <span class="cmp-cap">link</span><button class="btn cmp-link">Open source status</button><button class="btn cmp-link sm">Configure</button><button class="btn cmp-link cmp-lg">View all events</button><span class="muted small">—</span>
+          <span class="cmp-cap">bare</span><button class="cmp-bare">Show local weather</button><span class="muted small">bare-button.tsx: no base classes, caller styles it</span><span></span><span></span>
+        </div>
+        <div class="cmp-spec" style="margin-top:14px">
+          <span class="cmp-cap">states</span>
+          <button class="btn primary">rest</button>
+          <button class="btn primary cmp-hover">hover</button>
+          <button class="btn primary cmp-focus">focus-visible</button>
+          <button class="btn primary" disabled>disabled</button>
+          <button class="btn primary" aria-busy="true" disabled><span class="cmp-spin" aria-hidden="true">⠋</span> saving…</button>
+          <button class="btn cmp-hover">outline hover</button>
+          <button class="btn cmp-focus">outline focus</button>
+        </div>
+        <p class="cmp-rule">label wrapped in [ ] (ghost, link, icon excepted) · default = filled green · destructive = red outline · focus = 2px solid green ring, never a glow · loading keeps width, swaps label for braille spinner</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>badge</b><span>ui/badge.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-spec">
+          <span class="cmp-badge b-default">default</span>
+          <span class="cmp-badge b-secondary">secondary</span>
+          <span class="cmp-badge b-destructive">destructive</span>
+          <span class="cmp-badge b-outline">outline</span>
+          <span class="cmp-badge b-ghost">ghost</span>
+          <span class="cmp-badge b-link">link</span>
+        </div>
+        <div class="cmp-spec"><span class="cmp-cap">status</span><span class="badge ok">active</span><span class="badge warn">needs key</span><span class="badge err">failed</span><span class="badge mute">paused</span></div>
+        <div class="cmp-spec"><span class="cmp-cap">tags</span><span class="tag">feed</span><span class="tag">table</span><span class="tag">map</span><span class="tag">live</span></div>
+        <p class="cmp-rule">square, no pill · destructive = red outline, same as the destructive button · status badges collapse to ● word · outline badges read as &lt;word&gt; · tags read as #word</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>card</b><span>ui/card.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-card">
+          <div class="cmp-card-h"><h3>capture open_meteo</h3><p class="small muted">Open-Meteo forecast · Ho Chi Minh City</p></div>
+          <div class="cmp-card-b"><span class="badge ok">active</span> · every hour · last collected 13:00:03 · 168 records</div>
+          <div class="cmp-card-f"><button class="btn sm ghost">History</button><button class="btn sm">Collect now</button></div>
+        </div>
+        <p class="cmp-rule">card = raised surface + 1px line · header / body / footer split by rules · no shadow at rest</p>
+      </div>
+    </article>
+
+    <article class="pane s7">
+      <div class="pane-title"><b>table</b><span>ui/table.tsx</span></div>
+      <div class="pane-body" style="padding:4px 4px 12px">
+        <table class="data">
+          <thead><tr><th>Source</th><th>State</th><th>Schedule</th><th class="n">Records</th><th class="n">Last run</th></tr></thead>
+          <tbody>
+            <tr><td class="name">google_news</td><td><span class="badge ok">active</span></td><td><code>*/30 * * * *</code></td><td class="n">1,284</td><td class="n">13:00:12</td></tr>
+            <tr><td class="name">coingecko</td><td><span class="badge ok">active</span></td><td><code>*/5 * * * *</code></td><td class="n">2,016</td><td class="n">13:10:00</td></tr>
+            <tr><td class="name">nasa_firms</td><td><span class="badge warn">needs key</span></td><td><code>0 */3 * * *</code></td><td class="n">0</td><td class="n muted">never</td></tr>
+            <tr><td class="name">alpha_vantage</td><td><span class="badge err">failed</span></td><td><code>15 9 * * 1-5</code></td><td class="n">512</td><td class="n">09:15:40</td></tr>
+          </tbody>
+          <tfoot><tr><td colspan="3" class="muted small">4 of 7 sources</td><td class="n small">4,812</td><td></td></tr></tfoot>
+        </table>
+        <p class="cmp-rule" style="margin:10px 8px 0">headers uppercase 11px tracked · numbers tabular, right aligned · row hover = active tone, no zebra</p>
+      </div>
+    </article>
+
+    <article class="pane s5">
+      <div class="pane-title"><b>tabs</b><span>ui/tabs.tsx</span></div>
+      <div class="pane-body">
+        <div class="tabs" role="tablist" style="margin-bottom:10px">
+          <button role="tab" aria-selected="true">Sources</button>
+          <button role="tab" aria-selected="false">MCP</button>
+          <button role="tab" aria-selected="false">Personal data permissions</button>
+        </div>
+        <div class="tabs" role="tablist" style="margin-bottom:6px">
+          <button role="tab" aria-selected="false">All<span class="count">7</span></button>
+          <button role="tab" aria-selected="true">Active<span class="count">5</span></button>
+          <button role="tab" aria-selected="false">Paused<span class="count">1</span></button>
+          <button role="tab" aria-selected="false" disabled style="opacity:.45">Archived<span class="count">0</span></button>
+        </div>
+        <p class="cmp-rule">active tab = * prefix + green underline · counts muted · disabled tab 45% opacity</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>pagination</b><span>ui/pagination.tsx</span></div>
+      <div class="pane-body">
+        <nav class="cmp-pager" aria-label="Pagination">
+          <a href="#components" aria-label="Previous page">‹ prev</a>
+          <a href="#components">1</a>
+          <a href="#components" aria-current="page">2</a>
+          <a href="#components">3</a>
+          <span class="gap">…</span>
+          <a href="#components">12</a>
+          <a href="#components" aria-label="Next page">next ›</a>
+        </nav>
+        <p class="small muted" style="margin-top:8px">rows 21–40 of 236</p>
+        <p class="cmp-rule">current page = [2] in green · ellipsis is text, not a button</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>tooltip</b><span>ui/tooltip.tsx · open</span></div>
+      <div class="pane-body">
+        <div class="cmp-spec">
+          <span class="cmp-tipwrap"><button class="btn icon-only" aria-label="Collect now" aria-describedby="cmp-tip-1">⤓</button><span class="cmp-tip" role="tooltip" id="cmp-tip-1">Collect now</span></span>
+          <span class="cmp-tipwrap"><button class="btn icon-only" aria-label="Pause source">❚❚</button><span class="cmp-tip" role="tooltip">Pause · <kbd>P</kbd></span></span>
+        </div>
+        <p class="cmp-rule">tooltip = 1px green frame, "? " prefix · names icon-only actions · shows the shortcut</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>kbd · avatar</b><span>shared</span></div>
+      <div class="pane-body">
+        <div class="cmp-spec"><kbd>Ctrl</kbd><kbd>K</kbd><span class="small muted">command palette</span></div>
+        <div class="cmp-spec"><kbd>Esc</kbd><span class="small muted">close</span><kbd>↑</kbd><kbd>↓</kbd><span class="small muted">move</span><kbd>↵</kbd><span class="small muted">run</span></div>
+        <div class="cmp-spec"><span class="cmp-ava">O</span><span class="cmp-ava on">LT</span><span class="cmp-ava lg">BD</span><span class="small muted">owner · member · large</span></div>
+        <p class="cmp-rule">kbd = 1px control frame · avatar initials, square in terminal skin</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>umwelt-mark</b><span>brand/umwelt-mark.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-brand"><span class="cmp-mark" aria-hidden="true"></span><span class="cmp-word">umwelt-os</span></div>
+        <pre class="cmp-ascii" aria-hidden="true">  ___
+ / _ \   umwelt-os
+| (◉) |  personal intelligence
+ \___/   v2.4.0</pre>
+        <p class="cmp-rule">mark loses its circle (square frame) · wordmark prefixed ~/ · ASCII banner only on login and empty chat</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>show-more</b><span>show-more.tsx</span></div>
+      <div class="pane-body">
+        <p class="cmp-clamp" id="cmp-more">Spot gold swung $60 in two sessions as rate expectations shifted, while central bank buying kept the 12-month trend intact. Analysts expect range trading between 2,600 and 2,750 into year end, with physical demand from India softening after the festival season.</p>
+        <button class="btn cmp-link sm" aria-expanded="false" aria-controls="cmp-more" data-cmp-more style="margin-top:4px">show more ▾</button>
+        <p class="cmp-rule">toggle reads "show more ▾" / "show less ▴" · keeps aria-expanded in sync</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>feed-source-tabs · feed-view-toggle</b><span>feed-*.tsx</span></div>
+      <div class="pane-body">
+        <div class="chips" style="margin-bottom:10px">
+          <button class="chip" aria-pressed="true" data-single>all sources</button>
+          <button class="chip" aria-pressed="false" data-single>bao-thanh-nien</button>
+          <button class="chip" aria-pressed="false" data-single>google-news</button>
+        </div>
+        <div class="cmp-seg" role="group" aria-label="Feed layout">
+          <button aria-pressed="true">☰ list</button><button aria-pressed="false">▦ grid</button><button aria-pressed="false">≡ compact</button>
+        </div>
+        <p class="cmp-rule">source tabs = single-select [x] chips · view toggle = segmented, active segment green</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>feed-image</b><span>feed-image.tsx · fallback</span></div>
+      <div class="pane-body">
+        <div class="cmp-spec" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="cmp-img" role="img" aria-label="Image unavailable">
+            <pre>+--------------+
+|   no image   |
+|    [ ✕ ]     |
++--------------+</pre>
+            <span class="cap"><span>fallback</span><span>reuters</span></span>
+          </div>
+          <div class="cmp-img" role="img" aria-label="Loading image">
+            <span><span class="cmp-spin" aria-hidden="true">⠋</span> loading…</span>
+            <span class="cap"><span>loading</span><span>412 KB</span></span>
+          </div>
+        </div>
+        <p class="cmp-rule">blocked or missing thumbnail = ASCII frame, never a broken icon · proxy loading shows spinner</p>
+      </div>
+    </article>
+
+    <article class="pane s8">
+      <div class="pane-title"><b>settings-layout</b><span>settings-layout/index.tsx</span></div>
+      <div class="pane-body" style="padding:0">
+        <div class="settings" style="min-height:0;grid-template-columns:190px 1fr">
+          <nav class="subnav" aria-label="Settings sections (specimen)">
+            <span class="grp">Data &amp; AI</span>
+            <a href="#settings-sources">Data sources</a>
+            <a href="#settings-models" aria-current="page">Models</a>
+            <a href="#settings-prompts">System prompts</a>
+            <span class="grp">Workspace</span>
+            <a href="#settings-members">Members</a>
+          </nav>
+          <div class="settings-body" style="padding:16px 20px">
+            <div class="set-row" style="grid-template-columns:180px 1fr;padding-top:0">
+              <div><h2>Visualization router</h2><p class="help">How answers are presented.</p></div>
+              <select class="input" aria-label="Router"><option>internal (default)</option><option>model-assisted</option></select>
+            </div>
+            <div class="savebar"><button class="btn ghost">Cancel</button><button class="btn primary">Save</button></div>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>focus ring</b><span>global :focus-visible</span></div>
+      <div class="pane-body">
+        <div class="cmp-spec"><button class="btn cmp-focus">button</button><a href="#components" class="cmp-focus" style="outline:2px solid var(--accent);outline-offset:2px">link</a></div>
+        <div class="cmp-spec"><input class="input cmp-focus" value="input focus" aria-label="Focused input"></div>
+        <p class="cmp-rule">one ring everywhere: 2px solid accent, offset 2px · contrast ≥ 3:1 on every surface</p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ============================================================ 2. FORMS -->
+<section class="view" id="components-forms" data-group="Design system" data-title="Components — forms" data-path="design-system/components/forms" data-rail="settings" data-mode="INSERT" data-status="forms · label input textarea checkbox radio switch select combobox">
+  <div class="page-head">
+    <div><h1>Components · forms</h1><p class="meta">Inputs, choices and validation. Every field keeps a visible label; limits sit beside the field.</p></div>
+  </div>
+  <div class="tabs" role="tablist">
+    <a role="tab" aria-selected="false" href="#components">Actions &amp; display</a>
+    <a role="tab" aria-selected="true" href="#components-forms">Forms</a>
+    <a role="tab" aria-selected="false" href="#components-overlays">Overlays &amp; feedback</a>
+  </div>
+
+  <div class="grid">
+    <article class="pane s7">
+      <div class="pane-title"><b>input · label</b><span>ui/input.tsx · ui/label.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-states">
+          <div class="field"><label for="cf-1">Source name</label><input class="input" id="cf-1" placeholder="e.g. capture google_news"><span class="help">default · placeholder muted</span></div>
+          <div class="field"><label for="cf-2">Endpoint</label><input class="input cmp-focus" id="cf-2" value="https://api.anthropic.com"><span class="help">focus · green ring</span></div>
+          <div class="field"><label for="cf-3">NASA FIRMS API key</label><input class="input" id="cf-3" value="abc123" aria-invalid="true" aria-describedby="cf-3e"><span class="field-err" id="cf-3e">key must be 32 characters (got 6).</span></div>
+          <div class="field"><label for="cf-4">Workspace ID</label><input class="input" id="cf-4" value="ws_01HZX7Q3" disabled><span class="help">disabled · read only</span></div>
+          <div class="field"><label for="cf-5">Search</label><div class="prompt-wrap"><input class="input" id="cf-5" placeholder="filter sources…"></div><span class="help">search input · &gt; prompt</span></div>
+          <div class="field"><label for="cf-6">Monthly budget <span class="muted small">(USD)</span></label><input class="input num" id="cf-6" type="number" value="40"><span class="help">numeric · tabular figures</span></div>
+        </div>
+        <p class="cmp-rule">label above field, 13px strong · error = red border + "ERR " line tied by aria-describedby · disabled 50%</p>
+      </div>
+    </article>
+
+    <article class="pane s5">
+      <div class="pane-title"><b>password-input</b><span>ui/password-input.tsx</span></div>
+      <div class="pane-body">
+        <div class="field"><label for="cf-pw1">Anthropic API key</label>
+          <div class="cmp-pw"><input class="input" id="cf-pw1" type="password" value="sk-ant-api03-3f2a" autocomplete="off"><button type="button" data-cmp-pw aria-controls="cf-pw1" aria-pressed="false">[show]</button></div>
+          <span class="help">stored encrypted · shown as sk-ant-••••3f2a after save</span>
+        </div>
+        <div class="field" style="margin-top:12px"><label for="cf-pw2">Password</label>
+          <div class="cmp-pw"><input class="input" id="cf-pw2" type="text" value="correct-horse-battery" autocomplete="off"><button type="button" data-cmp-pw aria-controls="cf-pw2" aria-pressed="true">[hide]</button></div>
+          <span class="help">12+ characters · 1 number</span>
+        </div>
+        <p class="cmp-rule">toggle reads [show] / [hide], keeps focus in the field</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>textarea</b><span>ui/textarea.tsx</span></div>
+      <div class="pane-body">
+        <div class="field"><label for="cf-ta">System prompt · research assistant</label>
+          <textarea class="input" id="cf-ta" aria-describedby="cf-ta-c">You answer from the owner's synced sources first.
+Cite every claim as [n]. If sources disagree, say so.
+Never invent figures.</textarea>
+          <span class="cmp-count" id="cf-ta-c">142 / 4,000 · ~38 tokens</span>
+        </div>
+        <p class="cmp-rule">monospace already · counter right-aligned, muted · resize vertical only</p>
+      </div>
+    </article>
+
+    <article class="pane s3">
+      <div class="pane-title"><b>checkbox</b><span>ui/checkbox.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-cb">
+          <label class="check cmp-tcheck"><input type="checkbox" checked><span>Show data records</span></label>
+          <label class="check cmp-tcheck"><input type="checkbox"><span>Include archived</span></label>
+          <label class="check cmp-tcheck"><input type="checkbox" data-cmp-indet><span>All categories</span></label>
+          <label class="check cmp-tcheck"><input type="checkbox" disabled><span>Local only (no model)</span></label>
+        </div>
+        <p class="cmp-rule">drawn as [x] [ ] [-] · native input kept for a11y</p>
+      </div>
+    </article>
+
+    <article class="pane s3">
+      <div class="pane-title"><b>radio-group</b><span>ui/radio-group.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-cb" role="radiogroup" aria-label="Theme">
+          <label class="check cmp-tcheck"><input type="radio" name="cmp-r" ><span>light</span></label>
+          <label class="check cmp-tcheck"><input type="radio" name="cmp-r" checked><span>dark</span></label>
+          <label class="check cmp-tcheck"><input type="radio" name="cmp-r"><span>system</span></label>
+          <label class="check cmp-tcheck"><input type="radio" name="cmp-r2" disabled><span>high contrast</span></label>
+        </div>
+        <p class="cmp-rule">drawn as (*) ( ) · arrow keys move</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>switch</b><span>ui/switch.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-swrow"><span>Allow web search</span><span class="switch on" role="switch" aria-checked="true" tabindex="0" data-cmp-switch aria-label="Allow web search"></span></div>
+        <div class="cmp-swrow"><span>Send documents to cloud models</span><span class="switch" role="switch" aria-checked="false" tabindex="0" data-cmp-switch aria-label="Send documents to cloud models"></span></div>
+        <div class="cmp-swrow"><span class="muted">Telemetry (disabled by policy)</span><span class="switch" role="switch" aria-checked="false" aria-disabled="true" style="opacity:.45" aria-label="Telemetry"></span></div>
+        <p class="cmp-rule">reads [on ] / [off] · same width so rows never shift</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>select</b><span>ui/select.tsx · closed + open</span></div>
+      <div class="pane-body">
+        <div class="field"><label>Schedule</label><button class="cmp-trigger" type="button" aria-haspopup="listbox">every 30 min <span class="ch">▾</span></button></div>
+        <div class="field" style="margin-top:10px"><label>Role</label>
+          <button class="cmp-trigger open" type="button" aria-haspopup="listbox" aria-expanded="true">default chat <span class="ch">▴</span></button>
+          <ul class="cmp-list" role="listbox" aria-label="Role">
+            <li role="option" aria-selected="true" class="hi">default chat</li>
+            <li role="option" aria-selected="false">fast<span class="r">titles, routing</span></li>
+            <li role="option" aria-selected="false">embeddings</li>
+            <li role="option" aria-selected="false" class="dis" aria-disabled="true">vision<span class="r">not supported</span></li>
+          </ul>
+        </div>
+        <p class="cmp-rule">highlighted option = &gt; + green bar · selected = ✓ · no drop shadow</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>searchable-select</b><span>ui/searchable-select.tsx</span></div>
+      <div class="pane-body">
+        <div class="field"><label>Timezone</label>
+          <button class="cmp-trigger open" type="button" aria-expanded="true">Asia/Ho_Chi_Minh <span class="ch">▴</span></button>
+          <ul class="cmp-list" role="listbox" aria-label="Timezone">
+            <li class="filter"><div class="prompt-wrap"><input class="input" value="ho" aria-label="Filter timezones"></div></li>
+            <li class="grp">3 matches</li>
+            <li role="option" aria-selected="true" class="hi">Asia/<mark>Ho</mark>_Chi_Minh<span class="r">GMT+7</span></li>
+            <li role="option" aria-selected="false">Asia/<mark>Ho</mark>vd<span class="r">GMT+7</span></li>
+            <li role="option" aria-selected="false">America/Port-au-Prince (<mark>Ho</mark>)<span class="r">GMT−5</span></li>
+          </ul>
+        </div>
+        <ul class="cmp-list" role="listbox" aria-label="Timezone, no result" style="margin-top:10px">
+          <li class="filter"><div class="prompt-wrap"><input class="input" value="mars" aria-label="Filter timezones"></div></li>
+          <li class="grp" style="padding:8px">no match for "mars" · try a city name</li>
+        </ul>
+        <p class="cmp-rule">filter shares the &gt; prompt · matches highlighted bold green · empty result says what to try</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>form validation</b><span>pattern · blur + submit</span></div>
+      <div class="pane-body">
+        <div class="alert err" role="alert"><span class="alert-k"></span><div>2 fields need attention before saving.<ul style="margin:6px 0 0;padding-left:16px"><li><a href="#components-forms">NASA FIRMS API key</a>: must be 32 characters</li><li><a href="#components-forms">Schedule</a>: pick an interval</li></ul></div></div>
+        <div class="field" style="margin-top:12px"><label for="cf-v">Feed URL</label><input class="input" id="cf-v" value="https://vnexpress.net/rss/the-gioi.rss"><span class="help ok">OK   reachable · 200 · 48 items</span></div>
+        <p class="cmp-rule">validate on blur, summarise on submit · summary links focus the field</p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ============================================================ 3. OVERLAYS & FEEDBACK -->
+<section class="view" id="components-overlays" data-group="Design system" data-title="Components — overlays &amp; feedback" data-path="design-system/components/overlays" data-rail="settings" data-status="overlays · dropdown popover dialog alert-dialog sheet · feedback states">
+  <div class="page-head">
+    <div><h1>Components · overlays &amp; feedback</h1><p class="meta">Overlays drawn inline on a stage so they can be compared side by side.</p></div>
+  </div>
+  <div class="tabs" role="tablist">
+    <a role="tab" aria-selected="false" href="#components">Actions &amp; display</a>
+    <a role="tab" aria-selected="false" href="#components-forms">Forms</a>
+    <a role="tab" aria-selected="true" href="#components-overlays">Overlays &amp; feedback</a>
+  </div>
+
+  <div class="grid">
+    <article class="pane s4">
+      <div class="pane-title"><b>dropdown-menu</b><span>ui/dropdown-menu.tsx · open</span></div>
+      <div class="pane-body">
+        <button class="btn sm" aria-haspopup="menu" aria-expanded="true">⋯ source actions</button>
+        <ul class="cmp-list" role="menu" aria-label="Source actions" style="max-width:280px">
+          <li class="grp" role="presentation">source</li>
+          <li role="menuitem" class="hi">Collect now<span class="r"><kbd>C</kbd></span></li>
+          <li role="menuitem">Test connection<span class="r"><kbd>T</kbd></span></li>
+          <li role="menuitem">Edit schedule…</li>
+          <li class="sep" role="separator"></li>
+          <li class="grp" role="presentation">view</li>
+          <li role="menuitemcheckbox" aria-checked="true" aria-selected="true">Show in Live map</li>
+          <li role="menuitemcheckbox" aria-checked="false">Pin to Overview</li>
+          <li class="sep" role="separator"></li>
+          <li role="menuitem" class="dis" aria-disabled="true">Export records<span class="r">no records</span></li>
+          <li role="menuitem" class="danger">Delete source…<span class="r"><kbd>Del</kbd></span></li>
+        </ul>
+        <p class="cmp-rule">groups as // labels · shortcuts as kbd · destructive item red, last, behind "…"</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>popover</b><span>ui/popover.tsx · open</span></div>
+      <div class="pane-body">
+        <button class="btn sm" aria-expanded="true">ⓘ why paused?</button>
+        <div class="cmp-arrow">└─┐</div>
+        <div class="cmp-pop" role="dialog" aria-label="Why paused">
+          <p><b class="warn">rate limited</b> by gdelt.org</p>
+          <p class="small muted" style="margin-top:4px">429 Too Many Requests at 13:02:09. Next attempt 13:04:09 (backoff 120 s, attempt 3 of 6).</p>
+          <div class="row" style="margin-top:10px"><button class="btn sm">Retry now</button><button class="btn sm ghost">View log</button></div>
+        </div>
+        <p class="cmp-rule">popover = framed panel tied to its trigger by └─┐ · no shadow in terminal skin</p>
+      </div>
+    </article>
+
+    <article class="pane s4">
+      <div class="pane-title"><b>loading · skeleton · spinner</b><span>shared states</span></div>
+      <div class="pane-body">
+        <div class="cmp-spec"><span class="cmp-spin" aria-hidden="true">⠋</span><span>loading 3 sources…</span></div>
+        <div class="cmp-spec"><span class="cmp-spin" aria-hidden="true">⠋</span><span class="muted small">GET api.open-meteo.com/v1/forecast · 412 ms</span></div>
+        <div class="cmp-skel" style="margin-top:12px" aria-busy="true" aria-label="Loading feed"><i style="width:90%"></i><i style="width:70%"></i><i style="width:82%"></i><i style="width:45%"></i></div>
+        <p class="cmp-rule">braille spinner ⠋⠙⠹ · skeleton = ░ bars, static under reduced motion · aria-busy on the region</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>dialog</b><span>ui/dialog.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-stage">
+          <span class="lbl">stage · scrim 60%</span>
+          <div class="scrimfill"></div>
+          <div class="cmp-dlg" role="dialog" aria-labelledby="cmp-dlg-t">
+            <button class="btn sm ghost icon-only x" aria-label="Close">✕</button>
+            <div class="dialog-head"><h2 id="cmp-dlg-t">Add provider</h2><p class="help" style="margin-top:4px">Models from this provider become available in Chat.</p></div>
+            <div class="dialog-body stack-8">
+              <div class="field"><label for="cmp-d1">Provider</label><select class="input" id="cmp-d1"><option>Anthropic</option><option>OpenAI-compatible</option><option>Ollama (local)</option></select></div>
+              <div class="field"><label for="cmp-d2">API key</label><input class="input" id="cmp-d2" type="password" value="sk-ant-••••"></div>
+            </div>
+            <div class="dialog-foot"><button class="btn ghost">Cancel</button><button class="btn primary">Add provider</button></div>
+          </div>
+        </div>
+        <p class="cmp-rule">frame turns green in terminal skin · close ✕ top right · Esc closes · focus trapped</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>alert-dialog</b><span>ui/alert-dialog.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-stage">
+          <span class="lbl">stage · scrim 60%</span>
+          <div class="scrimfill"></div>
+          <div class="cmp-dlg" role="alertdialog" aria-labelledby="cmp-ad-t" aria-describedby="cmp-ad-d" style="border-color:var(--danger)">
+            <div class="dialog-head"><h2 id="cmp-ad-t"><span class="err">Delete source?</span></h2></div>
+            <div class="dialog-body"><p id="cmp-ad-d" class="small">capture coingecko and its 2,016 records will be removed. Gadgets that use it will show "no source". This cannot be undone.</p>
+              <pre style="margin-top:10px;font-size:12px">$ umwelt sources rm coingecko --purge
+<span class="warn">? confirm (y/N)</span></pre></div>
+            <div class="dialog-foot"><button class="btn ghost">Keep source</button><button class="btn danger">Delete source</button></div>
+          </div>
+        </div>
+        <p class="cmp-rule">no close ✕ · safe action first, destructive last · names what is lost and the count</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>sheet</b><span>ui/sheet.tsx</span></div>
+      <div class="pane-body">
+        <div class="cmp-stage" style="min-height:260px">
+          <span class="lbl">stage · right sheet</span>
+          <div class="scrimfill"></div>
+          <aside class="cmp-sheet" aria-label="Gadget settings">
+            <div class="sheet-head"><b>gadget: feed</b><span class="muted small">world-news</span><button class="btn sm ghost icon-only right" aria-label="Close">✕</button></div>
+            <div class="stack-8" style="padding:12px 16px;flex:1">
+              <div class="field"><label for="cmp-s1">Title</label><input class="input" id="cmp-s1" value="feed: world-news"></div>
+              <label class="check cmp-tcheck"><input type="checkbox" checked><span>Show source tags</span></label>
+              <label class="check cmp-tcheck"><input type="checkbox"><span>Unread only</span></label>
+            </div>
+            <div class="dialog-foot"><button class="btn ghost sm">Cancel</button><button class="btn primary sm">Apply</button></div>
+          </aside>
+        </div>
+        <p class="cmp-rule">sheet slides from right, green left edge · used by Quick chat and gadget settings</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>toast · notification</b><span>shared</span></div>
+      <div class="pane-body">
+        <div class="cmp-toast" role="status"><span class="ok">OK</span><span>Saved AI settings</span><time>13:12:04</time></div>
+        <div class="cmp-toast info" role="status"><span class="info">INFO</span><span>Collecting coingecko · 288 rows</span><time>13:10:00</time><span class="act"><button class="btn sm ghost">view</button></span></div>
+        <div class="cmp-toast err" role="alert"><span class="err">ERR</span><span>alpha_vantage: fetch timed out (20 s)</span><time>09:15:40</time><span class="act"><button class="btn sm">retry</button></span></div>
+        <p class="cmp-rule">one line, level word first, time muted · errors stay until dismissed, others 5 s</p>
+      </div>
+    </article>
+
+    <article class="pane s6">
+      <div class="pane-title"><b>empty · error · progress</b><span>shared states</span></div>
+      <div class="pane-body">
+        <p class="empty" style="padding:8px">no records yet.<br>run: <code>collect now</code> or wait for next schedule (in 14 min)</p>
+        <div class="alert err"><span class="alert-k"></span><div>source fetch timed out (20 s). last good data 2 h ago. <a href="#settings-sources">open source settings</a></div></div>
+        <div style="margin-top:12px">
+          <div class="cmp-prog-row"><span>indexing documents</span><span class="num muted">412 / 824</span><div class="cmp-prog" style="grid-column:1/-1"><b style="width:50%"></b></div><span class="cmp-prog-ascii" style="grid-column:1/-1">[██████████░░░░░░░░░░] 50%</span></div>
+          <div class="cmp-prog-row"><span>monthly AI budget</span><span class="num muted">$31.20 / $40</span><div class="cmp-prog" style="grid-column:1/-1"><b style="width:78%;background:var(--warning)"></b></div><span class="cmp-prog-ascii warn" style="grid-column:1/-1">[████████████████░░░░] 78%</span></div>
+        </div>
+        <p class="cmp-rule">empty states say the next command · progress = ASCII bar with count, warning colour past 75%</p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<script>
+/* Gallery interactions: braille spinners, show-more, password toggle, switches, indeterminate checkbox. */
+(function () {
+  const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let i = 0;
+  if (!reduce) setInterval(() => { i = (i + 1) % frames.length; document.querySelectorAll('.cmp-spin').forEach((s) => { if (s.offsetParent) s.textContent = frames[i]; }); }, 90);
+  document.querySelectorAll('[data-cmp-indet]').forEach((c) => { c.indeterminate = true; });
+  document.addEventListener('click', (e) => {
+    const more = e.target.closest('[data-cmp-more]');
+    if (more) {
+      const p = document.getElementById(more.getAttribute('aria-controls'));
+      const open = !p.classList.contains('open');
+      p.classList.toggle('open', open);
+      more.setAttribute('aria-expanded', String(open));
+      more.textContent = open ? 'show less ▴' : 'show more ▾';
+    }
+    const pw = e.target.closest('[data-cmp-pw]');
+    if (pw) {
+      const f = document.getElementById(pw.getAttribute('aria-controls'));
+      const show = f.type === 'password';
+      f.type = show ? 'text' : 'password';
+      pw.setAttribute('aria-pressed', String(show));
+      pw.textContent = show ? '[hide]' : '[show]';
+    }
+    const sw = e.target.closest('[data-cmp-switch]');
+    if (sw) { const on = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', String(on)); sw.classList.toggle('on', on); }
+  });
+  document.addEventListener('keydown', (e) => {
+    const sw = e.target.closest && e.target.closest('[data-cmp-switch]');
+    if (sw && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); sw.click(); }
+  });
+})();
+</script>

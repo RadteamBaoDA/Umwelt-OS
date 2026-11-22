@@ -2,6 +2,9 @@
 // so value imports do not evaluate the module's React component graph; components stay on the module index.
 export {
   type Entity,
+  type GadgetDocumentProjection,
+  type GadgetProjectionFilters,
+  type MediaProjection,
   type MemoryPrivacyConfig,
   type MemoryPurgeRequest,
   type MemoryPurgeResponse,

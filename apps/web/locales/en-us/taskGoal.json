@@ -68,6 +68,8 @@
   "no.tasks": "No tasks match this view.",
   "no.tasksYet": "No tasks yet.",
   "no.dueDate": "No due date",
+  "task.dueOverdue": "overdue {days}d",
+  "task.dueToday": "today",
   "no.goals": "No goals match this view.",
   "no.goalsYet": "No goals yet.",
   "no.deadline": "No deadline",

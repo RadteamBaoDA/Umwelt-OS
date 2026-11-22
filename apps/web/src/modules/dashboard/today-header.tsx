@@ -78,7 +78,14 @@ export function TodayHeader({
   });
   const hour = Number(getDateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: timezone }).format(now));
   const greeting = t(greetingKey(hour));
-  const date = getDateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'full', timeZone: timezone }).format(now);
+  // Compact date form ("Thu, Nov 12, 2026") in both skins.
+  const date = getDateTimeFormat(normalizeFormattingLocale(locale), {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: timezone,
+  }).format(now);
   const counts = useQuery({
     queryKey: ['today-since', lastVisit, sourceIds.join(',')],
     enabled: lastVisit !== null && sourceIds.length > 0,

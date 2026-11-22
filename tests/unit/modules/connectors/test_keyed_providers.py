@@ -18,6 +18,13 @@ from tests.unit.modules.connectors._collection_patch import patch_collection
 KEY = "SECRET-key-0123456789abcdef"
 NOW = datetime(2026, 10, 22, 0, 0, tzinfo=UTC)
 CFG = {
+    "tmdb_movies": {"tmdb_mode": "upcoming"},
+    "tmdb_tv": {"tmdb_mode": "airing_today"},
+    "trakt_media": {},
+    "omdb_lookup": {"omdb_mode": "title", "omdb_title": "Example movie"},
+    "mal_anime": {},
+    "mal_manga": {},
+    "google_books": {"google_books_subject": "History"},
     "fred": {"fred_series_id": "DFF"},
     "finnhub_news": {},
     "newsapi": {},
@@ -29,6 +36,21 @@ CFG = {
 # OpenWeather 2.5 current weather, OpenAQ v3 locations/{id}/sensors, FIRMS country CSV), trimmed but with the full
 # envelope and the extra fields real responses carry, so a mapper that only works on a minimal body is caught.
 BODIES = {
+    "tmdb_movies": {
+        "results": [{"id": 42, "title": "Example movie", "release_date": "2026-12-01"}]
+    },
+    "tmdb_tv": {"results": [{"id": 43, "name": "Example series", "first_air_date": "2026-12-01"}]},
+    "trakt_media": [{"movie": {"title": "Example movie", "year": 2026, "ids": {"trakt": 44}}}],
+    "omdb_lookup": {
+        "Response": "True",
+        "Title": "Example movie",
+        "Year": "2026",
+        "imdbID": "tt1234567",
+        "Type": "movie",
+    },
+    "mal_anime": {"data": [{"node": {"id": 41, "title": "Example anime", "media_type": "tv"}}]},
+    "mal_manga": {"data": [{"node": {"id": 42, "title": "Example manga", "media_type": "manga"}}]},
+    "google_books": {"items": [{"id": "example", "volumeInfo": {"title": "Example book"}}]},
     "fred": {
         "realtime_start": "2026-10-22",
         "realtime_end": "2026-10-22",
@@ -334,10 +356,13 @@ def make_run(monkeypatch, provider, secret, body=b"{}"):
 
     async def lease(_run):
         leased.append(1)
-        return object()
+        return SimpleNamespace(cursor_before=None)
 
-    async def accept(_run, _lease, records, coverage, _at, update=None):
+    async def accept(_run, _lease, records, coverage, _at, cursor_after=None, update=None):
         accepted.append(records)
+
+    async def select(_run, _lease, records, _at):
+        return list(records), None
 
     async def stored(_run):
         if isinstance(secret, Exception):
@@ -346,6 +371,7 @@ def make_run(monkeypatch, provider, secret, body=b"{}"):
 
     patch_collection(monkeypatch, "_lease", lease)
     patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_select", select)
     patch_collection(monkeypatch, "_rest_secret", stored)
     settings = SimpleNamespace(
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "x" * 44)
@@ -396,3 +422,92 @@ def test_keyed_import_pins_http_loggers_to_warning() -> None:
 
     for name in ("httpx", "httpcore"):
         assert logging.getLogger(name).level == logging.WARNING
+
+
+def test_fred_known_series_records_physical_units_as_provider_field() -> None:
+    """DFF carries units=Percent in provider fields; the unit column (series key) is unchanged."""
+    from datetime import UTC, datetime
+
+    payload = {"observations": [{"date": "2026-11-01", "value": "4.33"}]}
+    [record] = keyed.map_fred(payload, datetime(2026, 11, 2, tzinfo=UTC), {"fred_series_id": "DFF"})
+    world = record.metadata["provider_record"]["world_data"]
+    assert world["provider_fields"]["units"] == "Percent" and world["unit"] == "series units"
+    [other] = keyed.map_fred(
+        payload, datetime(2026, 11, 2, tzinfo=UTC), {"fred_series_id": "ABC123"}
+    )
+    assert "units" not in other.metadata["provider_record"]["world_data"]["provider_fields"]
+
+
+# ------------------------------------------------------------------ FRED series units from /fred/series
+
+
+class RoutedGate(Gate):
+    """Gate answering ``/fred/series?`` (metadata) and ``/observations`` with their own outcome."""
+
+    def __init__(self, meta):
+        super().__init__(json.dumps(BODIES["fred"]).encode())
+        self.meta = meta
+
+    async def fetch_bytes(self, url, **kwargs):
+        if "/fred/series?" not in url:
+            return await super().fetch_bytes(url, **kwargs)
+        self.calls.append((url, kwargs))
+        if isinstance(self.meta, Exception):
+            raise self.meta
+        return rest.Fetched(self.meta)
+
+
+def fred_units_run(monkeypatch, meta, sid="ABC123"):
+    run, accepted, _ = make_run(monkeypatch, "fred", (keyed.KEYED["fred"].placement, KEY))
+    run.attempt.source.configuration = {"fred_series_id": sid}
+    run.gate = RoutedGate(meta)
+    return run, accepted
+
+
+def accepted_units(accepted):
+    fields = accepted[0][0].metadata["provider_record"]["world_data"]["provider_fields"]
+    return fields.get("units")
+
+
+def meta_body(units):
+    return json.dumps({"seriess": [{"id": "ABC123", "units": units}]}).encode()
+
+
+async def test_fred_unknown_series_takes_units_from_series_metadata(monkeypatch):
+    run, accepted = fred_units_run(monkeypatch, meta_body("Billions of Dollars"))
+    await collection._run_keyed(run)
+    # Metadata goes first, so a quota deferral there spends nothing on the data send.
+    assert len(run.gate.calls) == 2 and "/fred/series?" in run.gate.calls[0][0]
+    assert accepted_units(accepted) == "Billions of Dollars"
+    assert KEY not in repr(accepted)
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [rest.ProviderHttpError(500), b"not json", b"{}", meta_body(["x"]), meta_body("x" * 81)]
+    + [meta_body("Per\ncent"), meta_body("")],
+)
+async def test_fred_bad_metadata_still_collects_without_units(monkeypatch, meta):
+    run, accepted = fred_units_run(monkeypatch, meta)
+    await collection._run_keyed(run)
+    assert accepted and accepted_units(accepted) is None
+
+
+async def test_fred_known_series_makes_no_metadata_send(monkeypatch):
+    run, accepted = fred_units_run(monkeypatch, meta_body("Wrong"), sid="DFF")
+    await collection._run_keyed(run)
+    assert len(run.gate.calls) == 1 and accepted_units(accepted) == "Percent"
+
+
+async def test_fred_metadata_quota_deferral_is_not_swallowed(monkeypatch):
+    from datetime import timedelta
+
+    from modules.connectors import quota
+
+    run, accepted = fred_units_run(monkeypatch, quota.QuotaDeferred("p", NOW + timedelta(hours=1)))
+    with pytest.raises(quota.QuotaDeferred):
+        await collection._run_keyed(run)
+    assert not accepted
+    assert all(
+        "/fred/series?" in call[0] for call in run.gate.calls
+    )  # no data send before the deferral

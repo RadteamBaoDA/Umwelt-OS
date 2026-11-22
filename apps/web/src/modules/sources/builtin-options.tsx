@@ -80,7 +80,7 @@ function MultiOption({ label, spec, value, disabled, onValue }: OptionFieldProps
   );
 }
 
-/** Select for an `enum` option with a leading Default item; choosing Default reports `undefined`. */
+/** Localizes labelled enum values and offers a leading Default item that reports undefined when selected. */
 function EnumOption({ id, label, spec, value, disabled, onValue }: OptionFieldProps & { id: string }) {
   const t = useTranslations('sources');
   return (
@@ -98,7 +98,7 @@ function EnumOption({ id, label, spec, value, disabled, onValue }: OptionFieldPr
           <SelectItem value={UNSET}>{t('opt.selectUnset')}</SelectItem>
           {(spec.values ?? []).map((item) => (
             <SelectItem key={item} value={item}>
-              {humanize(item)}
+              {spec.labelled && optionValueKey(item) ? t(optionValueKey(item)!) : humanize(item)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -110,9 +110,10 @@ function EnumOption({ id, label, spec, value, disabled, onValue }: OptionFieldPr
 /**
  * Renders one per-type option from its spec: enum Select (with a Default item that clears it), capped checkbox group,
  * bounded number, bounded text or switch. Reports `undefined` (or `[]` for a multi-select) when emptied so callers can
- * omit the key (wizard) or send an explicit null (Configure). Pure UI; the server remains the validator.
+ * omit the key (wizard) or send an explicit null (Configure). Nullable booleans retain explicit false.
+ * Pure UI; the server remains the validator.
  */
-function TypedOption({
+export function TypedOption({
   spec,
   value,
   onValue,
@@ -127,6 +128,27 @@ function TypedOption({
   const id = `builtin-option-${spec.key}`;
   const labelKey = optionLabelKey(spec.key);
   const label = labelKey ? t(labelKey) : spec.key;
+  if (spec.kind === 'bool' && spec.nullable) {
+    return (
+      <div className="field">
+        <Label htmlFor={id}>{label}</Label>
+        <Select
+          disabled={disabled}
+          value={typeof value === 'boolean' ? String(value) : UNSET}
+          onValueChange={(next) => onValue(next === UNSET ? undefined : next === 'true')}
+        >
+          <SelectTrigger id={id}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={UNSET}>{t('opt.selectUnset')}</SelectItem>
+            <SelectItem value="true">{t('opt.enabled')}</SelectItem>
+            <SelectItem value="false">{t('opt.disabled')}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+    );
+  }
   if (spec.kind === 'bool') {
     return (
       <div className="field flex items-center gap-2">
@@ -157,6 +179,7 @@ function TypedOption({
         <Input
           id={id}
           maxLength={spec.maxLen}
+          pattern={spec.pattern}
           disabled={disabled}
           value={typeof value === 'string' ? value : ''}
           onChange={(event) => {
@@ -186,7 +209,8 @@ function TypedOption({
 
 /**
  * Comma-separated terms field (for example VN tickers) that keeps the raw text locally so a trailing comma survives typing.
- * Reports trimmed, de-duplicated terms (upper-cased when the spec asks) capped at `spec.max`, or `undefined` when empty.
+ * Reports trimmed, de-duplicated terms (upper-cased when requested), capped at spec.max, or undefined when empty.
+ * Numeric identifier specs serialize parsed terms as numbers; the server owns authoritative format and range validation.
  */
 function TagsOption({
   id,
@@ -204,7 +228,7 @@ function TagsOption({
   onValue: (value: unknown) => void;
 }) {
   const t = useTranslations('sources');
-  const [raw, setRaw] = useState(Array.isArray(value) ? (value as string[]).join(', ') : '');
+  const [raw, setRaw] = useState(Array.isArray(value) ? value.join(', ') : '');
   const max = spec.max ?? 20;
   return (
     <div className="field">
@@ -213,13 +237,15 @@ function TagsOption({
         id={id}
         disabled={disabled}
         value={raw}
+        maxLength={max * ((spec.maxLen ?? 64) + 2)}
+        pattern={spec.pattern}
         aria-describedby={`${id}-help`}
         onChange={(event) => {
           const text = spec.upper ? event.target.value.toUpperCase() : event.target.value;
           setRaw(text);
           // Case-insensitive de-duplication: the server rejects keywords that differ only by case.
           const terms = [...new Map(parseTerms(text).map((term) => [term.toLowerCase(), term])).values()].slice(0, max);
-          onValue(terms.length ? terms : undefined);
+          onValue(terms.length ? (spec.numeric ? terms.map(Number) : terms) : undefined);
         }}
       />
       <small id={`${id}-help`} className="text-muted-foreground">

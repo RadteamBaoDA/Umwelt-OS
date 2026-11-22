@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, RefreshCw, Sparkles } from 'lucide-react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/core/api';
@@ -11,6 +12,7 @@ import { DateSelector } from './date-selector';
 import {
   dailyKeys,
   generateBrief,
+  getBriefSlotOwner,
   getDailyContext,
   type DailyBriefRevision,
   type DailyContextData,
@@ -21,7 +23,11 @@ import { useSelectedDay } from './selected-day';
 import { useWorkspace } from '@/core/workspace-context';
 import { BriefShareButton, SharedBriefs } from './brief-sharing';
 import { BriefText } from './brief-text';
+import { briefCitationHref } from './brief-citation-href';
 import { useSession } from '@/core/session';
+import { getRuleConversationId } from '@/modules/automations/public-api';
+import { FootBarSlot } from '@/components/gadget-title-slot';
+import { useReportGadgetFreshness } from './gadget-freshness';
 
 export { BriefText };
 
@@ -29,15 +35,23 @@ export { BriefText };
  * Backend-provided widget `title_key` values (modules/dashboard/context.py) mapped to literal `daily` catalog keys;
  * the payload keeps its legacy camelCase ids, so the mapping lives here rather than in a runtime key concatenation.
  */
-const WIDGET_TITLE_KEY = {
+export const WIDGET_TITLE_KEY = {
   dayTasks: 'day.tasks',
   dayGoals: 'day.goals',
   dayStories: 'day.stories',
   dayEvents: 'day.events',
+  dayMarkets: 'day.markets',
+  dayWeather: 'day.weather',
+  dayHazards: 'day.hazards',
+  daySourceHealth: 'day.sourceHealth',
 } as const;
 
-/** Catalog key of a day-widget title; an id the backend adds later falls back to the events title. */
-function widgetTitleKey(titleKey: string) {
+/**
+ * Catalog key of a day-widget title; an id the backend adds later falls back to the events title.
+ * @param titleKey - Backend widget `title_key` (for example `dayMarkets`).
+ * @returns Literal `daily` catalog key.
+ */
+export function widgetTitleKey(titleKey: string) {
   return WIDGET_TITLE_KEY[titleKey as keyof typeof WIDGET_TITLE_KEY] ?? WIDGET_TITLE_KEY.dayEvents;
 }
 
@@ -123,7 +137,7 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
   const t = useTranslations('daily');
   const brief = data.brief ?? null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="brief-saved-head flex flex-wrap items-center justify-between gap-2">
       <h3 id="saved-brief-heading" className="flex items-center gap-1.5 text-sm font-semibold">
         <Sparkles className="h-4 w-4 text-muted-foreground" aria-hidden />
         {t('savedBrief')}
@@ -141,9 +155,22 @@ function SavedBriefHeader({ data, display }: { data: DailyContextData; display: 
   );
 }
 
-/** Saved brief body: stale notice, text and citations, or the empty message. */
-function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
+/**
+ * Saved brief body: stale notice, text, citations (linked via `briefCitationHref` when a page exists) and an "open full brief" link, or the empty message. The link is
+ * shown only while an automation owns the brief slot (a Daily brief task is enabled) and goes to
+ * the task's chat thread (`/chat/{conversation_id}`), or to Settings > Scheduled tasks while the task has no thread yet.
+ * The ownership and conversation reads are best-effort: while the ownership read loads or fails the link stays hidden,
+ * and a failed conversation read falls back to Settings.
+ */
+export function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
   const t = useTranslations('daily');
+  const owner = useQuery({ queryKey: dailyKeys.slotOwner, queryFn: ({ signal }) => getBriefSlotOwner(signal) });
+  const automationId = owner.data?.schedule_owner === 'automation' ? owner.data.automation_id : null;
+  const thread = useQuery({
+    queryKey: ['automation-conversation', automationId],
+    queryFn: () => getRuleConversationId(automationId!),
+    enabled: Boolean(automationId),
+  });
   if (!brief) return <p className="text-sm text-muted-foreground">{t('noBrief')}</p>;
   return (
     <>
@@ -154,13 +181,28 @@ function SavedBriefBody({ brief }: { brief: DailyBriefRevision | null }) {
       )}
       <BriefText key={`${brief.id}:${brief.revision}`} brief={brief} />
       {brief.citations.length > 0 && (
-        <ol className="space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
-          {brief.citations.map((citation) => (
-            <li key={citation.ref}>
-              [{citation.ref}] {citation.title}
-            </li>
-          ))}
+        <ol className="brief-refs space-y-0.5 text-xs text-muted-foreground" aria-label={t('citations')}>
+          {brief.citations.map((citation) => {
+            const href = briefCitationHref(citation.kind, citation.id);
+            return (
+              <li key={citation.ref} id={`brief-ref-${citation.ref}`}>
+                [{citation.ref}]{' '}
+                {href ? (
+                  <Link href={href} className="underline">
+                    {citation.title}
+                  </Link>
+                ) : (
+                  citation.title
+                )}
+              </li>
+            );
+          })}
         </ol>
+      )}
+      {owner.data?.schedule_owner === 'automation' && (
+        <Link href={thread.data ? `/chat/${encodeURIComponent(thread.data)}` : '/settings/scheduled-tasks'} className="text-xs underline">
+          {t('openFullBrief')}
+        </Link>
       )}
     </>
   );
@@ -182,7 +224,7 @@ function BriefOwnerActions({
   const chat = useChatController();
   const { date, timezone } = useSelectedDay();
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="brief-actions flex flex-wrap gap-2">
       <Button type="button" size="sm" disabled={!canGenerate || generating} onClick={onGenerate}>
         <RefreshCw className="h-3.5 w-3.5" aria-hidden />
         {generating ? t('generating') : brief ? t('regenerate') : t('generate.label')}
@@ -208,7 +250,7 @@ function BriefOwnerActions({
 function CurrentRecords({ data, display }: { data: DailyContextData; display: DisplayPrefs }) {
   const t = useTranslations('daily');
   return (
-    <section aria-labelledby="current-records-heading" className="space-y-2">
+    <section aria-labelledby="current-records-heading" className="brief-records space-y-2">
       <h3 id="current-records-heading" className="text-sm font-semibold">
         {t('currentRecords.label')}
       </h3>
@@ -222,6 +264,19 @@ function CurrentRecords({ data, display }: { data: DailyContextData; display: Di
       </div>
     </section>
   );
+}
+
+/**
+ * Pane foot (demo `.pane-foot`): `Tasks due N · Active goals M` on the left, and the current-record refresh
+ * time reported as the gadget freshness ("updated ..." on the right). Portaled into the gadget foot.
+ *
+ * @param props.data Selected-day context whose widgets carry the task and goal counts.
+ */
+function BriefFootNote({ data }: { data: DailyContextData }) {
+  const t = useTranslations('daily');
+  useReportGadgetFreshness(data.widgets_updated_at);
+  const count = (id: string) => data.widgets.find((widget) => widget.id === id)?.items.length ?? 0;
+  return <FootBarSlot>{t('foot.summary', { tasks: count('dayTasks'), goals: count('dayGoals') })}</FootBarSlot>;
 }
 
 /** Owner/admin body: loading and error notices, saved brief section and current records. */
@@ -244,6 +299,7 @@ function OwnerBriefBody({
   const brief = context.data?.brief ?? null;
   return (
     <>
+      {context.data && <BriefFootNote data={context.data} />}
       {context.isLoading && (
         <p role="status" className="text-sm text-muted-foreground">
           {t('loading.label')}
@@ -256,7 +312,7 @@ function OwnerBriefBody({
       )}
       {context.data && (
         <>
-          <section aria-labelledby="saved-brief-heading" className="space-y-2 border-b border-border pb-3">
+          <section aria-labelledby="saved-brief-heading" className="brief-saved space-y-2 border-b border-border pb-3">
             <SavedBriefHeader data={context.data} display={display} />
             <SavedBriefBody brief={brief} />
             {errorKey && (
@@ -293,8 +349,8 @@ export function DailyBrief() {
   const { session, context, generate, errorKey } = useDailyBrief(date, timezone, canReadOwnerWorkspace);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5 pb-4">
-      <header className="flex flex-nowrap items-center justify-between gap-2">
+    <div className="brief-root flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3.5 pb-4">
+      <header className="brief-head flex flex-nowrap items-center justify-between gap-2">
         <DateSelector />
         {canReadOwnerWorkspace && context.data && context.data.relation !== 'today' && (
           <span className="rounded bg-secondary px-2 py-0.5 text-xs font-semibold">{t(RELATION_KEY[context.data.relation])}</span>
