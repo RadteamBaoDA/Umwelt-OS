@@ -46,7 +46,7 @@ export function RestSamplePreview({ m }: { m: ConnectorEditorModel }) {
       <Button type="button" variant="outline" disabled={!supported || busy} onClick={() => void run()}>
         {busy ? t('rest.testing') : t('rest.test')}
       </Button>
-      {m.authMethod !== 'none' && <p className="m-0 text-sm text-muted">{t('rest.headerAuth')}</p>}
+      {m.authMethod !== 'none' && <p className="m-0 text-sm text-muted-foreground">{t('rest.headerAuth')}</p>}
       {error && (
         <p className="m-0 text-sm text-danger" role="alert">
           {error}

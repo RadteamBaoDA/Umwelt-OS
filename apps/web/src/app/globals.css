@@ -139,7 +139,7 @@ html.dark {
   --chart-1: #77c69c;
   --chart-2: #edf3ee;
   --chart-3: #8a948e;
-  --chart-4: #4a534d;
+  --chart-4: #737d76;
   --chart-5: #77c69c;
 }
 
@@ -267,7 +267,7 @@ html[data-skin='terminal'].dark[data-accent] {
   --chart-1: #3fb950;
   --chart-2: #58a6ff;
   --chart-3: #8b949e;
-  --chart-4: #30363d;
+  --chart-4: #6e7681;
   --chart-5: #d29922;
   --scrim: rgb(0 0 0 / 0.6);
   --shadow-popover: none;

@@ -446,7 +446,7 @@ function AiSettingsFooter({ vm }: { vm: AISettingsWorkspaceVm }) {
       )}
       {/* Success stays visible next to the (now disabled) button until the next edit makes the form dirty again. */}
       {save.isSuccess && !dirty && (
-        <p className="m-0 text-sm text-accent" role="status">
+        <p className="m-0 text-sm text-data" role="status">
           {t('save.success')}
         </p>
       )}

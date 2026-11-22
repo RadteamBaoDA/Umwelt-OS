@@ -64,7 +64,7 @@ export function SparklineChart({ data, height = 40, width, forecastFrom, tooltip
     : [<XAxis key="x" dataKey="ts" hide />, <YAxis key="y" hide domain={['dataMin', 'dataMax']} />];
   const common = (
     <>
-      {axes && <CartesianGrid vertical={false} stroke="var(--rule, var(--border))" />}
+      {axes && <CartesianGrid vertical={false} stroke="var(--rule, var(--line))" />}
       {axisNodes}
       {tooltip && <Tooltip content={<SparkTooltip data={data} />} />}
     </>

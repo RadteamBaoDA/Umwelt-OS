@@ -79,7 +79,7 @@ function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<J
                 <TableCell className="max-w-64 whitespace-normal font-medium">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {p.url ? (
-                      <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-accent underline-offset-2 hover:underline">
+                      <a href={p.url} target="_blank" rel="noopener noreferrer" className="text-data underline-offset-2 hover:underline">
                         {displayTitle}
                       </a>
                     ) : (

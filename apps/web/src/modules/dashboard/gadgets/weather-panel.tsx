@@ -273,21 +273,21 @@ function WeatherTimeline({ rows, now, tickFormat }: { rows: ChartRow[]; now: num
     >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={rows} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-          <CartesianGrid vertical={false} stroke="var(--border)" />
+          <CartesianGrid vertical={false} stroke="var(--line)" />
           <XAxis
             dataKey="ts"
             type="number"
             scale="time"
             domain={['dataMin', 'dataMax']}
             tickFormatter={tickFormat}
-            tick={{ fontSize: 11 }}
+            tick={{ fontSize: 11, fill: 'var(--muted)' }}
             tickLine={false}
             axisLine={false}
             minTickGap={32}
           />
-          <YAxis yAxisId="temp" width={32} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
+          <YAxis yAxisId="temp" width={32} tick={{ fontSize: 11, fill: 'var(--muted)' }} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
           <YAxis yAxisId="precip" orientation="right" hide domain={[0, (max: number) => Math.max(max * 3, 1)]} />
-          <Bar yAxisId="precip" dataKey="precip" fill="var(--muted-foreground)" fillOpacity={0.35} isAnimationActive={false} />
+          <Bar yAxisId="precip" dataKey="precip" fill="var(--muted)" fillOpacity={0.35} isAnimationActive={false} />
           <Line
             yAxisId="temp"
             dataKey="past"
@@ -307,7 +307,7 @@ function WeatherTimeline({ rows, now, tickFormat }: { rows: ChartRow[]; now: num
             isAnimationActive={false}
             connectNulls
           />
-          <ReferenceLine yAxisId="temp" x={now} stroke="var(--muted-foreground)" strokeDasharray="2 2" />
+          <ReferenceLine yAxisId="temp" x={now} stroke="var(--muted)" strokeDasharray="2 2" />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
