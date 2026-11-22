@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -230,7 +230,7 @@ describe('ShellCrumb', () => {
     expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/the-gioi-world $');
   });
 
-  it('switches to the slug when the dashboard list lands after the first render', () => {
+  it('switches to the slug when the dashboard list lands after the first render', async () => {
     mockPath = '/dashboard/abc';
     const client = new QueryClient();
     const { container } = render(
@@ -240,7 +240,34 @@ describe('ShellCrumb', () => {
     );
     expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/abc $');
     act(() => client.setQueryData(['dashboards'], [{ id: 'abc', name: 'World' }]));
-    expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/world $');
+    await waitFor(() => expect(container.querySelector('.shell-crumb')?.textContent).toBe('owner@umwelt:~/dashboard/world $'));
+  });
+
+  it('does not update while a sibling builds a query during its render', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    /** Mounts a fresh query during render, which makes the cache notify synchronously. */
+    function Sibling() {
+      useQuery({ queryKey: ['sibling'], queryFn: () => new Promise(() => {}) });
+      return null;
+    }
+    mockPath = '/dashboard/abc';
+    const client = new QueryClient();
+    const tree = (sibling: boolean) => (
+      <QueryClientProvider client={client}>
+        <ShellCrumb />
+        {sibling && <Sibling />}
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree(false));
+    // The dashboard list lands and the page mounts LocalWeather in the same render pass: ShellCrumb's new slug is not
+    // committed yet when the sibling's query build notifies the cache.
+    act(() => {
+      client.setQueryData(['dashboards'], [{ id: 'abc', name: 'World' }]);
+      rerender(tree(true));
+    });
+    await waitFor(() => expect(client.getQueryCache().find({ queryKey: ['sibling'] })).toBeDefined());
+    expect(error.mock.calls.flat().join(' ')).not.toMatch(/Cannot update a component/);
+    error.mockRestore();
   });
 
   it('keeps the plain path for /dashboard', () => {

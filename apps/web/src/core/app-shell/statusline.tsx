@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { notifyManager, useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslations } from 'next-intl';
@@ -238,7 +238,8 @@ function crumbPath(pathname: string, nameOf: (id: string) => string | undefined)
 
 /**
  * Current route with a dashboard id replaced by its name slug (`/dashboard/world`), read from the react-query cache only
- * (no request). Subscribed to the query cache so the slug appears once the dashboard read lands after the first render.
+ * (no request). Subscribed to the query cache (notifications deferred via `notifyManager`) so the slug appears once the
+ * dashboard read lands after the first render.
  *
  * @returns The display path; the raw pathname when no cached name exists.
  */
@@ -246,7 +247,9 @@ function useCrumbPath(): string {
   const pathname = usePathname();
   const client = useQueryClient();
   return useSyncExternalStore(
-    (onChange) => client.getQueryCache().subscribe(onChange),
+    // The cache notifies synchronously when another component's useQuery builds a query during its render; batchCalls
+    // defers the store change out of that render (as TanStack's own hooks do) to avoid setState-in-render warnings.
+    (onChange) => client.getQueryCache().subscribe(notifyManager.batchCalls(onChange)),
     () =>
       crumbPath(pathname, (id) => {
         const list = client.getQueryData<{ id: string; name: string }[]>(dashboardKeys.all);
