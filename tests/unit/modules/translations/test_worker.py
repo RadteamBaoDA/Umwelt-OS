@@ -366,3 +366,37 @@ class _AsyncSessionCtx:
 
     async def __aexit__(self, *exc: object) -> None:
         return None
+
+
+async def test_busy_slot_hands_back_and_enqueues_a_fresh_wake_up(monkeypatch) -> None:
+    """A wake-up that times out waiting for the slot must re-enqueue itself instead of being lost."""
+    claim = _claim()
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    monkeypatch.setattr(worker, "claim_next", AsyncMock(return_value=claim))
+    monkeypatch.setattr(worker, "resolve_workspace_context", AsyncMock(return_value=object()))
+    monkeypatch.setattr(
+        worker,
+        "resolve_workspace_owner_context",
+        AsyncMock(return_value=SimpleNamespace(user_id=1, membership_revision=1)),
+    )
+    monkeypatch.setattr(worker, "_acquire", AsyncMock(return_value=None))
+    finish = AsyncMock()
+    monkeypatch.setattr(worker, "_finish", finish)
+    redis = MagicMock()
+    redis.enqueue_job = AsyncMock()
+    ctx = {
+        "session_factory": lambda: _AsyncSessionCtx(session),
+        "redis": redis,
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
+    }
+    await worker.translate_content(ctx, str(claim.id))
+    finish.assert_awaited_once()
+    assert "next_attempt_at" not in finish.await_args.kwargs
+    redis.enqueue_job.assert_awaited_once()
+    kwargs = redis.enqueue_job.await_args.kwargs
+    assert redis.enqueue_job.await_args.args == ("translate_content", str(claim.id))
+    assert kwargs["_queue_name"] == "arq:model"
+    assert kwargs["_job_id"].startswith(f"translation:{claim.id}:")
+    assert kwargs["_defer_until"] < datetime.now(UTC) - timedelta(minutes=30)

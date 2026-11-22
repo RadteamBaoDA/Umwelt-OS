@@ -475,6 +475,23 @@ async def _execute(run: _Run) -> None:
     await _publish(run, source, output)
 
 
+async def _wake(redis: Redis, translation_id: UUID) -> None:
+    """Enqueue one more ``translate_content`` wake-up ahead of queued bulk work on the model queue.
+
+    The job id is unique per call: the hint id of the job still running may equal ``translation:{id}``, and arq
+    refuses a duplicate id, which would silently drop this wake-up. Enqueue errors are swallowed; the recovery
+    cron is the backstop for a wake-up that could not be enqueued.
+    """
+    with contextlib.suppress(Exception):
+        await cast(Any, redis).enqueue_job(
+            "translate_content",
+            str(translation_id),
+            _job_id=f"translation:{translation_id}:{uuid7()}",
+            _queue_name=queue_for("translate_content"),
+            _defer_until=ahead_of_backlog(),
+        )
+
+
 async def translate_content(ctx: dict[str, object], translation_id: str) -> None:
     """Claim the next fair row (the id is only a wake-up hint), run it under the slot, publish fenced."""
     del translation_id
@@ -513,14 +530,15 @@ async def translate_content(ctx: dict[str, object], translation_id: str) -> None
             ),
         )
         token = await _acquire(run)
-        if token is None:  # slot busy: hand the attempt back; recovery re-enqueues
+        if token is None:
+            # Slot still busy after SLOT_WAIT_SECONDS: hand the attempt back and enqueue a fresh wake-up. Returning
+            # without one lost the wake-up, leaving the row pending until the 60 s recovery cron noticed it (and
+            # each hand-back reset its idle age), so a user's click could wait minutes behind other translations.
+            # The new job waits for the slot again, so this cannot spin; the slot TTL bounds how long it can stay held.
             await _finish(
-                factory,
-                claim,
-                attempt_count=ContentTranslation.attempt_count - 1,
-                next_attempt_at=datetime.now(UTC) + timedelta(seconds=5),
-                **_CLEAR,
+                factory, claim, attempt_count=ContentTranslation.attempt_count - 1, **_CLEAR
             )
+            await _wake(redis, claim.id)
             return
         work = asyncio.ensure_future(_execute(run))
         beat = asyncio.ensure_future(_heartbeat(run, token))
