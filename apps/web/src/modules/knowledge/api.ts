@@ -112,7 +112,7 @@ export type GadgetProjectionFilters = {
   release_season?: string;
   min_rating?: number;
   release_window_days?: number;
-  sort?: 'created_at_desc' | 'release_date_asc';
+  sort?: 'created_at_desc' | 'release_date_asc' | 'published_desc';
 };
 
 export type GadgetDocumentProjection = {

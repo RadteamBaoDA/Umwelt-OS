@@ -39,6 +39,7 @@ MINIMAL_SCOPE: dict[str, dict[str, Any]] = {
     "openaq": {"openaq_location_id": 8118},
     "nasa_firms": {"firms_country": "VNM"},
     "bluesky": {"bluesky_actor": "example.bsky.social"},
+    "telegram_public": {"telegram_public_channel": "vnwallstreet"},
     "reddit": {"reddit_subreddit": "python"},
     "mastodon": {
         "mastodon_instance_url": "https://mastodon.social",

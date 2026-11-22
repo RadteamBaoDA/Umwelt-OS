@@ -52,7 +52,7 @@ Do this only on a trusted network; plain http exposes the session cookie to anyo
 
 ## 4. Native run (hot reload without containers)
 
-Use this when you run `npm run dev` (API, worker, chat worker and Next dev server on the host). Start only the data services in Docker, then point the native processes at loopback.
+Use this when you run `npm run dev` (API, worker, cron worker, model worker, chat worker and Next dev server on the host). Start only the data services in Docker, then point the native processes at loopback.
 
 ```bash
 docker compose -f docker-compose.base.yml up -d postgres redis      # add "graph" profile only if needed
@@ -73,7 +73,7 @@ Then:
 
 ```bash
 npm run dev:migrate     # alembic upgrade head
-npm run dev             # be + worker + chat + fe, hot reload
+npm run dev             # be + worker + cron + model + chat + fe, hot reload
 ```
 
 ## 5. Troubleshooting

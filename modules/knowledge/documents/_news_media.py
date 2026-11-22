@@ -30,6 +30,11 @@ _LANG_TAG_RE = re.compile(r"^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$")
 # Default release window (days) for sort=release_date_asc; mirrors the media calendar gadget default.
 DEFAULT_CALENDAR_WINDOW_DAYS = 30
 
+# Dashboard projection sort orders. ``published_desc`` orders by the post time (``published_at``,
+# falling back to ``observed_at`` then ``created_at``) newest first; it shares the non-release
+# filter/window path with ``created_at_desc``.
+FeedSort = Literal["created_at_desc", "release_date_asc", "published_desc"]
+
 
 def _validate_token_tuple(
     values: tuple[str, ...] | None,
@@ -114,7 +119,7 @@ def _validate_media_filter_params(
         type(release_window_days) is not int or not 1 <= release_window_days <= 90
     ):
         raise ValueError("Invalid release_window_days filter")
-    if sort not in {"created_at_desc", "release_date_asc"}:
+    if sort not in {"created_at_desc", "release_date_asc", "published_desc"}:
         raise ValueError("Invalid sort order")
 
 
@@ -155,7 +160,7 @@ def _release_date_ts_expr(sf: Any) -> Any:
 
 
 def _release_window_bounds(
-    sort: Literal["created_at_desc", "release_date_asc"], release_window_days: int | None
+    sort: FeedSort, release_window_days: int | None
 ) -> tuple[datetime, datetime] | None:
     """Return the inclusive ``(lower, upper)`` release window, or ``None`` when unbounded.
 
@@ -287,7 +292,7 @@ def _apply_media_statement_filters(
     order_ts_expr: Any,
     sf: Any,
     *,
-    sort: Literal["created_at_desc", "release_date_asc"],
+    sort: FeedSort,
     release_window_days: int | None,
     media_preds: list[Any],
     candidates: Any = None,

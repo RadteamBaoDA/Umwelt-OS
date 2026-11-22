@@ -6491,6 +6491,10 @@ export interface paths {
         /**
          * Create Batch
          * @description Authorize and queue references; disabled workspaces get blocked items and nothing is queued.
+         *
+         *     Each enqueue is best effort and sets ``_defer_until=ahead_of_backlog()`` so a user click jumps
+         *     the bulk extraction backlog on the shared model queue. Enqueue errors are suppressed because
+         *     ``recover_translation_jobs`` re-enqueues any row whose enqueue was lost.
          */
         post: operations["create_batch_api_v1_translations_batches_post"];
         delete?: never;
@@ -8961,6 +8965,8 @@ export interface components {
             steam_mode?: ("featured" | "news") | null;
             /** Telegram Chat Ids */
             telegram_chat_ids?: string[] | null;
+            /** Telegram Public Channel */
+            telegram_public_channel?: string | null;
             /**
              * Timeout Seconds
              * @default 60
@@ -23211,7 +23217,7 @@ export interface operations {
                 release_season?: ("winter" | "spring" | "summer" | "fall") | null;
                 min_rating?: number | null;
                 release_window_days?: number | null;
-                sort?: "created_at_desc" | "release_date_asc";
+                sort?: "created_at_desc" | "release_date_asc" | "published_desc";
             };
             header?: {
                 "X-Workspace-ID"?: string | null;

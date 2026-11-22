@@ -396,7 +396,8 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
   const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.feedView.${instance.id}`, 'list', FEED_VIEWS);
   const { onlyUnread, selectMode, sourceFilter, language, timeWindow } = filters;
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
-  const { docsQuery, sourcesQuery } = useFeedQueries({ sourceIds, channelIds, language, windowSince: filters.windowSince });
+  const isTelegram = definition.renderer === 'telegram_feed';
+  const { docsQuery, sourcesQuery } = useFeedQueries({ sourceIds, channelIds, language, windowSince: filters.windowSince, isTelegram });
   const undoRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const moderation = useFeedModeration(instance.id, { undoRef, rootRef });

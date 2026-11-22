@@ -39,6 +39,7 @@ export type NativeProvider =
   | 'huggingface'
   | 'reddit'
   | 'bluesky'
+  | 'telegram_public'
   | 'mastodon'
   | 'x'
   | 'github'
@@ -76,6 +77,8 @@ const LON_PATTERN = '-?[0-9]{1,3}(\\.[0-9]+)?';
 /** Bluesky handle (domain name) or did:plc / did:web identifier; kept as a JS string so the escape is a single backslash. */
 const BLUESKY_ACTOR_PATTERN =
   '(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}|did:plc:[a-z2-7]{24}|did:web:[A-Za-z0-9.%:-]{1,220}';
+/** Public Telegram channel: bare username, @name or t.me link; the API normalizes to the username. */
+const TELEGRAM_CHANNEL_PATTERN = '(?:(?:https?://)?(?:www\\.)?t\\.me/(?:s/)?|@)?[A-Za-z][A-Za-z0-9_]{4,31}/?';
 /** Splits a comma/space separated list of terms. */
 const splitTerms = (value: string) => value.split(/[\s,]+/).filter(Boolean);
 /** Parses a numeric text field; an emptied field is `undefined`. */
@@ -686,6 +689,22 @@ function BlueskyScope({ configuration, disabled, onChange }: ScopeSectionProps) 
   );
 }
 
+/** Telegram public channel scope: username or t.me link, read from the public web preview. */
+function TelegramPublicScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return (
+    <ScopeField
+      name="telegram_public_channel"
+      label={t('telegramPublicChannel')}
+      value={configuration.telegram_public_channel ?? ''}
+      onValue={(value) => onChange('telegram_public_channel', value.trim())}
+      disabled={disabled}
+      maxLength={512}
+      pattern={TELEGRAM_CHANNEL_PATTERN}
+    />
+  );
+}
+
 /** One optional text input with its hint, used by the mutually-exclusive scopes (Mastodon, X); an emptied value is sent as undefined. */
 function OptionalScopeInput({
   name,
@@ -1087,6 +1106,7 @@ const SCOPE_SECTIONS: Record<NativeProvider, ComponentType<ScopeSectionProps>> =
   youtube: YoutubeScope,
   reddit: RedditScope,
   bluesky: BlueskyScope,
+  telegram_public: TelegramPublicScope,
   mastodon: MastodonScope,
   x: XScope,
   arxiv: ArxivScope,

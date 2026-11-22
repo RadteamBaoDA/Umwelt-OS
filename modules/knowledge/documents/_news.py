@@ -31,6 +31,7 @@ from modules.knowledge.documents._news_media import (
     DEFAULT_CALENDAR_WINDOW_DAYS as DEFAULT_CALENDAR_WINDOW_DAYS,
 )
 from modules.knowledge.documents._news_media import (
+    FeedSort,
     _apply_media_statement_filters,
     _coalesced_release_ts,
     _media_provenance_predicates,
@@ -596,6 +597,15 @@ async def news_current_scope_status(
 _ARTWORK_ASPECTS = frozenset({"poster", "square", "video", "landscape"})
 
 
+def _post_time_ts_expr() -> Any:
+    """Return the ``published_desc`` order timestamp ``coalesce(published_at, observed_at, created_at)``.
+
+    ``observed_at`` is the post time for telegram_public documents whose ``published_at`` is null;
+    ``created_at`` is non-null, so the chain never yields NULL and keyset comparisons stay total.
+    """
+    return func.coalesce(Document.published_at, Document.observed_at, Document.created_at)
+
+
 def _news_projection_statement(
     scope: Scope,
     source_ids: tuple[UUID, ...],
@@ -616,7 +626,7 @@ def _news_projection_statement(
     release_season: str | None = None,
     min_rating: float | None = None,
     release_window_days: int | None = None,
-    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
+    sort: FeedSort = "created_at_desc",
 ) -> tuple[Select[Any], Any]:
     """Build the current-version projection statement and ordering timestamp expression."""
     sf = NormalizedVersionProvenance.provenance_json["provider_record"]["source_fields"]
@@ -636,6 +646,8 @@ def _news_projection_statement(
     )
     candidates: Any = None
     order_ts_expr: Any = Document.created_at
+    if sort == "published_desc":
+        order_ts_expr = _post_time_ts_expr()
     if sort == "release_date_asc":
         # Order by the CTE's already-parsed date so the date expression is evaluated once per
         # provenance row (not per join row / sort comparison); see _release_candidates_cte.
@@ -763,11 +775,14 @@ async def list_news_document_projections(
     release_season: str | None = None,
     min_rating: float | None = None,
     release_window_days: int | None = None,
-    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
+    sort: FeedSort = "created_at_desc",
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> tuple[list[NewsDocumentProjection], str | None]:
-    """Page bounded current ready versions from explicitly authorized active sources."""
+    """Page bounded current ready versions from explicitly authorized active sources.
+
+    ``sort``: ``created_at_desc`` (default), ``published_desc`` (post time DESC, then id DESC; keyset ``<``) or ``release_date_asc`` (ascending; keyset ``>``). The cursor fingerprint includes ``sort``.
+    """
     if (
         not source_ids
         or len(source_ids) > 32
@@ -812,13 +827,13 @@ async def list_news_document_projections(
         cmp = (
             tuple_(order_ts_expr, Document.id) > (cursor_ts, document_cursor)
             if sort == "release_date_asc"
-            else tuple_(Document.created_at, Document.id) < (cursor_ts, document_cursor)
+            else tuple_(order_ts_expr, Document.id) < (cursor_ts, document_cursor)
         )
         statement = statement.where(cmp)
     ordered = (
         statement.order_by(order_ts_expr.asc(), Document.id.asc())
         if sort == "release_date_asc"
-        else statement.order_by(Document.created_at.desc(), Document.id.desc())
+        else statement.order_by(order_ts_expr.desc(), Document.id.desc())
     )
     rows = list((await session.execute(ordered.limit(limit + 1))).all())
     more, page_rows = len(rows) > limit, rows[:limit]
@@ -868,12 +883,13 @@ async def list_gadget_document_projections(
     release_season: str | None = None,
     min_rating: float | None = None,
     release_window_days: int | None = None,
-    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
+    sort: FeedSort = "created_at_desc",
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> GadgetDocumentProjectionList:
     """Return active, current, ready source records as a small dashboard projection page.
 
+    ``sort`` is ``created_at_desc`` (default), ``published_desc`` or ``release_date_asc``; see ``list_news_document_projections``.
     ``image_signer`` (caller-supplied, owns the privacy flag and signing secret) turns a record's raw feed image
     URL into a signed proxy path or ``None``; without it ``image_url`` is always null.
 
@@ -1299,7 +1315,7 @@ def _news_projection_cursor_fingerprint(
     release_season: str | None = None,
     min_rating: float | None = None,
     release_window_days: int | None = None,
-    sort: Literal["created_at_desc", "release_date_asc"] = "created_at_desc",
+    sort: FeedSort = "created_at_desc",
 ) -> str:
     """Hash News and media projection filters with the admitted actor/workspace revisions."""
     context = {

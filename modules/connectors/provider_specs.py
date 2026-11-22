@@ -490,6 +490,23 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         ),
         checked_on="2026-10-24",
     ),
+    replace(
+        _spec(
+            "telegram_public",
+            "Telegram public channel (web preview)",
+            "tech",
+            ("t.me",),
+            "news",
+            30,
+            "https://telegram.org/tos",
+            "review",
+            "Attribute the channel and link to each original post; Telegram terms do not establish redistribution rights for post content.",
+            ("/s/{username}",),
+            (_unknown(),),
+            execution="supported",
+        ),
+        checked_on="2026-11-22",
+    ),
     _spec(
         "hn_top",
         "Hacker News top stories",

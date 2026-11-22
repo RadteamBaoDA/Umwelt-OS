@@ -275,6 +275,12 @@ function TerminalMessageRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowC
       <Link href={`/knowledge/documents/${item.id}`} className="msg-body">
         {ctx.translation?.shown(item.id)?.title ?? item.title}
       </Link>
+      {item.imageUrl ? (
+        // Post photo (public Telegram channels): a small fixed-width thumbnail under the message line.
+        <div className="col-start-2 col-end-[-1] mt-1 w-40 max-w-full">
+          <FeedImage src={item.imageUrl} />
+        </div>
+      ) : null}
       <FeedItemActions item={item} ctx={ctx} />
     </li>
   );

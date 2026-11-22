@@ -73,34 +73,68 @@ export function defaultSourceTypeFor(renderer: string): FeedStreamItem['sourceTy
 /** One dashboard document projection row as returned by the knowledge API. */
 export type FeedDocument = Awaited<ReturnType<typeof listGadgetDocumentProjections>>['items'][number];
 
-/** Telegram metadata block of a document, or null for other providers. */
-function telegramOf(doc: FeedDocument) {
-  return doc.provider_metadata?.provider === 'telegram' ? doc.provider_metadata.telegram : null;
-}
-
 /** Returns the value when it is a string, otherwise null. */
 const asString = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 
+/** Channel fields shared by Bot API Telegram records and public-channel records. */
+type ChannelInfo = {
+  label: string | null;
+  messageId: string | null;
+  publishedAt: string | null;
+  editedAt: string | null;
+  media: NonNullable<FeedStreamItem['media']>;
+};
+
+/** Channel fields of a non-Telegram document. */
+const NO_CHANNEL: ChannelInfo = { label: null, messageId: null, publishedAt: null, editedAt: null, media: [] };
+
+/**
+ * Channel fields of a document, or null when it is not a Telegram record.
+ *
+ * Bot API `telegram` records read their typed block. Public-channel (`telegram_public`) records carry no such
+ * block, so the channel title comes from `source_fields.author` and the post id from the `canonical_url` tail.
+ */
+function channelOf(doc: FeedDocument): ChannelInfo | null {
+  const meta = doc.provider_metadata;
+  if (meta?.provider === 'telegram' && meta.telegram) {
+    const t = meta.telegram;
+    return {
+      label: asString(t.channel_label),
+      messageId: asString(t.message_id),
+      publishedAt: t.published_at ?? null,
+      editedAt: t.edited_at ?? null,
+      media: t.media ?? [],
+    };
+  }
+  if (meta?.provider === 'telegram_public') {
+    const fields = (meta.source_fields ?? {}) as Record<string, unknown>;
+    const url = asString(fields.canonical_url);
+    return { label: asString(fields.author), messageId: url?.split('/').pop() ?? null, publishedAt: null, editedAt: null, media: [] };
+  }
+  return null;
+}
+
 /** Maps one document to a feed item, or nothing when a Telegram feed meets a non-Telegram document. */
 function documentToItem(doc: FeedDocument, isTelegram: boolean, sourceType: FeedStreamItem['sourceType']): FeedStreamItem[] {
-  const telegram = telegramOf(doc);
-  if (isTelegram && !telegram) return [];
+  const found = channelOf(doc);
+  if (isTelegram && !found) return [];
+  const channel = found ?? NO_CHANNEL;
   return [
     {
       id: doc.document_id,
       title: doc.title,
       sourceType,
-      author: asString(telegram?.channel_label),
-      channelLabel: asString(telegram?.channel_label),
-      messageId: asString(telegram?.message_id),
+      author: channel.label,
+      channelLabel: channel.label,
+      messageId: channel.messageId,
       excerpt: doc.excerpt,
       timestamp: doc.published_at || doc.observed_at,
       sourceId: doc.source_id,
       documentVersionId: doc.document_version_id,
-      publishedAt: telegram?.published_at ?? doc.published_at,
+      publishedAt: channel.publishedAt ?? doc.published_at,
       collectedAt: doc.observed_at,
-      editedAt: telegram?.edited_at ?? null,
-      media: telegram?.media ?? [],
+      editedAt: channel.editedAt,
+      media: channel.media,
       imageUrl: doc.image_url ?? null,
       url: safeFeedUrl(doc.canonical_url, isTelegram),
       read: !!doc.read_at,
@@ -110,7 +144,10 @@ function documentToItem(doc: FeedDocument, isTelegram: boolean, sourceType: Feed
   ];
 }
 
-/** Transforms raw documents into standard feed items. */
+/**
+ * Transforms raw documents into standard feed items, preserving the server's page order (Telegram feeds
+ * are requested with `sort: 'published_desc'`, so the order is already newest post first across channels).
+ */
 export function documentsToItems(docs: FeedDocument[], isTelegram: boolean, sourceType: FeedStreamItem['sourceType']): FeedStreamItem[] {
   return docs.flatMap((doc) => documentToItem(doc, isTelegram, sourceType));
 }

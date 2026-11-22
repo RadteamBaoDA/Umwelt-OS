@@ -30,6 +30,7 @@ DataShape = Literal[
 _NON_CATALOG: MappingProxyType[str, frozenset[DataShape]] = MappingProxyType(
     {
         "telegram": frozenset({"messages"}),
+        "telegram_public": frozenset({"messages"}),
         **dict.fromkeys(("youtube", "youtube_api"), frozenset({"video", "media"})),
         "podcast_index": frozenset({"media"}),
         "listenbrainz_releases": frozenset({"media"}),

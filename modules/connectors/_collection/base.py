@@ -93,6 +93,7 @@ SIMPLE_NATIVE = frozenset(
         "arxiv",
         "huggingface",
         "bluesky",
+        "telegram_public",
         "reddit",
         "mastodon",
         "x",

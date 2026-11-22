@@ -268,6 +268,7 @@ class ConnectorConfig(BaseModel):
         default=None, min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
     )
     bluesky_actor: str | None = Field(default=None, min_length=3, max_length=253)
+    telegram_public_channel: str | None = Field(default=None, min_length=5, max_length=512)
     reddit_subreddit: str | None = Field(default=None, min_length=2, max_length=21)
     mastodon_instance_url: str | None = Field(default=None, min_length=8, max_length=512)
     mastodon_account: str | None = Field(default=None, min_length=1, max_length=320)
@@ -707,6 +708,24 @@ class ConnectorConfig(BaseModel):
         if re.fullmatch(r"did:web:[A-Za-z0-9.%:-]{1,220}", value):
             return value
         raise ValueError("Bluesky actor must be a handle or DID")
+
+    @field_validator("telegram_public_channel")
+    @classmethod
+    def valid_telegram_public_channel(cls, value: str | None) -> str | None:
+        """Normalize a channel username or t.me link to the bare username, rejecting anything else.
+
+        Accepts ``name``, ``@name``, ``t.me/name``, ``https://t.me/name`` and ``https://t.me/s/name``;
+        paths beyond the name, queries and other hosts fail so owner input cannot steer the fetch.
+        """
+        if value is None:
+            return None
+        match = re.fullmatch(
+            r"(?:(?:https?://)?(?:www\.)?t\.me/(?:s/)?|@)?([A-Za-z][A-Za-z0-9_]{4,31})/?",
+            value.strip(),
+        )
+        if match is None:
+            raise ValueError("Telegram channel must be a public username or t.me link")
+        return match.group(1)
 
     @field_validator("reddit_subreddit")
     @classmethod

@@ -271,7 +271,9 @@ async def list_dashboard_projections(
     release_season: Annotated[AnimeSeason | None, Query()] = None,
     min_rating: Annotated[float | None, Query(ge=0.0, le=100.0)] = None,
     release_window_days: Annotated[int | None, Query(ge=1, le=90)] = None,
-    sort: Annotated[Literal["created_at_desc", "release_date_asc"], Query()] = "created_at_desc",
+    sort: Annotated[Literal["created_at_desc", "release_date_asc", "published_desc"], Query()] = (
+        "created_at_desc"
+    ),
 ) -> GadgetDocumentProjectionList:
     """Return current source-scoped records through the Documents owner projection."""
     _require_document_route_owner(workspace)
