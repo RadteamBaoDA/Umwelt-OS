@@ -14,7 +14,6 @@ import { collectAndWait, collectErrorKey, sourceKeys } from '@/modules/sources';
 import type { FreshnessTick } from './freshness-strip';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { useSkin } from '@/core/use-skin';
 import { templateName } from '@/core/renderer-labels';
 import { formatDateTime } from '@/core/i18n';
 import { GadgetFreshnessProvider } from './gadget-freshness';
@@ -333,15 +332,14 @@ function CollectNowButton({ run }: { run: ReturnType<typeof useCollectSources> }
 }
 
 /**
- * Source-health badge slot of the status row: renders the badge for gadgets with bound sources; in the terminal skin a
+ * Source-health badge slot of the status row: renders the badge for gadgets with bound sources; a
  * News feed also keeps the Collect now button while its sources are fresh (demo `[ collect now ]`).
  *
  * @param props.sourceHealth Freshness ticks of the bound sources; `props.renderer` the gadget's renderer id.
  */
 function SourceHealthSlot({ sourceHealth, renderer }: { sourceHealth: GadgetFrameProps['sourceHealth']; renderer: string }) {
-  const terminal = useSkin() === 'terminal';
   if (!sourceHealth || sourceHealth.length === 0) return null;
-  return <SourceHealthBadge sourceHealth={sourceHealth} alwaysCollect={terminal && renderer === 'news_feed'} />;
+  return <SourceHealthBadge sourceHealth={sourceHealth} alwaysCollect={renderer === 'news_feed'} />;
 }
 
 /** Status badges that share the header row; overflow is clipped so streaming counts never change grid height. */

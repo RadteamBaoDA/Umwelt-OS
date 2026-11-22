@@ -2,10 +2,8 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { useSkin } from '@/core/use-skin';
 import { Button } from '@/components/ui/button';
 import { TitleBarSlot } from '@/components/gadget-title-slot';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
@@ -14,7 +12,6 @@ import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
-import { formatMetricLabel } from './metric-label';
 import { staleInfo } from './chart-range';
 import { useSourceInfo } from './use-effective-lookback';
 import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
@@ -261,121 +258,6 @@ function buildWeatherModel(items: WorldObservation[], now: number, displayTimezo
   };
 }
 
-/** Temperature line plus precipitation bars on one time axis (medium containers and up). */
-function WeatherTimeline({ rows, now, tickFormat }: { rows: ChartRow[]; now: number; tickFormat: (ts: number) => string }) {
-  const t = useTranslations('dashboard');
-  return (
-    <div
-      className="hidden h-36 shrink-0 @[24rem]/gadget:block"
-      role="img"
-      aria-label={t('weather.timeline')}
-      data-testid="weather-timeline"
-    >
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={rows} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-          <CartesianGrid vertical={false} stroke="var(--line)" />
-          <XAxis
-            dataKey="ts"
-            type="number"
-            scale="time"
-            domain={['dataMin', 'dataMax']}
-            tickFormatter={tickFormat}
-            tick={{ fontSize: 11, fill: 'var(--muted)' }}
-            tickLine={false}
-            axisLine={false}
-            minTickGap={32}
-          />
-          <YAxis yAxisId="temp" width={32} tick={{ fontSize: 11, fill: 'var(--muted)' }} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
-          <YAxis yAxisId="precip" orientation="right" hide domain={[0, (max: number) => Math.max(max * 3, 1)]} />
-          <Bar yAxisId="precip" dataKey="precip" fill="var(--muted)" fillOpacity={0.35} isAnimationActive={false} />
-          <Line
-            yAxisId="temp"
-            dataKey="past"
-            stroke="var(--chart-1)"
-            strokeWidth={1.5}
-            dot={false}
-            isAnimationActive={false}
-            connectNulls
-          />
-          <Line
-            yAxisId="temp"
-            dataKey="future"
-            stroke="var(--chart-1)"
-            strokeWidth={1.5}
-            strokeDasharray="3 3"
-            dot={false}
-            isAnimationActive={false}
-            connectNulls
-          />
-          <ReferenceLine yAxisId="temp" x={now} stroke="var(--muted)" strokeDasharray="2 2" />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-/** Large containers: one min-max row per day, computed client-side from the hourly readings. */
-function WeatherDays({ model, weekday }: { model: WeatherModel; weekday: Intl.DateTimeFormat }) {
-  const t = useTranslations('dashboard');
-  const { dayRows, spanMin, span } = model;
-  return (
-    <ul className="hidden shrink-0 divide-y divide-border @[40rem]/gadget:block" aria-label={t('weather.days')}>
-      {dayRows.map((day) => (
-        <li key={day.ts} className="flex items-center gap-3 py-1.5 text-sm tabular-nums" data-testid="weather-day">
-          <span className="w-12 shrink-0 text-muted-foreground">{weekday.format(new Date(day.ts))}</span>
-          <span className="w-10 shrink-0 text-right text-muted-foreground">{Math.round(day.min)}</span>
-          <span className="relative h-1.5 min-w-0 flex-1 rounded-full bg-muted" aria-hidden="true">
-            <span
-              className="absolute inset-y-0 rounded-full bg-chart-1"
-              style={{ left: `${((day.min - spanMin) / span) * 100}%`, width: `${Math.max(((day.max - day.min) / span) * 100, 4)}%` }}
-            />
-          </span>
-          <span className="w-10 shrink-0 text-foreground">{Math.round(day.max)}</span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** Hero block: current temperature, with wind and precipitation beside it. */
-function WeatherHero({ model, number }: { model: WeatherModel; number: Intl.NumberFormat }) {
-  const t = useTranslations('dashboard');
-  const { heroTemp, heroWind, heroPrecip } = model;
-  /** Formats a reading as `value unit`, or the localized missing-value placeholder. */
-  const withUnit = (r: Reading | undefined) => (r ? `${number.format(r.value)} ${r.unit}` : t('weather.missingValue'));
-  return (
-    <div className="flex flex-wrap items-end gap-x-4 gap-y-1" aria-label={t('weather.forecastReadings')} role="group">
-      <div className="min-w-0">
-        <div className="text-xs text-muted-foreground">{t('weather.now')}</div>
-        <div className="text-figure text-foreground" data-testid="weather-hero">
-          {heroTemp ? (
-            <>
-              {number.format(heroTemp.value)}
-              <span className="ml-1 text-sm font-normal text-muted-foreground">{heroTemp.unit}</span>
-            </>
-          ) : (
-            '—'
-          )}
-        </div>
-      </div>
-      <dl className="flex flex-col gap-0.5 pb-1 text-xs text-muted-foreground tabular-nums">
-        {heroWind && (
-          <div>
-            <dt className="inline">{formatMetricLabel('wind_speed_10m', t)}: </dt>
-            <dd className="inline">{withUnit(heroWind)}</dd>
-          </div>
-        )}
-        {heroPrecip && (
-          <div>
-            <dt className="inline">{formatMetricLabel('precipitation', t)}: </dt>
-            <dd className="inline">{withUnit(heroPrecip)}</dd>
-          </div>
-        )}
-      </dl>
-    </div>
-  );
-}
-
 /** Loads the Open-Meteo readings of the first source and reports the newest collection time as freshness. */
 function useWeatherReadings(instance: GadgetInstance) {
   const definition = instance.definition;
@@ -398,12 +280,11 @@ function useWeatherReadings(instance: GadgetInstance) {
 }
 
 /**
- * Terminal-skin weather body (demo `.pane.weather`): big current temperature, one muted summary line (low, high,
- * rain, wind), then the next-24h temperature line with `now … +24h` ticks. Presentation of the same model the
- * default panel uses; the Open-Meteo attribution link stays as a small muted footer.
+ * Weather body (demo `.pane.weather`, both skins): big current temperature, one muted summary line (low, high,
+ * rain, wind), then the next-24h temperature line with `now … +24h` ticks. Presentation of the derived model; the Open-Meteo attribution link stays as a small muted footer.
  *
  * @param props Derived model, the shared number format and the display timezone/locale for the mid tick.
- * @returns Compact terminal weather section.
+ * @returns Compact weather section.
  */
 function WeatherTerminal({
   model,
@@ -515,10 +396,8 @@ function WeatherStaleReading({ items, now }: { items: WorldObservation[]; now: n
 }
 
 /**
- * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
- * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
- * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
- * medium = + timeline, large = + day rows. Open-Meteo attribution is the body link only.
+ * Weather gadget: big current temperature, one muted summary line (low, high, rain, wind) and the next-24h line with
+ * `now … +24h` ticks; the Open-Meteo attribution is the body link only.
  *
  * @param props Gadget instance whose first source and metric scope select the Open-Meteo readings.
  * On a failed read the error notice also lists the bound source's last good data age and next retry, and the last
@@ -529,17 +408,14 @@ function WeatherStaleReading({ items, now }: { items: WorldObservation[]; now: n
 function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
-  const terminal = useSkin() === 'terminal';
   const { sourceId, query, items } = useWeatherReadings(instance);
-  const formatLocale = normalizeFormattingLocale(display.locale);
-  const number = getNumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 
   if (!sourceId) return <GadgetNotice kind="setup" message={t('weather.sourceRequired')} />;
   if (query.isPending) return <GadgetSkeleton variant="list" label={t('observation.loading')} />;
   if (query.isError)
     return (
       <>
-        {/* Terminal skin: `[ retry ]` in the pane title bar (demo weather error pane); refetches the same query. */}
+        {/* `[ retry ]` in the pane title bar (demo weather error pane); refetches the same query. */}
         <TitleBarSlot>
           <span className="gadget-failed" aria-hidden="true">
             {t('gadget.metaFailed')}
@@ -559,42 +435,5 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   // Fetch time of the data, not wall-clock in render: keeps render pure; falls back to the newest reading when unset.
   const now = query.dataUpdatedAt || Math.max(...items.map((item) => Date.parse(item.observed_at)).filter(Number.isFinite), 0);
   const model = buildWeatherModel(items, now, display.timezone);
-  if (terminal) return <WeatherTerminal model={model} now={now} locale={display.locale} />;
-  const { today, unit, next24h, chartRows, dayRows, zone } = model;
-  const weekday = getDateTimeFormat(formatLocale, { weekday: 'short', timeZone: zone });
-  /** X-axis tick label: short weekday in the reading's timezone. */
-  const tickFormat = (ts: number) => weekday.format(new Date(ts));
-
-  return (
-    <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
-      {query.data?.truncated && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {t('observation.truncated')}
-        </p>
-      )}
-      <WeatherHero model={model} number={number} />
-
-      {/* All sizes: today's low/high; the sparkline fills in for small containers that lack the full timeline. */}
-      {today && (
-        <p className="m-0 text-xs text-muted-foreground tabular-nums" data-testid="weather-minmax">
-          {t('weather.lowHigh', { min: `${Math.round(today.min)}${unit}`, max: `${Math.round(today.max)}${unit}` })}
-        </p>
-      )}
-      {next24h.length >= 2 && (
-        <div className="shrink-0 @[24rem]/gadget:hidden" role="img" aria-label={t('weather.next24h')} data-testid="weather-sparkline">
-          <Sparkline data={next24h} height={40} forecastFrom={now} line />
-        </div>
-      )}
-
-      {/* Medium containers and up: temperature line + precipitation bars on one time axis. */}
-      {chartRows.length >= 2 && <WeatherTimeline rows={chartRows} now={now} tickFormat={tickFormat} />}
-
-      {/* Large containers: one min-max row per day, computed client-side from the hourly readings. */}
-      {dayRows.length > 0 && <WeatherDays model={model} weekday={weekday} />}
-
-      <a className="mt-auto text-xs text-muted-foreground underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">
-        {t('openMeteoAttribution')}
-      </a>
-    </section>
-  );
+  return <WeatherTerminal model={model} now={now} locale={display.locale} />;
 }

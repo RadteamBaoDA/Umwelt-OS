@@ -49,8 +49,8 @@ describe('story list empty state', () => {
   });
 });
 
-describe('story list embedded lead', () => {
-  it('leads with the story that has the most sources and shows trends as chips', async () => {
+describe('story list embedded log', () => {
+  it('renders the embedded list as log rows (no lead hero) and shows trends as chips', async () => {
     const story = (id: string, title: string, source_count: number) => ({
       id,
       title,
@@ -79,44 +79,10 @@ describe('story list embedded lead', () => {
         </QueryClientProvider>
       </NextIntlClientProvider>,
     );
-    const lead = await screen.findByTestId('news-lead');
-    expect(lead.textContent).toContain('Big story');
-    expect(lead.textContent).toContain('6');
-    expect(lead.textContent).toContain('sources');
+    expect(await screen.findAllByTestId('news-log-row')).toHaveLength(2);
+    expect(screen.queryByTestId('news-lead')).toBeNull();
     expect(screen.getByText('Small story')).toBeTruthy();
     expect(await screen.findByText('2.5×')).toBeTruthy();
-  });
-
-  it('hides the big figure for a one-source lead and shows plain meta text', async () => {
-    vi.mocked(fetchStories).mockResolvedValueOnce({
-      items: [
-        {
-          id: 's-1',
-          title: 'Solo story',
-          excerpt: '',
-          source_count: 1,
-          evidence_count: 1,
-          observed_at: '2026-11-03T10:00:00Z',
-          relevance: null,
-          incomplete_reasons: [],
-          evidence: [],
-          translation_revision: null,
-        },
-      ],
-      next_cursor: null,
-      incomplete_reasons: [],
-    } as never);
-    vi.mocked(fetchNewsTrends).mockResolvedValueOnce({ items: [], incomplete_reasons: [] } as never);
-    render(
-      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          <StoryList sourceIds={['s1']} embedded onSelectStory={() => undefined} />
-        </QueryClientProvider>
-      </NextIntlClientProvider>,
-    );
-    const lead = await screen.findByTestId('news-lead');
-    expect(lead.textContent).toContain('1 source');
-    expect(lead.querySelector('.text-figure-sm')).toBeNull();
   });
 });
 
@@ -156,11 +122,10 @@ describe('story list embedded feed features', () => {
   it('shows 5 then expands, switches to image cards, and scopes stories to the chosen source tab', async () => {
     vi.mocked(fetchStories).mockResolvedValue({ items: mk(9), next_cursor: null, incomplete_reasons: [] } as never);
     renderEmbedded();
-    await screen.findByTestId('news-lead');
-    expect(screen.getAllByRole('listitem')).toHaveLength(4); // lead + 4 rows = 5 items
+    expect(await screen.findAllByTestId('news-log-row')).toHaveLength(8); // log rows, eight before "show more"
     fireEvent.click(screen.getByRole('button', { name: /^Show \d+ more$/ }));
-    expect(screen.getAllByRole('listitem').length).toBeGreaterThan(4);
-    fireEvent.click(screen.getByRole('button', { name: 'Cards' }));
+    expect(screen.getAllByTestId('news-log-row')).toHaveLength(9);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Cards' })[0]);
     expect((await screen.findAllByTestId('news-card')).length).toBe(6);
     expect(document.querySelector('img[src^="/api/v1/media/proxy"]')).toBeTruthy();
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Beta' }));
@@ -169,10 +134,9 @@ describe('story list embedded feed features', () => {
   });
 });
 
-describe('story list terminal log translation', () => {
-  it('keeps per-story Translate and Translate all reachable in the terminal log view', async () => {
+describe('story list log translation', () => {
+  it('keeps per-story Translate and Translate all reachable in the log view', async () => {
     translationState.enabled = true;
-    document.documentElement.dataset.skin = 'terminal';
     try {
       vi.mocked(fetchStories).mockResolvedValue({
         items: [
@@ -204,7 +168,6 @@ describe('story list terminal log translation', () => {
       expect(document.querySelector('.feed-view-narrow')?.textContent).toContain('Translate all');
     } finally {
       translationState.enabled = false;
-      delete document.documentElement.dataset.skin;
       window.localStorage.clear();
     }
   });

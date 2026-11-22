@@ -113,7 +113,7 @@ describe('FeedGadget view toggle and images', () => {
   it('switches to Cards, persists per instance and restores it', async () => {
     const { unmount } = view(withImage);
     expect(screen.queryByTestId('feed-cards')).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Cards' }));
+    await userEvent.click(screen.getAllByRole('button', { name: 'Cards' })[0]);
     expect(screen.getByTestId('feed-cards').querySelectorAll('li')).toHaveLength(3);
     // Cards show an image only for items that have one.
     expect(document.querySelectorAll('img')).toHaveLength(2);
@@ -146,7 +146,7 @@ describe('FeedGadget show more and source tabs', () => {
 
   it('shows 6 cards in Cards mode', async () => {
     view(many);
-    await userEvent.click(screen.getByRole('button', { name: /cards/i }));
+    await userEvent.click(screen.getAllByRole('button', { name: /cards/i })[0]);
     expect(within(screen.getByTestId('feed-cards')).getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByRole('button', { name: 'Show 2 more' })).toBeTruthy();
   });

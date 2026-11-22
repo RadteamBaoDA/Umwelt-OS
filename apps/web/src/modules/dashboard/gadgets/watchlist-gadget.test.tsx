@@ -57,12 +57,13 @@ describe('WatchlistGadget', () => {
         </NextIntlClientProvider>
       </QueryClientProvider>,
     );
-    expect(screen.getByText('1 alerting · 3 rules')).toBeTruthy();
+    // Compact summary: the hit count is the big figure, the rule total a muted tail.
+    expect(document.querySelector('.watch-figure')?.textContent).toBe('2');
+    expect(document.querySelector('.watch-figure-tail')?.textContent).toContain('3');
     expect(screen.queryByText('Condition / Trigger')).toBeNull();
-    expect(screen.getByText('Never matched')).toBeTruthy();
     const rows = within(screen.getByRole('list')).getAllByRole('listitem');
     expect(rows[0].textContent).toContain('Critical alert');
-    expect(rows[0].textContent).toContain('4×');
+    expect(rows[0].textContent).toContain('HIT');
     expect(rows[2].textContent).toContain('Quiet rule');
   });
 

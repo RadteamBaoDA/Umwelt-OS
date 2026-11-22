@@ -2,7 +2,6 @@
 
 import { createContext, useContext, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useSkin } from '@/core/use-skin';
 
 /** Frame hosts a gadget can portal into: the title bar (right side) and the foot row's left note. */
 export interface GadgetSlotHosts {
@@ -22,19 +21,18 @@ const GadgetSlotContext = createContext<GadgetSlotHosts | undefined>(undefined);
 export const GadgetSlotProvider = GadgetSlotContext.Provider;
 
 /**
- * Shared portal rule: in the terminal skin inside a frame, portal into the chosen host (render nothing until the
+ * Shared portal rule: inside a gadget frame, portal into the chosen host (render nothing until the
  * host mounts, avoiding a first-frame flash in the body); everywhere else render in place.
  */
 function SlotPortal({ which, children }: { which: keyof GadgetSlotHosts; children: ReactNode }) {
   const hosts = useContext(GadgetSlotContext);
-  const terminal = useSkin() === 'terminal';
-  if (!terminal || hosts === undefined) return <>{children}</>;
+  if (hosts === undefined) return <>{children}</>;
   const host = hosts[which];
   return host ? createPortal(children, host) : null;
 }
 
 /**
- * Terminal skin only: portals `children` into the gadget frame's title bar so a gadget's toolbar sits in the pane
+ * Portals `children` into the gadget frame's title bar so a gadget's toolbar sits in the pane
  * title like the design. React state, handlers and tab order stay with the gadget component.
  *
  * @param props.children Toolbar controls.
@@ -44,7 +42,7 @@ export function TitleBarSlot({ children }: { children: ReactNode }) {
 }
 
 /**
- * Terminal skin only: portals `children` (a short note such as "some stories may be incomplete") into the left of
+ * Portals `children` (a short note such as "some stories may be incomplete") into the left of
  * the gadget frame's foot row, opposite the "updated ..." text.
  *
  * @param props.children Note content.

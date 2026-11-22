@@ -3,15 +3,14 @@
 import { useMemo, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { TranslateActionButton, TranslatedBadge, TranslationNote, useContentTranslation } from '@/modules/translations';
-import { useSkin } from '@/core/use-skin';
 import type { DailyBriefRevision } from './daily-api';
 import { parseBriefParagraphs } from './brief-paragraphs';
 
 /**
- * Terminal-skin reading view of a brief: one paragraph per blank-line block, a bold lead label and `[n]` markers as
+ * Reading view of a brief: one paragraph per blank-line block, a bold lead label and `[n]` markers as
  * links to the matching entry of the citation list (`#brief-ref-n`, see daily-brief.tsx). Same text as the plain view.
  */
-function TerminalBriefText({ text }: { text: string }) {
+function BriefParagraphs({ text }: { text: string }) {
   return (
     <div className="brief-term">
       {parseBriefParagraphs(text).map((paragraph, index) => (
@@ -41,7 +40,6 @@ function TerminalBriefText({ text }: { text: string }) {
  */
 export function BriefText({ brief }: { brief: DailyBriefRevision }) {
   const t = useTranslations('translations');
-  const terminal = useSkin() === 'terminal';
   const [showOriginal, setShowOriginal] = useState(false);
   const targets = useMemo(() => [{ id: brief.id, revision: String(brief.revision) }], [brief.id, brief.revision]);
   const translation = useContentTranslation('daily_brief', targets);
@@ -72,11 +70,7 @@ export function BriefText({ brief }: { brief: DailyBriefRevision }) {
           {!translated && !pending ? <TranslationNote issue={issue} /> : null}
         </div>
       ) : null}
-      {terminal ? (
-        <TerminalBriefText text={translated && !showOriginal ? translated : brief.content} />
-      ) : (
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">{translated && !showOriginal ? translated : brief.content}</p>
-      )}
+      <BriefParagraphs text={translated && !showOriginal ? translated : brief.content} />
     </>
   );
 }

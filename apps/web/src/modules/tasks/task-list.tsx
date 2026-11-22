@@ -8,13 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { formatDateTime } from '@/core/i18n';
 import { useWorkspace } from '@/core/workspace-context';
 import { fetchTasks, fetchTasksByIds, getTask, updateTask } from './api';
 import type { Task, TaskPage, TaskStatus, TaskView } from './types';
 import { BareButton } from '@/components/bare-button';
 import { getDateTimeFormat, ownerFailureKey } from '@/modules/shared';
-import { useSkin } from '@/core/use-skin';
 import { dueLabel } from './due-label';
 
 const VIEWS: TaskView[] = ['inbox', 'today', 'upcoming', 'blocked', 'completed', 'all'];
@@ -164,20 +162,19 @@ function TaskListNotices({ vm }: { vm: TaskListVm }) {
 }
 
 /**
- * Task rows with completion checkbox and select action. In the terminal skin the meta text is the compact relative due
- * label (`overdue 2d`, `today`, `Fri`) or the status for finished tasks, which are listed last (a sorted copy, the
- * fetched order is untouched); the default skin keeps the fetched order, status plus full date.
+ * Task rows with completion checkbox and select action. The meta text is the compact relative due label
+ * (`overdue 2d`, `today`, `Fri`) or the status for finished tasks, which are listed last (a sorted copy, the
+ * fetched order is untouched).
  */
 function TaskRows({ vm }: { vm: TaskListVm }) {
   const { t, display, onSelectTask, isAdminViewer, toggleMutation, tasks, statusLabels, localDay, dueAtLocalDay } = vm;
-  const terminal = useSkin() === 'terminal';
   const dueText = {
     overdue: (days: number) => t('task.dueOverdue', { days }),
     today: t('task.dueToday'),
     none: t('no.dueDate'),
   };
-  // Terminal view only: finished tasks sink to the bottom of a copy (stable sort); the fetched order is untouched.
-  const rows = terminal ? [...tasks].sort((a, b) => Number(a.status === 'done') - Number(b.status === 'done')) : tasks;
+  // Finished tasks sink to the bottom of a copy (stable sort); the fetched order is untouched.
+  const rows = [...tasks].sort((a, b) => Number(a.status === 'done') - Number(b.status === 'done'));
   return (
     <ul className="task-list flex flex-col gap-2">
       {rows.map((task) => (
@@ -190,22 +187,15 @@ function TaskRows({ vm }: { vm: TaskListVm }) {
           />
           <BareButton type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelectTask?.(task)}>
             <span className="task-row-title block truncate text-sm font-medium">{task.title}</span>
-            {terminal ? (
-              <span
-                className="task-row-meta text-xs text-muted-foreground"
-                data-due={isOpenTask(task) && task.due_date && task.due_date < localDay ? 'overdue' : undefined}
-                data-finished={isOpenTask(task) ? undefined : 'true'}
-              >
-                {isOpenTask(task)
-                  ? dueLabel(task.due_date ?? (task.due_at ? dueAtLocalDay(task.due_at) : null), localDay, display.locale, dueText)
-                  : statusLabels[task.status]}
-              </span>
-            ) : (
-              <span className="task-row-meta text-xs text-muted-foreground">
-                {statusLabels[task.status]} ·{' '}
-                {task.due_at ? formatDateTime(task.due_at, display.locale, display.timezone) : (task.due_date ?? t('no.dueDate'))}
-              </span>
-            )}
+            <span
+              className="task-row-meta text-xs text-muted-foreground"
+              data-due={isOpenTask(task) && task.due_date && task.due_date < localDay ? 'overdue' : undefined}
+              data-finished={isOpenTask(task) ? undefined : 'true'}
+            >
+              {isOpenTask(task)
+                ? dueLabel(task.due_date ?? (task.due_at ? dueAtLocalDay(task.due_at) : null), localDay, display.locale, dueText)
+                : statusLabels[task.status]}
+            </span>
           </BareButton>
         </li>
       ))}
