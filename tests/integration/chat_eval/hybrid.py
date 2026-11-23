@@ -292,6 +292,10 @@ _LATEST_GENERATION_SQL = text(
     "SELECT status, error_code FROM search_index_generations "
     "ORDER BY created_at DESC, id DESC LIMIT 1"
 )
+_ITEM_ERRORS_SQL = text(
+    "SELECT status, coalesce(error_code, '-'), count(*) FROM search_index_items "
+    "GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 8"
+)
 
 
 async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> int:
@@ -322,9 +326,13 @@ async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> in
         """Latest generation's status and error code, for the timeout message."""
         async with engine.connect() as conn:
             row = (await conn.execute(_LATEST_GENERATION_SQL)).one_or_none()
+            items = (await conn.execute(_ITEM_ERRORS_SQL)).all()
         if row is None:
             return "no search index generation exists"
-        return f"latest generation status={row[0]} error_code={row[1]}"
+        breakdown = ", ".join(f"{status}/{code}={n}" for status, code, n in items)
+        return (
+            f"latest generation status={row[0]} error_code={row[1]}; items: {breakdown or 'none'}"
+        )
 
     return await drain_indexing(step, count, describe)
 
