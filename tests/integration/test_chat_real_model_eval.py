@@ -17,7 +17,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +49,14 @@ from modules.chat.generative_ui import (
 )
 from modules.chat.schemas import AnswerContext, AnswerContextRequest
 from tests.integration.chat_eval.cases import CASES, Case
+from tests.integration.chat_eval.grading import (
+    RowIds,
+    extract_row_ids,
+    hidden_miss,
+    recall,
+    scope_leak,
+    summarize_recall,
+)
 from tests.integration.test_chat_collected_data_matrix import (  # noqa: F401  # fixture + seed helpers
     FLAG,
     TZ,
@@ -168,10 +176,12 @@ def _assoc_ok(text: str, label: str, expected: float) -> bool:
 # --------------------------------------------------------------------------- real model stream
 @dataclass
 class Recorder:
-    """What one case's turn did: model rounds opened and each tool call's arguments/result."""
+    """What one case's turn did: model rounds opened, each tool call's arguments/result, and the ids it returned."""
 
     model_rounds: int = 0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    version_ids: set[str] = field(default_factory=set)  # document versions in SQL rows (string ids)
+    source_ids: set[str] = field(default_factory=set)  # sources in SQL rows (string ids)
 
 
 _REC: contextvars.ContextVar[Recorder] = contextvars.ContextVar("rec")
@@ -347,6 +357,15 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
     return {
         "answer": answer,
         "final_answer": cited.final_answer,
+        # Structured observations/documents carry no ids, so the turn's evidence list (every version the
+        # tools returned with a chunk) is the retrieval source for both modes.
+        "retrieved_versions": {str(e.document_version_id) for e in answer_context.evidence},
+        "retrieved_sources": {str(e.source_id) for e in answer_context.evidence},
+        "cited_versions": {
+            str(c["documentVersionId"])
+            for c in cited.valid_citations
+            if c.get("documentVersionId") is not None
+        },
         "citations": len(cited.valid_citations),
         "markers": sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer)}),
         "kept_markers": sorted(cited.number_map),
@@ -358,9 +377,21 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
     }
 
 
-def _grade(case: Case, out: dict[str, Any], rec: Recorder) -> dict[str, Any]:
-    """Apply every criterion; ``None`` means not applicable. Pure."""
+def _grade(
+    case: Case, out: dict[str, Any], rec: Recorder, key_map: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """Apply every criterion; ``None`` means not applicable. Pure.
+
+    ``key_map`` resolves case keys (``gold_keys``, ``forbid_keys``) to document version id strings. It is empty
+    until the matrix seed publishes its ids, so gold and forbidden sets are empty and recall is None.
+    Retrieval is the union of SQL-row ids and the turn's evidence; answer recall uses the kept citations.
+    """
     answer: str = out["final_answer"]
+    keys = key_map or {}
+    gold = {keys[k] for k in case.gold_keys if k in keys}
+    forbidden = {keys[k] for k in case.forbid_keys if k in keys}
+    retrieved_versions = rec.version_ids | out["retrieved_versions"]
+    retrieved_sources = rec.source_ids | out["retrieved_sources"]
     called = [c for c in rec.tool_calls if c.get("name") == TOOL_QUERY_COLLECTED_DATA]
     got_rows = any(c.get("rows") for c in called)
     nums_ok: bool | None = None
@@ -382,7 +413,7 @@ def _grade(case: Case, out: dict[str, Any], rec: Recorder) -> dict[str, Any]:
     empty_ok: bool | None = None
     if case.empty:
         empty_ok = bool(NODATA.search(answer)) and not out["unverified"]
-    return {
+    criteria: dict[str, Any] = {
         "tool_called": bool(called),
         "numbers_correct": nums_ok,
         "texts_ok": texts_ok,
@@ -391,6 +422,33 @@ def _grade(case: Case, out: dict[str, Any], rec: Recorder) -> dict[str, Any]:
         "citations_valid": cite_ok,
         "empty_ok": empty_ok,
     }
+    # hidden_miss looks only at the criteria above: a recall leg is a diagnosis, not a pass/fail input.
+    retrieval_recall = recall(gold, retrieved_versions)
+    answer_recall = recall(gold, out["cited_versions"])
+    criteria["hidden_miss"] = hidden_miss(criteria, retrieval_recall, answer_recall)
+    criteria["retrieval_recall"] = retrieval_recall
+    criteria["answer_recall"] = answer_recall
+    # Scope is enforced through forbid_keys only: a source_scope needs source ids in key_map (Task 5).
+    criteria["scope_leak"] = (
+        scope_leak(retrieved_sources, None, forbidden, retrieved_versions)
+        if case.forbid_keys
+        else None
+    )
+    return criteria
+
+
+_DIAGNOSTIC = frozenset({"retrieval_recall", "answer_recall", "hidden_miss", "scope_leak"})
+
+
+def _passed(criteria: Mapping[str, Any]) -> bool:
+    """True when no pass/fail criterion is False and no scope leak was recorded.
+
+    Recall legs and ``hidden_miss`` are diagnostics and never fail a case on their own; a ``False``
+    ``scope_leak`` means no leak, so it is excluded from the all() check and only a ``True`` fails it.
+    """
+    return all(v is not False for k, v in criteria.items() if k not in _DIAGNOSTIC) and not (
+        criteria.get("scope_leak")
+    )
 
 
 # --------------------------------------------------------------------------- the run
@@ -405,8 +463,9 @@ async def test_real_model_eval(
     real_tool = tools.execute_db_query_tool  # type: ignore[attr-defined]
 
     async def recording_tool(session: Any, raw: dict[str, Any], **kwargs: Any) -> str:
-        """Run the real query tool and record its arguments and whether it returned rows."""
+        """Run the real query tool; record its arguments, whether it returned rows and the ids it carried."""
         result = await real_tool(session, raw, **kwargs)
+        found = RowIds(set(), set())
         try:
             data = json.loads(result)
             rows = any(
@@ -414,9 +473,13 @@ async def test_real_model_eval(
             )
             error = data.get("error")
             status = data.get("status")
+            found = extract_row_ids(data)
         except json.JSONDecodeError:
             rows, error, status = False, "unparseable", None
-        _REC.get().tool_calls.append(
+        rec = _REC.get()
+        rec.version_ids |= found.version_ids
+        rec.source_ids |= found.source_ids
+        rec.tool_calls.append(
             {
                 "name": TOOL_QUERY_COLLECTED_DATA,
                 "args": raw,
@@ -507,7 +570,7 @@ def _summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     by_cat: dict[str, dict[str, int]] = {}
     for e in done:
-        ok = all(v is not False for v in e["criteria"].values())
+        ok = _passed(e["criteria"])
         slot = by_cat.setdefault(e["category"], {"pass": 0, "total": 0})
         slot["total"] += 1
         slot["pass"] += int(ok)
@@ -527,6 +590,7 @@ def _summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "empty_case_correct": f"{sum(empties)}/{len(empties)}",
         "mean_query_rounds": round(sum(e["query_rounds"] for e in done) / max(len(done), 1), 2),
         "mean_model_rounds": round(sum(e["model_rounds"] for e in done) / max(len(done), 1), 2),
-        "fully_passed": sum(all(v is not False for v in e["criteria"].values()) for e in done),
+        "fully_passed": sum(_passed(e["criteria"]) for e in done),
         "by_category": by_cat,
+        **summarize_recall(done),
     }
