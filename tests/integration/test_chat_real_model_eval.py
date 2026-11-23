@@ -275,7 +275,9 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
     req_params: dict[str, Any] = {"timezone": TZ}
     if scope is not None:
         req_params["source_scope"] = scope
-    turn_inputs = SimpleNamespace(day_scope=None, req_params=req_params, web_run=None)
+    turn_inputs = SimpleNamespace(
+        day_scope=None, req_params=req_params, web_run=None, task_brief=None
+    )
     system_text = _compose_system_text(
         turn_inputs,  # type: ignore[arg-type]
         answer_context,
