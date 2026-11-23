@@ -326,6 +326,31 @@ _INDEX_LOCKS_SQL = text(
 )
 
 
+_BUILD_BLOCKERS_SQL = text(
+    "SELECT b.pid, b.state, b.wait_event_type, b.wait_event, b.backend_xmin, "
+    "now() - b.xact_start, left(b.query, 80), b.application_name "
+    "FROM pg_stat_activity c "
+    "JOIN LATERAL unnest(pg_blocking_pids(c.pid)) AS bp(pid) ON true "
+    "JOIN pg_stat_activity b ON b.pid = bp.pid "
+    "WHERE c.query ILIKE 'CREATE INDEX CONCURRENTLY%' AND c.state = 'active'"
+)
+
+
+async def _sample_build_blockers(engine: AsyncEngine, seen: list[str]) -> None:
+    """Every 5 s, record (once each) the sessions blocking an in-progress concurrent index build."""
+    while True:
+        await asyncio.sleep(5)
+        try:
+            async with engine.connect() as conn:
+                rows = (await conn.execute(_BUILD_BLOCKERS_SQL)).all()
+        except Exception as exc:  # noqa: BLE001  # diagnostics only
+            rows = [("sample-error", type(exc).__name__)]
+        for row in rows:
+            entry = " ".join(str(v) for v in row)
+            if entry not in seen and len(seen) < 12:
+                seen.append(entry)
+
+
 async def _session_and_lock_summary(engine: AsyncEngine) -> str:
     """Compact view of the other sessions and the index-relevant locks, for a stuck-index message.
 
@@ -368,6 +393,7 @@ async def index_all(
     }
 
     first_error: list[str] = []
+    blockers: list[str] = []  # sessions seen blocking CREATE INDEX CONCURRENTLY
     real_embed = ModelGateway.embed
 
     async def recording_embed(self: ModelGateway, *args: Any, **kwargs: Any) -> Any:
@@ -382,9 +408,11 @@ async def index_all(
     async def step() -> int:
         """One indexing pass over the worker's job context, with embed failures recorded."""
         ModelGateway.embed = recording_embed  # type: ignore[method-assign]
+        sampler = asyncio.create_task(_sample_build_blockers(engine, blockers))
         try:
             return await index_pending_chunks(ctx)
         finally:
+            sampler.cancel()
             ModelGateway.embed = real_embed  # type: ignore[method-assign]
 
     async def count() -> int:
@@ -408,7 +436,7 @@ async def index_all(
         summary = await _session_and_lock_summary(engine)
         return mask(
             f"latest generation status={row[0]} error_code={row[1]}; items: {breakdown or 'none'}"
-            f"{cause}; {summary}"
+            f"{cause}; build blockers seen: {blockers or 'none'}; {summary}"
         )
 
     return await drain_indexing(step, count, describe)
