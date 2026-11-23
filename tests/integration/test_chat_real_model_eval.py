@@ -338,6 +338,8 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
         owner_timezone=TZ,
         ui_tools=ui_tools,
         open_stream=_open_stream,
+        task_draft_on=False,  # draft_scheduled_task is not offered in the eval
+        web_images=(),
     )
     turn = SimpleNamespace(
         user_prompt=case.q,
