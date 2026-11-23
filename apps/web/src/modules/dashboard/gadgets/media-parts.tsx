@@ -56,7 +56,6 @@ import { FeedUndoBar } from './feed-parts';
 import type { SelectedTelegramIdentity } from './feed-model';
 import { useFeedModeration } from './use-feed-state';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
-import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Literal labels for persisted media fields. */
 const MEDIA_FIELD_KEY = {
@@ -989,7 +988,6 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
   const { sourceIds, activeSources, typeConflict, query, documents, sources, privacy } = useMediaQuery(instance, state, calendar, isOwner);
   const items = filterMediaItems(documents, state, definition, moderation.hiddenIds);
   const translation = useMediaTranslation(items);
-  useCollectionTranslateAll(translation);
   useMediaFreshness(documents);
   /** Chat receives only currently visible immutable identities; server resolves ownership, provenance and egress. */
   const ask = (identities: SelectedTelegramIdentity[]) =>

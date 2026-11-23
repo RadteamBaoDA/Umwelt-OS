@@ -21,7 +21,6 @@ import {
   useItemTranslation,
   type ItemTranslationController,
 } from '@/modules/translations';
-import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Props for the job postings gadget. */
 export interface JobListGadgetProps {
@@ -145,7 +144,6 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
     [more.visible],
   );
   const translation = useItemTranslation('document', translationTargets);
-  useCollectionTranslateAll(translation);
 
   useReportGadgetFreshness(
     items.reduce<string | null>((max, r) => (r.observed_at && (!max || r.observed_at > max) ? r.observed_at : max), null),

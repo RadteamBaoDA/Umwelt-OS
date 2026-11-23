@@ -135,7 +135,7 @@ describe('story list embedded feed features', () => {
 });
 
 describe('story list log translation', () => {
-  it('keeps per-story Translate reachable and leaves Translate all to the gadget menu in the log view', async () => {
+  it('keeps per-story Translate reachable and offers no bulk translate in the log view', async () => {
     translationState.enabled = true;
     try {
       vi.mocked(fetchStories).mockResolvedValue({

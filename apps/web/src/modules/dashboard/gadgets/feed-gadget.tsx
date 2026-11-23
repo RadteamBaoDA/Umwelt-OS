@@ -36,7 +36,6 @@ import { ShowMoreButton, useShowMore } from './show-more';
 import { useLocalPref } from '@/core/use-local-pref';
 import { useAutoFetchWhenEmpty, useFeedFilters, useFeedModeration, useFeedQueries } from './use-feed-state';
 import { CollectionTranslationBar, TranslationStatusBanner, useItemTranslation } from '@/modules/translations';
-import { useCollectionTranslateAll } from '../gadget-actions';
 
 export type { FeedStreamItem } from './feed-model';
 
@@ -416,7 +415,6 @@ function FeedStream({ instance, initialItems, onUnreadCountChange, isOwner }: Fe
 
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
   const translation = useFeedTranslation(more.visible);
-  useCollectionTranslateAll(translation);
   const rowContext: FeedRowContext = {
     view,
     isTelegram: definition.renderer === 'telegram_feed',

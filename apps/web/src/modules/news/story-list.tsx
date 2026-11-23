@@ -19,19 +19,16 @@ import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import {
   isWorkspaceTranslationBlocker,
-  nextUntranslatedBatch,
   ITEM_REVEAL_CLASS,
   TranslateActionButton,
   TranslatedBadge,
   TranslationNote,
-  TranslationRunProgress,
   TranslationStatusBanner,
-  untranslatedTargets,
   useContentTranslation,
 } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
-import { formatRelativeTime, useReportGadgetFreshness, useTranslateAllAction } from '@/modules/dashboard/public-api';
+import { formatRelativeTime, useReportGadgetFreshness } from '@/modules/dashboard/public-api';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -562,8 +559,6 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   // Only the stories currently loaded are eligible for on-demand translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
-  // Mirrors useItemTranslation: each "Translate all" click submits at most one chunk of untranslated stories.
-  const nextBatchTranslateAll = () => translation.translate?.(nextUntranslatedBatch(targets, translation));
   // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
   useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
@@ -593,25 +588,6 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     });
     translation.translate?.([{ id: story.id, revision: story.translation_revision }]);
   };
-
-  /** Triggers on-demand translation for all currently loaded translatable stories. */
-  const translateAll = () => {
-    setShowOriginal(false);
-    setPerItemOriginal(new Set());
-    nextBatchTranslateAll();
-  };
-
-  // Embedded gadgets expose Translate all in the ⋯ menu instead; the news page keeps the toolbar button.
-  const showTranslateAllInToolbar =
-    !embedded && translation.enabled && (untranslatedTargets(targets, translation).length > 0 || (translation.pendingIds?.size ?? 0) > 0);
-  // Gadget ⋯ menu entry; a no-op outside a dashboard frame.
-  useTranslateAllAction({
-    enabled: translation.enabled,
-    pendingCount: translation.pendingIds?.size ?? 0,
-    untranslatedCount: untranslatedTargets(targets, translation).length,
-    progress: translation.progress,
-    onTranslateAll: translateAll,
-  });
 
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
   const shown = (story: Story) => (isShowingOriginal(story.id) ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
@@ -648,29 +624,13 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     isShowingOriginal,
     toggleItemOriginal,
     translateStory,
-    translateAll,
-    showTranslateAllInToolbar,
     tTrans,
   };
 }
 
 /** Builds the refresh button, on-demand translation toolbar action, and page action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
-  const {
-    t,
-    tTrans,
-    storiesQuery,
-    trendQuery,
-    showTrends,
-    embedded,
-    translation,
-    targets,
-    showOriginal,
-    setShowOriginal,
-    translateAll,
-    showTranslateAllInToolbar,
-  } = p;
-  const progress = translation.progress;
+  const { t, storiesQuery, trendQuery, showTrends, embedded, translation, showOriginal, setShowOriginal } = p;
   const refreshButton = (
     <Button
       variant="ghost"
@@ -686,31 +646,17 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
     </Button>
   );
 
-  const pendingCount = translation.pendingIds?.size ?? 0;
-  const untranslatedCount = untranslatedTargets(targets, translation).length;
   // Wrapper is only mounted when it has content: an empty flex item would add a gap before the refresh button.
-  const showTranslationToolbar = translation.results.size > 0 || (translation.enabled && (untranslatedCount > 0 || pendingCount > 0));
-  const translationToolbarAction: ReactNode = showTranslationToolbar ? (
-    <div className="relative flex items-center gap-1.5">
-      {translation.results.size ? (
+  const translationToolbarAction: ReactNode =
+    translation.results.size > 0 ? (
+      <div className="relative flex items-center gap-1.5">
         <TranslatedBadge
           showOriginal={showOriginal}
           targetLanguage={translation.targetLanguage}
           onToggle={() => setShowOriginal((v) => !v)}
         />
-      ) : null}
-      {showTranslateAllInToolbar ? (
-        <TranslateActionButton
-          compact
-          label={tTrans('translateAll')}
-          pending={pendingCount > 0}
-          pendingLabel={progress ? tTrans('translatingProgress', { done: progress.done, total: progress.total }) : undefined}
-          onClick={translateAll}
-        />
-      ) : null}
-      <TranslationRunProgress progress={progress} />
-    </div>
-  ) : null;
+      </div>
+    ) : null;
 
   const pageActions: ReactNode = (
     <>

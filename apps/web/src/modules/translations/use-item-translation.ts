@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { nextUntranslatedBatch, useContentTranslation, type ContentTranslation, type TranslationTarget } from './use-content-translation';
+import { useContentTranslation, type ContentTranslation, type TranslationTarget } from './use-content-translation';
 import type { ResourceType, TranslationPayload } from './types';
 
 /** State and handlers for on-demand collection/per-item translation with global and per-item Original toggles. */
@@ -20,13 +20,11 @@ export type ItemTranslationController = ContentTranslation & {
   shown: (id: string) => TranslationPayload | undefined;
   /** Requests on-demand translation for one item and ensures its translation is shown once ready. */
   translateOne: (target: TranslationTarget) => void;
-  /** Requests on-demand translation for the next untranslated slice (at most 25) and switches the view to translated. Its run progress is exposed as `progress`. */
-  translateAll: () => void;
 };
 
 /**
  * Composes `useContentTranslation` with collection-wide and per-item Original/Translation toggles.
- * Nothing is translated on mount; callers wire `translateOne` and `translateAll` to explicit buttons.
+ * Nothing is translated on mount; callers wire `translateOne` to explicit per-item buttons.
  *
  * @param type Resource type supported by the translation API.
  * @param targets Currently loaded resource references (id and revision).
@@ -63,13 +61,6 @@ export function useItemTranslation(type: ResourceType, targets: TranslationTarge
     translation.translate([target]);
   };
 
-  // Each click submits at most one chunk (25); repeated clicks walk the rest of the list.
-  const translateAll = () => {
-    setShowOriginal(false);
-    setPerItemOriginal(new Set());
-    translation.translate(nextUntranslatedBatch(targets, translation), { collection: true });
-  };
-
   return {
     ...translation,
     targets,
@@ -79,6 +70,5 @@ export function useItemTranslation(type: ResourceType, targets: TranslationTarge
     toggleItemOriginal,
     shown,
     translateOne,
-    translateAll,
   };
 }

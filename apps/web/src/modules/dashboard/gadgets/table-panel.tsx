@@ -22,7 +22,6 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import type { FeedDocument } from './feed-model';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
-import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Props for the source-backed table gadget. */
 export interface TablePanelProps {
@@ -258,7 +257,6 @@ export function TablePanel({ instance }: TablePanelProps) {
     [records],
   );
   const translation = useItemTranslation('document', translationTargets);
-  useCollectionTranslateAll(translation);
   const selected = Object.values(selectedRecords);
   const selectedIds = new Set(Object.keys(selectedRecords));
   const currentRecords = new Map(records.map((record) => [record.document_id, record]));

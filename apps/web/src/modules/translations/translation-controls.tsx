@@ -9,20 +9,18 @@ import { isWorkspaceTranslationBlocker, TranslationNote } from './translation-no
 import type { TranslationResult } from './types';
 import type { ItemTranslationController } from './use-item-translation';
 import { type TranslationTarget } from './use-content-translation';
-import { TranslationRunProgress } from './translation-progress';
 import { usePendingStage } from './use-pending-stage';
 
 /**
  * Reusable on-demand Translate button for gadgets, rows, and detail views.
- * Shows a spinner while `pending` and stays disabled until the in-flight request settles.
+ * Shows a spinner while `pending` and stays disabled until the in-flight request settles; the pending text walks
+ * the staged reassurance labels (8 s, 30 s) driven by `usePendingStage`.
  *
  * @param props.label Visible button text (for example "Translate" or "Translate to Vietnamese").
  * @param props.pending True while the target translation request is in flight.
  * @param props.onClick Invoked when the user explicitly requests translation.
  * @param props.compact Renders a slimmer inline button suitable for dense list rows and toolbars.
  * @param props.ariaLabel Optional explicit accessible name when `label` is terse.
- * @param props.pendingLabel Static text shown while pending (the collection progress label); when omitted, a
- * single pending request walks the staged reassurance labels (8 s, 30 s) driven by `usePendingStage`.
  * @param props.className Extra classes appended to the button (used by row reveal to hide an idle button).
  */
 export function TranslateActionButton({
@@ -31,7 +29,6 @@ export function TranslateActionButton({
   onClick,
   compact = false,
   ariaLabel,
-  pendingLabel,
   className,
 }: {
   label: string;
@@ -39,7 +36,6 @@ export function TranslateActionButton({
   onClick: () => void;
   compact?: boolean;
   ariaLabel?: string;
-  pendingLabel?: string;
   className?: string;
 }) {
   const t = useTranslations('translations');
@@ -64,7 +60,7 @@ export function TranslateActionButton({
         .join(' ')}
     >
       {pending ? <Spinner className="size-3.5" /> : <Languages className="size-3.5" aria-hidden="true" />}
-      {pending && !pendingLabel ? (
+      {pending ? (
         <span className="inline-grid">
           {stagedLabels.map((text, index) => (
             <span
@@ -77,7 +73,7 @@ export function TranslateActionButton({
           ))}
         </span>
       ) : (
-        <span className="tabular-nums">{pending ? pendingLabel : label}</span>
+        <span className="tabular-nums">{label}</span>
       )}
     </Button>
   );
@@ -152,25 +148,21 @@ export function ItemTranslateButton({
 }
 
 /**
- * Compact collection-level status control: a `TranslatedBadge` original/translation toggle once at least one
- * item has a ready translation, plus batch progress while requests run. "Translate all" is no longer here; it
- * lives in the gadget's ⋯ menu (see `useTranslateAllAction`).
+ * Compact collection-level status control: a `TranslatedBadge` original/translation toggle, shown only once at
+ * least one item has a ready translation. Translation is requested per item (`ItemTranslateButton`); there is
+ * no bulk "translate all" action.
  *
  * @param props.controller Shared collection translation controller from `useItemTranslation`.
  */
 export function CollectionTranslationBar({ controller }: { controller: ItemTranslationController }) {
-  if (controller.results.size === 0 && controller.pendingIds.size === 0) return null;
-  const { progress } = controller;
+  if (controller.results.size === 0) return null;
   return (
     <div className="relative flex flex-wrap items-center gap-1.5">
-      {controller.results.size > 0 ? (
-        <TranslatedBadge
-          showOriginal={controller.showOriginal}
-          targetLanguage={controller.targetLanguage}
-          onToggle={controller.toggleAllOriginal}
-        />
-      ) : null}
-      <TranslationRunProgress progress={progress} />
+      <TranslatedBadge
+        showOriginal={controller.showOriginal}
+        targetLanguage={controller.targetLanguage}
+        onToggle={controller.toggleAllOriginal}
+      />
     </div>
   );
 }

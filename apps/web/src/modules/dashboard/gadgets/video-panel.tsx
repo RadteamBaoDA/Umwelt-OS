@@ -25,7 +25,6 @@ import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
-import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Props for the VideoPanel gadget component. */
 export interface VideoPanelProps {
@@ -219,7 +218,6 @@ function VideoPanelView({
     [visibleItems],
   );
   const translation = useItemTranslation('document', translationTargets);
-  useCollectionTranslateAll(translation);
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground">
       {sourceIds.length === 0 && <GadgetNotice kind="setup" className="p-0" message={t('video.sourcesRequired')} />}

@@ -9,7 +9,6 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { cleanExcerpt } from '@/modules/news';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 import { CollectionTranslationBar, ItemTranslateButton, TranslationStatusBanner, useItemTranslation } from '@/modules/translations';
-import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Props for the TextPanel gadget component. */
 export interface TextPanelProps {
@@ -39,7 +38,6 @@ export function TextPanel({ instance, content }: TextPanelProps) {
   const items = useMemo(() => (query.data?.items ?? []).slice(0, 5), [query.data]);
   const targets = useMemo(() => items.map((item) => ({ id: item.document_id, revision: item.document_version_id })), [items]);
   const translation = useItemTranslation('document', targets);
-  useCollectionTranslateAll(translation);
 
   // Revision 1 says nothing; an edited gadget reports its revision in the frame footer instead of an inner header.
   const newestObserved =

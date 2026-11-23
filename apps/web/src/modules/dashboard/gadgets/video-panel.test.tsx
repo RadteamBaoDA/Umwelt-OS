@@ -7,7 +7,7 @@ import { getCatalog } from '@locales';
 import { VideoPanel } from './video-panel';
 
 const mocks = vi.hoisted(() => ({ list: vi.fn(), interact: vi.fn(), ask: vi.fn(), submit: vi.fn() }));
-// Translation api: settings enabled so the collection bar renders; submit records what "Translate all" sends.
+// Translation api: settings enabled so the collection bar renders; submit records what a per-item Translate sends.
 vi.mock('../../translations/api', () => ({
   fetchTranslationSettings: vi.fn(async () => ({ enabled: true, target_language: 'vi', configuration_revision: 1 })),
   submitTranslationBatch: mocks.submit,
@@ -166,7 +166,7 @@ describe('VideoPanel', () => {
     expect(screen.queryByText('Could not load more items. Try again.')).toBeNull();
   });
 
-  it('no longer shows Translate all in the collection bar (it lives in the gadget menu)', async () => {
+  it('offers no bulk translate in the collection bar', async () => {
     mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
     mocks.submit.mockResolvedValue({
       batch_id: null,
