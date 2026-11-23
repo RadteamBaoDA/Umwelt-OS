@@ -1,4 +1,8 @@
 <!-- scheduled-tasks-phase1-status:start -->
+## 2026-11-23 - Per-record anchored Ask AI, branch feature/translate-news
+
+Spec `docs/superpowers/specs/2026-11-23-record-ask-ai-design.md`, plan `docs/superpowers/plans/2026-11-23-record-ask-ai.md`. One Ask AI button (`AskRecordButton`) on document-backed rows of feed, video, media, table, job-list, text-panel and watchlist opens chat with `{ kind: 'selection', anchor: true, items: [one] }`. The server keeps the Documents/fence/local-only checks, returns `selected_only: False`, empty `source_scope` and `anchored: True`; retrieval collects the anchor first, caps it at 20 chunks and half the byte budget, and reranks only search results. Bulk "Ask about N" stays exact. Evidence: chat unit 1026 passed; web vitest 1870 passed; ruff, mypy (chat), tsc, eslint clean. Not run: Playwright, Docker, live model.
+
 ## Scheduled tasks - Daily brief, Topic watch, create from chat - 2026-11-18, branch claude/ai-datasource-scheduling-chat-0a33cb
 
 - Phase 1 (Daily brief), delivered:
