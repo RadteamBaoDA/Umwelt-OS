@@ -8,6 +8,7 @@ import pytest
 
 from core.model_gateway.client import CapabilityUnsupported, PrivacyPolicyDenied
 from modules.translations import service
+from modules.translations.protection import MARKER_RE
 from modules.translations.schemas import TranslationInput
 
 EN = (
@@ -55,7 +56,7 @@ async def test_news_exact_schema_and_before_send_passthrough():
 
     async def structured(alias, mapping, policy, messages, schema, **kw):
         seen.update(schema=schema, kw=kw)
-        payload = json.loads(messages[1]["content"])
+        payload = json.loads(messages[1]["content"])["text"]
         return _reply({k: _echo(v) for k, v in payload.items()})
 
     before = AsyncMock()
@@ -78,7 +79,7 @@ async def test_extra_field_rejected():
 
 async def test_invented_number_rejected():
     async def structured(alias, mapping, policy, messages, schema, **kw):
-        payload = json.loads(messages[1]["content"])
+        payload = json.loads(messages[1]["content"])["text"]
         payload["title"] += " 99"
         return _reply(payload)
 
@@ -147,7 +148,7 @@ async def test_brief_deadline_gives_no_partial_result(monkeypatch):
 
     async def structured(alias, mapping, policy, messages, schema, **kw):
         calls.append(1)
-        return _reply({"content": json.loads(messages[1]["content"])["content"]})
+        return _reply({"content": json.loads(messages[1]["content"])["text"]["content"]})
 
     clock = iter([0.0, 0.0, 1e9])  # second segment sees an expired deadline
     monkeypatch.setattr(service.time, "monotonic", lambda: next(clock, 1e9))
@@ -170,7 +171,7 @@ async def test_brief_roundtrip_keeps_structure():
 
     async def structured(alias, mapping, policy, messages, schema, **kw):
         assert schema["schema"]["required"] == ["content"]
-        masked = json.loads(messages[1]["content"])["content"]
+        masked = json.loads(messages[1]["content"])["text"]["content"]
         return _reply({"content": "\n".join(_echo(x) for x in masked.split("\n"))})
 
     out = await _run(SimpleNamespace(structured=structured), src)
@@ -223,7 +224,7 @@ async def test_token_use_is_counted_with_bounded_labels(monkeypatch):
     )
 
     async def structured(alias, mapping, policy, messages, schema, **kw):
-        payload = json.loads(messages[1]["content"])
+        payload = json.loads(messages[1]["content"])["text"]
         return {
             **_reply({k: _echo(v) for k, v in payload.items()}),
             "usage": {"prompt_tokens": 7, "completion_tokens": 3},
@@ -234,3 +235,92 @@ async def test_token_use_is_counted_with_bounded_labels(monkeypatch):
         ("translation_tokens_total", 7, {"direction": "in", "target_language": "vi"}),
         ("translation_tokens_total", 3, {"direction": "out", "target_language": "vi"}),
     ]
+
+
+CJK_TITLE = "美國人如何背棄特朗普——2026中期大選結果覆盤"
+CJK_EXCERPT = "身體最常受傷、卻很少人會刻意鍛鍊的部位：腳踝"
+
+
+async def test_model_echo_of_cjk_source_is_invalid():
+    src = _src(fields={"title": CJK_TITLE, "excerpt": CJK_EXCERPT})
+
+    async def structured(alias, mapping, policy, messages, schema, **kw):
+        payload = json.loads(messages[1]["content"])
+        return _reply(payload.get("text", payload))  # echo of the masked input
+
+    with pytest.raises(service.TranslationBlocked) as exc:
+        await _run(SimpleNamespace(structured=structured), src)
+    assert exc.value.code == "invalid_model_output"
+
+
+async def test_cjk_paraphrase_is_invalid():
+    src = _src(
+        fields={"title": "イチロー氏がマリナーズOBのホームラン競争に出場した", "excerpt": ""}
+    )
+    gw = SimpleNamespace(
+        structured=AsyncMock(
+            return_value=_reply(
+                {
+                    "title": "イチロー氏、マリナーズOBのホームラン競争でファンを沸かせる",
+                    "excerpt": "",
+                }
+            )
+        )
+    )
+    with pytest.raises(service.TranslationBlocked) as exc:
+        await _run(gw, src)
+    assert exc.value.code == "invalid_model_output"
+
+
+async def test_cjk_source_translated_to_vietnamese_passes():
+    src = _src(fields={"title": CJK_TITLE, "excerpt": CJK_EXCERPT})
+
+    async def structured(alias, mapping, policy, messages, schema, **kw):
+        masked_title = json.loads(messages[1]["content"])["text"]["title"]
+        marker = MARKER_RE.search(masked_title).group(0)  # keeps the protected 2026 token
+        return _reply(
+            {
+                "title": f"Người Mỹ quay lưng với Trump, tổng kết bầu cử giữa kỳ {marker}",
+                "excerpt": "Bộ phận cơ thể thường bị thương nhất: mắt cá chân",
+            }
+        )
+
+    out = await _run(SimpleNamespace(structured=structured), src)
+    assert "2026" in out["title"]
+    assert out["excerpt"].startswith("Bộ phận")
+
+
+async def test_vietnamese_with_bracketed_han_name_passes():
+    src = _src(fields={"title": "Xi Jinping meets Trump", "excerpt": ""})
+    gw = SimpleNamespace(
+        structured=AsyncMock(
+            return_value=_reply({"title": "Tập Cận Bình (习近平) gặp Trump", "excerpt": ""})
+        )
+    )
+    out = await _run(gw, src)
+    assert out["title"] == "Tập Cận Bình (习近平) gặp Trump"
+
+
+async def test_brief_echo_of_cjk_is_invalid():
+    src = _src("daily_brief", {"content": f"# {CJK_TITLE}\n- {CJK_EXCERPT}"})
+
+    async def structured(alias, mapping, policy, messages, schema, **kw):
+        payload = json.loads(messages[1]["content"])
+        return _reply({"content": payload.get("text", payload)["content"]})
+
+    with pytest.raises(service.TranslationBlocked) as exc:
+        await _run(SimpleNamespace(structured=structured), src)
+    assert exc.value.code == "invalid_model_output"
+
+
+async def test_user_message_wraps_payload_with_target_language():
+    seen = {}
+
+    async def structured(alias, mapping, policy, messages, schema, **kw):
+        seen["user"] = json.loads(messages[1]["content"])
+        return _reply({k: _echo(v) for k, v in seen["user"]["text"].items()})
+
+    await _run(SimpleNamespace(structured=structured))
+    assert seen["user"]["target_language"] == "Vietnamese"
+    assert set(seen["user"]["text"]) == {"title", "excerpt"}
+    assert "task" in seen["user"]

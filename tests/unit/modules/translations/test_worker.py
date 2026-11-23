@@ -167,7 +167,7 @@ class _FakeGateway:
         self.sent += 1
         import json
 
-        payload = json.loads(messages[1]["content"])
+        payload = json.loads(messages[1]["content"])["text"]
         return {"choices": [{"message": {"content": json.dumps(payload)}}]}
 
 
