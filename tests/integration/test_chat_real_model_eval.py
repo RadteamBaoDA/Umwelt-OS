@@ -48,7 +48,7 @@ from modules.chat.generative_ui import (
     list_skills,
 )
 from modules.chat.schemas import AnswerContext, AnswerContextRequest
-from tests.integration.chat_eval.cases import CASES, Case
+from tests.integration.chat_eval.cases import ALL_CASES, Case
 from tests.integration.chat_eval.grading import (
     RowIds,
     extract_row_ids,
@@ -560,7 +560,14 @@ async def test_real_model_eval(
     results: dict[str, dict[str, Any]] = {}
 
     async def one(case: Case) -> None:
-        """Run and grade one case under the concurrency gate, deadline and per-case timeout."""
+        """Run and grade one case under the concurrency gate, deadline and per-case timeout.
+
+        A ``needs_sql`` case is reported ``skipped_no_sql`` without a model call when the SQL reader
+        DSN is not configured, so it never grades as a failure of the query path it cannot reach.
+        """
+        if case.needs_sql and not sql_mode_available():
+            results[case.id] = {"id": case.id, "status": "skipped_no_sql"}
+            return
         async with gate:
             if time.monotonic() - started > DEADLINE_S:
                 results[case.id] = {"id": case.id, "status": "skipped_deadline"}
@@ -604,8 +611,8 @@ async def test_real_model_eval(
             entry["seconds"] = round(time.monotonic() - t0, 1)
             results[case.id] = entry
 
-    await asyncio.gather(*(one(c) for c in CASES))
-    ordered = [results[c.id] for c in CASES]
+    await asyncio.gather(*(one(c) for c in ALL_CASES))
+    ordered = [results[c.id] for c in ALL_CASES]
     report = {
         "model": _ENV["E2E_REAL_MODEL"],
         "generated_at": datetime.now(UTC).isoformat(),
@@ -620,7 +627,7 @@ async def test_real_model_eval(
     print(
         f"\nCHAT EVAL REPORT {path}\nCHAT EVAL SUMMARY {json.dumps(report['summary'], ensure_ascii=False)}"
     )
-    assert len(ordered) == len(CASES)  # the run completed; scores live in the report
+    assert len(ordered) == len(ALL_CASES)  # the run completed; scores live in the report
 
 
 def _pct(values: list[bool]) -> float | None:
@@ -646,6 +653,7 @@ def _summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "completed": len(done),
         "errors": [e["id"] for e in entries if e.get("status") == "error"],
         "skipped": [e["id"] for e in entries if e.get("status") == "skipped_deadline"],
+        "skipped_no_sql": [e["id"] for e in entries if e.get("status") == "skipped_no_sql"],
         "tool_called_pct": _pct(crit("tool_called")),
         "numbers_correct_pct": _pct(crit("numbers_correct")),
         "texts_ok_pct": _pct(crit("texts_ok")),
