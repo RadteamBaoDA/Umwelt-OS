@@ -6,9 +6,11 @@ import { getCatalog } from '@locales';
 
 import { JobListGadget } from './job-list';
 
-const api = vi.hoisted(() => ({ list: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn(), openDrawer: vi.fn() }));
 vi.mock('@/modules/knowledge/api', () => ({ documentKeys: { all: ['documents'] }, listGadgetDocumentProjections: api.list }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: api.openDrawer }) }));
+vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: true }) }));
 
 const job = (id: string, title: string, url: string, company: string, at: string) => ({
   document_id: id,
@@ -71,5 +73,35 @@ describe('JobListGadget', () => {
     expect(screen.getAllByRole('link')).toHaveLength(5);
     fireEvent.click(screen.getByRole('button', { name: 'Show 3 more' }));
     expect(screen.getAllByRole('link')).toHaveLength(8);
+  });
+});
+
+describe('JobListGadget row Ask AI', () => {
+  it('opens an anchored selection for the clicked posting only', async () => {
+    api.openDrawer.mockReset();
+    api.list.mockResolvedValue({
+      next_cursor: null,
+      items: [
+        job('1', 'Go Developer', 'https://j/1', 'Acme', '2026-10-01T00:00:00Z'),
+        job('3', 'Python Engineer', 'https://j/3', 'Beta', '2026-10-05T00:00:00Z'),
+      ],
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), common: getCatalog('en-us', 'common') }}
+        >
+          <JobListGadget instance={{ id: 'g1', title: '', definition: { source_ids: ['s1'] } } as never} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    const buttons = await screen.findAllByRole('button', { name: 'Ask AI' });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]!);
+    expect(api.openDrawer).toHaveBeenCalledWith({
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's1', documentId: '3', documentVersionId: 'v3' }] },
+    });
   });
 });

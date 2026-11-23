@@ -160,7 +160,7 @@ describe('MediaCalendarGadget', () => {
     );
     await userEvent.click(await screen.findByRole('button', { name: 'Ask AI' }));
     expect(mocks.openDrawer).toHaveBeenCalledWith({
-      context: { kind: 'selection', items: [{ sourceId: 's2', documentId: 'local', documentVersionId: 'local-v1' }] },
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's2', documentId: 'local', documentVersionId: 'local-v1' }] },
     });
   });
 

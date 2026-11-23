@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
@@ -7,8 +8,11 @@ import { getCatalog } from '@locales';
 import { WatchlistGadget, type WatchlistItem } from './watchlist-gadget';
 
 const windowMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({ openDrawer: vi.fn() }));
 vi.mock('@/modules/observations/api', () => ({ listWorldObservationWindow: windowMock }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: mocks.openDrawer }) }));
+vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: true }) }));
 
 const item = (over: Partial<WatchlistItem>): WatchlistItem => ({
   id: 'x',
@@ -109,5 +113,41 @@ describe('WatchlistGadget', () => {
     expect(screen.getAllByTestId('watchlist-symbol-row')).toHaveLength(1);
     expect(windowMock).toHaveBeenCalledTimes(1);
     expect(windowMock.mock.calls[0][0].symbols).toEqual(['BITCOIN', 'BTC', 'ETH', 'ETHEREUM']);
+  });
+});
+
+describe('WatchlistGadget row Ask AI', () => {
+  it('shows Ask AI only on rows that carry a full document identity and anchors it', async () => {
+    mocks.openDrawer.mockReset();
+    const withIdentity = item({
+      id: 'w1',
+      target: 'Identified hit',
+      status: 'matched',
+      severity: 'warning',
+      sourceId: 's1',
+      documentId: 'd1',
+      documentVersionId: 'v1',
+    });
+    const withoutIdentity = item({ id: 'w2', target: 'Plain hit', status: 'matched' });
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), daily: getCatalog('en-us', 'daily') }}
+        >
+          <WatchlistGadget
+            instance={{ id: 'g', title: '', definition: { renderer: 'watch_rules', source_ids: [], highlight_rules: [] } } as never}
+            initialItems={[withIdentity, withoutIdentity]}
+          />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    const buttons = screen.getAllByRole('button', { name: 'Ask AI' });
+    expect(buttons).toHaveLength(1);
+    await userEvent.click(buttons[0]!);
+    expect(mocks.openDrawer).toHaveBeenCalledWith({
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's1', documentId: 'd1', documentVersionId: 'v1' }] },
+    });
   });
 });

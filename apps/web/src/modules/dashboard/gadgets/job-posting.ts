@@ -1,6 +1,8 @@
 import { safeHttpUrl } from '@/core/safe-url';
 /** Normalized job posting row shown by the Jobs gadget; unknown fields are null. */
 export interface JobPosting {
+  /** Source identity of the document version; with the two ids below, lets the row offer an anchored Ask AI. */
+  sourceId?: string;
   documentId?: string;
   documentVersionId?: string;
   title: string;
@@ -15,6 +17,7 @@ export interface JobPosting {
 
 /** Minimal projection fields `parseJobPosting` reads (structurally a subset of GadgetDocumentProjection). */
 export interface JobPostingInput {
+  source_id?: string;
   document_id?: string;
   document_version_id?: string;
   title: string;
@@ -65,7 +68,8 @@ function splitHeadline(title: string, company: string | null): { title: string; 
 /**
  * Turns one collected job document into a table row. Company/location/salary/level come from the
  * provider summary (`Company: X; Location: Y; ...`); when no company field exists (We Work Remotely)
- * a `"Company: Title"` headline is split. Pure; never throws.
+ * a `"Company: Title"` headline is split. Pure; never throws. Record identity (`sourceId`, `documentId`,
+ * `documentVersionId`) is copied from the projection unchanged so the row can anchor Ask AI on it.
  *
  * @param item Document projection of a job datasource.
  * @returns Normalized posting with null for anything not found; undisclosed salary is null.
@@ -78,6 +82,7 @@ export function parseJobPosting(item: JobPostingInput): JobPosting {
   const salary = clean(fields.get('salary'));
   const publisher = typeof sourceFields.publisher === 'string' ? clean(sourceFields.publisher) : null;
   return {
+    sourceId: item.source_id,
     documentId: item.document_id,
     documentVersionId: item.document_version_id,
     title,

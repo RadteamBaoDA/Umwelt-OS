@@ -11,7 +11,7 @@ import {
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
 import Link from 'next/link';
-import { ListFilter, RotateCw, Sparkles, X } from 'lucide-react';
+import { ListFilter, RotateCw, X } from 'lucide-react';
 import { FeedImage } from '@/components/feed-image';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
 import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
@@ -54,6 +54,7 @@ import { MediaMultiChipPicker } from '../gadget-editor-pickers';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { FeedUndoBar } from './feed-parts';
 import type { SelectedTelegramIdentity } from './feed-model';
+import { AskRecordButton } from './ask-record-button';
 import { useFeedModeration } from './use-feed-state';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
@@ -467,21 +468,22 @@ interface MediaCardProps {
   pending: boolean;
   onInteract: (change: { id: string; versionNumber: number; read?: boolean; bookmarked?: boolean }) => void;
   onHide: () => void;
-  onAsk: () => void;
   /** Optional on-demand document translation controller for this media collection. */
   translation?: ItemTranslationController;
 }
 
-/** Owner-only actions reuse serialized moderation; external trailers remain safe HTTP links. */
+/**
+ * Owner-only actions reuse serialized moderation; external trailers remain safe HTTP links. The row's Ask AI is the
+ * shared anchored `AskRecordButton` for this item's exact version (bulk "Ask about N" stays in the selection bar).
+ */
 function MediaActions({
   item,
   canInteract,
   pending,
   onInteract,
   onHide,
-  onAsk,
   translation,
-}: Pick<MediaCardProps, 'item' | 'canInteract' | 'pending' | 'onInteract' | 'onHide' | 'onAsk' | 'translation'>) {
+}: Pick<MediaCardProps, 'item' | 'canInteract' | 'pending' | 'onInteract' | 'onHide' | 'translation'>) {
   const t = useTranslations('dashboard');
   const trailer = safeHttpUrl(item.media?.trailer_url);
   return (
@@ -495,10 +497,10 @@ function MediaActions({
       ) : null}
       {canInteract && (
         <>
-          <Button type="button" variant="ghost" size="sm" onClick={onAsk}>
-            <Sparkles className="size-3.5" aria-hidden="true" />
-            {t('media.ask')}
-          </Button>
+          <AskRecordButton
+            record={{ sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id }}
+            className="h-7 px-2 text-sm"
+          />
           <Button
             type="button"
             variant="ghost"
@@ -588,18 +590,7 @@ function MediaCardSubmeta({ item, excerpt }: { item: GadgetDocumentProjection; e
 }
 
 /** Adaptive poster/cover/video card with bounded selection, immutable-version actions and safe outbound links. */
-export function MediaCard({
-  item,
-  view,
-  selected,
-  onSelect,
-  pending,
-  onInteract,
-  onHide,
-  onAsk,
-  canInteract,
-  translation,
-}: MediaCardProps) {
+export function MediaCard({ item, view, selected, onSelect, pending, onInteract, onHide, canInteract, translation }: MediaCardProps) {
   const url = safeHttpUrl(item.canonical_url);
   const translated = translation?.shown(item.document_id);
   const displayTitle = translated?.title ?? item.title;
@@ -632,7 +623,6 @@ export function MediaCard({
           pending={pending}
           onInteract={onInteract}
           onHide={onHide}
-          onAsk={onAsk}
           translation={translation}
         />
       </div>
@@ -807,7 +797,6 @@ function MediaGroups({
   selected,
   setSelected,
   moderation,
-  ask,
   translation,
 }: {
   groups: MediaGroup[];
@@ -817,7 +806,6 @@ function MediaGroups({
   selected: Record<string, SelectedTelegramIdentity>;
   setSelected: React.Dispatch<React.SetStateAction<Record<string, SelectedTelegramIdentity>>>;
   moderation: ReturnType<typeof useFeedModeration>;
-  ask: (identities: SelectedTelegramIdentity[]) => void;
   translation: ItemTranslationController;
 }) {
   // Only currently visible records count toward the cap; selections hidden by later filters are pruned on the next tick.
@@ -846,7 +834,6 @@ function MediaGroups({
                 pending={moderation.interactionMutation.isPending}
                 onInteract={(change) => moderation.interactionMutation.mutate(change)}
                 onHide={() => moderation.setHidden([mediaIdentity(item)], true)}
-                onAsk={() => ask([mediaIdentity(item)])}
                 translation={translation}
               />
             ))}
@@ -1060,7 +1047,6 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
           selected={selected}
           setSelected={setSelected}
           moderation={moderation}
-          ask={ask}
           translation={translation}
         />
       </MediaResults>

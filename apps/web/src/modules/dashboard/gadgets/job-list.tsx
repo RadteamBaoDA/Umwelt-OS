@@ -14,6 +14,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
 import { parseJobPosting, type JobPosting, type JobPostingInput } from './job-posting';
+import { AskRecordButton } from './ask-record-button';
 import {
   CollectionTranslationBar,
   ItemTranslateButton,
@@ -46,6 +47,19 @@ function buildPostings(items: JobPostingInput[]): JobPosting[] {
       seen.add(key);
       return true;
     });
+}
+
+/**
+ * Anchored Ask AI for one posting. Renders only when the posting carries its full document identity (the
+ * projection always supplies it; the guard covers a partial parse), and the shared button applies owner gating.
+ *
+ * @param props.posting Parsed posting whose `sourceId`, `documentId` and `documentVersionId` identify the record.
+ * @returns The Ask AI button, or `null` when any identity id is missing.
+ */
+function JobAskAction({ posting }: { posting: JobPosting }) {
+  const { sourceId, documentId, documentVersionId } = posting;
+  if (!sourceId || !documentId || !documentVersionId) return null;
+  return <AskRecordButton record={{ sourceId, documentId, documentVersionId }} />;
 }
 
 /**
@@ -92,6 +106,7 @@ function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<J
                         title={displayTitle}
                       />
                     ) : null}
+                    <JobAskAction posting={p} />
                   </div>
                 </TableCell>
                 <TableCell>{p.company ?? dash}</TableCell>
