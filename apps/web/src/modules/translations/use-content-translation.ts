@@ -32,7 +32,11 @@ function readSafeWorkspace(): { selection?: { id: string } | null } | null {
 
 export const CHUNK_SIZE = 25;
 export const POLL_MS = 2000;
-export const MAX_POLL_MS = 60_000;
+/** After this long the item is still queued behind other model work: keep waiting, but poll less often. */
+export const FAST_POLL_WINDOW_MS = 60_000;
+export const SLOW_POLL_MS = 10_000;
+/** Hard client deadline; past it the item becomes `still_queued` and the button is clickable again. */
+export const MAX_POLL_MS = 10 * 60_000;
 
 export type TranslationTarget = { id: string; revision: string };
 export type ContentTranslation = {
@@ -98,7 +102,11 @@ function itemNeedsHydration(item: Seen): boolean {
   return false;
 }
 
-/** Polls a submitted translation batch every 2 s while the tab is visible until settled or `deadline`. */
+/**
+ * Polls a submitted translation batch while the tab is visible until settled or `deadline`: every 2 s for the
+ * first minute, then every 10 s. A slow model queue (translation shares workers with extraction) can take minutes,
+ * and the result should still land in the row without the user clicking again.
+ */
 async function pollBatchUntilSettled(params: {
   batchId: string;
   signal: AbortSignal;
@@ -107,9 +115,11 @@ async function pollBatchUntilSettled(params: {
   take: (items: Seen[]) => void;
 }): Promise<void> {
   const { batchId, signal, deadline, valid, take } = params;
+  const started = Date.now();
   let pending = true;
   while (pending && valid() && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    const interval = Date.now() - started < FAST_POLL_WINDOW_MS ? POLL_MS : SLOW_POLL_MS;
+    await new Promise((resolve) => setTimeout(resolve, interval));
     if (!valid() || Date.now() >= deadline) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') continue;
     const batch = await readTranslationBatch(batchId, signal);
@@ -254,10 +264,11 @@ function selectTodoTargets(
  * `translate()` (for all targets) or `translate([target])` (for one item) when the user explicitly clicks
  * a Translate button. Results live in the shared react-query cache (one entry per resource revision), so
  * list cards and detail dialogs share them immediately. Cached DB hits returned by POST /batches without
- * a payload are hydrated immediately via GET /batches/{id}; pending items poll every 2 s while visible
- * for at most 60 s. Everything in flight is aborted on unmount, workspace switch, or settings change.
- * Request failures (429, 409, 404, others) are stored per target as `failed` with a reason code. An entry still
- * `pending` at the 60 s deadline becomes `failed` with `still_queued`; an entry left `pending` by an aborted run
+ * a payload are hydrated immediately via GET /batches/{id}; pending items poll while visible, every 2 s for the
+ * first minute and every 10 s after, for at most 10 min. Everything in flight is aborted on unmount, workspace
+ * switch, or settings change. Request failures (429, 409, 404, others) are stored per target as `failed` with a
+ * reason code. An entry still `pending` at the 10 min deadline becomes `failed` with `still_queued`; an entry left
+ * `pending` by an aborted run
  * is removed. Both leave the Translate button clickable.
  *
  * @param type Resource type supported by the translation API.
