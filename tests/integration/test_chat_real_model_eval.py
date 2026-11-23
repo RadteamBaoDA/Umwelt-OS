@@ -23,12 +23,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 import pytest
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat._worker import stream, tools
@@ -47,7 +49,7 @@ from modules.chat.generative_ui import (
     build_generative_ui_system_prompt,
     list_skills,
 )
-from modules.chat.schemas import AnswerContext, AnswerContextRequest
+from modules.chat.schemas import AnswerContext
 from tests.integration.chat_eval.cases import ALL_CASES, Case
 from tests.integration.chat_eval.grading import (
     RowIds,
@@ -58,6 +60,17 @@ from tests.integration.chat_eval.grading import (
     scope_ids,
     scope_leak,
     summarize_recall,
+)
+from tests.integration.chat_eval.hybrid import (
+    HybridEnv,
+    configure_ai,
+    enable_search,
+    hybrid_context,
+    hybrid_env,
+    index_all,
+    local_only_blocked,
+    mask_secrets,
+    retrieval_request,
 )
 from tests.integration.chat_eval.planted import PLANTED_PATH, load_planted, seed_planted
 from tests.integration.chat_eval.seed_all import seed_all
@@ -192,9 +205,8 @@ _REC: contextvars.ContextVar[Recorder] = contextvars.ContextVar("rec")
 
 
 def _mask(text: str) -> str:
-    """Replace the API key in ``text`` (error bodies) so it can never reach a report or assertion message."""
-    key = _ENV["E2E_REAL_API_KEY"]
-    return text.replace(key, "***")
+    """Replace every ``E2E_*API_KEY`` value in ``text`` (error bodies) so no key reaches a report or assertion."""
+    return mask_secrets(text, _ENV)
 
 
 def _open_stream(
@@ -255,8 +267,15 @@ async def _flush(_c: Any, st: _StreamState) -> bool:
     return True
 
 
-async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any]:
-    """Run one case through the worker loop and return the raw outcome (answer, grounding, citations, calls)."""
+async def _run_turn(
+    case: Case, m: Matrix, engine: AsyncEngine, *, hybrid: tuple[Settings, Redis] | None = None
+) -> dict[str, Any]:
+    """Run one case through the worker loop and return the raw outcome (answer, grounding, citations, calls).
+
+    ``hybrid`` (real Settings and Redis) switches to the hybrid leg: the evidence comes from ``hybrid_context``
+    (rewrite, ``build_context``) instead of none. A turn with ``local_only`` evidence is not sent to the model and
+    returns ``{"blocked": True, ...}``.
+    """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     ws_scope = WorkspaceContext(
         user_id=m.user_id, workspace_id=m.workspace_id, role="owner", membership_revision=m.revision
@@ -277,6 +296,12 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
     req_params: dict[str, Any] = {"timezone": TZ}
     if scope is not None:
         req_params["source_scope"] = scope
+    if hybrid is not None:
+        answer_context = await hybrid_context(
+            case, retrieval_request(case, scope), ws_scope, fence, factory, *hybrid
+        )
+        if local_only_blocked(answer_context):
+            return {"blocked": True, "rerank_status": answer_context.rerank_status}
     turn_inputs = SimpleNamespace(
         day_scope=None, req_params=req_params, web_run=None, task_brief=None
     )
@@ -347,13 +372,7 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
         user_prompt=case.q,
         req_params=req_params,
         answer_context=answer_context,
-        answer_request=(
-            AnswerContextRequest(
-                query=case.q, source_scope=[UUID(s) for s in scope], source_scope_enforced=True
-            )
-            if scope is not None
-            else AnswerContextRequest(query=case.q)
-        ),
+        answer_request=retrieval_request(case, scope),
         web_run=None,
         prior_messages=[{"role": "assistant", "content": a} for _u, a in case.history],
     )
@@ -385,6 +404,7 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
             if c.get("documentVersionId") is not None
         },
         "citations": len(cited.valid_citations),
+        "rerank_status": answer_context.rerank_status,
         "markers": sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer)}),
         "kept_markers": sorted(cited.number_map),
         "unverified": list(report.unverified) if report is not None else [],
@@ -514,9 +534,10 @@ async def test_real_model_eval(
     matrix: Matrix,  # noqa: F811  # imported fixture
     eval_seed: EvalSeed,
     committed_engine: AsyncEngine,
+    ready_owner_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run every case against the real model, write the report, assert only that the run completed."""
+    """Run every selected case on each selected leg against the real model, write the report, assert only completion."""
     # Paused sources stay readable by design; archive the paused distractor so "latest" has one right answer.
     await _set(committed_engine, matrix, "bn_paused", "status = 'archived'")
     real_tool = tools.execute_db_query_tool  # type: ignore[attr-defined]
@@ -555,79 +576,197 @@ async def test_real_model_eval(
     monkeypatch.setattr(stream, "is_run_cancelled", _never_cancelled)
     monkeypatch.setattr(stream, "_flush_pending", _flush)
 
-    started = time.monotonic()
-    gate = asyncio.Semaphore(CONCURRENCY)
-    results: dict[str, dict[str, Any]] = {}
-
-    async def one(case: Case) -> None:
-        """Run and grade one case under the concurrency gate, deadline and per-case timeout.
-
-        A ``needs_sql`` case is reported ``skipped_no_sql`` without a model call when the SQL reader
-        DSN is not configured, so it never grades as a failure of the query path it cannot reach.
-        """
-        if case.needs_sql and not sql_mode_available():
-            results[case.id] = {"id": case.id, "status": "skipped_no_sql"}
-            return
-        async with gate:
-            if time.monotonic() - started > DEADLINE_S:
-                results[case.id] = {"id": case.id, "status": "skipped_deadline"}
-                return
-            rec = Recorder()
-            _REC.set(rec)
-            entry: dict[str, Any] = {
-                "id": case.id,
-                "category": case.cat,
-                "lang": case.lang,
-                "question": case.q,
-            }
-            t0 = time.monotonic()
-            try:
-                out = await asyncio.wait_for(
-                    _run_turn(case, matrix, committed_engine), CASE_TIMEOUT_S
-                )
-                entry |= {
-                    "status": "completed",
-                    "criteria": _grade(
-                        case,
-                        out,
-                        rec,
-                        key_map=eval_seed.key_map,
-                        scope=scope_ids(case, matrix.sources),
-                    ),
-                    "answer": out["answer"],
-                    "tool_args": [c["args"] for c in rec.tool_calls],
-                    "tool_results": [
-                        {k: c[k] for k in ("rows", "error", "status")} for c in rec.tool_calls
-                    ],
-                    "unverified_numbers": out["unverified"],
-                    "partially_uncited": out["partially_uncited"],
-                    "citations": out["citations"],
-                    "query_rounds": out["query_rounds"],
-                    "model_rounds": rec.model_rounds,
-                    "widgets": out["widgets"],
-                }
-            except Exception as exc:  # noqa: BLE001  # a failing case is reported, never raised
-                entry |= {"status": "error", "error": _mask(f"{type(exc).__name__}: {exc}")[:400]}
-            entry["seconds"] = round(time.monotonic() - t0, 1)
-            results[case.id] = entry
-
-    await asyncio.gather(*(one(c) for c in ALL_CASES))
-    ordered = [results[c.id] for c in ALL_CASES]
-    report = {
+    hybrid = hybrid_env(_ENV)
+    legs = _legs(hybrid is not None)
+    if not legs:
+        pytest.skip("CHAT_EVAL_LEGS selects only hybrid, but E2E_REAL_EMBED_* is not set")
+    cases = _selected_cases()
+    runtime = (
+        await _prepare_hybrid(ready_owner_client, committed_engine, hybrid)
+        if hybrid is not None and "hybrid" in legs
+        else None
+    )
+    try:
+        ordered = await _run_all(cases, legs, matrix, eval_seed, committed_engine, runtime)
+    finally:
+        if runtime is not None:
+            await runtime.redis.aclose()
+    report: dict[str, Any] = {
         "model": _ENV["E2E_REAL_MODEL"],
         "generated_at": datetime.now(UTC).isoformat(),
         "clock_utc": datetime.now(UTC).isoformat(),
-        "summary": _summary(ordered),
+        "summary": _summary([e for e in ordered if e["leg"] == "tool"]),
         "cases": ordered,
         "not_seeded": eval_seed.not_seeded,
     }
+    if runtime is not None:
+        report |= {
+            "legs": list(legs),
+            "rerank": runtime.rerank,
+            "indexed_chunks": runtime.indexed,
+            "hybrid_summary": _hybrid_summary([e for e in ordered if e["leg"] == "hybrid"]),
+        }
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORT_DIR / f"report-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(
         f"\nCHAT EVAL REPORT {path}\nCHAT EVAL SUMMARY {json.dumps(report['summary'], ensure_ascii=False)}"
     )
-    assert len(ordered) == len(ALL_CASES)  # the run completed; scores live in the report
+    if runtime is not None:
+        print(f"CHAT EVAL HYBRID {json.dumps(report['hybrid_summary'], ensure_ascii=False)}")
+    assert len(ordered) == len(cases) * len(legs)  # the run completed; scores live in the report
+
+
+def _legs(hybrid_on: bool) -> tuple[str, ...]:
+    """Legs to run: ``tool`` always, ``hybrid`` only when its env is set. ``CHAT_EVAL_LEGS`` (comma list) narrows it."""
+    wanted = {leg.strip() for leg in os.getenv("CHAT_EVAL_LEGS", "tool,hybrid").split(",")}
+    return tuple(
+        leg for leg in ("tool", "hybrid") if leg in wanted and (leg == "tool" or hybrid_on)
+    )
+
+
+def _selected_cases() -> tuple[Case, ...]:
+    """``ALL_CASES``, or only the ids in ``CHAT_EVAL_ONLY`` (comma list) for a targeted run such as an owner smoke."""
+    only = {cid.strip() for cid in os.getenv("CHAT_EVAL_ONLY", "").split(",") if cid.strip()}
+    return tuple(case for case in ALL_CASES if not only or case.id in only)
+
+
+@dataclass(frozen=True)
+class HybridRun:
+    """Real Settings and Redis for the hybrid leg, what indexing did, and the rerank status for the report header."""
+
+    settings: Settings
+    redis: Redis
+    indexed: int
+    rerank: str
+
+
+async def _prepare_hybrid(
+    client: httpx.AsyncClient, engine: AsyncEngine, h: HybridEnv
+) -> HybridRun:
+    """Store the AI settings, enable search, index the seeded chunks and open real Settings and Redis.
+
+    The caller closes ``redis``. Raises (after closing it) when a provider is refused or indexing does not drain.
+    """
+    settings = Settings()
+    redis = Redis.from_url(settings.redis_url)
+    try:
+        await configure_ai(client, h)
+        await enable_search(client)
+        indexed = await index_all(engine, settings, redis)
+    except BaseException:
+        await redis.aclose()
+        raise
+    return HybridRun(settings, redis, indexed, h.rerank_label)
+
+
+async def _run_all(
+    cases: tuple[Case, ...],
+    legs: tuple[str, ...],
+    matrix: Matrix,  # noqa: F811  # imported fixture
+    eval_seed: EvalSeed,
+    engine: AsyncEngine,
+    runtime: HybridRun | None,
+) -> list[dict[str, Any]]:
+    """Run every (leg, case) under the concurrency gate, the deadline and the per-case timeout; entries in order."""
+    started = time.monotonic()
+    gate = asyncio.Semaphore(CONCURRENCY)
+    results: dict[tuple[str, str], dict[str, Any]] = {}
+
+    async def one(case: Case, leg: str) -> None:
+        """Run and grade one case on one leg under the gate, deadline and per-case timeout.
+
+        A ``needs_sql`` case is reported ``skipped_no_sql`` without a model call when the SQL reader
+        DSN is not configured, so it never grades as a failure of the query path it cannot reach.
+        """
+        key = (case.id, leg)
+        if case.needs_sql and not sql_mode_available():
+            results[key] = {"id": case.id, "leg": leg, "status": "skipped_no_sql"}
+            return
+        async with gate:
+            if time.monotonic() - started > DEADLINE_S:
+                results[key] = {"id": case.id, "leg": leg, "status": "skipped_deadline"}
+                return
+            rec = Recorder()
+            _REC.set(rec)
+            entry: dict[str, Any] = {
+                "id": case.id,
+                "leg": leg,
+                "category": case.cat,
+                "lang": case.lang,
+                "question": case.q,
+            }
+            t0 = time.monotonic()
+            hybrid_arg = (runtime.settings, runtime.redis) if runtime and leg == "hybrid" else None
+            try:
+                out = await asyncio.wait_for(
+                    _run_turn(case, matrix, engine, hybrid=hybrid_arg), CASE_TIMEOUT_S
+                )
+                entry |= _outcome_entry(case, leg, out, rec, matrix, eval_seed)
+            except Exception as exc:  # noqa: BLE001  # a failing case is reported, never raised
+                entry |= {"status": "error", "error": _mask(f"{type(exc).__name__}: {exc}")[:400]}
+            entry["seconds"] = round(time.monotonic() - t0, 1)
+            results[key] = entry
+
+    await asyncio.gather(*(one(c, leg) for leg in legs for c in cases))
+    return [results[(c.id, leg)] for leg in legs for c in cases]
+
+
+def _outcome_entry(
+    case: Case,
+    leg: str,
+    out: dict[str, Any],
+    rec: Recorder,
+    matrix: Matrix,  # noqa: F811  # imported fixture
+    eval_seed: EvalSeed,
+) -> dict[str, Any]:
+    """Report fields of one finished turn: a graded ``completed`` entry, or ``local_only_blocked`` (not sent).
+
+    A blocked turn passes only in the ``scope_local_only`` category, where withholding local data is the expected
+    behaviour. ``rerank_status`` is recorded for the hybrid leg only.
+    """
+    if out.get("blocked"):
+        return {
+            "status": "local_only_blocked",
+            "rerank_status": out["rerank_status"],
+            "passed": case.cat == "scope_local_only",
+        }
+    fields: dict[str, Any] = {
+        "status": "completed",
+        "criteria": _grade(
+            case,
+            out,
+            rec,
+            key_map=eval_seed.key_map,
+            scope=scope_ids(case, matrix.sources),
+        ),
+        "answer": out["answer"],
+        "tool_args": [c["args"] for c in rec.tool_calls],
+        "tool_results": [{k: c[k] for k in ("rows", "error", "status")} for c in rec.tool_calls],
+        "unverified_numbers": out["unverified"],
+        "partially_uncited": out["partially_uncited"],
+        "citations": out["citations"],
+        "query_rounds": out["query_rounds"],
+        "model_rounds": rec.model_rounds,
+        "widgets": out["widgets"],
+    }
+    if leg == "hybrid":
+        fields["rerank_status"] = out["rerank_status"]
+    return fields
+
+
+def _hybrid_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """The regular summary plus the local_only guard outcomes and rerank status counts (pure)."""
+    blocked = [e for e in entries if e.get("status") == "local_only_blocked"]
+    rerank_counts: dict[str, int] = {}
+    for e in entries:
+        if "rerank_status" in e:
+            rerank_counts[e["rerank_status"]] = rerank_counts.get(e["rerank_status"], 0) + 1
+    return _summary(entries) | {
+        "local_only_blocked": [e["id"] for e in blocked],
+        "local_only_failed": [e["id"] for e in blocked if not e["passed"]],
+        "rerank_status_counts": rerank_counts,
+    }
 
 
 def _pct(values: list[bool]) -> float | None:
