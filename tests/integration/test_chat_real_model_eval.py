@@ -655,6 +655,11 @@ class HybridRun:
     rerank: str
 
 
+_COMPOSE_TEST_AI_CREDENTIAL_KEY = (
+    "ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA="  # docker-compose.test.yml default
+)
+
+
 async def _prepare_hybrid(
     client: httpx.AsyncClient, engine: AsyncEngine, h: HybridEnv
 ) -> HybridRun:
@@ -662,7 +667,13 @@ async def _prepare_hybrid(
 
     The caller closes ``redis``. Raises (after closing it) when a provider is refused or indexing does not drain.
     """
-    settings = Settings()
+    # Host pytest must decrypt the credentials the compose API saved, so it uses the stack's (public, fake)
+    # test key from docker-compose.test.yml instead of the developer .env key.
+    settings = Settings(
+        ai_credential_encryption_key=os.environ.get(
+            "TEST_AI_CREDENTIAL_ENCRYPTION_KEY", _COMPOSE_TEST_AI_CREDENTIAL_KEY
+        )
+    )
     redis = Redis.from_url(settings.redis_url)
     try:
         await configure_ai(client, h)
