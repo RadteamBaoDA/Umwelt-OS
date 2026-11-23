@@ -54,3 +54,18 @@ describe('parseJobPosting', () => {
     expect(p.url).toBeNull();
   });
 });
+
+describe('parseJobPosting record identity', () => {
+  it('maps the projection source_id to sourceId for the anchored Ask AI action', () => {
+    const p = parseJobPosting({
+      document_id: 'd9',
+      document_version_id: 'v9',
+      source_id: 's9',
+      title: 'Dev',
+      canonical_url: null,
+      published_at: null,
+      observed_at: null,
+    });
+    expect(p).toMatchObject({ documentId: 'd9', documentVersionId: 'v9', sourceId: 's9' });
+  });
+});

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
+import { AskRecordButton } from './ask-record-button';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { cleanExcerpt } from '@/modules/news';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
@@ -66,15 +67,20 @@ export function TextPanel({ instance, content }: TextPanelProps) {
             const title = shown?.title ?? item.title;
             const excerpt = cleanExcerpt(title, shown?.excerpt ?? item.excerpt);
             return (
-              <section key={item.document_version_id} className="max-w-prose space-y-1">
+              <section key={item.document_version_id} className="group/item max-w-prose space-y-1">
                 <div className="flex items-start justify-between gap-2">
                   {/* The first document leads at 17px; the rest are plain 14px headings. */}
                   <h3 className={index === 0 ? 'text-[17px] font-semibold leading-snug' : 'text-sm font-semibold'}>{title}</h3>
-                  <ItemTranslateButton
-                    controller={translation}
-                    target={{ id: item.document_id, revision: item.document_version_id }}
-                    title={title}
-                  />
+                  <div className="flex shrink-0 items-center gap-1">
+                    <AskRecordButton
+                      record={{ sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id }}
+                    />
+                    <ItemTranslateButton
+                      controller={translation}
+                      target={{ id: item.document_id, revision: item.document_version_id }}
+                      title={title}
+                    />
+                  </div>
                 </div>
                 <p className="whitespace-pre-wrap text-sm leading-[1.6] text-foreground">{excerpt}</p>
               </section>

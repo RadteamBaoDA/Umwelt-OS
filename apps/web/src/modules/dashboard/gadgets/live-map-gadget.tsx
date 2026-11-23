@@ -27,6 +27,8 @@ import { LiveMapTerminalFilters, LiveMapTitleBar, TerminalEventRow } from './liv
 import { safeLiveLink } from '../live-map-data';
 import { LiveMapConfig } from '../live-map-config';
 import { LIVE_TAG_KEY, LIVE_TAGS, providerMeta } from '../live-feed/sources';
+import { ItemTranslateButton } from '@/modules/translations';
+import { LiveEventTranslationContext, useLiveEventTranslation, useTranslatedEvent } from '../live-feed/translation-target';
 import type { StoredEvent } from '../live-feed/store';
 import { publishLiveEventCount } from '../live-event-count';
 import { termsAccepted, useLiveFeed, type ProviderStatus } from '../live-feed/use-live-feed';
@@ -152,6 +154,54 @@ function EventLinks({ event, separator }: { event: { url?: string | null; source
   );
 }
 
+/**
+ * Dated one-line event row of the default list. For an owner's NEWS event the title shows the translated text once
+ * ready and the links cell starts with the per-item Translate control (idle button revealed on row hover/focus).
+ *
+ * @param props.rowClass Row grid classes; `props.titleClass` the title button classes; `props.format` time formatter.
+ * @param props.inDialog Stacked layout flag forwarded to the links.
+ */
+function PageEventRow({
+  event,
+  rowClass,
+  titleClass,
+  format,
+  inDialog,
+  onSelect,
+}: {
+  event: StoredEvent;
+  rowClass: string;
+  titleClass: string;
+  format: (value: string) => string;
+  inDialog: boolean;
+  onSelect: (key: string) => void;
+}) {
+  const t = useTranslations('dashboard');
+  const tr = useTranslatedEvent(event);
+  return (
+    <li className={`${rowClass} group/item`}>
+      {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
+        <time dateTime={event.observed_at} className="whitespace-nowrap tabular-nums text-muted-foreground">
+          {format(event.observed_at)}
+        </time>
+      ) : (
+        <span className="whitespace-nowrap text-muted-foreground">{t('liveMap.timeUnknown')}</span>
+      )}
+      <Button type="button" variant="ghost" className={titleClass} onClick={() => onSelect(event.key)}>
+        <span className="min-w-0 truncate">{tr.title}</span>
+      </Button>
+      <span className="live-event-source flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">
+        {event.source}
+      </span>
+      {/* Links sit in their own cell so a long title or source truncates before they are pushed out of the row. */}
+      <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-muted-foreground">
+        {tr.controller && <ItemTranslateButton controller={tr.controller} target={tr.target} title={event.title} />}
+        <EventLinks event={event} separator={inDialog} />
+      </span>
+    </li>
+  );
+}
+
 /** Rows rendered before "show more": the feed can hold thousands of events and each row carries links and a time. */
 export const EVENT_LIST_INITIAL = 50;
 
@@ -206,25 +256,15 @@ function LiveEventList({
           logRows ? (
             <TerminalEventRow key={event.key} event={event} onSelect={onSelect} />
           ) : (
-            <li key={event.key} className={rowClass}>
-              {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
-                <time dateTime={event.observed_at} className="whitespace-nowrap tabular-nums text-muted-foreground">
-                  {format(event.observed_at)}
-                </time>
-              ) : (
-                <span className="whitespace-nowrap text-muted-foreground">{t('liveMap.timeUnknown')}</span>
-              )}
-              <Button type="button" variant="ghost" className={titleClass} onClick={() => onSelect(event.key)}>
-                <span className="min-w-0 truncate">{event.title}</span>
-              </Button>
-              <span className="live-event-source flex min-w-0 items-center overflow-hidden whitespace-nowrap text-muted-foreground">
-                {event.source}
-              </span>
-              {/* Links sit in their own cell so a long title or source truncates before they are pushed out of the row. */}
-              <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-muted-foreground">
-                <EventLinks event={event} separator={inDialog} />
-              </span>
-            </li>
+            <PageEventRow
+              key={event.key}
+              event={event}
+              rowClass={rowClass}
+              titleClass={titleClass}
+              format={format}
+              inDialog={inDialog}
+              onSelect={onSelect}
+            />
           ),
         )}
       </ul>
@@ -341,11 +381,13 @@ function LiveWeatherNotes({
   );
 }
 
-/** Details card of the selected event, anchored over the map, with a close control. */
+/** Details card of the selected event, anchored over the map, with a close control; shows the translated title and
+ * excerpt plus the Translate control for an owner's NEWS event. */
 function SelectedEventPopup({ event, onClose }: { event: StoredEvent; onClose: () => void }) {
   const t = useTranslations('dashboard');
+  const tr = useTranslatedEvent(event);
   return (
-    <div className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 p-2 pr-9 text-xs">
+    <div className="group/item absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 p-2 pr-9 text-xs">
       <Button
         type="button"
         variant="ghost"
@@ -356,8 +398,9 @@ function SelectedEventPopup({ event, onClose }: { event: StoredEvent; onClose: (
       >
         <X className="h-3.5 w-3.5" aria-hidden="true" />
       </Button>
-      <strong>{event.title}</strong>
-      <p>{event.summary}</p>
+      <strong>{tr.title}</strong>
+      <p>{tr.summary}</p>
+      {tr.controller && <ItemTranslateButton controller={tr.controller} target={tr.target} title={event.title} />}
       <EventLinks event={event} separator={false} />
     </div>
   );
@@ -769,6 +812,8 @@ function LiveMapContent({
   const feed = useLiveFeed(scope, { tags, days, query, now }, visible);
   const { workspaceId, isOwner, providers, accepted, config, results, events: filtered, points, statuses } = feed;
   const selectedEvent = filtered.find((event) => event.key === selected);
+  // Owner-only: members get no translation targets, so no Translate button renders.
+  const translation = useLiveEventTranslation(filtered, isOwner);
   // The overview map reports its event count to the page header (page header summary); cleared on unmount.
   useEffect(() => {
     if (!overview) return undefined;
@@ -822,13 +867,18 @@ function LiveMapContent({
     onRefresh: feed.refresh,
     onOpenSources: () => setSourcesOpen(true),
   };
-  if (overview) return <TerminalOverviewMap {...shared} refreshing={results.some((result) => result.isFetching)} />;
   return (
-    <DefaultLiveMap
-      {...shared}
-      results={results}
-      weather={<LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />}
-      sourceStatus={<LiveSourceStatus providers={providers} config={config} statuses={statuses} />}
-    />
+    <LiveEventTranslationContext.Provider value={isOwner ? translation : null}>
+      {overview ? (
+        <TerminalOverviewMap {...shared} refreshing={results.some((result) => result.isFetching)} />
+      ) : (
+        <DefaultLiveMap
+          {...shared}
+          results={results}
+          weather={<LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />}
+          sourceStatus={<LiveSourceStatus providers={providers} config={config} statuses={statuses} />}
+        />
+      )}
+    </LiveEventTranslationContext.Provider>
   );
 }

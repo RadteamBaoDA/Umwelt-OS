@@ -12633,6 +12633,16 @@ export interface components {
             terms_use?: ("personal" | "noncommercial" | "commercial") | null;
         };
         /**
+         * LiveEventSource
+         * @description Owner-supplied snapshot of a provider-published live-map event (ADR exception, <=30 days).
+         */
+        LiveEventSource: {
+            /** Summary */
+            summary?: string | null;
+            /** Title */
+            title: string;
+        };
+        /**
          * LiveMapEvent
          * @description Bounded, display-only provider record with validated coordinates.
          */
@@ -17290,7 +17300,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief" | "document";
+            resource_type: "news_story" | "daily_brief" | "document" | "live_event";
             /**
              * Status
              * @enum {string}
@@ -17305,7 +17315,7 @@ export interface components {
         };
         /**
          * TranslationItemRequest
-         * @description Only IDs/revisions are accepted; content is loaded by resource owners.
+         * @description IDs/revisions only, except ``live_event`` which carries its bounded inline ``source``.
          */
         TranslationItemRequest: {
             /**
@@ -17319,7 +17329,8 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief" | "document";
+            resource_type: "news_story" | "daily_brief" | "document" | "live_event";
+            source?: components["schemas"]["LiveEventSource"] | null;
         };
         /**
          * TranslationItemStatusRead
@@ -17337,7 +17348,7 @@ export interface components {
              * Resource Type
              * @enum {string}
              */
-            resource_type: "news_story" | "daily_brief" | "document";
+            resource_type: "news_story" | "daily_brief" | "document" | "live_event";
             /**
              * Status
              * @enum {string}

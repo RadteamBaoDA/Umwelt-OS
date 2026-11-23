@@ -1,4 +1,12 @@
 <!-- scheduled-tasks-phase1-status:start -->
+## 2026-11-23 - Live map NEWS translation (`live_event`), backend slice, branch feature/translate-news
+
+Plan `docs/superpowers/plans/2026-11-23-live-event-translation.md`. New translation resource type `live_event` (owner only, inline title/summary snapshot in `content_translations.source_text`, server-recomputed revision, 30-day retention; ADR exception recorded) and migration `0029_translation_live_event`. Backend only: unit tests, ruff, mypy, import contracts pass; migration not applied to a database; frontend slice pending.
+
+## 2026-11-23 - Per-record anchored Ask AI, branch feature/translate-news
+
+Spec `docs/superpowers/specs/2026-11-23-record-ask-ai-design.md`, plan `docs/superpowers/plans/2026-11-23-record-ask-ai.md`. One Ask AI button (`AskRecordButton`) on document-backed rows of feed, video, media, table, job-list, text-panel and watchlist opens chat with `{ kind: 'selection', anchor: true, items: [one] }`. The server keeps the Documents/fence/local-only checks, returns `selected_only: False`, empty `source_scope` and `anchored: True`; retrieval collects the anchor first, caps it at 20 chunks and half the byte budget, and reranks only search results. Bulk "Ask about N" stays exact. Evidence: chat unit 1026 passed; web vitest 1870 passed; ruff, mypy (chat), tsc, eslint clean. Not run: Playwright, Docker, live model.
+
 ## Scheduled tasks - Daily brief, Topic watch, create from chat - 2026-11-18, branch claude/ai-datasource-scheduling-chat-0a33cb
 
 - Phase 1 (Daily brief), delivered:

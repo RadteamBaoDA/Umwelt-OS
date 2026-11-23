@@ -139,6 +139,11 @@ export interface ChatContext {
     /** Client-only chip label; stripped before sending (the server forbids extra fields). */
     title?: string;
   }>;
+  /**
+   * One-item selection used as an anchor; server derives retrieval mode. Only meaningful with `kind: 'selection'`
+   * and exactly one item. Any edit that adds items (attachments) rebuilds the context without this flag.
+   */
+  anchor?: boolean;
   [key: string]: unknown;
 }
 

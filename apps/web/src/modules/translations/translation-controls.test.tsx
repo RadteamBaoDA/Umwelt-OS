@@ -23,8 +23,6 @@ function controller(overrides: Partial<ItemTranslationController> = {}): ItemTra
     toggleItemOriginal: vi.fn(),
     shown: () => undefined,
     translateOne: vi.fn(),
-    translateAll: vi.fn(),
-    progress: null,
     ...overrides,
   } as ItemTranslationController;
 }
@@ -96,28 +94,11 @@ describe('CollectionTranslationBar progress', () => {
   }
   const readyResults = new Map([0, 1, 2].map((i) => [`d${i}`, { status: 'ready' as const, translation: { title: 'x' } }]));
 
-  it('shows a determinate progressbar with the done/total label and announces completion once', () => {
-    const running = controller({
-      results: readyResults,
-      pendingIds: new Set(Array.from({ length: 22 }, (_, i) => `p${i}`)),
-      progress: { done: 3, total: 25 },
-    });
-    const view = render(bar(running));
-    const progressbar = screen.getByRole('progressbar');
-    expect(progressbar).toHaveAttribute('aria-valuenow', '3');
-    expect(progressbar).toHaveAttribute('aria-valuemax', '25');
-    expect(screen.getByText('Translating 3/25')).toBeInTheDocument();
-    expect(screen.queryByText(/Translated \d+ items/)).toBeNull();
-
-    view.rerender(
-      bar(
-        controller({
-          results: new Map(Array.from({ length: 25 }, (_, i) => [`d${i}`, { status: 'ready' as const, translation: { title: 'x' } }])),
-          progress: null,
-        }),
-      ),
-    );
+  it('shows only the original/translation toggle once an item is ready', () => {
+    const { container, rerender } = render(bar(controller()));
+    expect(container).toBeEmptyDOMElement();
+    rerender(bar(controller({ results: readyResults })));
+    expect(screen.getByRole('button')).toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).toBeNull();
-    expect(screen.getByText('Translated 25 items')).toHaveAttribute('aria-live', 'polite');
   });
 });

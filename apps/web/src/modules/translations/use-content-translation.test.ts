@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chunk, MAX_POLL_MS, POLL_MS, useContentTranslation } from './use-content-translation';
+import { chunk, FAST_POLL_WINDOW_MS, MAX_POLL_MS, POLL_MS, SLOW_POLL_MS, useContentTranslation } from './use-content-translation';
 
 const api = vi.hoisted(() => ({
   fetchTranslationSettings: vi.fn(),
@@ -76,6 +76,23 @@ describe('useContentTranslation', () => {
     ).toBe(true);
   });
 
+  it('forwards the inline live_event source in the POST body items', async () => {
+    api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) =>
+      accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))),
+    );
+    const target = { id: 'e1', revision: 'rev', source: { title: 'Hello', summary: null } };
+    const { result } = renderHook(() => useContentTranslation('live_event', [target]), { wrapper });
+    await settle();
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    expect(api.submitTranslationBatch.mock.calls[0][0]).toEqual([
+      { resource_type: 'live_event', resource_id: 'e1', resource_revision: 'rev', source: { title: 'Hello', summary: null } },
+    ]);
+  });
+
   it('hydrates DB cache hits (status=ready without payload) and cached blocked error codes immediately via readTranslationBatch', async () => {
     api.submitTranslationBatch.mockResolvedValue(
       accepted([
@@ -141,7 +158,39 @@ describe('useContentTranslation', () => {
     expect(result.current.results.size).toBe(0);
   });
 
-  it('stops polling after 60 s and does not resubmit', async () => {
+  it('keeps polling past the first minute and shows a result that lands later, without resubmitting', async () => {
+    api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'pending' }]));
+    const pending = {
+      batch_id: 'b1',
+      items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
+    };
+    api.readTranslationBatch.mockResolvedValue(pending);
+    const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FAST_POLL_WINDOW_MS + POLL_MS);
+    });
+    expect(result.current.pendingIds.has('s0')).toBe(true);
+    const fastPolls = api.readTranslationBatch.mock.calls.length;
+    api.readTranslationBatch.mockResolvedValue({
+      batch_id: 'b1',
+      items: [{ ...pending.items[0], status: 'ready', translation: { title: 'Bản dịch' } }],
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SLOW_POLL_MS * 2);
+    });
+    expect(result.current.results.get('s0')?.translation?.title).toBe('Bản dịch');
+    expect(result.current.pendingIds.size).toBe(0);
+    // Slow phase: at most a couple of reads in 20 s, not ten.
+    expect(api.readTranslationBatch.mock.calls.length - fastPolls).toBeLessThanOrEqual(2);
+    expect(api.submitTranslationBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops polling at the deadline and does not resubmit', async () => {
     api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'pending' }]));
     api.readTranslationBatch.mockResolvedValue({
       batch_id: 'b1',
@@ -329,39 +378,6 @@ describe('useContentTranslation', () => {
     expect(result.current.issues.get('s0')?.errorCode).toBe('resource_unavailable');
     expect(result.current.issues.get('s1')?.errorCode).toBe('stale_request');
     expect(result.current.pendingIds.size).toBe(0);
-  });
-
-  it('exposes run progress for a collection submission and clears it once every submitted item settles', async () => {
-    api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) => ({
-      ...accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'pending' }))),
-      settings: { enabled: true, target_language: 'vi', configuration_revision: 3 },
-    }));
-    const settledItems = (count: number, status: string) =>
-      Array.from({ length: 25 }, (_, i) => ({
-        resource_type: 'news_story',
-        resource_id: `s${i}`,
-        status: i < count ? status : 'pending',
-        original_revision: 'r',
-      }));
-    api.readTranslationBatch.mockResolvedValueOnce({ items: settledItems(3, 'unchanged') });
-    const { result } = renderHook(() => useContentTranslation('news_story', ids(30)), { wrapper });
-    await settle();
-    act(() => {
-      result.current.translate(ids(30).slice(0, 25), { collection: true });
-    });
-    await settle();
-    expect(result.current.progress).toEqual({ done: 0, total: 25 });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(POLL_MS);
-    });
-    await settle();
-    expect(result.current.progress).toEqual({ done: 3, total: 25 });
-    api.readTranslationBatch.mockResolvedValue({ items: settledItems(25, 'unchanged') });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(POLL_MS);
-    });
-    await settle();
-    expect(result.current.progress).toBeNull();
   });
 
   it('shows a polled ready item while another item in the run is still pending', async () => {

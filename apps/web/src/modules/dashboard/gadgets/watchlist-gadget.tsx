@@ -11,6 +11,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
 import { evaluateGadgetHighlights } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
+import { AskRecordButton } from './ask-record-button';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { metricBetterDirection } from './metric-direction';
 import { deltaVsPrevious, formatObservationValue, historyPerSeries, seriesKey } from './provider-observation-gadget';
@@ -69,6 +70,10 @@ export interface WatchlistItem {
   lastMatchedAt: string | null;
   matchReason?: string;
   matchCount: number;
+  /** Document identity of a highlight match; the row offers Ask AI only when all three ids are present. */
+  sourceId?: string;
+  documentId?: string;
+  documentVersionId?: string;
 }
 
 /** Props for the WatchlistGadget component. */
@@ -167,6 +172,9 @@ function useWatchlistItems(instance: GadgetInstance, initialItems: WatchlistItem
         lastMatchedAt: match.observed_at,
         matchReason: match.reason,
         matchCount: 1,
+        sourceId: match.source_id,
+        documentId: match.document_id,
+        documentVersionId: match.document_version_id,
       }));
 
   return { matchesQuery, items };
@@ -221,7 +229,8 @@ function severityEdge(severity: WatchlistItem['severity']): string {
 /**
  * One rule row: a symbol row with sparkline when live observations exist, otherwise the target/condition/time row.
  * A rule match is a plain `HIT  text` log row (alerting = danger, matched = warning,
- * monitoring = muted `idle`); symbol rows keep their value layout.
+ * monitoring = muted `idle`); symbol rows keep their value layout. A hit row gets the anchored Ask AI only when its
+ * match carries all three document ids; keyword rows built from props without identity show none.
  */
 function WatchlistRow({
   item,
@@ -268,6 +277,9 @@ function WatchlistRow({
       <span className="watch-hit-level">{hit ? t('watchlist.levelHit') : t('watchlist.levelIdle')}</span>
       <span className="watch-hit-text">{item.target}</span>
       {srSeverity}
+      {item.sourceId && item.documentId && item.documentVersionId ? (
+        <AskRecordButton record={{ sourceId: item.sourceId, documentId: item.documentId, documentVersionId: item.documentVersionId }} />
+      ) : null}
     </li>
   );
 }

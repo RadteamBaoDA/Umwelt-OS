@@ -270,7 +270,7 @@ describe('MediaFeedGadget', () => {
     await screen.findByText('Title doc-1');
     await userEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
     expect(mocks.openDrawer).toHaveBeenCalledWith({
-      context: { kind: 'selection', items: [{ sourceId: 's1', documentId: 'doc-1', documentVersionId: 'doc-1-v1' }] },
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's1', documentId: 'doc-1', documentVersionId: 'doc-1-v1' }] },
     });
     await userEvent.click(screen.getByRole('button', { name: 'Mark read' }));
     await waitFor(() => expect(mocks.interaction).toHaveBeenCalledWith('doc-1', 1, expect.objectContaining({ read: true }), 'csrf'));

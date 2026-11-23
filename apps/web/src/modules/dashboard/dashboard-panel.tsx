@@ -33,7 +33,9 @@ export function DashboardPanel({
       onScroll={(event) => {
         scrollPositions.set(panelId, event.currentTarget.scrollTop);
       }}
-      className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain"
+      // Stable gutter: a scrollbar that toggles with content height would change the grid width, which re-sizes
+      // gadgets, which toggles the scrollbar again (ResizeObserver loop: "Maximum update depth exceeded").
+      className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-contain [scrollbar-gutter:stable]"
     >
       {empty ? (
         <div className="flex min-h-64 flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-border bg-card px-6 text-center">

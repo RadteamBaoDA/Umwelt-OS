@@ -203,6 +203,7 @@ async def _load_turn_inputs(session: AsyncSession, c: _RunCtx, claimed: _Claimed
         timezone=req_params.get("timezone"),
         selected_refs=req_params.get("selected_refs", []),
         selected_only=req_params.get("selected_only", False),
+        anchored=req_params.get("anchored", False) is True,
         selection_fences=req_params.get("selection_fences", []),
         limit=req_params.get("limit", 20),
         mode=req_params.get("mode", "hybrid"),

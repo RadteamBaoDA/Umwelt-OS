@@ -39,6 +39,7 @@ from modules.settings.public import (
     read_translation_settings_projection,
     save_translation_settings_cas,
 )
+from modules.translations.live_events import request_verdict
 from modules.translations.models import (
     ContentTranslation,
     TranslationBatch,
@@ -57,7 +58,7 @@ from modules.translations.schemas import (
     TranslationInput as TranslationInput,
 )
 
-PROMPT_VERSION = "v2"  # T2 owns prompt text; bumping it invalidates every cache fingerprint.
+PROMPT_VERSION = "v4"  # T2 owns prompt text; bumping it invalidates every cache fingerprint. v3: wrapped payload + script guard. v4: dates may be re-formatted.
 MAX_NONTERMINAL_PER_WORKSPACE = 100
 MAX_BATCHES_PER_MINUTE = 20  # cost stays bounded by the queue cap and the cache
 RETRY_AFTER_SECONDS = "60"
@@ -308,10 +309,15 @@ async def _authorize_items(
 
     Returns the owner verdict for admissible items, else an ``error_code``: ``resource_unavailable``
     (missing and unauthorized are deliberately indistinguishable) or ``stale_request`` (the
-    client's revision differs from the verdict).
+    client's revision differs from the verdict). ``live_event`` items are decided from their inline
+    source by ``request_verdict`` (owner only; the revision is recomputed server-side) because no
+    row exists on the first submit.
     """
     out: list[ResourceAuthorization | str] = []
     for item in request.items:
+        if item.resource_type == "live_event":
+            out.append(request_verdict(actor, item))
+            continue
         verdict = await _authorize(
             session,
             actor,
@@ -343,6 +349,29 @@ def _admitted_status(
         status=row.status,
         error_code=code,
     )
+
+
+def _needs_retry(found: ContentTranslation, now: datetime) -> bool:
+    """Whether a cached row is re-run on a new POST: it expired, or it ended ``failed``.
+
+    Every POST /batches is an explicit owner click (nothing submits on mount; polling uses GET), so a
+    ``failed`` row (invalid model output, deadline, exhausted transport retries) gets one more model
+    call per click; the caller charges it to the rate limits. ``blocked`` rows (privacy, capability,
+    size, stale or unavailable resource) stay cached: asking again cannot change their outcome.
+    """
+    return found.expires_at <= now or found.status == "failed"
+
+
+def _reset_for_retry(found: ContentTranslation, now: datetime) -> None:
+    """Return an expired cached row to a fresh ``pending`` state with a new 30-day horizon.
+
+    Clears result, error, attempts, lease and schedule; mutates ``found`` in place (the caller's
+    transaction persists it). ``source_text`` is kept: the revision it hashes to is unchanged.
+    """
+    found.status, found.error_code, found.result = "pending", None, None
+    found.attempt_count, found.completed_at, found.next_attempt_at = 0, None, None
+    found.lease_token = found.lease_expires_at = None
+    found.expires_at = now + timedelta(days=30)
 
 
 def _merge_items(
@@ -481,9 +510,10 @@ async def request_translations(
                 prompt_version=PROMPT_VERSION,
                 status="pending",
                 attempt_count=0,
+                source_text=item.source.model_dump() if item.source else None,
             )
             fresh.append(found)
-        elif found.expires_at <= now:
+        elif _needs_retry(found, now):
             retry.append(found)
         elif found.status in ("ready", "unchanged"):
             count(
@@ -500,10 +530,7 @@ async def request_translations(
             new_work=len(fresh) + len(retry),
         )
     for found in retry:
-        found.status, found.error_code, found.result = "pending", None, None
-        found.attempt_count, found.completed_at, found.next_attempt_at = 0, None, None
-        found.lease_token = found.lease_expires_at = None
-        found.expires_at = now + timedelta(days=30)
+        _reset_for_retry(found, now)
     session.add_all(fresh)
     batch = TranslationBatch(
         workspace_id=actor.workspace_id,

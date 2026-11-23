@@ -320,3 +320,40 @@ async def test_create_batch_enqueues_ahead_of_backlog(monkeypatch):
     assert kwargs["_queue_name"] == "arq:model"
     assert kwargs["_job_id"] == f"translation:{tid}"
     assert kwargs["_defer_until"] < datetime.now(UTC) - timedelta(minutes=30)
+
+
+async def _live_batch(scope):
+    row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
+    session = _session(scalar=row)
+    session.scalar = AsyncMock(side_effect=[row, 0, 0])
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: []))
+    session.add = MagicMock(side_effect=lambda o: setattr(o, "id", uuid4()))
+    added: list = []
+
+    def add_all(objs):
+        for o in list(objs):
+            o.id = uuid4() if isinstance(o, ContentTranslation) else getattr(o, "id", None)
+            added.append(o)
+
+    session.add_all = MagicMock(side_effect=add_all)
+    src = {"title": "Hello", "summary": "World"}
+    from modules.translations.live_events import live_event_revision
+
+    item = _item(
+        resource_type="live_event",
+        resource_revision=live_event_revision("Hello", "World"),
+        source=src,
+    )
+    request = TranslationBatchRequest.model_validate({"items": [item]})
+    out = await public.request_translations(session, scope, request, multi_workspace_enabled=True)
+    return out, [o for o in added if isinstance(o, ContentTranslation)]
+
+
+async def test_live_event_owner_persists_snapshot_and_member_is_unavailable(monkeypatch):
+    monkeypatch.setattr(public, "_policy_fingerprint", AsyncMock(return_value="p"))
+    out, rows = await _live_batch(_scope("owner"))
+    assert [(i.status, i.error_code) for i in out.items] == [("pending", None)]
+    assert rows[0].source_text == {"title": "Hello", "summary": "World"}
+    out, rows = await _live_batch(_scope("member"))
+    assert out.batch_id is None and rows == []
+    assert [(i.status, i.error_code) for i in out.items] == [("failed", "resource_unavailable")]

@@ -19,13 +19,11 @@ import { fetchNewsTrends, fetchStories } from './story-api';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import {
   isWorkspaceTranslationBlocker,
-  nextUntranslatedBatch,
+  ITEM_REVEAL_CLASS,
   TranslateActionButton,
   TranslatedBadge,
   TranslationNote,
-  TranslationRunProgress,
   TranslationStatusBanner,
-  untranslatedTargets,
   useContentTranslation,
 } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
@@ -50,6 +48,11 @@ export type StoryListProps = {
   instanceId?: string;
   /** Resolved names of `sourceIds` for the source tabs (embedded mode, 2-6 sources). */
   sourceNames?: { id: string; name: string }[];
+  /**
+   * Optional host-supplied action rendered beside each story's Translate control (both row layouts). Hosts use it to
+   * attach per-story controls without this module importing them; it sits outside the selection button.
+   */
+  renderStoryAction?: (story: Story) => ReactNode;
   onSelectStory: (storyId: string, trigger: HTMLButtonElement) => void;
 };
 
@@ -144,6 +147,7 @@ function StoryTranslateControl({ vm, story }: { vm: StoryListVm; story: Story })
       // Rows repeat the same visible label, so the accessible name carries the story title.
       ariaLabel={tTrans('translateItem', { title: story.title })}
       pending={translation.pendingIds?.has(story.id) ?? false}
+      className={translation.pendingIds?.has(story.id) || translation.issues.has(story.id) ? undefined : ITEM_REVEAL_CLASS}
       onClick={() => translateStory(story)}
     />
   );
@@ -164,7 +168,10 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
   const excerpt = cleanExcerpt(displayTitle, shown(story)?.excerpt ?? story.excerpt);
   const card = vm.embedded && vm.view === 'cards';
   return (
-    <li data-testid={card ? 'news-card' : undefined} className={card ? 'min-w-0 rounded-md border border-border p-2' : undefined}>
+    <li
+      data-testid={card ? 'news-card' : undefined}
+      className={card ? 'group/item min-w-0 rounded-md border border-border p-2' : 'group/item'}
+    >
       {card ? <FeedImage src={story.image_url} className="mb-2" /> : null}
       <Button
         type="button"
@@ -182,6 +189,7 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Attribution story={story} />
         <StoryTranslateControl vm={vm} story={story} />
+        {vm.renderStoryAction?.(story)}
       </div>
       <StoryRowIssue vm={vm} storyId={story.id} />
     </li>
@@ -215,7 +223,7 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
   const isNew = now - observed < NEW_STORY_MINUTES * 60_000;
   const { tag, href, license } = storyLogTag(story);
   return (
-    <li className="story-log-row" data-testid="news-log-row">
+    <li className="story-log-row group/item" data-testid="news-log-row">
       <time dateTime={story.observed_at} title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
         {Number.isNaN(observed) ? '' : clock.format(new Date(observed))}
       </time>
@@ -235,6 +243,7 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
       {/* Own line under the title (outside the title button), so on-demand translation stays reachable in the log. */}
       <span className="story-log-actions">
         <StoryTranslateControl vm={vm} story={story} />
+        {vm.renderStoryAction?.(story)}
         <StoryRowIssue vm={vm} storyId={story.id} />
       </span>
     </li>
@@ -498,6 +507,7 @@ function useStoryListData(props: StoryListProps) {
     noSources = false,
     instanceId,
     sourceNames,
+    renderStoryAction,
     onSelectStory,
   } = props;
   const t = useTranslations('news');
@@ -546,6 +556,7 @@ function useStoryListData(props: StoryListProps) {
     sourceTab,
     setSourceTab,
     sourceNames,
+    renderStoryAction,
     onSelectStory,
   };
 }
@@ -557,8 +568,6 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   // Only the stories currently loaded are eligible for on-demand translation.
   const targets = stories.filter((s) => s.translation_revision).map((s) => ({ id: s.id, revision: s.translation_revision as string }));
   const translation = useContentTranslation('news_story', targets);
-  // Mirrors useItemTranslation: each "Translate all" click submits at most one chunk of untranslated stories.
-  const nextBatchTranslateAll = () => translation.translate?.(nextUntranslatedBatch(targets, translation));
   // Newest loaded story time feeds the gadget frame's "updated ..." foot; a no-op outside a gadget frame.
   useReportGadgetFreshness(stories.reduce<string | null>((max, s) => (!max || s.observed_at > max ? s.observed_at : max), null));
   const [showOriginal, setShowOriginal] = useState(false);
@@ -587,13 +596,6 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
       return next;
     });
     translation.translate?.([{ id: story.id, revision: story.translation_revision }]);
-  };
-
-  /** Triggers on-demand translation for all currently loaded translatable stories. */
-  const translateAll = () => {
-    setShowOriginal(false);
-    setPerItemOriginal(new Set());
-    nextBatchTranslateAll();
   };
 
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
@@ -631,16 +633,13 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     isShowingOriginal,
     toggleItemOriginal,
     translateStory,
-    translateAll,
     tTrans,
   };
 }
 
 /** Builds the refresh button, on-demand translation toolbar action, and page action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
-  const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } =
-    p;
-  const progress = translation.progress;
+  const { t, storiesQuery, trendQuery, showTrends, embedded, translation, showOriginal, setShowOriginal } = p;
   const refreshButton = (
     <Button
       variant="ghost"
@@ -656,31 +655,17 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
     </Button>
   );
 
-  const pendingCount = translation.pendingIds?.size ?? 0;
-  const untranslatedCount = untranslatedTargets(targets, translation).length;
   // Wrapper is only mounted when it has content: an empty flex item would add a gap before the refresh button.
-  const showTranslationToolbar = translation.results.size > 0 || (translation.enabled && (untranslatedCount > 0 || pendingCount > 0));
-  const translationToolbarAction: ReactNode = showTranslationToolbar ? (
-    <div className="relative flex items-center gap-1.5">
-      {translation.results.size ? (
+  const translationToolbarAction: ReactNode =
+    translation.results.size > 0 ? (
+      <div className="relative flex items-center gap-1.5">
         <TranslatedBadge
           showOriginal={showOriginal}
           targetLanguage={translation.targetLanguage}
           onToggle={() => setShowOriginal((v) => !v)}
         />
-      ) : null}
-      {translation.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
-        <TranslateActionButton
-          compact
-          label={tTrans('translateAll')}
-          pending={pendingCount > 0}
-          pendingLabel={progress ? tTrans('translatingProgress', { done: progress.done, total: progress.total }) : undefined}
-          onClick={translateAll}
-        />
-      ) : null}
-      <TranslationRunProgress progress={progress} />
-    </div>
-  ) : null;
+      </div>
+    ) : null;
 
   const pageActions: ReactNode = (
     <>

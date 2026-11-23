@@ -12,18 +12,35 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from modules.settings.public import TranslationSettingsRead
 
 # github_project is intentionally not translatable: it renders timeline events, not documents.
-ResourceType = Literal["news_story", "daily_brief", "document"]
+ResourceType = Literal["news_story", "daily_brief", "document", "live_event"]
 TranslationStatus = Literal["pending", "ready", "unchanged", "blocked", "failed"]
 
 
+class LiveEventSource(BaseModel):
+    """Owner-supplied snapshot of a provider-published live-map event (ADR exception, <=30 days)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=500)
+    summary: str | None = Field(default=None, max_length=1000)
+
+
 class TranslationItemRequest(BaseModel):
-    """Only IDs/revisions are accepted; content is loaded by resource owners."""
+    """IDs/revisions only, except ``live_event`` which carries its bounded inline ``source``."""
 
     model_config = ConfigDict(extra="forbid")
 
     resource_type: ResourceType
     resource_id: UUID
     resource_revision: str = Field(min_length=1, max_length=128)
+    source: LiveEventSource | None = None
+
+    @model_validator(mode="after")
+    def _source_only_live_event(self) -> "TranslationItemRequest":
+        """Reject inline ``source`` on every type but ``live_event`` (content is owner-loaded)."""
+        if self.source is not None and self.resource_type != "live_event":
+            raise ValueError("source is only accepted for live_event")
+        return self
 
 
 class TranslationBatchRequest(BaseModel):
@@ -39,6 +56,13 @@ class TranslationBatchRequest(BaseModel):
         refs = [(item.resource_type, item.resource_id) for item in self.items]
         if len(set(refs)) != len(refs):
             raise ValueError("Duplicate item references")
+        return self
+
+    @model_validator(mode="after")
+    def _live_event_has_source(self) -> "TranslationBatchRequest":
+        """Every ``live_event`` item must carry its inline source (nothing server-side to look up)."""
+        if any(i.resource_type == "live_event" and i.source is None for i in self.items):
+            raise ValueError("live_event items require source")
         return self
 
 

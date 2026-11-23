@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
@@ -5,10 +6,43 @@ import { describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 import { TablePanel } from './table-panel';
 
-const api = vi.hoisted(() => ({ list: vi.fn() }));
+const api = vi.hoisted(() => ({ list: vi.fn(), openDrawer: vi.fn() }));
 vi.mock('@/modules/knowledge/api', () => ({ documentKeys: { all: ['documents'] }, listGadgetDocumentProjections: api.list }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
-vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: vi.fn() }) }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: api.openDrawer }) }));
+vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: true }) }));
+
+describe('TablePanel row Ask AI', () => {
+  it('sends an anchored one-item selection from a row, with the row identity', async () => {
+    api.list.mockResolvedValue({
+      next_cursor: null,
+      items: [
+        {
+          document_id: 'd7',
+          document_version_id: 'v7',
+          version_number: 1,
+          source_id: 's7',
+          title: 'Anchored record',
+          excerpt: 'Body text.',
+          published_at: '2026-10-30T12:16:00Z',
+          observed_at: null,
+        },
+      ],
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: getCatalog('en-us', 'dashboard') }}>
+          <TablePanel instance={{ id: 'g1', title: '', definition: { source_ids: ['s7'] } } as never} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Ask AI' }));
+    expect(api.openDrawer).toHaveBeenCalledWith({
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's7', documentId: 'd7', documentVersionId: 'v7' }] },
+    });
+  });
+});
 
 describe('TablePanel', () => {
   it('renders the security provider title "{cve_id} {severity}" as a title plus severity badge', async () => {

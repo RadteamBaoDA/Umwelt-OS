@@ -5,7 +5,9 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { DetailDialog, type DetailTarget } from '@/modules/detail';
 import { StoryList } from '@/modules/news';
+import { ITEM_REVEAL_CLASS } from '@/modules/translations';
 import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
+import { AskRecordButton } from './ask-record-button';
 import { GadgetNotice } from './gadget-notice';
 
 /** Source names for the story source tabs; only fetched when tabs can appear (2-6 sources). Shares the Feed filter's cache entry. */
@@ -18,7 +20,10 @@ function useNewsSourceNames(sourceIds: string[]) {
   return sourcesQuery.data?.items;
 }
 
-/** Props for the source-scoped News story gadget. */
+/**
+ * Props for the source-scoped News story gadget.
+ * Each row's Ask AI action (owner-only, via `AskRecordButton`) is anchored on that story's first evidence item.
+ */
 export interface NewsFeedProps {
   /** Saved source and filter configuration for this dashboard gadget instance. */
   instance: GadgetInstance;
@@ -99,6 +104,17 @@ export function NewsFeed({ instance }: NewsFeedProps) {
         embedded
         instanceId={instance.id}
         sourceNames={sourceNames}
+        renderStoryAction={(story) => {
+          // Anchored on the first evidence item only; a story without evidence has no document to ask about.
+          const first = story.evidence?.[0];
+          if (!first) return null;
+          return (
+            <AskRecordButton
+              record={{ sourceId: first.source_id, documentId: first.document_id, documentVersionId: first.document_version_id }}
+              className={`${ITEM_REVEAL_CLASS} h-6 px-2 text-xs`}
+            />
+          );
+        }}
         onSelectStory={(storyId, trigger) => {
           returnFocusRef.current = trigger;
           setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });

@@ -756,10 +756,51 @@ async def _read_evidence_items(
     return evidence_items
 
 
+def _anchor_key(request: AnswerContextRequest) -> set[tuple[UUID, UUID]]:
+    """Return the ``(document_version_id, chunk_id)`` keys of the request's anchored selected refs."""
+    return {(ref.document_version_id, ref.chunk_id) for ref in request.selected_refs}
+
+
+def _partition_anchor_items(
+    request: AnswerContextRequest, items: list[EvidenceItem]
+) -> tuple[list[EvidenceItem], list[EvidenceItem]]:
+    """Split ``items`` into (anchor items, other items), each keeping its input order.
+
+    An item is an anchor when its version/chunk pair is one of the request's selected refs. The split
+    is only meaningful for an anchored request; a plain request has no anchor items by contract.
+    """
+    keys = _anchor_key(request)
+    anchors = [item for item in items if (item.document_version_id, item.chunk_id) in keys]
+    others = [item for item in items if (item.document_version_id, item.chunk_id) not in keys]
+    return anchors, others
+
+
+def _take_leading(
+    items: list[EvidenceItem], budget_bytes: int, taken: list[EvidenceItem], total: int
+) -> int:
+    """Append leading ``items`` to ``taken`` while they fit ``budget_bytes``; return the new byte total.
+
+    Stops at the first item that does not fit. An empty ``taken`` always accepts its first item, so a
+    single oversized item is never dropped: the budget is a soft cap for the first item only.
+    """
+    for item in items:
+        item_bytes = len(item.content.encode("utf-8"))
+        if total + item_bytes > budget_bytes and taken:
+            break
+        taken.append(item)
+        total += item_bytes
+    return total
+
+
 def _fit_context_budget(
     request: AnswerContextRequest, evidence_items: list[EvidenceItem]
 ) -> tuple[list[EvidenceItem], int]:
     """Keep the leading evidence items that fit the byte budget; always keeps at least one.
+
+    For an anchored request the anchor chunks are fitted first, into at most half the budget, and
+    workspace search items then fill up to the full budget, so the output lists anchor items first.
+    The first anchor chunk is always kept, even when it alone exceeds the half-budget cap; later
+    anchor chunks beyond the half-budget are dropped, which is why the anchor cap lives here.
 
     Raises:
         ValueError: when an exact gadget selection does not fit entirely.
@@ -767,12 +808,12 @@ def _fit_context_budget(
     budget_bytes = min(request.context_budget_bytes, MAX_CONTEXT_BUDGET_BYTES)
     budgeted_items: list[EvidenceItem] = []
     total_bytes = 0
-    for item in evidence_items:
-        item_bytes = len(item.content.encode("utf-8"))
-        if total_bytes + item_bytes > budget_bytes and budgeted_items:
-            break
-        budgeted_items.append(item)
-        total_bytes += item_bytes
+    if request.anchored:
+        anchors, others = _partition_anchor_items(request, evidence_items)
+        total_bytes = _take_leading(anchors, budget_bytes // 2, budgeted_items, total_bytes)
+        total_bytes = _take_leading(others, budget_bytes, budgeted_items, total_bytes)
+    else:
+        total_bytes = _take_leading(evidence_items, budget_bytes, budgeted_items, total_bytes)
     if request.selected_only and len(budgeted_items) != len(evidence_items):
         raise ValueError("The exact selected evidence exceeds the bounded chat context budget")
     return budgeted_items, total_bytes
@@ -793,6 +834,40 @@ def _snapshot_source_fences(items: list[EvidenceItem]) -> dict[str, dict[str, An
     }
 
 
+async def _rerank_evidence(
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    settings: Settings,
+    request: AnswerContextRequest,
+    budgeted_items: list[EvidenceItem],
+    scope: Scope,
+) -> tuple[list[EvidenceItem], str, list[str]]:
+    """Rerank the budgeted evidence through the permitted reranker, keeping anchor evidence on top.
+
+    Exact gadget selections are never sent to a separate reranker destination (status ``skipped``).
+    For an anchored request only the workspace search items are reranked; the anchor items are returned
+    first, unchanged, so reranking can never push the record out of the answer. Otherwise the whole list
+    is reranked by ``_apply_configured_reranking``, which degrades to the original order on failure.
+
+    Returns:
+        The ordered evidence, the rerank status label, and any warnings to surface.
+    """
+    if request.selected_only:
+        return budgeted_items, "skipped", []
+    if not request.anchored:
+        return await _apply_configured_reranking(
+            session, session_factory, redis, settings, request.query, budgeted_items, scope
+        )
+    anchors, others = _partition_anchor_items(request, budgeted_items)
+    if not others:
+        return anchors, "skipped", []
+    reranked, status, warnings = await _apply_configured_reranking(
+        session, session_factory, redis, settings, request.query, others, scope
+    )
+    return [*anchors, *reranked], status, warnings
+
+
 async def build_context(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -807,6 +882,9 @@ async def build_context(
     and temporal events. Deduplicates chunks by (version_id, chunk_id), enforces
     the configured context byte budget, applies permitted reranking if available,
     and snapshots source fences for later revalidation.
+
+    An ``anchored`` request first collects its selected refs (the anchored record) ahead of search, so
+    they survive the read cap, and keeps them first through budget fitting and reranking.
 
     Args:
         session: Active database session.
@@ -830,6 +908,11 @@ async def build_context(
     if request.selected_only:
         _validate_selected_only_request(request)
 
+    # Anchor refs go in before search so the 100-ref read cap in _read_evidence_items never drops them.
+    if request.anchored:
+        for sel in request.selected_refs:
+            collector.add_default((sel.document_version_id, sel.chunk_id), 1.0)
+
     # Exact gadget selections must never silently expand into a source-wide search.
     if not request.selected_only:
         await _collect_search_refs(session, redis, settings, request, scope_kw, collector, warnings)
@@ -849,20 +932,9 @@ async def build_context(
     budgeted_items, total_bytes = _fit_context_budget(request, evidence_items)
 
     # 7. Apply configured permitted reranking
-    rerank_warnings: list[str]
-    if request.selected_only:
-        # Exact gadget selections are not sent to a separate reranker destination.
-        reranked_items, rerank_status, rerank_warnings = budgeted_items, "skipped", []
-    else:
-        reranked_items, rerank_status, rerank_warnings = await _apply_configured_reranking(
-            session,
-            session_factory,
-            redis,
-            settings,
-            request.query,
-            budgeted_items,
-            scope,
-        )
+    reranked_items, rerank_status, rerank_warnings = await _rerank_evidence(
+        session, session_factory, redis, settings, request, budgeted_items, scope
+    )
     warnings.extend(rerank_warnings)
 
     # 8. Snapshot source fences

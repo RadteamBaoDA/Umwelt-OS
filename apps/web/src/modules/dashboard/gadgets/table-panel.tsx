@@ -20,6 +20,7 @@ import {
 } from '@/modules/translations';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
+import { AskRecordButton } from './ask-record-button';
 import type { FeedDocument } from './feed-model';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 
@@ -168,7 +169,10 @@ function TableRowTitle({ title, excerpt }: { title: string; excerpt: string | nu
   );
 }
 
-/** One stacked record row: optional checkbox, title/severity/excerpt, optional source, translate toggle and date. */
+/**
+ * One stacked record row: optional checkbox, title/severity/excerpt, optional source, translate toggle and date.
+ * Every row also carries the shared anchored Ask AI action (owner-only, enforced inside `AskRecordButton`).
+ */
 function TableRecordRow({
   record,
   selectMode,
@@ -190,16 +194,21 @@ function TableRecordRow({
   const excerpt = distinctExcerpt(effectiveTitle, translated?.excerpt ?? record.excerpt);
   const stamp = record.published_at ?? record.observed_at;
   return (
-    <li className="tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
+    <li className="group/item tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
       {selectMode && <TableRowCheckbox record={record} checked={checked} setSelectedRecords={setSelectedRecords} />}
       <TableRowTitle title={effectiveTitle} excerpt={excerpt} />
       <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>
       <div className="tbl-date flex shrink-0 flex-col items-end gap-0.5">
-        <ItemTranslateButton
-          controller={translation}
-          target={{ id: record.document_id, revision: record.document_version_id }}
-          title={effectiveTitle}
-        />
+        <div className="flex items-center gap-1">
+          <AskRecordButton
+            record={{ sourceId: record.source_id, documentId: record.document_id, documentVersionId: record.document_version_id }}
+          />
+          <ItemTranslateButton
+            controller={translation}
+            target={{ id: record.document_id, revision: record.document_version_id }}
+            title={effectiveTitle}
+          />
+        </div>
         <time className="whitespace-nowrap text-xs tabular-nums text-muted-foreground" dateTime={stamp ?? undefined}>
           {formatTerminalStamp(stamp, display.locale, display.timezone)}
         </time>

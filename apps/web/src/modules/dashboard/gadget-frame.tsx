@@ -797,6 +797,7 @@ export function GadgetFrame({
   const { rendererHost, attachExpandedHost } = useRendererHost(isExpanded, { inlineHostRef, inlineScrollRef, expandedHostRef });
   useHeaderMeasurement(headerRef, onHeaderMeasured);
   const { reportFreshness, footerText, shortText, freshnessTitle, collectedAt, footNote, freshnessLabel } = useGadgetFooter();
+  const rendererProps = { report: reportFreshness, slotHosts: isExpanded ? undefined : slotHosts, instance };
   const metaText = useTerminalMeta(instance, shortText);
   // Each new collectedAt replays the data-refresh reveal on the body; the element itself is never remounted.
   useGadgetReveal(inlineScrollRef, collectedAt);
@@ -860,13 +861,7 @@ export function GadgetFrame({
         attachHost={attachExpandedHost}
       />
       {/* Supplies exactly one renderer subtree to the stable host; it is never invoked in two surfaces. */}
-      {rendererHost &&
-        createPortal(
-          <RendererSubtree report={reportFreshness} slotHosts={isExpanded ? undefined : slotHosts} instance={instance}>
-            {children}
-          </RendererSubtree>,
-          rendererHost,
-        )}
+      {rendererHost && createPortal(<RendererSubtree {...rendererProps}>{children}</RendererSubtree>, rendererHost)}
     </>
   );
 }

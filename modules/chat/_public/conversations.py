@@ -3,6 +3,7 @@
 # Cross-module contract re-exports (importers use this public module, never private submodules).
 
 # isort: split
+from typing import TYPE_CHECKING
 from typing import Any as _Any
 from uuid import UUID
 
@@ -34,6 +35,9 @@ from modules.chat.schemas import (
     AnswerContextRequest,
     SelectedDocumentVersion,
 )
+
+if TYPE_CHECKING:
+    from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
 
 async def delete_conversation(
@@ -248,21 +252,29 @@ def _parse_selection_items(raw_items: _Any) -> list[SelectedDocumentVersion]:
     return selections
 
 
+# Anchored records use at most this many leading chunks; the rest of the budget is for workspace search.
+ANCHOR_MAX_CHUNKS = 20
+
+
 async def _resolve_selected_chunk_ids(
     session: AsyncSession,
     item: SelectedDocumentVersion,
     projection: _Any,
     fence: _Any,
     scope_kw: dict[str, _Any],
+    *,
+    anchor: bool = False,
 ) -> list[UUID]:
     """Return the evidence chunk ids a selection item contributes (an exact chunk or all chunks).
 
     An exact chunk is re-read under the captured fence; without one the whole document must fit
-    the bounded projection slice.
+    the bounded projection slice. An ``anchor`` item never fails on truncation: it takes the
+    leading ``ANCHOR_MAX_CHUNKS`` chunks of the projection instead.
 
     Raises:
         ConflictError: (409) when the chunk is unavailable or the document has no chunks.
-        ValidationFailedError: (422, ``selection_too_large``) when the projection was truncated.
+        ValidationFailedError: (422, ``selection_too_large``) when an exact item's projection was
+            truncated.
     """
     from modules.knowledge.documents import public as documents_public
 
@@ -287,14 +299,17 @@ async def _resolve_selected_chunk_ids(
         # The exact chunk may be beyond the bounded projection slice; preserve its validated ID.
         chunk_ids = [item.chunk_id]
     else:
-        if projection.chunks_truncated:
-            raise ValidationFailedError(
-                _selection_detail(
-                    "selection_too_large",
-                    "Select a specific evidence chunk for documents above the context limit",
-                ),
-            )
-        chunk_ids = [chunk.id for chunk in projection.chunks]
+        if anchor:
+            chunk_ids = [chunk.id for chunk in projection.chunks[:ANCHOR_MAX_CHUNKS]]
+        else:
+            if projection.chunks_truncated:
+                raise ValidationFailedError(
+                    _selection_detail(
+                        "selection_too_large",
+                        "Select a specific evidence chunk for documents above the context limit",
+                    ),
+                )
+            chunk_ids = [chunk.id for chunk in projection.chunks]
     if not chunk_ids:
         raise ConflictError(
             _selection_detail(
@@ -304,41 +319,23 @@ async def _resolve_selected_chunk_ids(
     return chunk_ids
 
 
-async def resolve_gadget_context(
+async def _resolve_selection_items(
     session: AsyncSession,
-    context: dict[str, _Any] | None,
+    selections: list[SelectedDocumentVersion],
     *,
     scope: WorkspaceContext,
     multi_workspace_enabled: bool,
-) -> dict[str, _Any]:
-    """Normalize exact gadget selections to JSON-safe refs and owner-derived source fences.
+    anchor: bool,
+) -> tuple[list[UUID], list[dict[str, str]], list["GadgetDocumentSelectionFence"]]:
+    """Resolve each selection item to its evidence refs, source ids and privacy fences.
 
-    Every item is re-resolved through Documents' active current-version and provider-scope policy at
-    send time. Persisted IDs use JSON strings; worker intake reparses typed refs and revalidates each
-    captured generation/scope before reading, reranking, remote egress, or streaming callbacks.
-    Read-only; raises ``DomainError`` subclasses (422 invalid/too large, 409 stale/unavailable).
+    Each item is re-read through Documents' current-version projection and its source-scope fence is
+    validated. Exact items keep the bounded-projection 422; ``anchor`` items use the leading chunks.
+    Returns the distinct source ids in item order, the chunk refs, and one fence per item. Read-only;
+    raises ``DomainError`` subclasses (409 stale/unavailable, 422 too large).
     """
-    if not context:
-        return {}
-    if context.get("kind") == "gadget":
-        return await _resolve_gadget_instance_context(
-            session,
-            context,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    if context.get("kind") != "selection":
-        # This server-derived flag is reserved for validated exact gadget selections.
-        # Strip server-reserved keys: "selected_only" and every "_"-prefixed private key.
-        return {
-            key: value
-            for key, value in context.items()
-            if key != "selected_only" and not key.startswith("_")
-        }
     from modules.knowledge.documents import public as documents_public
     from modules.knowledge.documents.public import GadgetDocumentSelectionFence
-
-    selections = _parse_selection_items(context.get("items"))
 
     scope_kw: dict[str, _Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
     sources: list[UUID] = []
@@ -377,7 +374,9 @@ async def resolve_gadget_context(
         ):
             raise ConflictError("A selected document source scope is stale")
         selection_fences.append(fence)
-        chunk_ids = await _resolve_selected_chunk_ids(session, item, projection, fence, scope_kw)
+        chunk_ids = await _resolve_selected_chunk_ids(
+            session, item, projection, fence, scope_kw, anchor=anchor
+        )
         for chunk_id in chunk_ids:
             refs.append(
                 {
@@ -393,7 +392,75 @@ async def resolve_gadget_context(
             raise ValidationFailedError(
                 _selection_detail("selection_too_large", "Selection exceeds the evidence limit")
             )
+    return sources, refs, selection_fences
 
+
+async def resolve_gadget_context(
+    session: AsyncSession,
+    context: dict[str, _Any] | None,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+) -> dict[str, _Any]:
+    """Normalize gadget selections to JSON-safe refs and owner-derived source fences.
+
+    Every item is re-resolved through Documents' active current-version and provider-scope policy at
+    send time. Persisted IDs use JSON strings; worker intake reparses typed refs and revalidates each
+    captured generation/scope before reading, reranking, remote egress, or streaming callbacks.
+
+    A selection with ``anchor: true`` must hold exactly one item. It resolves like an exact selection
+    but returns ``selected_only: False``, a server-derived ``anchored: True`` so retrieval keeps
+    workspace search on, and no ``source_scope`` key. The omitted key makes ``turn_source_scope``
+    return ``None``, so retrieval and ``query_collected_data`` both treat the turn as unscoped
+    (whole workspace), like plain chat. Anchored selections store ``selection_fences`` only for the
+    local-only refusal and web-search scoping; they are not used for exact read/stream revalidation,
+    where only the source fence snapshot applies. Client-sent ``anchored`` and
+    ``selected_only`` keys are never copied through. Read-only; raises ``DomainError`` subclasses
+    (422 invalid/too large/anchor with several items, 409 stale/unavailable).
+    """
+    if not context:
+        return {}
+    if context.get("kind") == "gadget":
+        return await _resolve_gadget_instance_context(
+            session,
+            context,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    if context.get("kind") != "selection":
+        # These server-derived flags are reserved for validated selections; a client cannot set them.
+        # Strip server-reserved keys: "selected_only", "anchored" and every "_"-prefixed private key.
+        return {
+            key: value
+            for key, value in context.items()
+            if key not in ("selected_only", "anchored") and not key.startswith("_")
+        }
+    selections = _parse_selection_items(context.get("items"))
+    # Anchor mode is a request for less restriction, so it is honoured only for one record.
+    anchor = context.get("anchor") is True
+    if anchor and len(selections) != 1:
+        raise ValidationFailedError(
+            _selection_detail(
+                "anchor_requires_single_item", "An anchored selection must contain exactly one item"
+            )
+        )
+
+    sources, refs, selection_fences = await _resolve_selection_items(
+        session,
+        selections,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        anchor=anchor,
+    )
+
+    if anchor:
+        # No ``source_scope`` key: an empty list would read as "no sources" in ``_allowed_sources``.
+        return {
+            "selected_refs": refs,
+            "selection_fences": [fence.model_dump(mode="json") for fence in selection_fences],
+            "selected_only": False,
+            "anchored": True,
+        }
     return {
         "source_scope": [str(source_id) for source_id in sources],
         "selected_refs": refs,

@@ -8,7 +8,7 @@ import { MAX_ATTACHMENTS } from './api';
 const upload = vi.hoisted(() => vi.fn());
 vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), uploadChatAttachment: upload, getChatAttachment: vi.fn() }));
 
-import { useChatAttachments } from './chat-attachments';
+import { useChatAttachments, withAttachments } from './chat-attachments';
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
@@ -80,5 +80,15 @@ describe('attachment sharing choice (C5)', () => {
     expect(result.current.sendBlock).toBeNull();
     expect(result.current.advisory).toContain('private');
     expect(result.current.showReattach).toBe(true);
+  });
+});
+
+describe('withAttachments anchor handling', () => {
+  it('drops the anchor flag once an attachment is merged, leaving an exact selection', () => {
+    const a = { sourceId: 's1', documentId: 'd1', documentVersionId: 'v1' };
+    const b = { sourceId: 's2', documentId: 'd2', documentVersionId: 'v2' };
+    const merged = withAttachments({ kind: 'selection', anchor: true, items: [a] }, [b]);
+    expect(merged).toEqual({ kind: 'selection', items: [a, b] });
+    expect(merged).not.toHaveProperty('anchor');
   });
 });

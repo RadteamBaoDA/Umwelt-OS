@@ -222,6 +222,7 @@ def _day_scope(context: dict[str, Any], metadata: dict[str, Any] | None) -> tupl
 _TASK_THREAD_DROPPED_KEYS = (
     "selected_refs",
     "selected_only",
+    "anchored",
     "selection_fences",
     "entity_ids",
     "date_context",
@@ -240,7 +241,7 @@ def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | N
     Malformed entries are dropped. Plain conversations are untouched and return False.
 
     Every other client retrieval override is dropped too (``selected_refs``, ``selected_only``,
-    ``selection_fences``, ``entity_ids``, ``date_context``, ``timezone`` and a client day ``date``), so the
+    ``anchored``, ``selection_fences``, ``entity_ids``, ``date_context``, ``timezone`` and a client day ``date``), so the
     thread retrieves only from the pinned sources. Call this before ``_day_scope`` or any other reader of
     ``context``; a day scope stored in conversation metadata may still apply afterwards.
     """

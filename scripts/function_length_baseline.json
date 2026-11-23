@@ -95,5 +95,5 @@
   "modules/tools/mcp_repository.py::save_connection": 130,
   "modules/tools/mcp_server.py::ScopedMcpServer.call_tool": 142,
   "modules/tools/public.py::revalidate_native_output_fences_many": 114,
-  "modules/translations/public.py::request_translations": 164
+  "modules/translations/public.py::request_translations": 162
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { AlignJustify, ChevronDown, Edit3, Eye, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { AlignJustify, ChevronDown, Edit3, Eye, MoreHorizontal, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -115,29 +115,59 @@ export function DashboardSwitcher(props: SwitcherProps) {
 }
 
 /**
- * Comfortable/Compact density toggle. The pre-paint script already set `data-density`; state is read from <html>
- * lazily (this header only renders after the session loads, client-side) and changes are applied and persisted through `applyDensity`.
+ * Comfortable/Compact density switch rendered as a header ⋯ menu item; its label shows the current state and
+ * selecting it flips the density. The pre-paint script already set `data-density`; state is read from <html>
+ * lazily (this header only renders after the session loads, client-side) and changes are applied and persisted
+ * through `applyDensity`. Must be rendered inside a DropdownMenuContent.
  */
 export function DensityToggle() {
   const t = useTranslations('dashboard');
   const [density, setDensity] = useState<DensityId>(() => (typeof document === 'undefined' ? 'comfortable' : readDensity()));
   const compact = density === 'compact';
   return (
-    <Button
-      type="button"
-      variant={compact ? 'default' : 'outline'}
-      aria-pressed={compact}
+    <DropdownMenuItem
+      className="gap-2 text-xs"
       aria-label={`${t('density.label')}: ${compact ? t('density.compact') : t('density.comfortable')}`}
-      title={t('density.label')}
-      onClick={() => {
+      onSelect={() => {
         const next = compact ? 'comfortable' : 'compact';
         applyDensity(next);
         setDensity(next);
       }}
     >
-      <AlignJustify className="w-4 h-4" aria-hidden="true" />
-      <span>{compact ? t('density.compact') : t('density.comfortable')}</span>
-    </Button>
+      <AlignJustify className="w-3.5 h-3.5" aria-hidden="true" />
+      <span>{`${t('density.label')}: ${compact ? t('density.compact') : t('density.comfortable')}`}</span>
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * Header ⋯ menu grouping the secondary dashboard settings: the density switch for everyone and "Manage topics"
+ * for workspace owners only (`onOpenManagement` is the only owner-gated action it triggers).
+ *
+ * @param props.isOwner Shows the Manage topics entry when true.
+ * @param props.onOpenManagement Opens the topics and highlights management dialog.
+ */
+export function HeaderMoreMenu({ isOwner, onOpenManagement }: { isOwner: boolean; onOpenManagement: () => void }) {
+  const t = useTranslations('dashboard');
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="icon" aria-label={t('moreActions')} title={t('moreActions')}>
+          <MoreHorizontal className="w-4 h-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DensityToggle />
+        {isOwner && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onOpenManagement} className="gap-2 text-xs">
+              <span>{t('manage.topicsAndHighlights')}</span>
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -147,8 +177,6 @@ interface HeaderProps extends SwitcherProps {
   summary: string | null;
   /** Overview greeting strip rendered under the title (omitted on other tabs). */
   greeting?: ReactNode;
-  /** Optional workspace content-translation popover rendered next to the density toggle. */
-  translationControl?: ReactNode;
   isOwner: boolean;
   isEditMode: boolean;
   canEditLayout: boolean;
@@ -200,8 +228,7 @@ export function DashboardHeader(props: HeaderProps) {
         {greeting && <div className="dash-greeting">{greeting}</div>}
         <StatuslineSummary summary={summary} />
       </div>
-      <DensityToggle />
-      {props.translationControl}
+      <HeaderMoreMenu isOwner={isOwner} onOpenManagement={props.onOpenManagement} />
       {!isAdminViewer && (
         <Button
           type="button"
@@ -212,11 +239,6 @@ export function DashboardHeader(props: HeaderProps) {
         >
           {isEditMode ? <Eye className="w-4 h-4" aria-hidden="true" /> : <Edit3 className="w-4 h-4" aria-hidden="true" />}
           <span>{isEditMode ? t('finishEditing') : t('toggleEdit')}</span>
-        </Button>
-      )}
-      {isOwner && (
-        <Button type="button" variant="outline" onClick={props.onOpenManagement}>
-          {t('manage.topicsAndHighlights')}
         </Button>
       )}
       {/* Terminal-only shortcut (hidden by CSS in the default skin); edit mode already has its own Add gadget button. */}

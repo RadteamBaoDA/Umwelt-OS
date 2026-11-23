@@ -1,12 +1,19 @@
 /** Wire contracts of /api/v1/translations and /api/v1/settings/translation. */
-export type ResourceType = 'news_story' | 'daily_brief' | 'document';
+export type ResourceType = 'news_story' | 'daily_brief' | 'document' | 'live_event';
 export type TranslationStatus = 'pending' | 'ready' | 'unchanged' | 'blocked' | 'failed';
 export type TranslationLanguage = 'vi' | 'en';
 
 export type TranslationSettings = { enabled: boolean; target_language: TranslationLanguage; configuration_revision: number };
 export type TranslationSettingsUpdate = { enabled: boolean; target_language: TranslationLanguage; expected_revision: number };
 
-export type TranslationItemRequest = { resource_type: ResourceType; resource_id: string; resource_revision: string };
+/** Inline snapshot the owner client sends for `live_event` items (the server keeps no copy of live events). */
+export type LiveEventSource = { title: string; summary: string | null };
+export type TranslationItemRequest = {
+  resource_type: ResourceType;
+  resource_id: string;
+  resource_revision: string;
+  source?: LiveEventSource;
+};
 export type TranslationPayload = { title?: string | null; excerpt?: string | null; content?: string | null };
 export type TranslationItemStatus = { resource_type: ResourceType; resource_id: string; status: TranslationStatus };
 export type TranslationBatchAccepted = { batch_id: string | null; items: TranslationItemStatus[]; settings: TranslationSettings };

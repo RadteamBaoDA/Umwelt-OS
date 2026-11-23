@@ -7,7 +7,7 @@ import { ApiError, workspaceGeneration } from '@/core/api';
 import { workspaceKeys } from '@/core/query-keys';
 import { useWorkspace as readWorkspace } from '@/core/workspace-context';
 import { fetchTranslationSettings, readTranslationBatch, submitTranslationBatch } from './api';
-import type { ResourceType, TranslationItemRequest, TranslationResult, TranslationSettings } from './types';
+import type { LiveEventSource, ResourceType, TranslationItemRequest, TranslationResult, TranslationSettings } from './types';
 
 /** Reason code stored on a batch that is still pending at the client deadline; the item stays retryable. */
 export const STILL_QUEUED_CODE = 'still_queued';
@@ -32,13 +32,14 @@ function readSafeWorkspace(): { selection?: { id: string } | null } | null {
 
 export const CHUNK_SIZE = 25;
 export const POLL_MS = 2000;
-export const MAX_POLL_MS = 60_000;
+/** After this long the item is still queued behind other model work: keep waiting, but poll less often. */
+export const FAST_POLL_WINDOW_MS = 60_000;
+export const SLOW_POLL_MS = 10_000;
+/** Hard client deadline; past it the item becomes `still_queued` and the button is clickable again. */
+export const MAX_POLL_MS = 10 * 60_000;
 
-export type TranslationTarget = { id: string; revision: string };
-/** Progress of the most recent Translate-all submission: `done` items no longer pending out of `total` submitted. */
-export type TranslationProgress = { done: number; total: number };
-/** Options for `translate`: `collection` marks a Translate-all run whose progress is exposed. */
-export type TranslateOptions = { collection?: boolean };
+/** One translatable resource; `source` is the inline text snapshot required only for `live_event`. */
+export type TranslationTarget = { id: string; revision: string; source?: LiveEventSource };
 export type ContentTranslation = {
   enabled: boolean;
   targetLanguage: 'vi' | 'en';
@@ -51,9 +52,7 @@ export type ContentTranslation = {
   /** Resource ids the server reported as already in the target language: render a note, not a Translate button. */
   unchanged: ReadonlySet<string>;
   /** Requests on-demand translation for the given subset (or all current `targets` when omitted). */
-  /** Progress of the active Translate-all run, or null when no collection run is still settling. */
-  progress: TranslationProgress | null;
-  translate: (subset?: TranslationTarget[], options?: TranslateOptions) => void;
+  translate: (subset?: TranslationTarget[]) => void;
 };
 
 /** Cache key of one translated resource revision: [workspace, generation, type, id, revision, settings revision]. */
@@ -104,7 +103,11 @@ function itemNeedsHydration(item: Seen): boolean {
   return false;
 }
 
-/** Polls a submitted translation batch every 2 s while the tab is visible until settled or `deadline`. */
+/**
+ * Polls a submitted translation batch while the tab is visible until settled or `deadline`: every 2 s for the
+ * first minute, then every 10 s. A slow model queue (translation shares workers with extraction) can take minutes,
+ * and the result should still land in the row without the user clicking again.
+ */
 async function pollBatchUntilSettled(params: {
   batchId: string;
   signal: AbortSignal;
@@ -113,9 +116,11 @@ async function pollBatchUntilSettled(params: {
   take: (items: Seen[]) => void;
 }): Promise<void> {
   const { batchId, signal, deadline, valid, take } = params;
+  const started = Date.now();
   let pending = true;
   while (pending && valid() && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    const interval = Date.now() - started < FAST_POLL_WINDOW_MS ? POLL_MS : SLOW_POLL_MS;
+    await new Promise((resolve) => setTimeout(resolve, interval));
     if (!valid() || Date.now() >= deadline) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') continue;
     const batch = await readTranslationBatch(batchId, signal);
@@ -145,6 +150,7 @@ async function runTranslationGroup(params: {
     resource_type: type,
     resource_id: t.id,
     resource_revision: t.revision,
+    ...(t.source ? { source: t.source } : {}),
   }));
   const accepted = await submitTranslationBatch(requests, csrfToken, signal);
   if (!valid()) return;
@@ -235,31 +241,6 @@ function settleStalePending(
 }
 
 /**
- * Derives the Translate-all run progress: how many of the run's submitted ids have a non-pending outcome in the
- * cache (ready, unchanged, blocked, failed or still_queued). Returns null once every id has settled, so the bar
- * and its label disappear on completion.
- *
- * @param run Ids submitted by the most recent collection run.
- * @param targets Currently loaded targets, in the same order as `entries`.
- * @param entries Cache observer results for `targets`.
- * @returns `{ done, total }` while the run is still settling, otherwise null.
- */
-function runProgress(
-  run: readonly string[],
-  targets: TranslationTarget[],
-  entries: ReadonlyArray<{ data?: unknown }>,
-): TranslationProgress | null {
-  const index = new Map(targets.map((t, i) => [t.id, i]));
-  let done = 0;
-  for (const id of run) {
-    const i = index.get(id);
-    const status = i === undefined ? undefined : (entries[i]?.data as TranslationResult | undefined)?.status;
-    if (status && status !== 'pending') done += 1;
-  }
-  return done >= run.length ? null : { done, total: run.length };
-}
-
-/**
  * Deduplicates requested targets, skipping items already resolved in cache or currently in flight.
  *
  * @param requested Targets asked for by the caller.
@@ -281,46 +262,16 @@ function selectTodoTargets(
 }
 
 /**
- * Targets with no cached outcome at all: not ready, not unchanged, and not already in an issue state.
- * Excluding issue states is what lets repeated "Translate all" clicks walk past blocked or failed items
- * instead of resubmitting the same first 25 forever; those items keep their per-item Translate button.
- *
- * @param targets Currently loaded targets, in display order.
- * @param translation Current derived state of the hook (results, issues, unchanged).
- * @returns Every target still awaiting a first attempt, in display order.
- */
-export function untranslatedTargets(
-  targets: readonly TranslationTarget[],
-  translation: Pick<ContentTranslation, 'results' | 'issues' | 'unchanged'>,
-): TranslationTarget[] {
-  return targets.filter((t) => !translation.results.has(t.id) && !translation.unchanged.has(t.id) && !translation.issues.has(t.id));
-}
-
-/**
- * The slice one "Translate all" click submits: at most CHUNK_SIZE of `untranslatedTargets`.
- *
- * @param targets Currently loaded targets, in display order.
- * @param translation Current derived state of the hook (results, issues, unchanged).
- * @returns Up to CHUNK_SIZE targets for the next submission.
- */
-export function nextUntranslatedBatch(
-  targets: TranslationTarget[],
-  translation: Pick<ContentTranslation, 'results' | 'issues' | 'unchanged'>,
-): TranslationTarget[] {
-  return untranslatedTargets(targets, translation).slice(0, CHUNK_SIZE);
-}
-
-/**
  * On-demand content translation for the given resources. Nothing is submitted on mount: callers invoke
  * `translate()` (for all targets) or `translate([target])` (for one item) when the user explicitly clicks
  * a Translate button. Results live in the shared react-query cache (one entry per resource revision), so
  * list cards and detail dialogs share them immediately. Cached DB hits returned by POST /batches without
- * a payload are hydrated immediately via GET /batches/{id}; pending items poll every 2 s while visible
- * for at most 60 s. Everything in flight is aborted on unmount, workspace switch, or settings change.
- * Request failures (429, 409, 404, others) are stored per target as `failed` with a reason code. An entry still
- * `pending` at the 60 s deadline becomes `failed` with `still_queued`; an entry left `pending` by an aborted run
- * is removed. Both leave the Translate button clickable. A Translate-all run (`translate(subset, { collection: true })`)
- * also exposes `progress` until every submitted id has settled.
+ * a payload are hydrated immediately via GET /batches/{id}; pending items poll while visible, every 2 s for the
+ * first minute and every 10 s after, for at most 10 min. Everything in flight is aborted on unmount, workspace
+ * switch, or settings change. Request failures (429, 409, 404, others) are stored per target as `failed` with a
+ * reason code. An entry still `pending` at the 10 min deadline becomes `failed` with `still_queued`; an entry left
+ * `pending` by an aborted run
+ * is removed. Both leave the Translate button clickable.
  *
  * @param type Resource type supported by the translation API.
  * @param targets Currently loaded resource references (id and revision).
@@ -363,11 +314,9 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
   const controllersRef = useRef<Set<AbortController>>(new Set());
   const inFlightIdsRef = useRef<Set<string>>(new Set());
   const [submittingIds, setSubmittingIds] = useState<ReadonlySet<string>>(() => new Set());
-  // Ids submitted by the latest Translate-all run; progress is derived from the cache, so this only records membership.
-  const [collectionRun, setCollectionRun] = useState<{ ids: string[] } | null>(null);
   // The disabled observer queries above do not reliably re-render this hook when a poll writes the cache mid-run
   // (seen in tests: a ready item stayed invisible until the whole run settled). Each cache write bumps this counter so
-  // results and Translate-all progress appear as each poll lands, not only when the run ends.
+  // results appear as each poll lands, not only when the run ends.
   const [, bumpRender] = useReducer((n: number) => n + 1, 0);
 
   // Abort every in-flight batch when the workspace, resource type, or settings revision changes (or on unmount).
@@ -379,19 +328,17 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
       controllers.clear();
       inFlight.clear();
       setSubmittingIds(new Set());
-      setCollectionRun(null);
     };
   }, [scopeKey, enabled]);
 
   const translate = useCallback(
-    (subset?: TranslationTarget[], options?: TranslateOptions) => {
+    (subset?: TranslationTarget[]) => {
       if (!enabled || !workspaceId) return;
       const generation = workspaceGeneration();
       const todo = selectTodoTargets(subset ?? targets, inFlightIdsRef.current, (item) =>
         queryClient.getQueryData<TranslationResult>(keyOf(item, generation)),
       );
       if (todo.length === 0) return;
-      if (options?.collection) setCollectionRun({ ids: todo.map((t) => t.id) });
 
       const controller = new AbortController();
       controllersRef.current.add(controller);
@@ -437,8 +384,7 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
     [enabled, workspaceId, targets, queryClient, keyOf, type, csrfToken],
   );
 
-  const progress = collectionRun && enabled ? runProgress(collectionRun.ids, targets, entries) : null;
-  return { enabled, targetLanguage, ...deriveTranslationState({ targets, entries, enabled, submittingIds }), progress, translate };
+  return { enabled, targetLanguage, ...deriveTranslationState({ targets, entries, enabled, submittingIds }), translate };
 }
 
 /**

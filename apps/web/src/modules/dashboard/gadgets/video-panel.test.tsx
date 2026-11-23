@@ -7,7 +7,7 @@ import { getCatalog } from '@locales';
 import { VideoPanel } from './video-panel';
 
 const mocks = vi.hoisted(() => ({ list: vi.fn(), interact: vi.fn(), ask: vi.fn(), submit: vi.fn() }));
-// Translation api: settings enabled so the collection bar renders; submit records what "Translate all" sends.
+// Translation api: settings enabled so the collection bar renders; submit records what a per-item Translate sends.
 vi.mock('../../translations/api', () => ({
   fetchTranslationSettings: vi.fn(async () => ({ enabled: true, target_language: 'vi', configuration_revision: 1 })),
   submitTranslationBatch: mocks.submit,
@@ -121,7 +121,7 @@ describe('VideoPanel', () => {
     expect(screen.getByText('Media a')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
     expect(mocks.ask).toHaveBeenCalledWith({
-      context: { kind: 'selection', items: [{ sourceId: 's1', documentId: 'a', documentVersionId: 'a-v1' }] },
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's1', documentId: 'a', documentVersionId: 'a-v1' }] },
     });
     expect(JSON.stringify(mocks.ask.mock.calls)).not.toContain('Projection excerpt');
   });
@@ -166,7 +166,7 @@ describe('VideoPanel', () => {
     expect(screen.queryByText('Could not load more items. Try again.')).toBeNull();
   });
 
-  it('Translate all in the collection bar submits the loaded items for translation', async () => {
+  it('offers no bulk translate in the collection bar', async () => {
     mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
     mocks.submit.mockResolvedValue({
       batch_id: null,
@@ -175,8 +175,8 @@ describe('VideoPanel', () => {
     });
     renderPanel(['s1']);
     await screen.findByText('Media a');
-    fireEvent.click(await screen.findByRole('button', { name: 'Translate all' }));
-    await waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
-    expect(mocks.submit.mock.calls[0][0]).toEqual([{ resource_type: 'document', resource_id: 'a', resource_revision: 'a-v1' }]);
+    expect(await screen.findByText('Media a')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Translate all' })).toBeNull();
+    expect(mocks.submit).not.toHaveBeenCalled();
   });
 });

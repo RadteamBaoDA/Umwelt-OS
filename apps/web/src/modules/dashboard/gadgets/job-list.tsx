@@ -14,6 +14,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
 import { parseJobPosting, type JobPosting, type JobPostingInput } from './job-posting';
+import { AskRecordButton } from './ask-record-button';
 import {
   CollectionTranslationBar,
   ItemTranslateButton,
@@ -49,6 +50,19 @@ function buildPostings(items: JobPostingInput[]): JobPosting[] {
 }
 
 /**
+ * Anchored Ask AI for one posting. Renders only when the posting carries its full document identity (the
+ * projection always supplies it; the guard covers a partial parse), and the shared button applies owner gating.
+ *
+ * @param props.posting Parsed posting whose `sourceId`, `documentId` and `documentVersionId` identify the record.
+ * @returns The Ask AI button, or `null` when any identity id is missing.
+ */
+function JobAskAction({ posting }: { posting: JobPosting }) {
+  const { sourceId, documentId, documentVersionId } = posting;
+  if (!sourceId || !documentId || !documentVersionId) return null;
+  return <AskRecordButton record={{ sourceId, documentId, documentVersionId }} />;
+}
+
+/**
  * Scrollable job table for the current page with a show-more control.
  *
  * @param p.more Show-more state over the current page's postings (first rows plus expansion).
@@ -75,7 +89,7 @@ function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<J
           {more.visible.map((p, index) => {
             const displayTitle = (p.documentId ? translation.shown(p.documentId)?.title : undefined) ?? p.title;
             return (
-              <TableRow key={`${p.url ?? p.title}-${index}`}>
+              <TableRow key={`${p.url ?? p.title}-${index}`} className="group/item">
                 <TableCell className="max-w-64 whitespace-normal font-medium">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {p.url ? (
@@ -92,6 +106,7 @@ function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<J
                         title={displayTitle}
                       />
                     ) : null}
+                    <JobAskAction posting={p} />
                   </div>
                 </TableCell>
                 <TableCell>{p.company ?? dash}</TableCell>
