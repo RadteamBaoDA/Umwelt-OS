@@ -8,6 +8,7 @@ is logged; only counts and latency are recorded.
 
 import asyncio
 import contextlib
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -46,6 +47,8 @@ from modules.translations.schemas import (
     TranslationPayload,
 )
 from modules.translations.service import ROLE, TranslationBlocked, content_hash, translate_input
+
+logger = logging.getLogger(__name__)
 
 LEASE_SECONDS = 120
 SLOT_TTL_SECONDS = 120
@@ -562,7 +565,10 @@ async def translate_content(ctx: dict[str, object], translation_id: str) -> None
             await _retry_or_fail(factory, claim, exc.code)
         else:
             await _block(factory, claim, exc.code)
-    except (ModelGatewayError, OSError, TimeoutError):
+    except (ModelGatewayError, OSError, TimeoutError) as exc:
+        # The row only keeps the generic code; log the exception type (never its message, which may carry
+        # provider URLs or content) so a failing provider/model is diagnosable.
+        logger.warning("Translation transport failure id=%s error=%s", claim.id, type(exc).__name__)
         await _retry_or_fail(factory, claim, "transport_error")
     except (DomainError, HTTPException):
         await _block(factory, claim, "stale_request")
