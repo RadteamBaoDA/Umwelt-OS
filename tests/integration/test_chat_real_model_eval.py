@@ -59,6 +59,8 @@ from tests.integration.chat_eval.grading import (
     scope_leak,
     summarize_recall,
 )
+from tests.integration.chat_eval.planted import PLANTED_PATH, load_planted, seed_planted
+from tests.integration.chat_eval.seed_all import seed_all
 from tests.integration.test_chat_collected_data_matrix import (  # noqa: F401  # fixture + seed helpers
     FLAG,
     TZ,
@@ -402,8 +404,9 @@ def _grade(
 ) -> dict[str, Any]:
     """Apply every criterion; ``None`` means not applicable. Pure.
 
-    ``key_map`` resolves case keys (``gold_keys``, ``forbid_keys``) to document version id strings. It is empty
-    until the matrix seed publishes its ids, so gold and forbidden sets are empty and recall is None.
+    ``key_map`` resolves case keys (``gold_keys``, ``forbid_keys``) to document version id strings (the
+    ``EvalSeed.key_map`` from ``eval_seed``). A key missing from the map is ignored, so the gold and
+    forbidden sets shrink to the resolvable keys and recall is None when none resolve.
     ``scope`` is the case's source-id allow-list from ``scope_ids`` (None when unscoped); any retrieved source
     outside it is a scope leak. Retrieval is the union of SQL-row ids and the turn's evidence; answer recall
     uses the kept citations.
@@ -475,9 +478,41 @@ def _passed(criteria: Mapping[str, Any]) -> bool:
     )
 
 
+# --------------------------------------------------------------------------- seeding
+@dataclass(frozen=True)
+class EvalSeed:
+    """Everything the eval run needs from the seed: the matrix (with fixture and planted sources), the
+    planted key -> document_version_id map, and the providers that were not seeded (with reasons)."""
+
+    matrix: Matrix
+    key_map: dict[str, str]
+    not_seeded: list[dict[str, str]]
+
+
+_EVAL_SEED: EvalSeed | None = None  # per-session cache: committed rows persist between tests
+
+
+@pytest.fixture
+async def eval_seed(
+    matrix: Matrix,  # noqa: F811  # imported fixture
+    ready_owner_client: httpx.AsyncClient,
+    committed_engine: AsyncEngine,
+) -> EvalSeed:
+    """Seed every fixture provider and the planted gold once per session, after the matrix seed."""
+    global _EVAL_SEED
+    if _EVAL_SEED is None:
+        not_seeded = await seed_all(ready_owner_client, committed_engine, matrix)
+        key_map = await seed_planted(
+            ready_owner_client, committed_engine, matrix, load_planted(PLANTED_PATH)
+        )
+        _EVAL_SEED = EvalSeed(matrix, key_map, not_seeded)
+    return _EVAL_SEED
+
+
 # --------------------------------------------------------------------------- the run
 async def test_real_model_eval(
     matrix: Matrix,  # noqa: F811  # imported fixture
+    eval_seed: EvalSeed,
     committed_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -545,7 +580,13 @@ async def test_real_model_eval(
                 )
                 entry |= {
                     "status": "completed",
-                    "criteria": _grade(case, out, rec, scope=scope_ids(case, matrix.sources)),
+                    "criteria": _grade(
+                        case,
+                        out,
+                        rec,
+                        key_map=eval_seed.key_map,
+                        scope=scope_ids(case, matrix.sources),
+                    ),
                     "answer": out["answer"],
                     "tool_args": [c["args"] for c in rec.tool_calls],
                     "tool_results": [
@@ -571,6 +612,7 @@ async def test_real_model_eval(
         "clock_utc": datetime.now(UTC).isoformat(),
         "summary": _summary(ordered),
         "cases": ordered,
+        "not_seeded": eval_seed.not_seeded,
     }
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORT_DIR / f"report-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
