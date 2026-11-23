@@ -172,3 +172,58 @@ describe('story list log translation', () => {
     }
   });
 });
+
+describe('story list renderStoryAction', () => {
+  const oneStory = [
+    {
+      id: 'row-1',
+      title: 'Row story',
+      excerpt: '',
+      source_count: 1,
+      evidence_count: 1,
+      observed_at: '2026-11-03T10:00:00Z',
+      relevance: null,
+      incomplete_reasons: [],
+      evidence: [],
+      translation_revision: null,
+    },
+  ];
+  const renderWithAction = (embedded: boolean, withAction: boolean) => {
+    vi.mocked(fetchStories).mockResolvedValueOnce({ items: oneStory, next_cursor: null, incomplete_reasons: [] } as never);
+    return render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <StoryList
+            sourceIds={['s1']}
+            embedded={embedded}
+            instanceId="row-action"
+            onSelectStory={() => undefined}
+            {...(withAction ? { renderStoryAction: (story) => <span data-testid="story-action">{`ask-${story.id}`}</span> } : {})}
+          />
+        </QueryClientProvider>
+      </NextIntlClientProvider>,
+    );
+  };
+
+  it('renders the action next to the translate control in the default row layout', async () => {
+    renderWithAction(false, true);
+    const action = await screen.findByTestId('story-action');
+    expect(action.textContent).toBe('ask-row-1');
+    expect(action.closest('button')).toBeNull();
+  });
+
+  it('renders the action in the embedded log row outside the title button', async () => {
+    renderWithAction(true, true);
+    const row = await screen.findByTestId('news-log-row');
+    const action = screen.getByTestId('story-action');
+    expect(row.contains(action)).toBe(true);
+    expect(action.closest('button')).toBeNull();
+    expect(action.closest('.story-log-title')).toBeNull();
+  });
+
+  it('renders no action when the prop is not passed', async () => {
+    renderWithAction(false, false);
+    await screen.findByText('Row story');
+    expect(screen.queryByTestId('story-action')).toBeNull();
+  });
+});

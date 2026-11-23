@@ -48,6 +48,11 @@ export type StoryListProps = {
   instanceId?: string;
   /** Resolved names of `sourceIds` for the source tabs (embedded mode, 2-6 sources). */
   sourceNames?: { id: string; name: string }[];
+  /**
+   * Optional host-supplied action rendered beside each story's Translate control (both row layouts). Hosts use it to
+   * attach per-story controls without this module importing them; it sits outside the selection button.
+   */
+  renderStoryAction?: (story: Story) => ReactNode;
   onSelectStory: (storyId: string, trigger: HTMLButtonElement) => void;
 };
 
@@ -184,6 +189,7 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Attribution story={story} />
         <StoryTranslateControl vm={vm} story={story} />
+        {vm.renderStoryAction?.(story)}
       </div>
       <StoryRowIssue vm={vm} storyId={story.id} />
     </li>
@@ -237,6 +243,7 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
       {/* Own line under the title (outside the title button), so on-demand translation stays reachable in the log. */}
       <span className="story-log-actions">
         <StoryTranslateControl vm={vm} story={story} />
+        {vm.renderStoryAction?.(story)}
         <StoryRowIssue vm={vm} storyId={story.id} />
       </span>
     </li>
@@ -500,6 +507,7 @@ function useStoryListData(props: StoryListProps) {
     noSources = false,
     instanceId,
     sourceNames,
+    renderStoryAction,
     onSelectStory,
   } = props;
   const t = useTranslations('news');
@@ -548,6 +556,7 @@ function useStoryListData(props: StoryListProps) {
     sourceTab,
     setSourceTab,
     sourceNames,
+    renderStoryAction,
     onSelectStory,
   };
 }
