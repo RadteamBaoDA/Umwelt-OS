@@ -10,7 +10,7 @@ through AI settings in that disposable database and are never printed, logged or
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -39,7 +39,7 @@ class Endpoint:
 
     base_url: str
     model: str
-    api_key: str
+    api_key: str = field(repr=False)  # secret: kept out of reprs and pytest tracebacks
 
 
 @dataclass(frozen=True)

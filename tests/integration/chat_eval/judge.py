@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -65,7 +65,7 @@ class JudgeConfig:
 
     base_url: str
     model: str
-    api_key: str
+    api_key: str = field(repr=False)  # secret: kept out of reprs and pytest tracebacks
 
 
 def judge_config(env: Mapping[str, str]) -> JudgeConfig | None:
