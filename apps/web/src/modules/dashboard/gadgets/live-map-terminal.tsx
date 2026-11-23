@@ -12,6 +12,8 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { LIVE_TAG_KEY, LIVE_TAGS } from '../live-feed/sources';
 import type { StoredEvent } from '../live-feed/store';
 import { safeLiveLink } from '../live-map-data';
+import { ItemTranslateButton } from '@/modules/translations';
+import { useTranslatedEvent } from '../live-feed/translation-target';
 import { eventKind } from './event-kind';
 
 /**
@@ -144,7 +146,9 @@ export function LiveMapTerminalFilters({
 
 /**
  * One terminal event row `HH:MM  KIND  title  #tag`: the title button selects the event on the map, and the
- * provider links are icon-only anchors (accessible names, no visible "Open event" text).
+ * provider links are icon-only anchors (accessible names, no visible "Open event" text). For an owner's NEWS event
+ * (translation context present) the title shows the translated text once ready and the links cell starts with the
+ * per-item Translate control (idle button revealed on row hover, any state always visible).
  *
  * @param props.onSelect Called with the event key when the title is pressed.
  */
@@ -162,19 +166,21 @@ export function TerminalEventRow({ event, onSelect }: { event: StoredEvent; onSe
     [display.locale, display.timezone],
   );
   const kind = eventKind(event);
+  const tr = useTranslatedEvent(event);
   const href = safeLiveLink(event.url ?? null);
   const time = event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? event.observed_at : null;
   return (
-    <li className="live-event-row live-event-row-term">
+    <li className="live-event-row live-event-row-term group/item">
       {time ? <time dateTime={time}>{clock.format(new Date(time))}</time> : <span>{t('liveMap.timeUnknown')}</span>}
       <span className="live-event-kind" style={{ color: kind.tone }}>
         {kind.label}
       </span>
-      <button type="button" className="live-event-title" title={event.title} onClick={() => onSelect(event.key)}>
-        {event.title}
+      <button type="button" className="live-event-title" title={tr.title} onClick={() => onSelect(event.key)}>
+        {tr.title}
       </button>
       <span className="live-event-source">{event.source}</span>
       <span className="live-event-links">
+        {tr.controller && <ItemTranslateButton controller={tr.controller} target={tr.target} title={event.title} />}
         {href && (
           <a href={href} target="_blank" rel="noreferrer" aria-label={t('liveMap.openEvent')} title={t('liveMap.openEvent')}>
             <ExternalLink className="h-3 w-3" aria-hidden="true" />

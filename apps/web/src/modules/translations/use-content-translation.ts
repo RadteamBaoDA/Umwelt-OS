@@ -7,7 +7,7 @@ import { ApiError, workspaceGeneration } from '@/core/api';
 import { workspaceKeys } from '@/core/query-keys';
 import { useWorkspace as readWorkspace } from '@/core/workspace-context';
 import { fetchTranslationSettings, readTranslationBatch, submitTranslationBatch } from './api';
-import type { ResourceType, TranslationItemRequest, TranslationResult, TranslationSettings } from './types';
+import type { LiveEventSource, ResourceType, TranslationItemRequest, TranslationResult, TranslationSettings } from './types';
 
 /** Reason code stored on a batch that is still pending at the client deadline; the item stays retryable. */
 export const STILL_QUEUED_CODE = 'still_queued';
@@ -38,7 +38,8 @@ export const SLOW_POLL_MS = 10_000;
 /** Hard client deadline; past it the item becomes `still_queued` and the button is clickable again. */
 export const MAX_POLL_MS = 10 * 60_000;
 
-export type TranslationTarget = { id: string; revision: string };
+/** One translatable resource; `source` is the inline text snapshot required only for `live_event`. */
+export type TranslationTarget = { id: string; revision: string; source?: LiveEventSource };
 export type ContentTranslation = {
   enabled: boolean;
   targetLanguage: 'vi' | 'en';
@@ -149,6 +150,7 @@ async function runTranslationGroup(params: {
     resource_type: type,
     resource_id: t.id,
     resource_revision: t.revision,
+    ...(t.source ? { source: t.source } : {}),
   }));
   const accepted = await submitTranslationBatch(requests, csrfToken, signal);
   if (!valid()) return;

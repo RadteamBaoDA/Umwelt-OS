@@ -76,6 +76,23 @@ describe('useContentTranslation', () => {
     ).toBe(true);
   });
 
+  it('forwards the inline live_event source in the POST body items', async () => {
+    api.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_id: string }>) =>
+      accepted(items.map((i) => ({ resource_id: i.resource_id, status: 'unchanged' }))),
+    );
+    const target = { id: 'e1', revision: 'rev', source: { title: 'Hello', summary: null } };
+    const { result } = renderHook(() => useContentTranslation('live_event', [target]), { wrapper });
+    await settle();
+    await settle();
+    act(() => {
+      result.current.translate();
+    });
+    await settle();
+    expect(api.submitTranslationBatch.mock.calls[0][0]).toEqual([
+      { resource_type: 'live_event', resource_id: 'e1', resource_revision: 'rev', source: { title: 'Hello', summary: null } },
+    ]);
+  });
+
   it('hydrates DB cache hits (status=ready without payload) and cached blocked error codes immediately via readTranslationBatch', async () => {
     api.submitTranslationBatch.mockResolvedValue(
       accepted([
@@ -143,7 +160,10 @@ describe('useContentTranslation', () => {
 
   it('keeps polling past the first minute and shows a result that lands later, without resubmitting', async () => {
     api.submitTranslationBatch.mockResolvedValue(accepted([{ resource_id: 's0', status: 'pending' }]));
-    const pending = { batch_id: 'b1', items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }] };
+    const pending = {
+      batch_id: 'b1',
+      items: [{ resource_type: 'news_story', resource_id: 's0', status: 'pending', original_revision: 'r' }],
+    };
     api.readTranslationBatch.mockResolvedValue(pending);
     const { result } = renderHook(() => useContentTranslation('news_story', ids(1)), { wrapper });
     await settle();

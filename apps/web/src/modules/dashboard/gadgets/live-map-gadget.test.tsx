@@ -9,7 +9,19 @@ const workspace = vi.hoisted(() => ({ isOwner: true }));
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: 'workspace' }, isOwner: workspace.isOwner }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 const request = vi.hoisted(() => vi.fn());
-vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, apiRequest: request, ApiError: class extends Error {} }));
+vi.mock('@/core/api', () => ({
+  workspaceGeneration: () => 1,
+  retrySessionConflict: () => false,
+  apiRequest: request,
+  ApiError: class extends Error {},
+}));
+const translationApi = vi.hoisted(() => ({
+  fetchTranslationSettings: vi.fn(),
+  submitTranslationBatch: vi.fn(),
+  readTranslationBatch: vi.fn(),
+}));
+vi.mock('@/modules/translations/api', () => translationApi);
+vi.mock('@/core/app-shell/workspace-session', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 import { LiveMapGadget, LiveMapOverview } from './live-map-gadget';
 import { LiveEventLegend } from './live-map-legend';
 import type { StoredEvent } from '../live-feed/store';
@@ -379,5 +391,97 @@ describe('live map overview engine control', () => {
     fireEvent.click(flat);
     expect(flat.getAttribute('aria-pressed')).toBe('true');
     expect(globe.getAttribute('aria-pressed')).toBe('false');
+  });
+});
+
+describe('live map per-item translation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    request.mockReset();
+    workspace.isOwner = true;
+  });
+  /** Renders the gadget with one proxied provider returning a single event titled "Headline". */
+  const renderOne = async (provider: string, tags: string[]) => {
+    let observe: IntersectionObserverCallback | undefined;
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: IntersectionObserverCallback) {
+          observe = cb;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    translationApi.fetchTranslationSettings.mockResolvedValue({ enabled: true, target_language: 'vi', configuration_revision: 1 });
+    translationApi.submitTranslationBatch.mockImplementation(async (items: Array<{ resource_type: string; resource_id: string }>) => ({
+      batch_id: null,
+      settings: { enabled: true, target_language: 'vi', configuration_revision: 1 },
+      items: items.map((i) => ({ ...i, status: 'ready', translation: { title: 'Tieu de', excerpt: null } })),
+    }));
+    request.mockImplementation(async (url: string) =>
+      url.includes('/config')
+        ? { revision: 1, terms_catalog: [{ id: provider, accepted: true }] }
+        : {
+            fetched_at: '2026-11-04T00:00:00Z',
+            truncated: false,
+            items: [
+              {
+                id: '1',
+                title: 'Headline',
+                source: 'S',
+                observed_at: null,
+                latitude: null,
+                longitude: null,
+                url: null,
+                summary: 'Body',
+                tags,
+              },
+            ],
+          },
+    );
+    const instance = { id: 'one', definition: { scope: { live_map_providers: [provider] }, filters: {} } } as GadgetInstance;
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{ dashboard: getCatalog('en-us', 'dashboard'), translations: getCatalog('en-us', 'translations') }}
+        >
+          <LiveMapGadget instance={instance} isEditMode={false} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(observe).toBeDefined());
+    act(() => observe?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+  };
+
+  it('lets the owner translate a NEWS row and shows the translated title', async () => {
+    await renderOne('lobsters', []);
+    await screen.findByText('Headline');
+    fireEvent.click(await screen.findByRole('button', { name: /Translate/ }));
+    expect(await screen.findByText('Tieu de')).toBeTruthy();
+    expect(translationApi.submitTranslationBatch.mock.calls[0][0][0]).toMatchObject({
+      resource_type: 'live_event',
+      source: { title: 'Headline', summary: 'Body' },
+    });
+  });
+  it('offers no Translate button on a non-NEWS row', async () => {
+    await renderOne('cisa_kev', ['cve']);
+    await screen.findByText('Headline');
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /Translate/ })).toBeNull();
+  });
+  it('offers no Translate button to members', async () => {
+    workspace.isOwner = false;
+    await renderOne('lobsters', []);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /Translate/ })).toBeNull();
   });
 });
