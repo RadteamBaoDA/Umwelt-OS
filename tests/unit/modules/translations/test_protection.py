@@ -55,6 +55,20 @@ def test_invented_tokens_rejected():
             p.reject_new_tokens("pay 5 USD", bad)
 
 
+def test_month_name_may_become_month_number():
+    src = "Minutes of the FOMC, October 27-28, 2026"
+    for ok in ("Biên bản FOMC, ngày 27-28 tháng 10 năm 2026", "Biên bản FOMC, 27-28/10/2026"):
+        p.reject_new_tokens(src, ok)
+    p.reject_new_tokens("due Sept. 5", "hạn 5/9")
+    for bad in ("Biên bản FOMC, ngày 27-28 tháng 11 năm 2026", "Biên bản, 27-29/10/2026"):
+        with pytest.raises(ValueError, match="new_token"):
+            p.reject_new_tokens(src, bad)
+    with pytest.raises(
+        ValueError, match="new_token"
+    ):  # no month name in the source: no new month number
+        p.reject_new_tokens("pay 5 USD", "trả 5 USD tháng 10")
+
+
 def test_marker_collision_gets_fresh_nonce(monkeypatch):
     seq = iter(["aaaaaaaa", "bbbbbbbb"])
     monkeypatch.setattr(p.secrets, "token_hex", lambda n: next(seq))

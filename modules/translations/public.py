@@ -58,7 +58,7 @@ from modules.translations.schemas import (
     TranslationInput as TranslationInput,
 )
 
-PROMPT_VERSION = "v3"  # T2 owns prompt text; bumping it invalidates every cache fingerprint. v3: wrapped payload + script guard.
+PROMPT_VERSION = "v4"  # T2 owns prompt text; bumping it invalidates every cache fingerprint. v3: wrapped payload + script guard. v4: dates may be re-formatted.
 MAX_NONTERMINAL_PER_WORKSPACE = 100
 MAX_BATCHES_PER_MINUTE = 20  # cost stays bounded by the queue cap and the cache
 RETRY_AFTER_SECONDS = "60"

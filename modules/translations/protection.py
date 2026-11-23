@@ -67,10 +67,35 @@ def _tokens(text: str) -> set[str]:
     return {m.group(0) for m in _PROTECTED_RE.finditer(text)}
 
 
+_PLAIN_NUMBER_RE = re.compile(r"[\d.,/:\-–]+")
+_MONTH_RE = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b"
+)  # capitalized only, so the verb "may" does not unlock 5
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _numbers(text: str) -> set[int]:
+    """Return every integer value in ``text`` plus the month number of each English month name."""
+    values = {int(d) for d in re.findall(r"\d+", text)}
+    return values | {_MONTHS.index(m.group(1)) + 1 for m in _MONTH_RE.finditer(text)}
+
+
 def reject_new_tokens(original: str, restored: str) -> None:
-    """R12: the model may not introduce a number, URL, citation or ticker absent from the source."""
-    if _tokens(restored) - _tokens(original):
-        raise ValueError("translation_new_token")
+    """R12: the model may not introduce a number, URL, citation or ticker absent from the source.
+
+    A plain number/date token (digits and separators only, no sign, currency or %) may be a
+    re-formatting of source values ("October 27-28, 2026" -> "27-28/10/2026"): it passes when each
+    of its integers occurs in the source, counting a month name as its month number. Anything
+    else new (URL, citation, ticker, amount, a value not in the source) raises ValueError.
+    """
+    new = _tokens(restored) - _tokens(original)
+    allowed = _numbers(original)
+    for token in new:
+        if (
+            not _PLAIN_NUMBER_RE.fullmatch(token)
+            or not {int(d) for d in re.findall(r"\d+", token)} <= allowed
+        ):
+            raise ValueError("translation_new_token")
 
 
 def split_markdown(text: str) -> list[tuple[str, str]]:
