@@ -266,8 +266,17 @@ async def test_second_transport_failure_is_terminal(monkeypatch):
     assert finish.await_args.kwargs["status"] == "failed"
 
 
-async def test_failed_row_with_same_fingerprint_is_not_retried_on_resubmit(monkeypatch):
+@pytest.mark.parametrize(
+    ("status", "code", "rerun"),
+    [("failed", "invalid_model_output", True), ("blocked", "privacy_blocked", False)],
+)
+async def test_resubmit_reruns_failed_row_but_keeps_blocked_cached(
+    monkeypatch, status, code, rerun
+):
+    """A new POST (an explicit click) re-runs a failed row once, charged to the limits; blocked stays."""
     monkeypatch.setattr(public, "lock_access_fence", AsyncMock())
+    limits = AsyncMock()
+    monkeypatch.setattr(public, "_enforce_translation_limits", limits)
     monkeypatch.setattr(public, "_AUTHORIZERS", {})
 
     async def ok(session, *, scope, resource_id, multi_workspace_enabled):
@@ -295,9 +304,10 @@ async def test_failed_row_with_same_fingerprint_is_not_retried_on_resubmit(monke
         content_hash="c" * 64,
         visibility_hash="v" * 64,
         config_hash=config,
-        status="failed",
-        error_code="transport_error",
+        status=status,
+        error_code=code,
         result=None,
+        attempt_count=1,
         expires_at=datetime(2999, 1, 1, tzinfo=UTC),
     )
     session = MagicMock(
@@ -316,7 +326,13 @@ async def test_failed_row_with_same_fingerprint_is_not_retried_on_resubmit(monke
         }
     )
     out = await public.request_translations(session, scope, request, multi_workspace_enabled=True)
-    assert failed.status == "failed" and out.enqueue_ids == [] and out.items[0].status == "failed"
+    if rerun:
+        assert (
+            failed.status == "pending" and failed.error_code is None and failed.attempt_count == 0
+        )
+        assert out.enqueue_ids == [failed.id] and limits.await_args.kwargs["new_work"] == 1
+    else:
+        assert failed.status == "blocked" and out.enqueue_ids == [] and limits.await_count == 0
     assert "enqueue_ids" not in out.model_dump()
 
 

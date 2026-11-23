@@ -351,6 +351,17 @@ def _admitted_status(
     )
 
 
+def _needs_retry(found: ContentTranslation, now: datetime) -> bool:
+    """Whether a cached row is re-run on a new POST: it expired, or it ended ``failed``.
+
+    Every POST /batches is an explicit owner click (nothing submits on mount; polling uses GET), so a
+    ``failed`` row (invalid model output, deadline, exhausted transport retries) gets one more model
+    call per click; the caller charges it to the rate limits. ``blocked`` rows (privacy, capability,
+    size, stale or unavailable resource) stay cached: asking again cannot change their outcome.
+    """
+    return found.expires_at <= now or found.status == "failed"
+
+
 def _reset_for_retry(found: ContentTranslation, now: datetime) -> None:
     """Return an expired cached row to a fresh ``pending`` state with a new 30-day horizon.
 
@@ -502,7 +513,7 @@ async def request_translations(
                 source_text=item.source.model_dump() if item.source else None,
             )
             fresh.append(found)
-        elif found.expires_at <= now:
+        elif _needs_retry(found, now):
             retry.append(found)
         elif found.status in ("ready", "unchanged"):
             count(

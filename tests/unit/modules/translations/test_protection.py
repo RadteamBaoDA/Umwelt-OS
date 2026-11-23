@@ -77,6 +77,16 @@ def test_month_name_may_become_month_number():
         with pytest.raises(ValueError, match="new_token"):
             p.reject_new_tokens(src, bad)
     p.reject_new_tokens("due Sept. 5 or March 3", "hạn 5/9 hoặc 3/3")
+    not_dates = [
+        ("Q3 rose in May 2026", "quý 3 tăng tháng 5/2026"),  # month/year: no day part
+        ("on October 40, 2026", "ngày 40/10/2026"),  # day out of range
+        ("on October 5, 2026", "ngày 5/10/2027"),  # year not in the source
+        ("on October 5, 2026", "ngày 5/11/2026"),  # month not named in the source
+        ("on October 5, 2026", "ngày 5:10"),  # time, not a date
+    ]
+    for src, bad in not_dates:
+        with pytest.raises(ValueError, match="new_token"):
+            p.reject_new_tokens(src, bad)
 
 
 def test_marker_collision_gets_fresh_nonce(monkeypatch):

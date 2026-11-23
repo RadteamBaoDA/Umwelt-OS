@@ -67,8 +67,6 @@ def _tokens(text: str) -> set[str]:
     return {m.group(0) for m in _PROTECTED_RE.finditer(text)}
 
 
-# Starts with a digit: a leading "-" would let the model flip a source value's sign.
-_PLAIN_NUMBER_RE = re.compile(r"\d[\d.,/:\-–]*")
 # A source numeric token: optional sign/currency, then a digit (not a URL, citation, code or ticker).
 _NUMERIC_TOKEN_RE = re.compile(r"(?:[+\-−])?(?:[$€£¥₫]\s?)?\d")
 _MONTHS = (
@@ -88,10 +86,12 @@ _MONTHS = (
 _MONTH_NUMBER = {name: n for n, names in enumerate(_MONTHS, 1) for name in names}
 # Exact, capitalized names or abbreviations only ("Marketing", "Junior" and the verb "may" do not match).
 _MONTH_RE = re.compile(r"\b(" + "|".join(sorted(_MONTH_NUMBER, key=len, reverse=True)) + r")\b")
+# Day (or day range) / month [/ four-digit year], with "/" or "." between parts: "5/9", "27-28/10/2026".
+_DATE_RE = re.compile(r"(\d{1,2}(?:[-–]\d{1,2})?)[/.](\d{1,2})(?:[/.](\d{4}))?")
 
 
-def _numbers(text: str) -> set[int]:
-    """Return the integers of ``text``'s numeric protected tokens plus each English month name's number.
+def _source_values(text: str) -> tuple[set[int], set[int]]:
+    """Return (integers of ``text``'s numeric protected tokens, month numbers of its English month names).
 
     Digits inside URLs, citations, code or tickers are not counted, so they cannot unlock a value.
     """
@@ -101,25 +101,44 @@ def _numbers(text: str) -> set[int]:
         if _NUMERIC_TOKEN_RE.match(m.group(0))
         for d in re.findall(r"\d+", m.group(0))
     }
-    return values | {_MONTH_NUMBER[m.group(1)] for m in _MONTH_RE.finditer(text)}
+    return values, {_MONTH_NUMBER[m.group(1)] for m in _MONTH_RE.finditer(text)}
+
+
+def _is_reformatted_date(token: str, values: set[int], months: set[int]) -> bool:
+    """Whether a new ``token`` only re-writes a source date with its month name as a number.
+
+    Accepted: a bare month number ("tháng 10" for "October"), or a day[-day]/month[/year] date whose
+    month comes from a source month name, whose days (1-31) and year are source numbers.
+    """
+    if re.fullmatch(r"\d{1,2}", token):
+        # ponytail: a bare month number cannot be told apart from the same number used elsewhere (an
+        # hour, a count); bounded to 1-12 values named as months in the source.
+        return int(token) in months
+    date = _DATE_RE.fullmatch(token)
+    if not date:
+        return False
+    days = [int(d) for d in re.findall(r"\d+", date.group(1))]
+    year = date.group(3)
+    return (
+        all(1 <= d <= 31 and d in values for d in days)
+        and int(date.group(2)) in months
+        and (year is None or int(year) in values)
+    )
 
 
 def reject_new_tokens(original: str, restored: str) -> None:
     """R12: the model may not introduce a number, URL, citation or ticker absent from the source.
 
-    A plain number/date token (digits and separators only, no sign, currency or %) may be a
-    re-formatting of source values ("October 27-28, 2026" -> "27-28/10/2026"): it passes when each
-    of its integers occurs in the source, counting a month name as its month number. Anything
-    else new (URL, citation, ticker, amount, a value not in the source) raises ValueError.
+    The one exception is a source date re-written with its month name as a number ("October 27-28,
+    2026" -> "27-28/10/2026" or "tháng 10"), checked by ``_is_reformatted_date``. Anything else new
+    (URL, citation, ticker, amount, signed value, a value not in the source) raises ValueError.
     """
     new = _tokens(restored) - _tokens(original)
-    allowed = _numbers(original)
-    for token in new:
-        if (
-            not _PLAIN_NUMBER_RE.fullmatch(token)
-            or not {int(d) for d in re.findall(r"\d+", token)} <= allowed
-        ):
-            raise ValueError("translation_new_token")
+    if not new:
+        return
+    values, months = _source_values(original)
+    if not all(_is_reformatted_date(token, values, months) for token in new):
+        raise ValueError("translation_new_token")
 
 
 def split_markdown(text: str) -> list[tuple[str, str]]:
