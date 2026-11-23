@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from tests.integration.chat_eval.planted import PLANTED_PATH, PlantedItem, load_planted
+from tests.integration.chat_eval.planted import (
+    PLANTED_PATH,
+    PlantedItem,
+    _records_for,
+    external_id_for,
+    load_planted,
+)
 
 
 def _items() -> list[PlantedItem]:
@@ -60,3 +67,20 @@ def test_load_planted_rejects_missing_required_field(tmp_path: Path) -> None:
     path.write_text(json.dumps({"items": [{"key": "only-key"}]}), encoding="utf-8")
     with pytest.raises(ValueError):
         load_planted(path)
+
+
+def test_planted_external_id_matches_mapper_provider_id() -> None:
+    """Each planted key's external_id equals the provider_id the mapper emits for its record.
+
+    JSON-feed mappers prefix the provider (``emsc_quakes:quake_00``), so the lookup must use the same
+    value the normalizer writes to ``documents.external_id``; the news mapper keeps the key as-is.
+    """
+    items = _items()
+    produced: set[str] = set()
+    for source_key in {i.source_key for i in items}:
+        group = [i for i in items if i.source_key == source_key]
+        produced.update(r.provider_id for r in _records_for(group, date(2026, 11, 16)))
+    for item in items:
+        assert external_id_for(item) in produced, item.key
+    media = next(i for i in items if i.provider == "tvmaze_schedule")
+    assert external_id_for(media) == f"tvmaze_schedule:{media.key}"

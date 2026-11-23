@@ -47,6 +47,8 @@ SETS = frozenset(
 _LANGS = frozenset({"en", "vi"})
 _REQUIRED = ("key", "set", "provider", "source_key", "title", "body", "lang", "published_at")
 _API_PROVIDERS = frozenset({"emsc_quakes", "tvmaze_schedule"})
+# Providers whose records come from json_feed.map_json_feed, which prefixes the identity with the provider.
+_JSON_FEED_PROVIDERS = frozenset({"emsc_quakes", "tvmaze_schedule"})
 _TVMAZE_FEED = JsonFeed(
     provider="tvmaze_schedule",
     publisher="TVMaze",
@@ -179,13 +181,25 @@ def _records_for(items: Sequence[PlantedItem], monday: date) -> list[IngestionRe
     return map_feed(provider, _atom_body(items), COLLECTED)
 
 
+def external_id_for(item: PlantedItem) -> str:
+    """Return the ``documents.external_id`` the normalizer stores for this planted item.
+
+    ``json_feed.map_json_feed`` builds the record identity as ``<provider>:<id>`` (quakes and media),
+    while the news mapper keeps the entry id verbatim. Keys are far below the 480-character limit where
+    ``news._stable_id`` would switch to a SHA-256 digest, so the id is never hashed here.
+    """
+    if item.provider in _JSON_FEED_PROVIDERS:
+        return f"{item.provider}:{item.key}"
+    return item.key
+
+
 async def _resolve_versions(
     engine: AsyncEngine, matrix: Matrix, items: Sequence[PlantedItem]
 ) -> dict[str, str]:
     """Map each planted key to the current document version id of its document in its source.
 
-    ``external_id`` is the record provider id, which is the planted key. Items with no document are
-    left out; the caller decides whether that is an error.
+    ``external_id`` is the record provider id as produced by the mapper (see ``external_id_for``).
+    Items with no document are left out; the caller decides whether that is an error.
     """
     out: dict[str, str] = {}
     async with engine.connect() as conn:
@@ -197,7 +211,7 @@ async def _resolve_versions(
                         "ON v.document_id = d.id AND v.version_number = d.current_version "
                         "WHERE d.source_id = :s AND d.external_id = :k"
                     ),
-                    {"s": str(matrix.sources[item.source_key]), "k": item.key},
+                    {"s": str(matrix.sources[item.source_key]), "k": external_id_for(item)},
                 )
             ).scalar_one_or_none()
             if row is not None:
