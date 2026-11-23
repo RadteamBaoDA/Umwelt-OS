@@ -187,7 +187,7 @@ def test_content_hash_depends_on_fields():
 def test_fingerprint_is_order_independent_and_part_sensitive():
     from modules.translations.public import PROMPT_VERSION, translation_fingerprint
 
-    assert PROMPT_VERSION == "v2"
+    assert PROMPT_VERSION == "v3"
     assert translation_fingerprint({"a": 1, "b": "x"}) == translation_fingerprint(
         {"b": "x", "a": 1}
     )
