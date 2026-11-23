@@ -91,6 +91,10 @@ class _Segment(BaseModel):
     content: str
 
 
+# Resource types translated as {"title","excerpt"}; the rest translate one "content" field.
+_TITLE_EXCERPT = ("news_story", "document", "live_event")
+
+
 def content_hash(source: TranslationInput) -> str:
     """Hash of exactly the text that would be sent."""
     body = json.dumps([source.resource_type, source.fields], sort_keys=True, ensure_ascii=False)
@@ -240,7 +244,7 @@ async def translate_input(
     not in the target script (an echo or an untranslated paraphrase of the source).
     """
     fields = source.fields
-    if source.resource_type in ("news_story", "document"):
+    if source.resource_type in _TITLE_EXCERPT:
         if len(fields["title"]) > MAX_TITLE or len(fields["excerpt"]) > MAX_EXCERPT:
             raise TranslationBlocked("input_too_large")
     elif len(fields["content"]) > MAX_BRIEF:
@@ -254,7 +258,7 @@ async def translate_input(
         local or (execution_config.privacy.allow_remote_reasoning and policy.reasoning_allowed)
     ):
         raise TranslationBlocked("privacy_blocked")
-    if source.resource_type not in ("news_story", "document"):
+    if source.resource_type not in _TITLE_EXCERPT:
         content = await _translate_brief(
             gateway,
             execution_config,

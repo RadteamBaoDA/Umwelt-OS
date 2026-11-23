@@ -25,6 +25,11 @@ _OWNERS = {
         "read_document_translation_input",
         "document_id",
     ),
+    "live_event": (
+        "modules.translations.live_events",
+        "read_live_event_translation_input",
+        "event_id",
+    ),
 }
 
 

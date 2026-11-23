@@ -30,7 +30,7 @@ from core.ids import uuid7
 
 RETENTION_DAYS = 30
 STATUSES = ("pending", "ready", "unchanged", "blocked", "failed")
-RESOURCE_TYPES = ("news_story", "daily_brief", "document")
+RESOURCE_TYPES = ("news_story", "daily_brief", "document", "live_event")
 _STATUS_SQL = ", ".join(f"'{value}'" for value in STATUSES)
 _RESOURCE_SQL = ", ".join(f"'{value}'" for value in RESOURCE_TYPES)
 
@@ -91,6 +91,8 @@ class ContentTranslation(Base):
     prompt_version: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Inline client snapshot ({"title","summary"}); live_event only, deleted with the row (<=30 days).
+    source_text: Mapped[dict[str, str | None] | None] = mapped_column(JSONB)
     error_code: Mapped[str | None] = mapped_column(String(64))
     # T3-reserved: durable work lease, global translation slot, attempt budget, next retry.
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

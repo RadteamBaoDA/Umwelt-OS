@@ -39,6 +39,7 @@ from modules.settings.public import (
     read_translation_settings_projection,
     save_translation_settings_cas,
 )
+from modules.translations.live_events import request_verdict
 from modules.translations.models import (
     ContentTranslation,
     TranslationBatch,
@@ -308,10 +309,15 @@ async def _authorize_items(
 
     Returns the owner verdict for admissible items, else an ``error_code``: ``resource_unavailable``
     (missing and unauthorized are deliberately indistinguishable) or ``stale_request`` (the
-    client's revision differs from the verdict).
+    client's revision differs from the verdict). ``live_event`` items are decided from their inline
+    source by ``request_verdict`` (owner only; the revision is recomputed server-side) because no
+    row exists on the first submit.
     """
     out: list[ResourceAuthorization | str] = []
     for item in request.items:
+        if item.resource_type == "live_event":
+            out.append(request_verdict(actor, item))
+            continue
         verdict = await _authorize(
             session,
             actor,
@@ -343,6 +349,18 @@ def _admitted_status(
         status=row.status,
         error_code=code,
     )
+
+
+def _reset_for_retry(found: ContentTranslation, now: datetime) -> None:
+    """Return an expired cached row to a fresh ``pending`` state with a new 30-day horizon.
+
+    Clears result, error, attempts, lease and schedule; mutates ``found`` in place (the caller's
+    transaction persists it). ``source_text`` is kept: the revision it hashes to is unchanged.
+    """
+    found.status, found.error_code, found.result = "pending", None, None
+    found.attempt_count, found.completed_at, found.next_attempt_at = 0, None, None
+    found.lease_token = found.lease_expires_at = None
+    found.expires_at = now + timedelta(days=30)
 
 
 def _merge_items(
@@ -481,6 +499,7 @@ async def request_translations(
                 prompt_version=PROMPT_VERSION,
                 status="pending",
                 attempt_count=0,
+                source_text=item.source.model_dump() if item.source else None,
             )
             fresh.append(found)
         elif found.expires_at <= now:
@@ -500,10 +519,7 @@ async def request_translations(
             new_work=len(fresh) + len(retry),
         )
     for found in retry:
-        found.status, found.error_code, found.result = "pending", None, None
-        found.attempt_count, found.completed_at, found.next_attempt_at = 0, None, None
-        found.lease_token = found.lease_expires_at = None
-        found.expires_at = now + timedelta(days=30)
+        _reset_for_retry(found, now)
     session.add_all(fresh)
     batch = TranslationBatch(
         workspace_id=actor.workspace_id,
