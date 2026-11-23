@@ -63,7 +63,7 @@ def _setup(
         def __init__(self, recheck: Any) -> None:
             self.recheck = recheck
 
-        async def embed(self, *_a: Any) -> Any:
+        async def embed(self, *_a: Any, before_send: Any) -> Any:
             await self.recheck()
             log.append("embed")
             return object()

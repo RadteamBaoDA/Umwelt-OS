@@ -211,6 +211,7 @@ async def _embed_claimed_chunk(
         mapping,
         ctx.original.policy,
         [claimed.content],
+        before_send=recheck_send,
     )
     values, returned_model = embedding_values(response, claimed.dimensions)
     return values, returned_model, source_generation

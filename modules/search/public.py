@@ -646,7 +646,7 @@ async def _embed_query_vector(
     if release_during_embed:
         await session.commit()
     response = await gateway(config, redis, recheck_send, scope=scope).embed(
-        "embedding", mapping, policy, [request.query]
+        "embedding", mapping, policy, [request.query], before_send=recheck_send
     )
     values, returned_model = embedding_values(response, generation.dimensions)
     if returned_model != generation.response_model_id:

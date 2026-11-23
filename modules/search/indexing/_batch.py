@@ -297,6 +297,7 @@ async def _embed_chunk_batch(
         ctx.original.mapping,
         ctx.original.policy,
         [chunk.content for chunk in chunks],
+        before_send=recheck_send,
     )
     vectors, returned_model = embedding_batch_values(response, len(chunks), chunks[0].dimensions)
     return _EmbeddedBatch(chunks, kept, vectors, returned_model)

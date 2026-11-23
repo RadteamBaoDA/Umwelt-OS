@@ -320,7 +320,7 @@ def _patch_generation_run(
         return FENCE, True, 3
 
     class FakeGateway:
-        async def embed(self, *_a: Any, **_k: Any) -> dict[str, Any]:
+        async def embed(self, *_a: Any, before_send: Any, **_k: Any) -> dict[str, Any]:
             seen_open.append(factory.open)
             return {"data": [{"embedding": [1.0, 2.0]}], "model": "embed"}
 
@@ -560,7 +560,7 @@ def _patch_denial(
     hook: list[Any] = []
 
     class Gateway:
-        async def embed(self, *_a: Any, **_k: Any) -> dict[str, Any]:
+        async def embed(self, *_a: Any, before_send: Any, **_k: Any) -> dict[str, Any]:
             await hook[0]()
             if embed_error is not None:
                 raise embed_error
@@ -822,7 +822,7 @@ async def test_search_send_denied_when_access_fence_changes(
         def __init__(self, before_send: Any) -> None:
             self.before_send = before_send
 
-        async def embed(self, *_a: Any, **_k: Any) -> Any:
+        async def embed(self, *_a: Any, before_send: Any, **_k: Any) -> Any:
             try:
                 await self.before_send()
             except PrivacyPolicyDenied as exc:

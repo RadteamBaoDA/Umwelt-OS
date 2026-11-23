@@ -95,7 +95,13 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
 
     class Gateway:
         async def embed(
-            self, _role: str, _mapping: Any, _policy: Any, inputs: list[str]
+            self,
+            _role: str,
+            _mapping: Any,
+            _policy: Any,
+            inputs: list[str],
+            *,
+            before_send: Any,
         ) -> dict[str, Any]:
             w.embed_inputs.append(list(inputs))
             if w.bad_response:
