@@ -1,7 +1,7 @@
 'use client';
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bookmark, Play, Search, Sparkles } from 'lucide-react';
+import { Bookmark, Play, Search } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
 import {
@@ -14,7 +14,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FeedSourceTabs } from '@/components/feed-source-tabs';
-import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-session';
 import { useWorkspace } from '@/core/workspace-context';
 import { formatDateTime } from '@/core/i18n';
@@ -23,6 +22,7 @@ import { safeHttpUrl } from '@/core/safe-url';
 import { documentKeys, listGadgetDocumentProjections, setGadgetDocumentInteraction } from '@/modules/knowledge';
 import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
+import { AskRecordButton } from './ask-record-button';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { ShowMoreButton, useShowMore } from './show-more';
 
@@ -104,7 +104,6 @@ function TerminalVideoFrame({ video }: { video: VideoItem }) {
 export function VideoPanel({ instance }: VideoPanelProps) {
   const daily = useTranslations('daily');
   const display = useDisplayPreferences();
-  const { openDrawer } = useChatController();
   const { isOwner } = useWorkspace();
   const session = useWorkspaceSession();
   const client = useQueryClient();
@@ -160,15 +159,6 @@ export function VideoPanel({ instance }: VideoPanelProps) {
       display={display}
       mutate={mutation.mutate}
       pending={mutation.isPending}
-      ask={(item) =>
-        isOwner &&
-        openDrawer({
-          context: {
-            kind: 'selection',
-            items: [{ sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id }],
-          },
-        })
-      }
     />
   );
 }
@@ -190,7 +180,6 @@ function VideoPanelView({
   display,
   mutate,
   pending,
-  ask,
 }: {
   sourceIds: string[];
   activeSource: string;
@@ -207,7 +196,6 @@ function VideoPanelView({
   display: ReturnType<typeof useDisplayPreferences>;
   mutate: (change: { item: VideoRecord; read?: boolean; bookmarked?: boolean }) => void;
   pending: boolean;
-  ask: (item: VideoRecord) => void;
 }) {
   const t = useTranslations('dashboard');
   // TanStack sets isError after a failed next-page fetch too, while earlier pages stay in `data`. The generic
@@ -258,7 +246,6 @@ function VideoPanelView({
               pending={pending}
               timestamp={item.published_at ?? item.observed_at}
               dateLabel={formatDateTime(item.published_at ?? item.observed_at, display.locale, display.timezone)}
-              ask={() => ask(item)}
               toggleRead={() => mutate({ item, read: !item.read_at })}
               toggleBookmark={() => mutate({ item, bookmarked: !item.bookmarked_at })}
               translation={translation}
@@ -355,7 +342,6 @@ function VideoRow({
   pending,
   timestamp,
   dateLabel,
-  ask,
   toggleRead,
   toggleBookmark,
   translation,
@@ -367,7 +353,6 @@ function VideoRow({
   pending: boolean;
   timestamp: string;
   dateLabel: string;
-  ask: () => void;
   toggleRead: () => void;
   toggleBookmark: () => void;
   translation: ItemTranslationController;
@@ -404,10 +389,10 @@ function VideoRow({
           />
           {isOwner && (
             <>
-              <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={ask}>
-                <Sparkles className="mr-1 size-3.5" />
-                {t('askAbout.message')}
-              </Button>
+              <AskRecordButton
+                record={{ sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id }}
+                className="h-7 px-2"
+              />
               <Button type="button" variant="ghost" size="sm" className="h-7 px-2" disabled={pending} onClick={toggleRead}>
                 {read ? t('markUnread') : t('markRead')}
               </Button>

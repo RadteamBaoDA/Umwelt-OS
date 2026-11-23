@@ -121,7 +121,7 @@ describe('VideoPanel', () => {
     expect(screen.getByText('Media a')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
     expect(mocks.ask).toHaveBeenCalledWith({
-      context: { kind: 'selection', items: [{ sourceId: 's1', documentId: 'a', documentVersionId: 'a-v1' }] },
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's1', documentId: 'a', documentVersionId: 'a-v1' }] },
     });
     expect(JSON.stringify(mocks.ask.mock.calls)).not.toContain('Projection excerpt');
   });

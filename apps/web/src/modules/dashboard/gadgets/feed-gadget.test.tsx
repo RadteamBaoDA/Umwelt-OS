@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 import { FeedGadget, type FeedStreamItem } from './feed-gadget';
 
-const mocks = vi.hoisted(() => ({ isOwner: true }));
+const mocks = vi.hoisted(() => ({ isOwner: true, openDrawer: vi.fn() }));
 
 vi.mock('@/modules/knowledge/api', () => ({
   documentKeys: { all: ['documents'] },
@@ -14,7 +14,7 @@ vi.mock('@/modules/knowledge/api', () => ({
   setGadgetDocumentInteraction: vi.fn(),
 }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
-vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: vi.fn() }) }));
+vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => ({ openDrawer: mocks.openDrawer }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: mocks.isOwner }) }));
 
@@ -64,6 +64,15 @@ describe('FeedGadget lead + list', () => {
   it('offers single-item Ask AI for a non-Telegram projection identity', () => {
     view([{ ...items[0]!, sourceId: 's1', documentVersionId: 'v1' }]);
     expect(screen.getByRole('button', { name: 'Ask AI' })).toBeTruthy();
+  });
+
+  it('sends an anchored one-item selection from a row Ask AI', async () => {
+    mocks.openDrawer.mockReset();
+    view([{ ...items[0]!, sourceId: 's1', documentVersionId: 'v1' }]);
+    await userEvent.click(screen.getByRole('button', { name: 'Ask AI' }));
+    expect(mocks.openDrawer).toHaveBeenCalledWith({
+      context: { kind: 'selection', anchor: true, items: [{ sourceId: 's1', documentId: 'a', documentVersionId: 'v1' }] },
+    });
   });
 
   it('hides the newly enabled non-Telegram Ask AI action from non-owners', () => {

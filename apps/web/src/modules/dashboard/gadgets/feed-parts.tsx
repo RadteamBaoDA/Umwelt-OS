@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { AskRecordButton } from './ask-record-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { FeedImage } from '@/components/feed-image';
 import { TitleBarSlot } from '@/components/gadget-title-slot';
@@ -74,16 +75,11 @@ function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowCont
       {showTranslate ? (
         <ItemTranslateButton controller={ctx.translation!} target={{ id: item.id, revision: item.documentVersionId! }} title={item.title} />
       ) : null}
-      {item.documentVersionId && item.sourceId && (ctx.isTelegram || ctx.isOwner) && (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 text-xs"
-          onClick={() => ctx.onAskAbout([{ sourceId: item.sourceId!, documentId: item.id, documentVersionId: item.documentVersionId! }])}
-        >
-          {t('askAbout.message')}
-        </Button>
+      {item.documentVersionId && item.sourceId && (
+        <AskRecordButton
+          record={{ sourceId: item.sourceId, documentId: item.id, documentVersionId: item.documentVersionId }}
+          allowNonOwner={ctx.isTelegram}
+        />
       )}
       {item.versionNumber !== undefined && (
         <Button
