@@ -56,6 +56,7 @@ from tests.integration.chat_eval.grading import (
     extract_row_ids,
     hidden_miss,
     min_recall_ok,
+    passed,
     recall,
     scope_ids,
     scope_leak,
@@ -71,6 +72,13 @@ from tests.integration.chat_eval.hybrid import (
     local_only_blocked,
     mask_secrets,
     retrieval_request,
+)
+from tests.integration.chat_eval.judge import (
+    judge,
+    judge_config,
+    load_env_file,
+    summarize_judge,
+    to_record,
 )
 from tests.integration.chat_eval.planted import PLANTED_PATH, load_planted, seed_planted
 from tests.integration.chat_eval.seed_all import seed_all
@@ -91,14 +99,7 @@ DEADLINE_S = 25 * 60.0  # cases not started by then are reported as skipped
 
 def _load_env() -> dict[str, str]:
     """Parse ``.env.e2e-real`` into a dict (empty when absent). Values are never logged."""
-    values: dict[str, str] = {}
-    if ENV_FILE.exists():
-        for raw in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, value = line.split("=", 1)
-                values[key.strip()] = value.strip().strip("\"'")
-    return values
+    return load_env_file(ENV_FILE)
 
 
 _ENV = _load_env()
@@ -484,20 +485,6 @@ def _grade(
     return criteria
 
 
-_DIAGNOSTIC = frozenset({"retrieval_recall", "answer_recall", "hidden_miss", "scope_leak"})
-
-
-def _passed(criteria: Mapping[str, Any]) -> bool:
-    """True when no pass/fail criterion is False and no scope leak was recorded.
-
-    Recall legs and ``hidden_miss`` are diagnostics and never fail a case on their own; a ``False``
-    ``scope_leak`` means no leak, so it is excluded from the all() check and only a ``True`` fails it.
-    """
-    return all(v is not False for k, v in criteria.items() if k not in _DIAGNOSTIC) and not (
-        criteria.get("scope_leak")
-    )
-
-
 # --------------------------------------------------------------------------- seeding
 @dataclass(frozen=True)
 class EvalSeed:
@@ -593,6 +580,7 @@ async def test_real_model_eval(
             await runtime.redis.aclose()
     report: dict[str, Any] = {
         "model": _ENV["E2E_REAL_MODEL"],
+        "judge": "on" if judge_config(_ENV) is not None else "off",
         "generated_at": datetime.now(UTC).isoformat(),
         "clock_utc": datetime.now(UTC).isoformat(),
         "summary": _summary([e for e in ordered if e["leg"] == "tool"]),
@@ -703,6 +691,8 @@ async def _run_all(
                     _run_turn(case, matrix, engine, hybrid=hybrid_arg), CASE_TIMEOUT_S
                 )
                 entry |= _outcome_entry(case, leg, out, rec, matrix, eval_seed)
+                if entry["status"] == "completed":
+                    await _add_judge(case, entry)
             except Exception as exc:  # noqa: BLE001  # a failing case is reported, never raised
                 entry |= {"status": "error", "error": _mask(f"{type(exc).__name__}: {exc}")[:400]}
             entry["seconds"] = round(time.monotonic() - t0, 1)
@@ -710,6 +700,22 @@ async def _run_all(
 
     await asyncio.gather(*(one(c, leg) for leg in legs for c in cases))
     return [results[(c.id, leg)] for leg in legs for c in cases]
+
+
+async def _add_judge(case: Case, entry: dict[str, Any]) -> None:
+    """Attach the report-only JEV verdict to a completed entry as ``entry["judge"]``.
+
+    Does nothing when the judge env is incomplete. Never raises: a judge failure is stored as an
+    ``invalid`` verdict with a masked error, so it cannot fail the case or the run.
+    """
+    try:
+        verdict = await judge(case, entry["answer"], _ENV)
+    except Exception as exc:  # noqa: BLE001  # report-only grader: a judge bug must not fail the case
+        error = _mask(f"{type(exc).__name__}: {exc}")[:300]
+        entry["judge"] = {"label": "", "probs": {}, "status": "invalid", "error": error}
+        return
+    if verdict is not None:
+        entry["judge"] = to_record(verdict)
 
 
 def _outcome_entry(
@@ -782,7 +788,7 @@ def _summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     by_cat: dict[str, dict[str, int]] = {}
     for e in done:
-        ok = _passed(e["criteria"])
+        ok = passed(e["criteria"])
         slot = by_cat.setdefault(e["category"], {"pass": 0, "total": 0})
         slot["total"] += 1
         slot["pass"] += int(ok)
@@ -803,7 +809,8 @@ def _summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "empty_case_correct": f"{sum(empties)}/{len(empties)}",
         "mean_query_rounds": round(sum(e["query_rounds"] for e in done) / max(len(done), 1), 2),
         "mean_model_rounds": round(sum(e["model_rounds"] for e in done) / max(len(done), 1), 2),
-        "fully_passed": sum(_passed(e["criteria"]) for e in done),
+        "fully_passed": sum(passed(e["criteria"]) for e in done),
         "by_category": by_cat,
         **summarize_recall(done),
+        **summarize_judge(entries),
     }

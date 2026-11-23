@@ -152,3 +152,17 @@ def summarize_recall(entries: list[dict[str, Any]]) -> dict[str, Any]:
             for cat, slot in by_cat.items()
         },
     }
+
+
+_DIAGNOSTIC = frozenset({"retrieval_recall", "answer_recall", "hidden_miss", "scope_leak"})
+
+
+def passed(criteria: Mapping[str, Any]) -> bool:
+    """True when no pass/fail criterion is False and no scope leak was recorded (pure).
+
+    Recall legs and ``hidden_miss`` are diagnostics and never fail a case on their own; a ``False``
+    ``scope_leak`` means no leak, so it is excluded from the all() check and only a ``True`` fails it.
+    """
+    return all(v is not False for k, v in criteria.items() if k not in _DIAGNOSTIC) and not (
+        criteria.get("scope_leak")
+    )
