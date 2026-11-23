@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -83,4 +83,18 @@ def test_planted_external_id_matches_mapper_provider_id() -> None:
     for item in items:
         assert external_id_for(item) in produced, item.key
     media = next(i for i in items if i.provider == "tvmaze_schedule")
-    assert external_id_for(media) == f"tvmaze_schedule:{media.key}"
+    assert external_id_for(media) == f"tvmaze:{900000 + int(media.key.split('_')[1])}"
+
+
+def test_media_rows_carry_release_date_attribute() -> None:
+    """Media seed rows go through the production TVMaze mapper, so release_date lands in source_fields."""
+    monday = date(2026, 11, 16)
+    media = [i for i in _items() if i.provider == "tvmaze_schedule"]
+    records = {r.provider_id: r for r in _records_for(media, monday)}
+    assert len(records) == len(media) == 6
+    for item in media:
+        offset = int(item.attributes["release_week_offset_days"])
+        fields = records[external_id_for(item)].metadata["provider_record"]["source_fields"]
+        # The TVMaze mapper keeps the airstamp instant (UTC, ``Z``) as release_date, not a bare date.
+        air_day = monday + timedelta(days=offset)
+        assert fields["release_date"] == f"{air_day.isoformat()}T20:00:00Z", item.key

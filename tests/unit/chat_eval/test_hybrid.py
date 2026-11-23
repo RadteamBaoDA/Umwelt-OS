@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 import pytest
+from arq.worker import Retry
 
 from modules.chat.schemas import AnswerContext, EvidenceItem
 from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.hybrid import (
-    drain,
+    drain_indexing,
     hybrid_env,
     local_only_blocked,
     mask_secrets,
@@ -84,20 +86,69 @@ def test_retrieval_request_pins_scope_when_scoped() -> None:
     assert [str(s) for s in scoped.source_scope] == [source]
 
 
-@pytest.mark.asyncio
-async def test_drain_sums_passes_until_zero() -> None:
-    results = iter([3, 2, 0])
+def _scripted(values: list[int | BaseException]) -> Callable[[], Awaitable[int]]:
+    """A pass function replaying ``values``; an exception entry is raised instead of returned."""
+    queue = list(values)
 
     async def step() -> int:
-        return next(results)
+        value = queue.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
-    assert await drain(step) == 5
+    return step
+
+
+async def _no_sleep(_seconds: float) -> None:
+    """Stand-in pause so the drain loop runs without real waiting."""
 
 
 @pytest.mark.asyncio
-async def test_drain_raises_when_work_never_ends() -> None:
-    async def step() -> int:
-        return 1
+async def test_drain_indexing_returns_count_after_retry_and_drained_pass() -> None:
+    # Pass 1 finds nothing yet, pass 2 is deferred by the worker's heavy slot, pass 3 drains.
+    step = _scripted([0, Retry(), 0])
+    counts = _scripted_counts([0, 0, 5])
 
-    with pytest.raises(AssertionError, match="not drained after 4 passes"):
-        await drain(step, bound=4)
+    async def describe() -> str:
+        return "unused"
+
+    indexed = await drain_indexing(step, counts, describe, pause=_no_sleep)
+
+    assert indexed == 5
+
+
+@pytest.mark.asyncio
+async def test_drain_indexing_does_not_exit_on_zero_work_with_nothing_indexed() -> None:
+    # A drained step with no succeeded chunks is not a finished run: keep polling until bound.
+    async def describe() -> str:
+        return "status=failed error_code=model_unavailable"
+
+    with pytest.raises(AssertionError, match="model_unavailable"):
+        await drain_indexing(
+            _scripted([0, 0, 0]), _scripted_counts([0, 0, 0]), describe, bound=3, pause=_no_sleep
+        )
+
+
+@pytest.mark.asyncio
+async def test_drain_indexing_raises_when_work_never_ends() -> None:
+    async def describe() -> str:
+        return "status=active error_code=None"
+
+    with pytest.raises(AssertionError, match="not drained after 4 passes.*status=active"):
+        await drain_indexing(
+            _scripted([1, 1, 1, 1]),
+            _scripted_counts([1, 1, 1, 1]),
+            describe,
+            bound=4,
+            pause=_no_sleep,
+        )
+
+
+def _scripted_counts(values: list[int]) -> Callable[[], Awaitable[int]]:
+    """A count function replaying ``values`` one per pass."""
+    queue = list(values)
+
+    async def count() -> int:
+        return queue.pop(0)
+
+    return count

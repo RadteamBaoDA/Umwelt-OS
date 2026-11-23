@@ -2,7 +2,7 @@
 
 ``planted.json`` lists items grouped by ``source_key``. Each source gets one feed-shaped body that goes
 through a production mapper (``map_feed`` for the news source, ``map_json_feed`` with the EMSC row for
-quakes, and a test-local ``JsonFeed`` row for TVMaze-shaped media rows), then the matrix ``_ingest`` path.
+quakes, and ``map_tvmaze_schedule`` for TVMaze-shaped media rows), then the matrix ``_ingest`` path.
 Keys are the ``provider_id`` of each record; ``seed_planted`` resolves them to document version ids.
 Timestamps are fixed; only ``media_time`` release dates depend on the run week (see ``seed_planted``).
 """
@@ -21,7 +21,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from modules.connectors.providers.json_feed import JSON_FEEDS, JsonFeed, map_json_feed
+from modules.connectors.providers.json_feed import JSON_FEEDS, map_json_feed
+from modules.connectors.providers.media_movies_tv import map_tvmaze_schedule
 from modules.connectors.providers.news import map_feed
 from modules.ingestion.schemas import IngestionRecord
 from tests.integration.test_chat_collected_data_matrix import (
@@ -48,17 +49,9 @@ _LANGS = frozenset({"en", "vi"})
 _REQUIRED = ("key", "set", "provider", "source_key", "title", "body", "lang", "published_at")
 _API_PROVIDERS = frozenset({"emsc_quakes", "tvmaze_schedule"})
 # Providers whose records come from json_feed.map_json_feed, which prefixes the identity with the provider.
-_JSON_FEED_PROVIDERS = frozenset({"emsc_quakes", "tvmaze_schedule"})
-_TVMAZE_FEED = JsonFeed(
-    provider="tvmaze_schedule",
-    publisher="TVMaze",
-    url="https://api.tvmaze.com/schedule",
-    items="results",
-    id=("id",),
-    title=("name",),
-    summary=(("Release date", "release_date"),),
-    time="observed_at",
-)
+_JSON_FEED_PROVIDERS = frozenset({"emsc_quakes"})
+# TVMaze episode ids for media rows; the key's number offsets this base so ids stay unique and positive.
+_TVMAZE_ID_BASE = 900000
 
 
 @dataclass(frozen=True)
@@ -155,20 +148,31 @@ def _quake_body(items: Sequence[PlantedItem]) -> bytes:
     return json.dumps({"type": "FeatureCollection", "features": features}).encode("utf-8")
 
 
-def _media_body(items: Sequence[PlantedItem], monday: date) -> bytes:
-    """TVMaze-shaped rows; ``release_date`` is the run week's Monday plus the item's offset."""
-    rows = [
-        {
-            "id": i.key,
-            "name": i.title,
-            "release_date": (
-                monday + timedelta(days=int(i.attributes["release_week_offset_days"]))
-            ).isoformat(),
-            "observed_at": i.published_at.astimezone(UTC).isoformat(),
-        }
-        for i in items
-    ]
-    return json.dumps({"results": rows}).encode("utf-8")
+def _tvmaze_episode_id(key: str) -> int:
+    """Numeric TVMaze episode id for a media key such as ``media_3`` (pure)."""
+    return _TVMAZE_ID_BASE + int(key.split("_")[1])
+
+
+def _media_body(items: Sequence[PlantedItem], monday: date) -> list[dict[str, Any]]:
+    """TVMaze schedule rows for ``map_tvmaze_schedule``; the air date is the run week's Monday plus the offset.
+
+    The production mapper reads ``airstamp`` for the release date, so ``release_date`` lands in the record's
+    source_fields (and the matrix attributes) exactly as it does for a live schedule.
+    """
+    rows: list[dict[str, Any]] = []
+    for i in items:
+        air_day = monday + timedelta(days=int(i.attributes["release_week_offset_days"]))
+        episode_id = _tvmaze_episode_id(i.key)
+        rows.append(
+            {
+                "id": episode_id,
+                "name": i.title,
+                "airstamp": f"{air_day.isoformat()}T20:00:00+00:00",
+                "summary": i.body,
+                "show": {"id": episode_id, "name": i.title, "language": "English"},
+            }
+        )
+    return rows
 
 
 def _records_for(items: Sequence[PlantedItem], monday: date) -> list[IngestionRecord]:
@@ -177,17 +181,19 @@ def _records_for(items: Sequence[PlantedItem], monday: date) -> list[IngestionRe
     if provider == "emsc_quakes":
         return map_json_feed(JSON_FEEDS["emsc_quakes"], _quake_body(items), COLLECTED)
     if provider == "tvmaze_schedule":
-        return map_json_feed(_TVMAZE_FEED, _media_body(items, monday), COLLECTED)
+        return map_tvmaze_schedule(_media_body(items, monday), collected_at=COLLECTED, config={})
     return map_feed(provider, _atom_body(items), COLLECTED)
 
 
 def external_id_for(item: PlantedItem) -> str:
     """Return the ``documents.external_id`` the normalizer stores for this planted item.
 
-    ``json_feed.map_json_feed`` builds the record identity as ``<provider>:<id>`` (quakes and media),
-    while the news mapper keeps the entry id verbatim. Keys are far below the 480-character limit where
-    ``news._stable_id`` would switch to a SHA-256 digest, so the id is never hashed here.
+    ``json_feed.map_json_feed`` builds the quake identity as ``<provider>:<id>``; the TVMaze mapper identifies
+    an episode as ``tvmaze:<episode id>``; the news mapper keeps the entry id verbatim. Keys are far below the
+    480-character limit where ``news._stable_id`` would switch to a SHA-256 digest, so the id is never hashed here.
     """
+    if item.provider == "tvmaze_schedule":
+        return f"tvmaze:{_tvmaze_episode_id(item.key)}"
     if item.provider in _JSON_FEED_PROVIDERS:
         return f"{item.provider}:{item.key}"
     return item.key

@@ -9,14 +9,17 @@ through AI settings in that disposable database and are never printed, logged or
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from arq.worker import Retry
 from httpx import AsyncClient
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -29,7 +32,10 @@ from modules.chat.schemas import AnswerContext, AnswerContextRequest
 from modules.search.indexing import index_pending_chunks
 from tests.integration.chat_eval.cases import Case
 
-INDEX_PASS_BOUND = 200  # index_pending_chunks passes before the run counts as not drained
+INDEX_PASS_BOUND = (
+    60  # index passes before the run counts as not drained (about 2 minutes at the pause below)
+)
+INDEX_PASS_SLEEP_SECONDS = 2.0  # pause between passes so a heavy slot held by the worker can clear
 SEARCH_MODULE_ID = "search"
 
 
@@ -247,26 +253,53 @@ async def enable_search(client: AsyncClient) -> None:
     assert response.status_code == 200, response.text[:300]
 
 
-async def drain(step: Callable[[], Awaitable[int]], bound: int = INDEX_PASS_BOUND) -> int:
-    """Call ``step`` until it returns 0 and return the sum of its positive results (pure orchestration).
+async def drain_indexing(
+    step: Callable[[], Awaitable[int]],
+    count: Callable[[], Awaitable[int]],
+    describe: Callable[[], Awaitable[str]],
+    *,
+    bound: int = INDEX_PASS_BOUND,
+    pause: Callable[[float], Awaitable[object]] = asyncio.sleep,
+) -> int:
+    """Run indexing passes until the run is drained and something is indexed; return the indexed count.
 
-    Raises AssertionError when ``bound`` passes still return work: the run must be drained before the hybrid
-    turns read the index, otherwise evidence would silently be missing.
+    Each pass calls ``step`` (returns the chunks it indexed, or raises ``arq.Retry`` when the worker's heavy slot
+    defers it) and then ``count`` (succeeded chunks of the active generation, including those the cron worker
+    indexed). The run is drained when a pass completed without a Retry and returned 0, and it is finished once
+    ``count`` is positive. Waits ``pause`` seconds after each unfinished pass. Raises AssertionError after
+    ``bound`` passes, with ``describe()`` (the latest generation's status and error code) in the message.
     """
-    total = 0
     for _ in range(bound):
-        done = await step()
-        if done == 0:
-            return total
-        total += done
-    raise AssertionError(f"indexing not drained after {bound} passes")
+        try:
+            drained = await step() == 0
+        except Retry:
+            # The worker holds the heavy slot: this pass did no work, so it cannot prove the run is drained.
+            drained = False
+        indexed = await count()
+        if drained and indexed > 0:
+            return indexed
+        await pause(INDEX_PASS_SLEEP_SECONDS)
+    detail = await describe()
+    raise AssertionError(f"indexing not drained after {bound} passes: {detail}")
+
+
+_ACTIVE_INDEXED_SQL = text(
+    "SELECT count(*) FROM search_index_items i "
+    "JOIN search_index_generations g ON g.id = i.generation_id "
+    "WHERE g.status = 'active' AND i.status = 'succeeded'"
+)
+_LATEST_GENERATION_SQL = text(
+    "SELECT status, error_code FROM search_index_generations "
+    "ORDER BY created_at DESC, id DESC LIMIT 1"
+)
 
 
 async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> int:
-    """Index every pending chunk of the eval workspace; return how many were indexed.
+    """Index every pending chunk of the eval workspace; return how many succeeded in the active generation.
 
     The context matches the worker's (session factory, Redis, Settings and the cursor state dict that ARQ keeps
-    across job copies). Passes run until one returns 0, bounded by ``INDEX_PASS_BOUND``.
+    across job copies). The cron worker indexes the same rows every 60 s, so the result is read from the database
+    rather than summed from the passes. Passes stop as ``drain_indexing`` describes.
     """
     factory = async_sessionmaker(engine, expire_on_commit=False)
     ctx: dict[str, object] = {
@@ -280,7 +313,20 @@ async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> in
         """One indexing pass over the worker's job context."""
         return await index_pending_chunks(ctx)
 
-    return await drain(step)
+    async def count() -> int:
+        """Succeeded chunks of the active generation, read on a fresh connection."""
+        async with engine.connect() as conn:
+            return int((await conn.execute(_ACTIVE_INDEXED_SQL)).scalar_one())
+
+    async def describe() -> str:
+        """Latest generation's status and error code, for the timeout message."""
+        async with engine.connect() as conn:
+            row = (await conn.execute(_LATEST_GENERATION_SQL)).one_or_none()
+        if row is None:
+            return "no search index generation exists"
+        return f"latest generation status={row[0]} error_code={row[1]}"
+
+    return await drain_indexing(step, count, describe)
 
 
 async def hybrid_context(

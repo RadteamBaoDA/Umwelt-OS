@@ -658,6 +658,11 @@ class HybridRun:
 _COMPOSE_TEST_AI_CREDENTIAL_KEY = (
     "ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA="  # docker-compose.test.yml default
 )
+# Endpoint identity inputs the compose worker uses (docker-compose.test.yml, AI_ALLOWED_ENDPOINT_HOSTS and
+# AI_ALLOWED_ENDPOINT_CIDRS). The embedding model_identity hashes them, so host Settings must mirror them or the
+# host and the worker fail each other's index generation. Must mirror docker-compose.test.yml.
+_COMPOSE_AI_ALLOWED_ENDPOINT_HOSTS = frozenset({"fake-model:8000", "searxng:8080"})
+_COMPOSE_AI_ALLOWED_ENDPOINT_CIDRS = ["172.16.0.0/12", "192.168.0.0/16", "10.0.0.0/8"]
 
 
 async def _prepare_hybrid(
@@ -668,11 +673,18 @@ async def _prepare_hybrid(
     The caller closes ``redis``. Raises (after closing it) when a provider is refused or indexing does not drain.
     """
     # Host pytest must decrypt the credentials the compose API saved, so it uses the stack's (public, fake)
-    # test key from docker-compose.test.yml instead of the developer .env key.
+    # test key from docker-compose.test.yml instead of the developer .env key. The endpoint allowlists and the
+    # public-provider switch mirror the worker's env too: a developer .env would otherwise change the embedding
+    # model_identity, and each side would then fail the other's generation (failed/model_unavailable).
+    # AI_ALLOW_PUBLIC_PROVIDERS in the compose file is ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}.
+    public_providers = os.environ.get("E2E_ALLOW_PUBLIC_PROVIDERS", "false").lower() == "true"
     settings = Settings(
         ai_credential_encryption_key=os.environ.get(
             "TEST_AI_CREDENTIAL_ENCRYPTION_KEY", _COMPOSE_TEST_AI_CREDENTIAL_KEY
-        )
+        ),
+        ai_allowed_endpoint_hosts=set(_COMPOSE_AI_ALLOWED_ENDPOINT_HOSTS),
+        ai_allowed_endpoint_cidrs=list(_COMPOSE_AI_ALLOWED_ENDPOINT_CIDRS),
+        ai_allow_public_providers=public_providers,
     )
     redis = Redis.from_url(settings.redis_url)
     try:
