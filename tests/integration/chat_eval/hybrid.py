@@ -10,6 +10,7 @@ through AI settings in that disposable database and are never printed, logged or
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -33,9 +34,10 @@ from modules.chat.schemas import AnswerContext, AnswerContextRequest
 from modules.search.indexing import index_pending_chunks
 from tests.integration.chat_eval.cases import Case
 
-INDEX_PASS_BOUND = (
-    60  # index passes before the run counts as not drained (about 2 minutes at the pause below)
-)
+# Index passes before the run counts as not drained (about 2 minutes at the default pause below).
+INDEX_PASS_BOUND = int(os.getenv("CHAT_EVAL_INDEX_PASSES", "60"))
+# Consecutive heavy-slot deadline expiries after which the build is treated as stuck, not waiting.
+TIMEOUT_STREAK_LIMIT = 3
 INDEX_PASS_SLEEP_SECONDS = 2.0  # pause between passes so a heavy slot held by the worker can clear
 SEARCH_MODULE_ID = "search"
 
@@ -269,14 +271,29 @@ async def drain_indexing(
     indexed). The run is drained when a pass completed without a Retry and returned 0, and it is finished once
     ``count`` is positive. Waits ``pause`` seconds after each unfinished pass. Raises AssertionError after
     ``bound`` passes, with ``describe()`` (the latest generation's status and error code) in the message.
+
+    A TimeoutError means the pass hit the heavy-slot deadline. Consecutive TimeoutErrors are counted: after
+    ``TIMEOUT_STREAK_LIMIT`` in a row the build is stuck (a concurrent HNSW build blocked on a lock), so this raises
+    at once with ``describe()`` instead of waiting out the bound. A Retry neither counts nor resets the streak; any
+    pass that completes resets it.
     """
+    timeouts = 0
     for _ in range(bound):
         try:
             drained = await step() == 0
-        except (Retry, TimeoutError):
-            # The worker holds the heavy slot (Retry when deferred, TimeoutError when the slot wait expires, e.g.
-            # while it builds the HNSW index): this pass did no work, so it cannot prove the run is drained.
+            timeouts = 0
+        except Retry:
+            # Deferred by the worker's heavy slot: this pass did no work, so it cannot prove the run is drained.
             drained = False
+        except TimeoutError:
+            # The slot wait expired (e.g. while the worker builds the HNSW index): no work either.
+            drained = False
+            timeouts += 1
+            if timeouts >= TIMEOUT_STREAK_LIMIT:
+                detail = await describe()
+                raise AssertionError(
+                    f"index build cancelled at the heavy-slot deadline {timeouts} times in a row: {detail}"
+                ) from None
         indexed = await count()
         if drained and indexed > 0:
             return indexed
@@ -298,6 +315,36 @@ _ITEM_ERRORS_SQL = text(
     "SELECT status, coalesce(error_code, '-'), count(*) FROM search_index_items "
     "GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 8"
 )
+_OTHER_SESSIONS_SQL = text(
+    "SELECT pid, application_name, state, wait_event_type, wait_event, backend_xmin, "
+    "now() - xact_start, left(query, 60) FROM pg_stat_activity "
+    "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+)
+_INDEX_LOCKS_SQL = text(
+    "SELECT pid, locktype, mode, granted FROM pg_locks "
+    "WHERE locktype = 'advisory' OR relation = 'search_index_items'::regclass"
+)
+
+
+async def _session_and_lock_summary(engine: AsyncEngine) -> str:
+    """Compact view of the other sessions and the index-relevant locks, for a stuck-index message.
+
+    Runs on its own connection. It reads ``pg_stat_activity`` for this database (excluding this session) and the
+    advisory and ``search_index_items`` locks from ``pg_locks``. The output is plain text; the caller masks it.
+    """
+    async with engine.connect() as conn:
+        sessions = (await conn.execute(_OTHER_SESSIONS_SQL)).all()
+        locks = (await conn.execute(_INDEX_LOCKS_SQL)).all()
+    session_text = "; ".join(
+        f"pid={pid} app={app} state={state} wait={wait_type}/{wait_event} xmin={xmin} "
+        f"xact_age={age} q={query!r}"
+        for pid, app, state, wait_type, wait_event, xmin, age, query in sessions
+    )
+    lock_text = "; ".join(
+        f"pid={pid} {locktype} mode={mode} granted={granted}"
+        for pid, locktype, mode, granted in locks
+    )
+    return f"sessions: [{session_text or 'none'}]; locks: [{lock_text or 'none'}]"
 
 
 async def index_all(
@@ -346,7 +393,11 @@ async def index_all(
             return int((await conn.execute(_ACTIVE_INDEXED_SQL)).scalar_one())
 
     async def describe() -> str:
-        """Latest generation's status and error code, for the timeout message."""
+        """Latest generation's status, error code, item breakdown and session/lock summary, masked, for failures.
+
+        Reads the database on fresh connections, so it works while the worker holds the index build. The output
+        contains no key values: ``mask`` removes them from the whole message.
+        """
         async with engine.connect() as conn:
             row = (await conn.execute(_LATEST_GENERATION_SQL)).one_or_none()
             items = (await conn.execute(_ITEM_ERRORS_SQL)).all()
@@ -354,9 +405,10 @@ async def index_all(
             return "no search index generation exists"
         breakdown = ", ".join(f"{status}/{code}={n}" for status, code, n in items)
         cause = f"; first embed error: {first_error[0]}" if first_error else ""
-        return (
+        summary = await _session_and_lock_summary(engine)
+        return mask(
             f"latest generation status={row[0]} error_code={row[1]}; items: {breakdown or 'none'}"
-            + cause
+            f"{cause}; {summary}"
         )
 
     return await drain_indexing(step, count, describe)

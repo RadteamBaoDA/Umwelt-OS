@@ -130,6 +130,35 @@ async def test_drain_indexing_does_not_exit_on_zero_work_with_nothing_indexed() 
 
 
 @pytest.mark.asyncio
+async def test_drain_indexing_fails_after_three_consecutive_timeouts_with_diagnostics() -> None:
+    # Three TimeoutError passes in a row mean the index build is stuck at the slot deadline: stop early.
+    calls: list[int] = []
+
+    async def step() -> int:
+        calls.append(1)
+        raise TimeoutError
+
+    async def describe() -> str:
+        return "sessions: [pid=7 wait=Lock]"
+
+    with pytest.raises(AssertionError, match="3 times in a row.*pid=7 wait=Lock"):
+        await drain_indexing(step, _scripted_counts([0] * 10), describe, bound=10, pause=_no_sleep)
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_drain_indexing_timeout_streak_resets_after_a_successful_pass() -> None:
+    # Timeouts separated by a completed pass never reach three in a row, so the run keeps going.
+    step = _scripted([TimeoutError(), TimeoutError(), 0, TimeoutError(), TimeoutError(), 0])
+    counts = _scripted_counts([0, 0, 0, 0, 0, 4])
+
+    async def describe() -> str:
+        return "unused"
+
+    assert await drain_indexing(step, counts, describe, pause=_no_sleep) == 4
+
+
+@pytest.mark.asyncio
 async def test_drain_indexing_raises_when_work_never_ends() -> None:
     async def describe() -> str:
         return "status=active error_code=None"
