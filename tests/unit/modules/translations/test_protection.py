@@ -67,6 +67,16 @@ def test_month_name_may_become_month_number():
         ValueError, match="new_token"
     ):  # no month name in the source: no new month number
         p.reject_new_tokens("pay 5 USD", "trả 5 USD tháng 10")
+    bypasses = [
+        ("rose 5 points", "giảm -5 điểm"),  # sign flip
+        ("Marketing team", "đội 3"),  # month-like word
+        ("Junior staff", "nhân viên 6"),
+        ("see https://x.io/a/42 now", "xem https://x.io/a/42 nay 42"),  # digit from a URL
+    ]
+    for src, bad in bypasses:
+        with pytest.raises(ValueError, match="new_token"):
+            p.reject_new_tokens(src, bad)
+    p.reject_new_tokens("due Sept. 5 or March 3", "hạn 5/9 hoặc 3/3")
 
 
 def test_marker_collision_gets_fresh_nonce(monkeypatch):

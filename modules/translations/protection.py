@@ -67,17 +67,41 @@ def _tokens(text: str) -> set[str]:
     return {m.group(0) for m in _PROTECTED_RE.finditer(text)}
 
 
-_PLAIN_NUMBER_RE = re.compile(r"[\d.,/:\-–]+")
-_MONTH_RE = re.compile(
-    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b"
-)  # capitalized only, so the verb "may" does not unlock 5
-_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+# Starts with a digit: a leading "-" would let the model flip a source value's sign.
+_PLAIN_NUMBER_RE = re.compile(r"\d[\d.,/:\-–]*")
+# A source numeric token: optional sign/currency, then a digit (not a URL, citation, code or ticker).
+_NUMERIC_TOKEN_RE = re.compile(r"(?:[+\-−])?(?:[$€£¥₫]\s?)?\d")
+_MONTHS = (
+    ("January", "Jan"),
+    ("February", "Feb"),
+    ("March", "Mar"),
+    ("April", "Apr"),
+    ("May", "May"),
+    ("June", "Jun"),
+    ("July", "Jul"),
+    ("August", "Aug"),
+    ("September", "Sept", "Sep"),
+    ("October", "Oct"),
+    ("November", "Nov"),
+    ("December", "Dec"),
+)
+_MONTH_NUMBER = {name: n for n, names in enumerate(_MONTHS, 1) for name in names}
+# Exact, capitalized names or abbreviations only ("Marketing", "Junior" and the verb "may" do not match).
+_MONTH_RE = re.compile(r"\b(" + "|".join(sorted(_MONTH_NUMBER, key=len, reverse=True)) + r")\b")
 
 
 def _numbers(text: str) -> set[int]:
-    """Return every integer value in ``text`` plus the month number of each English month name."""
-    values = {int(d) for d in re.findall(r"\d+", text)}
-    return values | {_MONTHS.index(m.group(1)) + 1 for m in _MONTH_RE.finditer(text)}
+    """Return the integers of ``text``'s numeric protected tokens plus each English month name's number.
+
+    Digits inside URLs, citations, code or tickers are not counted, so they cannot unlock a value.
+    """
+    values = {
+        int(d)
+        for m in _PROTECTED_RE.finditer(text)
+        if _NUMERIC_TOKEN_RE.match(m.group(0))
+        for d in re.findall(r"\d+", m.group(0))
+    }
+    return values | {_MONTH_NUMBER[m.group(1)] for m in _MONTH_RE.finditer(text)}
 
 
 def reject_new_tokens(original: str, restored: str) -> None:
