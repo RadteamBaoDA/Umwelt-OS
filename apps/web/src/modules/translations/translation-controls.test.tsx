@@ -106,7 +106,7 @@ describe('CollectionTranslationBar progress', () => {
     const progressbar = screen.getByRole('progressbar');
     expect(progressbar).toHaveAttribute('aria-valuenow', '3');
     expect(progressbar).toHaveAttribute('aria-valuemax', '25');
-    expect(screen.getByText('Translating 3/25')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Translate all' })).toBeNull();
     expect(screen.queryByText(/Translated \d+ items/)).toBeNull();
 
     view.rerender(

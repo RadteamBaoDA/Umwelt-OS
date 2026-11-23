@@ -133,6 +133,8 @@
   "mobile.breakpointDirtyWarning": "The viewport changed while this {breakpoint} layout has unsaved edits. Save or discard this layout, or stay with its draft.",
   "layoutActionUnavailable": "This layout change cannot fit within the supported dashboard bounds.",
   "gadget.scrollRegionLabel": "Scrollable gadget: {title}",
+  "gadget.moreActions": "More actions",
+  "moreActions": "More dashboard actions",
   "gadget.expandedDescription": "Expanded view of {title}. Closing returns to the same gadget and preserves its state.",
   "cancelEdit": "Cancel",
   "undo": "Undo",

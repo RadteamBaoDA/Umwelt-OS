@@ -15,7 +15,6 @@ import { DashboardOverview } from './dashboard-overview';
 import { DashboardPanel } from './dashboard-panel';
 import { DashboardCrudDialogs, ManagementDialog, useDashboardCrud } from './dashboard-dialogs';
 import { DashboardHeader, formatRelativeAge } from './dashboard-header';
-import { DashboardTranslationControl } from '@/modules/translations';
 import { buildHeaderSummary } from './header-summary';
 import { useLiveEventCount } from './live-event-count';
 import './dashboard-skin.css';
@@ -157,7 +156,6 @@ function ConnectedHeader({
         },
       )}
       greeting={<TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />}
-      translationControl={<DashboardTranslationControl />}
       onSwitch={save.requestSwitchDashboard}
       onCreate={() => crud.setCreateOpen(true)}
       onRename={() => {

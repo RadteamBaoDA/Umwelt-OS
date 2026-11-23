@@ -21,6 +21,7 @@ import {
   useItemTranslation,
   type ItemTranslationController,
 } from '@/modules/translations';
+import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Props for the job postings gadget. */
 export interface JobListGadgetProps {
@@ -75,7 +76,7 @@ function JobTable({ more, translation }: { more: ReturnType<typeof useShowMore<J
           {more.visible.map((p, index) => {
             const displayTitle = (p.documentId ? translation.shown(p.documentId)?.title : undefined) ?? p.title;
             return (
-              <TableRow key={`${p.url ?? p.title}-${index}`}>
+              <TableRow key={`${p.url ?? p.title}-${index}`} className="group/item">
                 <TableCell className="max-w-64 whitespace-normal font-medium">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {p.url ? (
@@ -144,6 +145,7 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
     [more.visible],
   );
   const translation = useItemTranslation('document', translationTargets);
+  useCollectionTranslateAll(translation);
 
   useReportGadgetFreshness(
     items.reduce<string | null>((max, r) => (r.observed_at && (!max || r.observed_at > max) ? r.observed_at : max), null),

@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, GripHorizontal, Info, Maximize2, MoreVertical, Settings, Sparkles, Trash2 } from 'lucide-react';
+import { AlertTriangle, GripHorizontal, Info, Maximize2, MoreHorizontal, MoreVertical, Settings, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useMemo, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
@@ -17,6 +17,7 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { templateName } from '@/core/renderer-labels';
 import { formatDateTime } from '@/core/i18n';
 import { GadgetFreshnessProvider } from './gadget-freshness';
+import { GadgetActionsProvider, type GadgetAction } from './gadget-actions';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   DropdownMenu,
@@ -421,6 +422,39 @@ function EditMenu({ onConfigure, onRemove }: Pick<GadgetFrameProps, 'onConfigure
   );
 }
 
+/**
+ * View-mode ⋯ menu listing the actions a gadget renderer reported (for example "Translate all").
+ * Rendered only by HeaderActions when the list is non-empty, so a gadget without actions shows no button.
+ *
+ * @param props.actions Entries reported through `useReportGadgetActions`; picking one calls its `onSelect`.
+ */
+function GadgetActionsMenu({ actions }: { actions: readonly GadgetAction[] }) {
+  const t = useTranslations('dashboard');
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          aria-label={t('gadget.moreActions')}
+          title={t('gadget.moreActions')}
+          variant="ghost"
+          size="icon"
+          className={`${REVEAL_ON_HOVER} size-7 min-h-7 min-w-7 rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground`}
+        >
+          <MoreHorizontal className="size-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {actions.map((action) => (
+          <DropdownMenuItem key={action.id} disabled={action.disabled} onClick={action.onSelect} className="gap-2 text-xs">
+            <span>{action.label}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** Header action controls; they cannot start title dragging. */
 function HeaderActions({
   isEditMode,
@@ -429,11 +463,14 @@ function HeaderActions({
   expandRef,
   onConfigure,
   onRemove,
+  actions,
 }: {
   isEditMode: boolean;
   onAsk: () => void;
   onExpand: () => void;
   expandRef: RefObject<HTMLButtonElement | null>;
+  /** Renderer-reported view-mode actions; the ⋯ menu appears only when non-empty. */
+  actions: readonly GadgetAction[];
 } & Pick<GadgetFrameProps, 'onConfigure' | 'onRemove'>) {
   const t = useTranslations('dashboard');
   return (
@@ -468,6 +505,8 @@ function HeaderActions({
       >
         <Maximize2 className="size-4" aria-hidden="true" />
       </Button>
+
+      {!isEditMode && actions.length > 0 && <GadgetActionsMenu actions={actions} />}
 
       {/* Edit mode configuration and removal actions */}
       {isEditMode && <EditMenu onConfigure={onConfigure} onRemove={onRemove} />}
@@ -572,13 +611,17 @@ function ExpandedDialog({
  */
 function RendererSubtree(p: {
   report: (collectedAt: string | null, attribution?: string | null) => void;
+  /** Frame setter for the renderer's view-mode ⋯ menu actions. */
+  reportActions: (actions: readonly GadgetAction[]) => void;
   slotHosts: GadgetSlotHosts | undefined;
   instance: GadgetInstance;
   children: React.ReactNode;
 }) {
   return (
     <GadgetFreshnessProvider report={p.report}>
-      <GadgetSlotProvider value={p.slotHosts}>{p.children ? p.children : <PlannedGadgetBody instance={p.instance} />}</GadgetSlotProvider>
+      <GadgetActionsProvider report={p.reportActions}>
+        <GadgetSlotProvider value={p.slotHosts}>{p.children ? p.children : <PlannedGadgetBody instance={p.instance} />}</GadgetSlotProvider>
+      </GadgetActionsProvider>
     </GadgetFreshnessProvider>
   );
 }
@@ -704,6 +747,8 @@ function GadgetHeader(p: {
   expandRef: React.RefObject<HTMLButtonElement | null>;
   onConfigure: GadgetFrameProps['onConfigure'];
   onRemove: GadgetFrameProps['onRemove'];
+  /** View-mode actions the renderer reported; shown in the ⋯ menu. */
+  actions: readonly GadgetAction[];
   /** Callback ref of the terminal title-bar slot that gadget toolbars portal into. */
   attachSlot: (el: HTMLElement | null) => void;
 }) {
@@ -752,6 +797,7 @@ function GadgetHeader(p: {
         expandRef={expandRef}
         onConfigure={onConfigure}
         onRemove={onRemove}
+        actions={p.actions}
       />
     </header>
   );
@@ -797,6 +843,8 @@ export function GadgetFrame({
   const { rendererHost, attachExpandedHost } = useRendererHost(isExpanded, { inlineHostRef, inlineScrollRef, expandedHostRef });
   useHeaderMeasurement(headerRef, onHeaderMeasured);
   const { reportFreshness, footerText, shortText, freshnessTitle, collectedAt, footNote, freshnessLabel } = useGadgetFooter();
+  const [actions, setActions] = useState<readonly GadgetAction[]>([]);
+  const rendererProps = { report: reportFreshness, reportActions: setActions, slotHosts: isExpanded ? undefined : slotHosts, instance };
   const metaText = useTerminalMeta(instance, shortText);
   // Each new collectedAt replays the data-refresh reveal on the body; the element itself is never remounted.
   useGadgetReveal(inlineScrollRef, collectedAt);
@@ -832,6 +880,7 @@ export function GadgetFrame({
           expandRef={expandTriggerRef}
           onConfigure={onConfigure}
           onRemove={onRemove}
+          actions={actions}
           attachSlot={setSlotHost}
         />
 
@@ -860,13 +909,7 @@ export function GadgetFrame({
         attachHost={attachExpandedHost}
       />
       {/* Supplies exactly one renderer subtree to the stable host; it is never invoked in two surfaces. */}
-      {rendererHost &&
-        createPortal(
-          <RendererSubtree report={reportFreshness} slotHosts={isExpanded ? undefined : slotHosts} instance={instance}>
-            {children}
-          </RendererSubtree>,
-          rendererHost,
-        )}
+      {rendererHost && createPortal(<RendererSubtree {...rendererProps}>{children}</RendererSubtree>, rendererHost)}
     </>
   );
 }

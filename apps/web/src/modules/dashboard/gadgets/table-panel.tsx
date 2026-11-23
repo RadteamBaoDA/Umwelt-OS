@@ -22,6 +22,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import type { FeedDocument } from './feed-model';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Props for the source-backed table gadget. */
 export interface TablePanelProps {
@@ -190,7 +191,7 @@ function TableRecordRow({
   const excerpt = distinctExcerpt(effectiveTitle, translated?.excerpt ?? record.excerpt);
   const stamp = record.published_at ?? record.observed_at;
   return (
-    <li className="tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
+    <li className="group/item tbl-row flex flex-wrap items-start gap-x-3 gap-y-0.5 py-2">
       {selectMode && <TableRowCheckbox record={record} checked={checked} setSelectedRecords={setSelectedRecords} />}
       <TableRowTitle title={effectiveTitle} excerpt={excerpt} />
       <span className="tbl-src">{typeof sourceName === 'string' ? sourceName : ''}</span>
@@ -257,6 +258,7 @@ export function TablePanel({ instance }: TablePanelProps) {
     [records],
   );
   const translation = useItemTranslation('document', translationTargets);
+  useCollectionTranslateAll(translation);
   const selected = Object.values(selectedRecords);
   const selectedIds = new Set(Object.keys(selectedRecords));
   const currentRecords = new Map(records.map((record) => [record.document_id, record]));

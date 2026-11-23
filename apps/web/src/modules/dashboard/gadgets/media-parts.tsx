@@ -56,6 +56,7 @@ import { FeedUndoBar } from './feed-parts';
 import type { SelectedTelegramIdentity } from './feed-model';
 import { useFeedModeration } from './use-feed-state';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { useCollectionTranslateAll } from '../gadget-actions';
 
 /** Literal labels for persisted media fields. */
 const MEDIA_FIELD_KEY = {
@@ -605,7 +606,9 @@ export function MediaCard({
   const displayTitle = translated?.title ?? item.title;
   const listLayout = view === 'list';
   return (
-    <article className={`min-w-0 space-y-2 rounded-md border border-line bg-surface p-2 ${listLayout ? 'flex items-start gap-3' : ''}`}>
+    <article
+      className={`group/item min-w-0 space-y-2 rounded-md border border-line bg-surface p-2 ${listLayout ? 'flex items-start gap-3' : ''}`}
+    >
       <div className={listLayout ? 'w-16 shrink-0' : ''}>
         <FeedImage
           key={item.image_url}
@@ -986,6 +989,7 @@ function MediaCollectionBody({ instance, calendar = false, groupItems, view, set
   const { sourceIds, activeSources, typeConflict, query, documents, sources, privacy } = useMediaQuery(instance, state, calendar, isOwner);
   const items = filterMediaItems(documents, state, definition, moderation.hiddenIds);
   const translation = useMediaTranslation(items);
+  useCollectionTranslateAll(translation);
   useMediaFreshness(documents);
   /** Chat receives only currently visible immutable identities; server resolves ownership, provenance and egress. */
   const ask = (identities: SelectedTelegramIdentity[]) =>

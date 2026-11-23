@@ -166,7 +166,7 @@ describe('VideoPanel', () => {
     expect(screen.queryByText('Could not load more items. Try again.')).toBeNull();
   });
 
-  it('Translate all in the collection bar submits the loaded items for translation', async () => {
+  it('no longer shows Translate all in the collection bar (it lives in the gadget menu)', async () => {
     mocks.list.mockResolvedValue({ items: [projection('a')], next_cursor: null });
     mocks.submit.mockResolvedValue({
       batch_id: null,
@@ -175,8 +175,8 @@ describe('VideoPanel', () => {
     });
     renderPanel(['s1']);
     await screen.findByText('Media a');
-    fireEvent.click(await screen.findByRole('button', { name: 'Translate all' }));
-    await waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(1));
-    expect(mocks.submit.mock.calls[0][0]).toEqual([{ resource_type: 'document', resource_id: 'a', resource_revision: 'a-v1' }]);
+    expect(await screen.findByText('Media a')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Translate all' })).toBeNull();
+    expect(mocks.submit).not.toHaveBeenCalled();
   });
 });

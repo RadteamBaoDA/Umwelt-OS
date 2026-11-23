@@ -40,14 +40,39 @@ export interface FeedRowContext {
   translation?: ItemTranslationController;
 }
 
+/** True once the item has any translation outcome (in flight, ready, unchanged or failed) worth showing without hover. */
+function hasTranslationState(controller: ItemTranslationController, id: string): boolean {
+  return controller.pendingIds.has(id) || controller.results.has(id) || controller.unchanged.has(id) || controller.issues.has(id);
+}
+
+/**
+ * Always-visible translation state for one row: progress, the Original/Translation toggle, "unchanged" or an error
+ * note. Renders nothing while the item is untranslated, so idle rows stay clean and the Translate button lives in the
+ * hover-revealed actions. Placed next to the row timestamp because the actions overlay is hidden until hover.
+ *
+ * @param props.item Feed item; needs `documentVersionId` to be translatable.
+ * @param props.ctx Row context carrying the optional translation controller.
+ * @param props.className Placement classes for the host layout (grid rows need a full-width cell).
+ */
+function FeedTranslationState({ item, ctx, className = '' }: { item: FeedStreamItem; ctx: FeedRowContext; className?: string }) {
+  if (!ctx.translation || !item.documentVersionId || !hasTranslationState(ctx.translation, item.id)) return null;
+  return (
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap align-baseline ${className}`}>
+      <ItemTranslateButton controller={ctx.translation} target={{ id: item.id, revision: item.documentVersionId }} title={item.title} />
+    </span>
+  );
+}
+
 /** Per-item controls preserve Telegram Ask AI and gate the new ID-only action on owner status for other feeds. */
 function FeedItemActions({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const t = useTranslations('dashboard');
   const isRead = !!item.read;
+  // Translate lives in the hover actions only while idle; any outcome moves to FeedTranslationState beside the time.
+  const showTranslate = ctx.translation && item.documentVersionId && !hasTranslationState(ctx.translation, item.id);
   return (
     <div className="absolute right-0 top-0 flex flex-wrap items-center gap-1 bg-card pl-2 text-xs pointer-coarse:static pointer-coarse:w-full pointer-coarse:bg-transparent pointer-coarse:pl-0 pointer-coarse:opacity-100 text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100 group-focus-within/item:opacity-100">
-      {ctx.translation && item.documentVersionId ? (
-        <ItemTranslateButton controller={ctx.translation} target={{ id: item.id, revision: item.documentVersionId }} title={item.title} />
+      {showTranslate ? (
+        <ItemTranslateButton controller={ctx.translation!} target={{ id: item.id, revision: item.documentVersionId! }} title={item.title} />
       ) : null}
       {item.documentVersionId && item.sourceId && (ctx.isTelegram || ctx.isOwner) && (
         <Button
@@ -234,7 +259,8 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
           {metaParts(item) ? `${metaParts(item)} · ` : ''}
           <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>
             {formatRelativeTime(item.timestamp, display.locale)}
-          </time>
+          </time>{' '}
+          <FeedTranslationState item={item} ctx={ctx} />
         </p>
         <div className="hidden @[40rem]/gadget:block">
           <MediaList item={item} isTelegram={ctx.isTelegram} />
@@ -275,6 +301,8 @@ function TerminalMessageRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowC
       <Link href={`/knowledge/documents/${item.id}`} className="msg-body">
         {ctx.translation?.shown(item.id)?.title ?? item.title}
       </Link>
+      {/* Grid row: give the state its own full-width line under the message, like the photo below. */}
+      <FeedTranslationState item={item} ctx={ctx} className="col-start-2 col-end-[-1] mt-0.5" />
       {item.imageUrl ? (
         // Post photo (public Telegram channels): a small fixed-width thumbnail under the message line.
         <div className="col-start-2 col-end-[-1] mt-1 w-40 max-w-full">
@@ -308,6 +336,7 @@ function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
       <time className="shrink-0 text-xs tabular-nums text-muted-foreground" dateTime={item.timestamp} title={timeTitle(item)}>
         {formatRelativeTime(item.timestamp, display.locale)}
       </time>
+      <FeedTranslationState item={item} ctx={ctx} />
       <FeedItemActions item={item} ctx={ctx} />
     </li>
   );
@@ -338,7 +367,8 @@ function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
         {metaParts(item) ? `${metaParts(item)} · ` : ''}
         <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>
           {formatRelativeTime(item.timestamp, display.locale)}
-        </time>
+        </time>{' '}
+        <FeedTranslationState item={item} ctx={ctx} />
       </p>
       <MediaList item={item} isTelegram={ctx.isTelegram} />
       <FeedItemActions item={item} ctx={ctx} />

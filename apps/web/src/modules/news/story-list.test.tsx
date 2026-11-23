@@ -135,7 +135,7 @@ describe('story list embedded feed features', () => {
 });
 
 describe('story list log translation', () => {
-  it('keeps per-story Translate and Translate all reachable in the log view', async () => {
+  it('keeps per-story Translate reachable and leaves Translate all to the gadget menu in the log view', async () => {
     translationState.enabled = true;
     try {
       vi.mocked(fetchStories).mockResolvedValue({
@@ -165,7 +165,7 @@ describe('story list log translation', () => {
       );
       const row = await screen.findByTestId('news-log-row');
       expect(row.querySelector('button[aria-label="Translate “Log story”"]')).toBeTruthy();
-      expect(document.querySelector('.feed-view-narrow')?.textContent).toContain('Translate all');
+      expect(document.querySelector('.feed-view-narrow')?.textContent).not.toContain('Translate all');
     } finally {
       translationState.enabled = false;
       window.localStorage.clear();

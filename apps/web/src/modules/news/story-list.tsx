@@ -20,6 +20,7 @@ import { useNewsIncompleteLabel } from './use-news-incomplete-label';
 import {
   isWorkspaceTranslationBlocker,
   nextUntranslatedBatch,
+  ITEM_REVEAL_CLASS,
   TranslateActionButton,
   TranslatedBadge,
   TranslationNote,
@@ -30,7 +31,7 @@ import {
 } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
-import { formatRelativeTime, useReportGadgetFreshness } from '@/modules/dashboard/public-api';
+import { formatRelativeTime, useReportGadgetFreshness, useTranslateAllAction } from '@/modules/dashboard/public-api';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */
@@ -144,6 +145,7 @@ function StoryTranslateControl({ vm, story }: { vm: StoryListVm; story: Story })
       // Rows repeat the same visible label, so the accessible name carries the story title.
       ariaLabel={tTrans('translateItem', { title: story.title })}
       pending={translation.pendingIds?.has(story.id) ?? false}
+      className={translation.pendingIds?.has(story.id) || translation.issues.has(story.id) ? undefined : ITEM_REVEAL_CLASS}
       onClick={() => translateStory(story)}
     />
   );
@@ -164,7 +166,10 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
   const excerpt = cleanExcerpt(displayTitle, shown(story)?.excerpt ?? story.excerpt);
   const card = vm.embedded && vm.view === 'cards';
   return (
-    <li data-testid={card ? 'news-card' : undefined} className={card ? 'min-w-0 rounded-md border border-border p-2' : undefined}>
+    <li
+      data-testid={card ? 'news-card' : undefined}
+      className={card ? 'group/item min-w-0 rounded-md border border-border p-2' : 'group/item'}
+    >
       {card ? <FeedImage src={story.image_url} className="mb-2" /> : null}
       <Button
         type="button"
@@ -215,7 +220,7 @@ function StoryLogRow({ vm, story }: { vm: StoryListVm; story: Story }) {
   const isNew = now - observed < NEW_STORY_MINUTES * 60_000;
   const { tag, href, license } = storyLogTag(story);
   return (
-    <li className="story-log-row" data-testid="news-log-row">
+    <li className="story-log-row group/item" data-testid="news-log-row">
       <time dateTime={story.observed_at} title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
         {Number.isNaN(observed) ? '' : clock.format(new Date(observed))}
       </time>
@@ -596,6 +601,18 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     nextBatchTranslateAll();
   };
 
+  // Embedded gadgets expose Translate all in the ⋯ menu instead; the news page keeps the toolbar button.
+  const showTranslateAllInToolbar =
+    !embedded && translation.enabled && (untranslatedTargets(targets, translation).length > 0 || (translation.pendingIds?.size ?? 0) > 0);
+  // Gadget ⋯ menu entry; a no-op outside a dashboard frame.
+  useTranslateAllAction({
+    enabled: translation.enabled,
+    pendingCount: translation.pendingIds?.size ?? 0,
+    untranslatedCount: untranslatedTargets(targets, translation).length,
+    progress: translation.progress,
+    onTranslateAll: translateAll,
+  });
+
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
   const shown = (story: Story) => (isShowingOriginal(story.id) ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
 
@@ -632,14 +649,27 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     toggleItemOriginal,
     translateStory,
     translateAll,
+    showTranslateAllInToolbar,
     tTrans,
   };
 }
 
 /** Builds the refresh button, on-demand translation toolbar action, and page action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
-  const { t, tTrans, storiesQuery, trendQuery, showTrends, embedded, translation, targets, showOriginal, setShowOriginal, translateAll } =
-    p;
+  const {
+    t,
+    tTrans,
+    storiesQuery,
+    trendQuery,
+    showTrends,
+    embedded,
+    translation,
+    targets,
+    showOriginal,
+    setShowOriginal,
+    translateAll,
+    showTranslateAllInToolbar,
+  } = p;
   const progress = translation.progress;
   const refreshButton = (
     <Button
@@ -669,7 +699,7 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
           onToggle={() => setShowOriginal((v) => !v)}
         />
       ) : null}
-      {translation.enabled && (untranslatedCount > 0 || pendingCount > 0) ? (
+      {showTranslateAllInToolbar ? (
         <TranslateActionButton
           compact
           label={tTrans('translateAll')}

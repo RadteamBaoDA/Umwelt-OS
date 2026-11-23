@@ -6,7 +6,7 @@ export { isWorkspaceTranslationBlocker, TranslationNote } from './translation-no
 export { nextUntranslatedBatch, untranslatedTargets } from './use-content-translation';
 export {
   CollectionTranslationBar,
-  DashboardTranslationControl,
+  ITEM_REVEAL_CLASS,
   ItemTranslateButton,
   TranslateActionButton,
   TranslationStatusBanner,
