@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.model_gateway.client import ModelGateway
 from core.worker_cursors import STATE_KEY
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.chat._worker.setup import _rewrite_for_retrieval
@@ -298,7 +299,12 @@ _ITEM_ERRORS_SQL = text(
 )
 
 
-async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> int:
+async def index_all(
+    engine: AsyncEngine,
+    settings: Settings,
+    redis: Redis,
+    mask: Callable[[str], str] = lambda text_: text_,
+) -> int:
     """Index every pending chunk of the eval workspace; return how many succeeded in the active generation.
 
     The context matches the worker's (session factory, Redis, Settings and the cursor state dict that ARQ keeps
@@ -313,9 +319,25 @@ async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> in
         STATE_KEY: {},
     }
 
+    first_error: list[str] = []
+    real_embed = ModelGateway.embed
+
+    async def recording_embed(self: ModelGateway, *args: Any, **kwargs: Any) -> Any:
+        """The real gateway call; remembers the first failure (masked) so a timeout can name it."""
+        try:
+            return await real_embed(self, *args, **kwargs)
+        except Exception as exc:
+            if not first_error:
+                first_error.append(mask(f"{type(exc).__name__}: {exc}")[:300])
+            raise
+
     async def step() -> int:
-        """One indexing pass over the worker's job context."""
-        return await index_pending_chunks(ctx)
+        """One indexing pass over the worker's job context, with embed failures recorded."""
+        ModelGateway.embed = recording_embed  # type: ignore[method-assign]
+        try:
+            return await index_pending_chunks(ctx)
+        finally:
+            ModelGateway.embed = real_embed  # type: ignore[method-assign]
 
     async def count() -> int:
         """Succeeded chunks of the active generation, read on a fresh connection."""
@@ -330,8 +352,10 @@ async def index_all(engine: AsyncEngine, settings: Settings, redis: Redis) -> in
         if row is None:
             return "no search index generation exists"
         breakdown = ", ".join(f"{status}/{code}={n}" for status, code, n in items)
+        cause = f"; first embed error: {first_error[0]}" if first_error else ""
         return (
             f"latest generation status={row[0]} error_code={row[1]}; items: {breakdown or 'none'}"
+            + cause
         )
 
     return await drain_indexing(step, count, describe)

@@ -690,7 +690,7 @@ async def _prepare_hybrid(
     try:
         await configure_ai(client, h)
         await enable_search(client)
-        indexed = await index_all(engine, settings, redis)
+        indexed = await index_all(engine, settings, redis, mask=lambda t: mask_secrets(t, _ENV))
     except BaseException:
         await redis.aclose()
         raise
