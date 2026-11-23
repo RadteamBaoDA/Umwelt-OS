@@ -12,9 +12,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.errors import ValidationFailedError
+from core.errors import ConflictError, ValidationFailedError
 from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.workspaces.schemas import (
+    AccessFence,
     AdminWorkspaceReadContext,
     Scope,
     WorkspaceContext,
@@ -61,6 +62,21 @@ class ReviewVersionFence:
     version_number: int
 
 
+def _ready_cursor_position(cursor: str, fence: AccessFence) -> tuple[datetime, UUID] | None:
+    """Decode a ready-version scan cursor to its ``(created_at, id)`` keyset position.
+
+    Returns ``None`` for a stale-fence or malformed advisory cursor so the caller restarts the scan
+    from the first page instead of failing every recovery tick.
+    """
+    try:
+        scoped = _decode_document_owner_cursor(
+            cursor, kind="ready_versions", fence=fence, resource_id=None
+        )
+        return decode_cursor(scoped)
+    except (ConflictError, ValidationFailedError):
+        return None
+
+
 async def list_ready_version_refs(
     session: AsyncSession,
     limit: int = 50,
@@ -69,7 +85,11 @@ async def list_ready_version_refs(
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> tuple[list[ReadyVersionRef], str | None]:
-    """Page through active-source current versions that have ready chunks."""
+    """Page active-source current versions with ready chunks (recovery workers; cursor kept in Redis).
+
+    A stale-fence (settings changed) or malformed cursor restarts the scan instead of raising
+    409/422 each tick; scope predicates still bound every page, so this never widens access.
+    """
     access_fence = await _admit_document_scope(
         session,
         scope=scope,
@@ -102,17 +122,9 @@ async def list_ready_version_refs(
             .exists(),
         )
     )
-    if cursor:
-        scoped_cursor = _decode_document_owner_cursor(
-            cursor,
-            kind="ready_versions",
-            fence=access_fence,
-            resource_id=None,
-        )
-        created_at, identifier = decode_cursor(scoped_cursor)
-        statement = statement.where(
-            tuple_(Document.created_at, Document.id) < (created_at, identifier)
-        )
+    position = _ready_cursor_position(cursor, access_fence) if cursor else None
+    if position is not None:
+        statement = statement.where(tuple_(Document.created_at, Document.id) < position)
     rows = list(
         (
             await session.execute(

@@ -50,22 +50,28 @@ export interface FeedQueryInputs {
   channelIds: string[];
   language: string;
   windowSince: string | undefined;
+  /** Telegram feeds page by post time server-side (`published_desc`); other feeds keep the server default. */
+  isTelegram?: boolean;
 }
 
 /**
  * Loads the gadget's documents page by page and, when more than one source can be filtered, their names.
+ * Telegram feeds request `sort: 'published_desc'` so each page is post-time ordered across channels; the sort is
+ * part of the query key so switching a feed's kind never reuses the other order's cached pages.
  *
  * @returns The document infinite query and the source-name query (enabled only for multi-source feeds).
  */
-export function useFeedQueries({ sourceIds, channelIds, language, windowSince }: FeedQueryInputs) {
+export function useFeedQueries({ sourceIds, channelIds, language, windowSince, isTelegram = false }: FeedQueryInputs) {
+  const sort = isTelegram ? ('published_desc' as const) : undefined;
   const docsQuery = useInfiniteQuery({
-    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds, language, windowSince],
+    queryKey: [...documentKeys.all, 'gadget', sourceIds, channelIds, language, windowSince, sort],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       if (sourceIds.length === 0) return { items: [], next_cursor: null };
       return listGadgetDocumentProjections(sourceIds, channelIds, pageParam, {
         language: language === 'any' ? undefined : language,
         since: windowSince,
+        ...(sort ? { sort } : {}),
       });
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,

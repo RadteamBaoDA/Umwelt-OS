@@ -52,6 +52,7 @@ DISPATCHABLE = frozenset(
         "itunes_movies",
         "letterboxd_rss",
         "bluesky",
+        "telegram_public",
         # Built-in RSS/Atom world-data feeds (providers/news.py FEED_URLS).
         "aljazeera_world",
         "npr_news",
@@ -172,6 +173,7 @@ PROVIDER_MIN_INTERVAL_MINUTES: dict[str, int] = {
             "google_news",
             "gdelt_economy",
             "bluesky",
+            "telegram_public",
             "gdacs_rss",
             "gdacs_events",
             "emsc_quakes",

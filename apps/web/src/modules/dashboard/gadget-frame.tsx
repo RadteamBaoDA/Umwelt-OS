@@ -558,7 +558,8 @@ function ExpandedDialog({
           <DialogTitle className="text-lg font-semibold leading-snug">{title}</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground">{t('gadget.expandedDescription', { title })}</DialogDescription>
         </DialogHeader>
-        <div ref={attachHost} className="min-h-0 flex-1 overflow-auto overscroll-contain p-6" />
+        {/* Same named container as the inline body, so renderers' @[..]/gadget: queries (card columns, lead) apply here too. */}
+        <div ref={attachHost} className="@container/gadget min-h-0 flex-1 overflow-auto overscroll-contain p-6" />
       </DialogContent>
     </Dialog>
   );

@@ -246,6 +246,7 @@ def test_registration_agrees_across_registry_sources_and_scope_validators(provid
     SourceCreate(type=source_type, name="n", provider=provider)  # sources schema map agrees
     scope = {
         "bluesky": {"bluesky_actor": "example.bsky.social"},
+        "telegram_public": {"telegram_public_channel": "vnwallstreet"},
         "reddit": {"reddit_subreddit": "python"},
         "mastodon": {
             "mastodon_instance_url": "https://mastodon.social",

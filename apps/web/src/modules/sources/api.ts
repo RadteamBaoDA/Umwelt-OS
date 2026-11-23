@@ -94,6 +94,8 @@ export type ConnectorConfig = {
   /** Numeric video category id (1-4 digits) for the most-popular chart. */
   youtube_video_category_id?: string | null;
   bluesky_actor?: string;
+  /** Public Telegram channel username (also accepted as a t.me link; the API normalizes it). */
+  telegram_public_channel?: string;
   mastodon_instance_url?: string;
   mastodon_account?: string;
   mastodon_hashtag?: string;

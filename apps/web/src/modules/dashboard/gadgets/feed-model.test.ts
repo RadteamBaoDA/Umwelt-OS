@@ -63,11 +63,44 @@ describe('feed model', () => {
       timestamp: '2026-01-02T00:00:00Z',
     });
     expect(documentsToItems([doc()], true, 'telegram')).toEqual([]);
+    const publicDoc = doc({
+      canonical_url: 'https://t.me/vnwallstreet/10',
+      image_url: '/api/media/signed',
+      provider_metadata: {
+        provider: 'telegram_public',
+        source_fields: { author: 'Wall Street VN', canonical_url: 'https://t.me/vnwallstreet/10' },
+      } as unknown as FeedDocument['provider_metadata'],
+    });
+    expect(documentsToItems([publicDoc], true, 'telegram')[0]).toMatchObject({
+      channelLabel: 'Wall Street VN',
+      author: 'Wall Street VN',
+      messageId: '10',
+      url: 'https://t.me/vnwallstreet/10',
+      imageUrl: '/api/media/signed',
+    });
     expect(documentsToItems([doc({ read_at: 'x', published_at: null })], false, 'document')[0]).toMatchObject({
       read: true,
       timestamp: '2026-01-03T00:00:00Z',
       url: 'https://example.com/a',
     });
+  });
+
+  it('preserves server order for Telegram and other feeds (the server sorts Telegram by post time)', () => {
+    const tg = (id: string, at: string) =>
+      doc({
+        document_id: id,
+        published_at: at,
+        provider_metadata: { provider: 'telegram_public', source_fields: {} } as unknown as FeedDocument['provider_metadata'],
+      });
+    // Server order (published_desc) is already newest post first across channels; no client re-sort.
+    const docs = [
+      tg('b1', '2026-01-02T06:00:00Z'),
+      tg('a1', '2026-01-02T05:00:00Z'),
+      tg('b2', '2026-01-02T03:00:00Z'),
+      tg('a2', '2026-01-02T01:00:00Z'),
+    ];
+    expect(documentsToItems(docs, true, 'telegram').map((i) => i.id)).toEqual(['b1', 'a1', 'b2', 'a2']);
+    expect(documentsToItems(docs, false, 'document').map((i) => i.id)).toEqual(['b1', 'a1', 'b2', 'a2']);
   });
 
   it('filters by hidden version, unread, source and text', () => {

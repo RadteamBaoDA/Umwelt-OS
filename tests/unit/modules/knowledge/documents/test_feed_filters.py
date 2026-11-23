@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import WorkspaceContext
-from modules.knowledge.documents import public
+from modules.knowledge.documents import _news, public
 from modules.knowledge.documents._news import _extract_media_projection
 
 WS = uuid4()
@@ -268,6 +268,7 @@ async def test_media_type_filter_includes_legacy_youtube_provider_fallback() -> 
         {"min_rating": 101.0},
         {"release_window_days": 91},
         {"sort": "rating_desc"},
+        {"sort": "published_desc_x"},
     ],
 )
 async def test_invalid_media_filters_raise_value_error(bad_kwargs: dict[str, Any]) -> None:
@@ -456,3 +457,38 @@ def test_contract_skip_warning_is_logged_once_per_version(caplog: pytest.LogCapt
                 None,
             )
     assert sum("violates contract" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_published_desc_orders_by_post_time_chain_then_id_desc() -> None:
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), sort="published_desc", **KW
+    )
+    sql = _sql(session)
+    # Post time falls back to observed_at (telegram_public has no published_at) then created_at.
+    assert (
+        "ORDER BY coalesce(documents.published_at, documents.observed_at, documents.created_at)"
+        " DESC, documents.id DESC" in sql
+    )
+
+
+@pytest.mark.asyncio
+async def test_published_desc_keyset_page_uses_strict_less_than_on_post_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor_ts = datetime(2026, 1, 2, tzinfo=UTC)
+    cursor_id = uuid4()
+    monkeypatch.setattr(
+        _news, "_decode_news_projection_cursor", lambda _cursor, _fp: (cursor_ts, cursor_id)
+    )
+    session = _session()
+    await public.list_gadget_document_projections(
+        session, source_ids=(uuid4(),), cursor="opaque", sort="published_desc", **KW
+    )
+    sql = _sql(session)
+    assert (
+        "coalesce(documents.published_at, documents.observed_at, documents.created_at), documents.id) <"
+        in sql
+    )
+    assert "documents.created_at, documents.id) <" not in sql

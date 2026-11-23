@@ -143,6 +143,30 @@ async def _native_bluesky(call: NativeCall) -> None:
     )
 
 
+async def _native_telegram_public(call: NativeCall) -> None:
+    """Public Telegram channel web preview; fences the credential and accepts the receipt itself."""
+    from modules.connectors.providers.telegram_public import collect_telegram_public_channel
+
+    run, gate = call.run, call.run.gate
+    config = connectors.ConnectorConfig.model_validate(run.attempt.source.configuration)
+    page = await collect_telegram_public_channel(
+        config.telegram_public_channel or "",
+        collected_at=call.collected_at,
+        fetch_bytes=lambda url: gate.fetch_bytes(
+            url, max_bytes=5 * 1024 * 1024, headers={"Accept": "text/html"}
+        ),
+    )
+    await _credential_fence(run)
+    await _accept_native(
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
+        cursor_after=page.cursor_after,
+    )
+
+
 async def _native_reddit(call: NativeCall) -> None:
     """Reddit subreddit listing under the exact Reddit grant; accepts the receipt itself."""
     from modules.connectors.providers.social_networks import collect_reddit_subreddit
@@ -561,6 +585,7 @@ register_native_provider(("steam_releases", "igdb_games"), _native_steam_igdb)
 register_native_provider(("youtube", "arxiv"), _native_feed)
 register_native_provider(("huggingface",), _native_huggingface)
 register_native_provider(("bluesky",), _native_bluesky)
+register_native_provider(("telegram_public",), _native_telegram_public)
 register_native_provider(("reddit",), _native_reddit)
 register_native_provider(("mastodon", "x"), _native_mastodon_x)
 register_native_provider(("google_mail", "google_calendar", "google_drive"), _native_google)

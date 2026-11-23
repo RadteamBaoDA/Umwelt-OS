@@ -108,6 +108,7 @@ export const SCOPE_HINT_KEY = {
   arxiv_category: 'scopeHint.arxiv_category',
   huggingface_author: 'scopeHint.huggingface_author',
   bluesky_actor: 'scopeHint.bluesky_actor',
+  telegram_public_channel: 'scopeHint.telegram_public_channel',
   reddit_subreddit: 'scopeHint.reddit_subreddit',
   mastodon_instance_url: 'scopeHint.mastodon_instance_url',
   mastodon_account: 'scopeHint.mastodon_account',

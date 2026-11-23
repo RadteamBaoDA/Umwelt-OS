@@ -96,6 +96,10 @@ _PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] 
         "GitHub owner and repository are required",
     ),
     "bluesky": (lambda c: not c.bluesky_actor, "A Bluesky handle or DID is required"),
+    "telegram_public": (
+        lambda c: not c.telegram_public_channel,
+        "A public Telegram channel username is required",
+    ),
     "mastodon": (
         lambda c: bool(c.mastodon_account) == bool(c.mastodon_hashtag),
         "Choose exactly one Mastodon account or hashtag",
@@ -238,6 +242,7 @@ def _validate_generic_source(source: ConnectorSource) -> dict[str, Any]:
             "arxiv_category",
             "huggingface_author",
             "bluesky_actor",
+            "telegram_public_channel",
             "github_owner",
             "github_repository",
             "include_issues",

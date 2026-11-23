@@ -107,6 +107,7 @@ export const PROVIDER_LABEL_KEY = {
   hacker_news: 'provider.hackerNews',
   mastodon: 'provider.mastodon',
   bluesky: 'provider.bluesky',
+  telegram_public: 'provider.telegramPublic',
   x: 'provider.x',
   vietnamese_press: 'provider.vietnamesePress',
   gdelt: 'provider.gdelt',

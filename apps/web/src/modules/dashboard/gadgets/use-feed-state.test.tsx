@@ -88,6 +88,19 @@ describe('useFeedQueries', () => {
     await waitFor(() => expect(mocks.listSources).toHaveBeenCalled());
   });
 
+  it('requests published_desc only for Telegram feeds and keys the cache by it', async () => {
+    mocks.listProjections.mockResolvedValue({ items: [], next_cursor: null });
+    const { wrapper } = makeWrapper();
+    renderHook(() => useFeedQueries({ sourceIds: ['s1'], channelIds: [], language: 'any', windowSince: undefined, isTelegram: true }), {
+      wrapper,
+    });
+    await waitFor(() => expect(mocks.listProjections).toHaveBeenCalled());
+    expect(mocks.listProjections.mock.calls[0][3]).toEqual({ language: undefined, since: undefined, sort: 'published_desc' });
+    renderHook(() => useFeedQueries({ sourceIds: ['s1'], channelIds: [], language: 'any', windowSince: undefined }), { wrapper });
+    await waitFor(() => expect(mocks.listProjections).toHaveBeenCalledTimes(2));
+    expect(mocks.listProjections.mock.calls[1][3]).not.toHaveProperty('sort');
+  });
+
   it('omits the language filter for "any"', async () => {
     mocks.listProjections.mockResolvedValue({ items: [], next_cursor: null });
     const { wrapper } = makeWrapper();

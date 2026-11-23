@@ -1,7 +1,9 @@
 """Documents routes pass the workspace scope/flag to converted owners (no DB, no HTTP)."""
 
 import dataclasses
+import inspect
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -94,6 +96,43 @@ async def test_dashboard_projections_route_forwards_media_filters_and_sort() -> 
     assert kw["min_rating"] == 80.0
     assert kw["release_window_days"] == 14
     assert kw["sort"] == "release_date_asc"
+
+
+def test_dashboard_projections_route_sort_literal_lists_the_three_sorts() -> None:
+    """The route Query Literal admits the three projection sorts and nothing else."""
+    annotation = inspect.signature(routes.list_dashboard_projections).parameters["sort"].annotation
+    literal = get_args(annotation)[0]
+    assert get_args(literal) == ("created_at_desc", "release_date_asc", "published_desc")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_projections_route_forwards_published_desc_sort() -> None:
+    owner_call = AsyncMock(return_value="ok")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    multi_workspace_enabled=False,
+                    csrf_signing_secret=SimpleNamespace(get_secret_value=lambda: "s"),
+                ),
+                redis=None,
+            )
+        )
+    )
+    with (
+        patch.object(routes.public, "list_gadget_document_projections", owner_call),
+        patch.object(
+            routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)
+        ),
+    ):
+        await routes.list_dashboard_projections(
+            session=object(),
+            request=request,
+            workspace=SCOPE,
+            source_ids=[uuid4()],
+            sort="published_desc",
+        )
+    assert owner_call.await_args.kwargs["sort"] == "published_desc"
 
 
 @pytest.mark.asyncio
