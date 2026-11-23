@@ -127,7 +127,7 @@ def test_fit_context_budget_keeps_first_and_enforces_exact_selection() -> None:
     request = AnswerContextRequest(query="q", context_budget_bytes=1000)
     kept, total = retrieval._fit_context_budget(request, [big, small])
     assert kept == [big] and total == 800
-    exact = SimpleNamespace(context_budget_bytes=1000, selected_only=True)
+    exact = SimpleNamespace(context_budget_bytes=1000, selected_only=True, anchored=False)
     with pytest.raises(ValueError, match="exceeds the bounded chat context budget"):
         retrieval._fit_context_budget(exact, [big, small])  # type: ignore[arg-type]
 

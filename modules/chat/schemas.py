@@ -189,6 +189,9 @@ class AnswerContextRequest(BaseModel):
         default_factory=list, max_length=MAX_SELECTED_REFS
     )
     selected_only: bool = False
+    # Server-derived only (set from a validated one-record anchor selection). The anchor's selected_refs are
+    # collected first and kept ahead of search results within a half-budget cap; search still runs.
+    anchored: bool = False
     selection_fences: list[GadgetDocumentSelectionFence] = Field(
         default_factory=list, max_length=32
     )
