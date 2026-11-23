@@ -6,6 +6,19 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "umwelt-workers-fe",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["concurrently", "-k", "-n", "be,worker,cron,model,chat,fe", "npm:dev:be", "uv run --env-file .env python -m arq apps.worker.main.WorkerSettings", "uv run --env-file .env python -m arq apps.worker.main.CronWorkerSettings", "uv run --env-file .env python -m arq apps.worker.main.ModelWorkerSettings", "uv run --env-file .env python -m arq apps.worker.main.ChatWorkerSettings", "npm:dev:fe"],
+      "port": 3000
+    },
+    {
+      "name": "umwelt-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:be"],
+      "port": 8000,
+      "url": "http://localhost:8000"
     }
   ]
 }
