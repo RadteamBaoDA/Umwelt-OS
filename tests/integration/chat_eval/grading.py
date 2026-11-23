@@ -8,6 +8,9 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
+
+from tests.integration.chat_eval.cases import Case
 
 _ID_KEYS = ("observations", "documents", "rows")
 
@@ -52,6 +55,24 @@ def recall(gold: set[str], got: set[str]) -> float | None:
     if not gold:
         return None
     return len(gold & got) / len(gold)
+
+
+def scope_ids(case: Case, sources: Mapping[str, UUID]) -> list[str] | None:
+    """The case's source scope as id strings, or None when the case is unscoped.
+
+    Raises KeyError for a scope key the matrix did not seed, so a typo in a case fails loudly instead of
+    silently widening the scope to the whole workspace.
+    """
+    if not case.source_scope:
+        return None
+    return [str(sources[key]) for key in case.source_scope]
+
+
+def min_recall_ok(min_recall: float | None, retrieval: float | None) -> bool | None:
+    """True when retrieval met the case's ``min_recall``; None when either side is unset (no gold or no floor)."""
+    if min_recall is None or retrieval is None:
+        return None
+    return retrieval >= min_recall
 
 
 def scope_leak(

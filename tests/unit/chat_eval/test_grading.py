@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
+import pytest
+
+from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.grading import (
     extract_row_ids,
     hidden_miss,
+    min_recall_ok,
     recall,
+    scope_ids,
     scope_leak,
     summarize_recall,
 )
@@ -78,3 +85,19 @@ def test_summarize_recall_per_category() -> None:
     assert out["hidden_miss"] == 1
     assert out["recall_by_category"]["latest"]["retrieval"] == 0.5
     assert out["recall_by_category"]["latest"]["scope_leaks"] == 1
+
+
+def test_scope_keys_to_ids() -> None:
+    u = uuid4()
+    scoped = Case("x", "cat", "en", "q", source_scope=("fx",))
+    assert scope_ids(scoped, {"fx": u}) == [str(u)]
+    assert scope_ids(Case("y", "cat", "en", "q"), {"fx": u}) is None
+    with pytest.raises(KeyError):
+        scope_ids(Case("z", "cat", "en", "q", source_scope=("nope",)), {"fx": u})
+
+
+def test_min_recall_ok() -> None:
+    assert min_recall_ok(None, 0.1) is None
+    assert min_recall_ok(0.5, None) is None
+    assert min_recall_ok(0.5, 0.4) is False
+    assert min_recall_ok(0.5, 0.5) is True

@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -53,7 +53,9 @@ from tests.integration.chat_eval.grading import (
     RowIds,
     extract_row_ids,
     hidden_miss,
+    min_recall_ok,
     recall,
+    scope_ids,
     scope_leak,
     summarize_recall,
 )
@@ -268,7 +270,11 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
     skills = list_skills()
     locale = "vi-VN" if case.lang == "vi" else "en-US"
     answer_context = AnswerContext(query=case.q, evidence=[])
+    # Scoped cases pin the tool to their sources; the tool reads the allow-list from req_params.
+    scope = scope_ids(case, m.sources)
     req_params: dict[str, Any] = {"timezone": TZ}
+    if scope is not None:
+        req_params["source_scope"] = scope
     turn_inputs = SimpleNamespace(day_scope=None, req_params=req_params, web_run=None)
     system_text = _compose_system_text(
         turn_inputs,  # type: ignore[arg-type]
@@ -335,7 +341,13 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
         user_prompt=case.q,
         req_params=req_params,
         answer_context=answer_context,
-        answer_request=AnswerContextRequest(query=case.q),
+        answer_request=(
+            AnswerContextRequest(
+                query=case.q, source_scope=[UUID(s) for s in scope], source_scope_enforced=True
+            )
+            if scope is not None
+            else AnswerContextRequest(query=case.q)
+        ),
         web_run=None,
         prior_messages=[{"role": "assistant", "content": a} for _u, a in case.history],
     )
@@ -378,13 +390,19 @@ async def _run_turn(case: Case, m: Matrix, engine: AsyncEngine) -> dict[str, Any
 
 
 def _grade(
-    case: Case, out: dict[str, Any], rec: Recorder, key_map: Mapping[str, str] | None = None
+    case: Case,
+    out: dict[str, Any],
+    rec: Recorder,
+    key_map: Mapping[str, str] | None = None,
+    scope: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply every criterion; ``None`` means not applicable. Pure.
 
     ``key_map`` resolves case keys (``gold_keys``, ``forbid_keys``) to document version id strings. It is empty
     until the matrix seed publishes its ids, so gold and forbidden sets are empty and recall is None.
-    Retrieval is the union of SQL-row ids and the turn's evidence; answer recall uses the kept citations.
+    ``scope`` is the case's source-id allow-list from ``scope_ids`` (None when unscoped); any retrieved source
+    outside it is a scope leak. Retrieval is the union of SQL-row ids and the turn's evidence; answer recall
+    uses the kept citations.
     """
     answer: str = out["final_answer"]
     keys = key_map or {}
@@ -425,13 +443,15 @@ def _grade(
     # hidden_miss looks only at the criteria above: a recall leg is a diagnosis, not a pass/fail input.
     retrieval_recall = recall(gold, retrieved_versions)
     answer_recall = recall(gold, out["cited_versions"])
+    # A pass/fail floor on retrieval; not in _DIAGNOSTIC, so a False fails the case and suppresses hidden_miss.
+    criteria["min_recall_ok"] = min_recall_ok(case.min_recall, retrieval_recall)
     criteria["hidden_miss"] = hidden_miss(criteria, retrieval_recall, answer_recall)
     criteria["retrieval_recall"] = retrieval_recall
     criteria["answer_recall"] = answer_recall
-    # Scope is enforced through forbid_keys only: a source_scope needs source ids in key_map (Task 5).
+    allowed = set(scope) if scope is not None else None
     criteria["scope_leak"] = (
-        scope_leak(retrieved_sources, None, forbidden, retrieved_versions)
-        if case.forbid_keys
+        scope_leak(retrieved_sources, allowed, forbidden, retrieved_versions)
+        if case.forbid_keys or allowed is not None
         else None
     )
     return criteria
@@ -521,7 +541,7 @@ async def test_real_model_eval(
                 )
                 entry |= {
                     "status": "completed",
-                    "criteria": _grade(case, out, rec),
+                    "criteria": _grade(case, out, rec, scope=scope_ids(case, matrix.sources)),
                     "answer": out["answer"],
                     "tool_args": [c["args"] for c in rec.tool_calls],
                     "tool_results": [
