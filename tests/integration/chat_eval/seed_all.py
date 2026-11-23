@@ -4,15 +4,23 @@ Every provider with a fixture under ``tests/fixtures/providers`` is either seede
 production mapper (fed the offline body) or listed in ``NOT_SEEDED`` with the reason. Providers the matrix
 already seeds, and fixtures whose records would change an existing case's answer, stay out. Source keys
 are ``fx_<provider>``; they never reuse a matrix key.
+
+A provider whose normalize stage does not settle does not abort the seed: its source is archived so chat
+cannot read its rows, its failure is appended to the returned report with the normalize stage error code and
+the observation row error codes read from the database, and seeding continues. The matrix seed and the planted
+gold keep failing loudly.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
+from uuid import UUID
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modules.connectors.backends import PROVIDER_SOURCE_TYPES
@@ -26,6 +34,7 @@ from tests.integration.test_chat_collected_data_matrix import (
     Matrix,
     _create_source,
     _ingest,
+    _set,
 )
 from tests.unit.modules.connectors.p3_helpers import fixture
 
@@ -63,6 +72,11 @@ _RSS_PROVIDERS = frozenset({"bbc_world", "fed_press", "github_trending", "google
 _AV_CONFIG = ConnectorConfig(
     market_symbols=("IBM",), market_currency="USD", market_exchange_timezone="America/New_York"
 )
+# The market scope fields (symbols, currency, timezone) must be stored on the source. Chat reads a market
+# point only when its scope is verifiable; an alpha_vantage source without them fails the normalize stage
+# ("missing its scope") for every row. Same dump the matrix stores for its market sources.
+_AV_CONFIG_DUMP: dict[str, Any] = _AV_CONFIG.model_dump(mode="json", exclude_none=True)
+_CONFIGURATION: Mapping[str, dict[str, Any]] = {"alpha_vantage": _AV_CONFIG_DUMP}
 _MATRIX_SEEDS = "the matrix already seeds this provider"
 _BTC_DISTRACTOR = (
     "carries a BTC USD price; a second BTC price would change the unscoped btc_* case answers"
@@ -116,6 +130,50 @@ NOT_SEEDED: tuple[tuple[str, str, str], ...] = (
 )
 
 
+def normalize_failure_reason(stage_code: str | None, row_codes: Mapping[str, int]) -> str:
+    """Render the report reason for a provider whose normalize stage did not succeed.
+
+    Pure formatting, testable without a database. ``stage_code`` is the normalize stage's ``error_code``
+    (None when unset); ``row_codes`` maps each observation row error code to its count. Codes are sorted
+    so the same failure always renders the same reason.
+    """
+    stage = stage_code or "none"
+    rows = ", ".join(f"{code} x{count}" for code, count in sorted(row_codes.items())) or "none"
+    return f"normalize stage failed (error_code={stage}); row error_codes: {rows}"
+
+
+async def _normalize_failure(
+    engine: AsyncEngine, source_id: UUID
+) -> tuple[str | None, dict[str, int]]:
+    """Read the normalize stage error code of the source's newest run and its per-row error counts.
+
+    Read-only. Runs are ordered newest first, so a retried source reports its latest failure. Row codes
+    live on ``observation_normalizations`` because they are set per observation, not per stage.
+    """
+    async with engine.connect() as conn:
+        stage_code: str | None = (
+            await conn.execute(
+                text(
+                    "SELECT st.error_code FROM ingestion_stages st "
+                    "JOIN ingestion_runs r ON r.id = st.run_id "
+                    "WHERE r.source_id = :i AND st.stage_key = 'normalize' "
+                    "ORDER BY r.created_at DESC LIMIT 1"
+                ),
+                {"i": source_id},
+            )
+        ).scalar_one_or_none()
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT error_code, count(*) FROM observation_normalizations "
+                    "WHERE source_id = :i AND error_code IS NOT NULL GROUP BY error_code"
+                ),
+                {"i": source_id},
+            )
+        ).all()
+    return stage_code, {str(code): cast(int, count) for code, count in rows}
+
+
 def _provider_records(provider: str, bodies: Sequence[bytes]) -> list[IngestionRecord]:
     """Map one provider's offline bodies with its production mapper; no I/O.
 
@@ -138,11 +196,15 @@ def _provider_records(provider: str, bodies: Sequence[bytes]) -> list[IngestionR
 
 
 async def seed_all(client: AsyncClient, engine: AsyncEngine, m: Matrix) -> list[dict[str, str]]:
-    """Create and ingest one source per entry of ``SEEDED``; return the ``NOT_SEEDED`` report rows.
+    """Create and ingest one source per entry of ``SEEDED``; return the ``NOT_SEEDED`` rows plus failures.
 
-    Each source is created through the matrix helper (its key lands in ``m.sources``) and ingested
-    through the real normalization path. A normalization failure raises from ``_ingest``.
+    Each source is created through the matrix helper (its key lands in ``m.sources``) with its stored
+    configuration where the mapper's scope needs one, then ingested through the real normalization path.
+    When a provider's normalize stage does not settle, ``_ingest`` raises ``pytest.fail``; that one outcome
+    is caught here. The source is archived (chat excludes archived sources), its failure is appended with the
+    database error codes, and the next provider is seeded. Mapper and source-creation errors are not caught.
     """
+    failures: list[dict[str, str]] = []
     for provider, fixtures in SEEDED.items():
         key = f"fx_{provider}"
         await _create_source(
@@ -152,9 +214,24 @@ async def seed_all(client: AsyncClient, engine: AsyncEngine, m: Matrix) -> list[
             key,
             provider=provider,
             source_type=PROVIDER_SOURCE_TYPES[provider],
+            configuration=_CONFIGURATION.get(provider),
         )
-        await _ingest(engine, m, key, _provider_records(provider, [fixture(f) for f in fixtures]))
+        records = _provider_records(provider, [fixture(f) for f in fixtures])
+        try:
+            await _ingest(engine, m, key, records)
+        except (
+            pytest.fail.Exception
+        ):  # the matrix _ingest reports an unsettled normalize stage this way
+            stage_code, row_codes = await _normalize_failure(engine, m.sources[key])
+            await _set(engine, m, key, "status = 'archived'")
+            failures.append(
+                {
+                    "provider": provider,
+                    "fixture": ", ".join(fixtures),
+                    "reason": normalize_failure_reason(stage_code, row_codes),
+                }
+            )
     return [
         {"provider": provider, "fixture": name, "reason": reason}
         for name, provider, reason in NOT_SEEDED
-    ]
+    ] + failures

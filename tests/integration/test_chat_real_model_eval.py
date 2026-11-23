@@ -7,6 +7,11 @@ citation validation) with a real OpenAI-compatible model (base URL, model, key r
 runtime only; the key is never printed or written, and error text is masked). The seed is the one from
 ``test_chat_collected_data_matrix``. The run is graded per case and written to
 ``test-results/chat-eval/report-<timestamp>.json``; the test asserts only that the run completed.
+
+Seed-only verification: ``CHAT_EVAL_ONLY=__seed_only__`` seeds the matrix, every ``seed_all`` provider and the
+planted gold, then writes ``test-results/chat-eval/report-<timestamp>.json`` with ``mode: "seed_only"``, the
+``not_seeded`` rows (including providers whose normalization failed) and ``key_map_size``. No case runs and no
+model is called. Any other ``CHAT_EVAL_ONLY`` value still selects case ids.
 """
 
 from __future__ import annotations
@@ -95,6 +100,9 @@ REPORT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "chat-eval"
 CONCURRENCY = 3
 CASE_TIMEOUT_S = 170.0
 DEADLINE_S = 25 * 60.0  # cases not started by then are reported as skipped
+SEED_ONLY_MODE = (
+    "__seed_only__"  # CHAT_EVAL_ONLY value: seed everything, write the report, run no case
+)
 
 
 def _load_env() -> dict[str, str]:
@@ -524,7 +532,25 @@ async def test_real_model_eval(
     ready_owner_client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run every selected case on each selected leg against the real model, write the report, assert only completion."""
+    """Run every selected case on each selected leg against the real model, write the report, assert only completion.
+
+    With ``CHAT_EVAL_ONLY=__seed_only__`` the seed fixture has already run; the report records what seeded
+    (``not_seeded`` and the planted key count) and the test returns before any case, grader or model call.
+    """
+    if os.getenv("CHAT_EVAL_ONLY", "").strip() == SEED_ONLY_MODE:
+        seed_report: dict[str, Any] = {
+            "mode": "seed_only",
+            "generated_at": datetime.now(UTC).isoformat(),
+            "not_seeded": eval_seed.not_seeded,
+            "key_map_size": len(eval_seed.key_map),
+        }
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        seed_path = REPORT_DIR / f"report-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+        seed_path.write_text(
+            json.dumps(seed_report, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+        )
+        print(f"\nCHAT EVAL SEED REPORT {seed_path}")
+        return
     # Paused sources stay readable by design; archive the paused distractor so "latest" has one right answer.
     await _set(committed_engine, matrix, "bn_paused", "status = 'archived'")
     real_tool = tools.execute_db_query_tool  # type: ignore[attr-defined]
