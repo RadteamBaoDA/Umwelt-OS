@@ -106,8 +106,8 @@ async def _no_sleep(_seconds: float) -> None:
 @pytest.mark.asyncio
 async def test_drain_indexing_returns_count_after_retry_and_drained_pass() -> None:
     # Pass 1 finds nothing yet, pass 2 is deferred by the worker's heavy slot, pass 3 drains.
-    step = _scripted([0, Retry(), 0])
-    counts = _scripted_counts([0, 0, 5])
+    step = _scripted([0, Retry(), TimeoutError(), 0])
+    counts = _scripted_counts([0, 0, 0, 5])
 
     async def describe() -> str:
         return "unused"

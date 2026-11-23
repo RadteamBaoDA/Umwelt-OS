@@ -265,7 +265,7 @@ async def drain_indexing(
     """Run indexing passes until the run is drained and something is indexed; return the indexed count.
 
     Each pass calls ``step`` (returns the chunks it indexed, or raises ``arq.Retry`` when the worker's heavy slot
-    defers it) and then ``count`` (succeeded chunks of the active generation, including those the cron worker
+    defers it, or TimeoutError when waiting for that slot expires) and then ``count`` (succeeded chunks of the active generation, including those the cron worker
     indexed). The run is drained when a pass completed without a Retry and returned 0, and it is finished once
     ``count`` is positive. Waits ``pause`` seconds after each unfinished pass. Raises AssertionError after
     ``bound`` passes, with ``describe()`` (the latest generation's status and error code) in the message.
@@ -273,8 +273,9 @@ async def drain_indexing(
     for _ in range(bound):
         try:
             drained = await step() == 0
-        except Retry:
-            # The worker holds the heavy slot: this pass did no work, so it cannot prove the run is drained.
+        except (Retry, TimeoutError):
+            # The worker holds the heavy slot (Retry when deferred, TimeoutError when the slot wait expires, e.g.
+            # while it builds the HNSW index): this pass did no work, so it cannot prove the run is drained.
             drained = False
         indexed = await count()
         if drained and indexed > 0:
