@@ -799,7 +799,8 @@ def _fit_context_budget(
 
     For an anchored request the anchor chunks are fitted first, into at most half the budget, and
     workspace search items then fill up to the full budget, so the output lists anchor items first.
-    Anchor items beyond the half-budget are dropped, which is why the anchor cap lives here.
+    The first anchor chunk is always kept, even when it alone exceeds the half-budget cap; later
+    anchor chunks beyond the half-budget are dropped, which is why the anchor cap lives here.
 
     Raises:
         ValueError: when an exact gadget selection does not fit entirely.

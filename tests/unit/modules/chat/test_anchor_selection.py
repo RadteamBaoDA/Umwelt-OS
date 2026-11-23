@@ -12,6 +12,7 @@ import pytest
 from core.errors import ConflictError, DomainError
 from modules.chat._public import conversations
 from modules.chat._worker.base import _pin_task_thread_scope
+from modules.chat.db_query import turn_source_scope
 from modules.chat.public import reject_unsendable_selection, resolve_gadget_context
 
 _DOC = "modules.knowledge.documents.public"
@@ -75,9 +76,17 @@ async def test_anchor_single_item_resolves_unfenced() -> None:
     result = await _resolve(p, {"kind": "selection", "anchor": True, "items": [_item(p)]})
     assert result["selected_only"] is False
     assert result["anchored"] is True
-    assert result["source_scope"] == []
+    assert "source_scope" not in result
     assert len(result["selected_refs"]) == 3
     assert len(result["selection_fences"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_anchor_turn_source_scope_is_unrestricted() -> None:
+    """An anchored turn has no source allow-list, so collected-data queries see the whole workspace."""
+    p = _projection(chunk_count=2, truncated=False)
+    result = await _resolve(p, {"kind": "selection", "anchor": True, "items": [_item(p)]})
+    assert turn_source_scope(result) is None
 
 
 @pytest.mark.asyncio

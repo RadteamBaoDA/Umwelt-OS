@@ -409,8 +409,12 @@ async def resolve_gadget_context(
     captured generation/scope before reading, reranking, remote egress, or streaming callbacks.
 
     A selection with ``anchor: true`` must hold exactly one item. It resolves like an exact selection
-    but returns ``selected_only: False``, an empty ``source_scope`` and a server-derived
-    ``anchored: True`` so retrieval keeps workspace search on. Client-sent ``anchored`` and
+    but returns ``selected_only: False``, a server-derived ``anchored: True`` so retrieval keeps
+    workspace search on, and no ``source_scope`` key. The omitted key makes ``turn_source_scope``
+    return ``None``, so retrieval and ``query_collected_data`` both treat the turn as unscoped
+    (whole workspace), like plain chat. Anchored selections store ``selection_fences`` only for the
+    local-only refusal and web-search scoping; they are not used for exact read/stream revalidation,
+    where only the source fence snapshot applies. Client-sent ``anchored`` and
     ``selected_only`` keys are never copied through. Read-only; raises ``DomainError`` subclasses
     (422 invalid/too large/anchor with several items, 409 stale/unavailable).
     """
@@ -450,8 +454,8 @@ async def resolve_gadget_context(
     )
 
     if anchor:
+        # No ``source_scope`` key: an empty list would read as "no sources" in ``_allowed_sources``.
         return {
-            "source_scope": [],
             "selected_refs": refs,
             "selection_fences": [fence.model_dump(mode="json") for fence in selection_fences],
             "selected_only": False,

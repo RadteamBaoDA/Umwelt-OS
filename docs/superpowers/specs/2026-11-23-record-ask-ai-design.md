@@ -83,7 +83,8 @@ The record is the anchor, not a fence.
 
 - `resolve_gadget_context`: same per-item resolution, refs and fences. When `anchor` is true, return
   `selected_refs` and `selection_fences` (fences still feed `reject_unsendable_selection`), set
-  `selected_only: False`, `source_scope: []` (no filter, plain-chat meaning), and a server-derived
+  `selected_only: False`, no `source_scope` key (omitted, so retrieval and `query_collected_data` both
+  treat the turn as unscoped, plain-chat meaning), and a server-derived
   `anchored: True` marker. Strip client-sent `anchored` like `selected_only` today.
 - Long records *(design call)*: in anchor mode the resolver does not raise 422 for a truncated document; it
   takes the document's leading chunks up to the anchor cap below. Exact selection keeps the 422.
