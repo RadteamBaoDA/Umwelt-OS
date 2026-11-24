@@ -1,4 +1,30 @@
 <!-- scheduled-tasks-phase1-status:start -->
+## 2026-11-24 - Chat retrieval eval and three search/rerank fixes, branch enhance/chat-datasource
+
+Spec `docs/superpowers/specs/2026-11-23-chat-retrieval-eval-design.md`, plan `docs/superpowers/plans/2026-11-23-chat-retrieval-eval.md`. The opt-in eval (`tests/integration/test_chat_real_model_eval.py`, `tests/integration/chat_eval/`) seeds 21 fixture providers plus planted rows (paraphrase, cross-lingual, volume, attribute, media time, injection, local-only). It runs 101 en/vi cases on two legs: `tool` (`query_collected_data`) and `hybrid` (`build_context`: lexical + pgvector + rerank, follow-up rewrite). It grades retrieval and answer recall against hand-authored gold, scope leaks and hidden misses, and runs a report-only JEV judge (`/api/alpha/decisions`). The spec's "no production change" was overridden by owner rulings for three bugs the eval exposed:
+- `81335a23`: search embed calls passed no `before_send`, so the vector leg always failed and fell back to lexical without the user seeing it.
+- `12469670` + `6154ab84`: the HNSW build ran inside `heavy_job_slot`, and `CREATE INDEX CONCURRENTLY` waited on the slot's own transaction, so no generation ever activated. The build now runs after the slot is released, the woken next pass activates the generation, and cancelled builds are logged.
+- `6df39175` + `64b12b22`: the gateway ran an equal egress hook twice (`is not` on bound methods). The rerank lock session leaked and timed itself out, so rerank was always unavailable. The lock session is now also closed on gateway failure.
+
+Full run `test-results/chat-eval/report-20261124T083228Z.json` (claude-haiku-5-5, jina-embeddings-v5-text-small, cohere rerank-multilingual-v3.0; 202/202 completed; scope leaks 0 on both legs):
+
+| Leg | Pass | Retrieval recall | Answer recall | Numbers correct | Hidden miss |
+|---|---|---|---|---|---|
+| tool | 71/101 | 0.721 | 0.578 | 71.4% | 12 (paraphrase, stemming, volume summary) |
+| hybrid | 55/101 (about 82 under the later `tool_used` regrade, `61698e1e`) | 0.991 | 0.896 | 89.8% | 2 |
+
+Findings:
+- Lexical `text_query` misses paraphrase and stemmed wording.
+- EMSC magnitude lives only in summary text, so it cannot be filtered (metadata gap).
+- Rerank was applied in 49 of 101 hybrid cases; the rest got HTTP 429 from the provider's trial key, limited to 10 calls/min.
+- Weak hybrid categories: media_time 0/3, followup 0/2, quake 2/4.
+- 7 tool-leg baseline regressions: gdp ×3, weather_avg ×2, bsky_en, empty_stock_en.
+- The JEV judge labels 46 to 52 answers "fabricated", including numerically correct ones, so it is miscalibrated (it has no evidence context) and stays report-only.
+
+Remaining ceiling: an HNSW build longer than the 180 s cron `job_timeout` is retried every tick; a dedicated arq build job is a follow-up.
+
+Evidence: 1304 unit tests passed (chat_eval, search, chat, model gateway); ruff, mypy, lint-imports, size and function-length gates clean; Opus whole-branch review ready with no Critical findings. Not run: Playwright.
+
 ## 2026-11-23 - Live map NEWS translation (`live_event`), backend slice, branch feature/translate-news
 
 Plan `docs/superpowers/plans/2026-11-23-live-event-translation.md`. New translation resource type `live_event` (owner only, inline title/summary snapshot in `content_translations.source_text`, server-recomputed revision, 30-day retention; ADR exception recorded) and migration `0029_translation_live_event`. Backend only: unit tests, ruff, mypy, import contracts pass; migration not applied to a database; frontend slice pending.
