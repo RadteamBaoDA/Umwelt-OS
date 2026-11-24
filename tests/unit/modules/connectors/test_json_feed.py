@@ -180,3 +180,27 @@ def test_json_feed_numeric_fields_skip_non_finite_bool_and_text():
     for rec in map_json_feed(feed, body, NOW):
         fields = rec.metadata["provider_record"]["source_fields"]
         assert "magnitude" not in fields and "depth_km" not in fields
+
+
+def test_emsc_out_of_range_magnitude_or_depth_drops_only_that_field():
+    # Knowledge validator bounds: magnitude [-2, 10], depth_km [-10, 800]. An out-of-range value must not
+    # fail the whole record: the field is skipped and the rest of the quake is kept.
+    feed = JSON_FEEDS["emsc_quakes"]
+    body = (
+        b'{"features":['
+        b'{"id":"a","properties":{"flynn_region":"A","mag":12.5,"depth":9.0}},'
+        b'{"id":"b","properties":{"flynn_region":"B","mag":4.2,"depth":900.0}},'
+        b'{"id":"c","properties":{"flynn_region":"C","mag":-3.0,"depth":-10.5}},'
+        b'{"id":"d","properties":{"flynn_region":"D","mag":5.0,"depth":-10.0}}]}'
+    )
+    fields = {
+        rec.metadata["provider_record"]["source_fields"]["title"]: rec.metadata["provider_record"][
+            "source_fields"
+        ]
+        for rec in map_json_feed(feed, body, NOW)
+    }
+    assert set(fields) == {"A", "B", "C", "D"}
+    assert "magnitude" not in fields["A"] and fields["A"]["depth_km"] == 9.0
+    assert fields["B"]["magnitude"] == 4.2 and "depth_km" not in fields["B"]
+    assert "magnitude" not in fields["C"] and "depth_km" not in fields["C"]
+    assert fields["D"]["magnitude"] == 5.0 and fields["D"]["depth_km"] == -10.0

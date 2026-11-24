@@ -128,6 +128,24 @@ def _item_time(feed: JsonFeed, item: Any, collected_at: datetime) -> datetime | 
     return parse_when(raw, collected_at)
 
 
+# Mirrors the knowledge validator's inclusive bounds for numeric source fields (modules/knowledge
+# documents/_provider_fields.py `_FLOAT_BOUNDS`). Cross-module private import is forbidden, so keep these in
+# sync. A value outside them would fail the whole record at validation, so it is dropped here instead.
+_FIELD_BOUNDS: dict[str, tuple[float, float]] = {
+    "magnitude": (-2.0, 10.0),
+    "depth_km": (-10.0, 800.0),
+}
+
+
+def _in_field_bounds(key: str, value: float) -> bool:
+    """Return True when ``value`` is inside the validator bounds for ``key`` (or ``key`` is unbounded).
+
+    Pure. Used by ``map_json_feed`` to skip only the out-of-range field so the rest of the record survives.
+    """
+    bounds = _FIELD_BOUNDS.get(key)
+    return bounds is None or bounds[0] <= value <= bounds[1]
+
+
 def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
     """Map one fetched JSON body to deduped news-shaped records (<= ``MAX_ROWS_SCANNED``), newest first.
 
@@ -183,7 +201,8 @@ def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[I
             number = _get(item, path)
             # decode_json yields Decimal for JSON numbers; bool is an int subclass and must not pass
             if type(number) in (int, float, Decimal) and math.isfinite(number):
-                fields[key] = float(number)
+                if _in_field_bounds(key, float(number)):
+                    fields[key] = float(number)
         record = _record(
             provider=feed.provider,
             identity=identity,
