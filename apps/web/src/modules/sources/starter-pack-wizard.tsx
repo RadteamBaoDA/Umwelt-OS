@@ -77,7 +77,7 @@ async function createStarterItem(item: PackItem, { csrfToken, builtinById, catal
     const sendName = name && name !== row?.label && (row?.applicable_options?.includes('name') ?? true);
     await enableBuiltinSource(item.provider, 'personal', csrfToken, undefined, {
       graph_enabled: false,
-      rag_index_enabled: false,
+      rag_index_enabled: true,
       ...options,
       ...(sendName ? { name } : {}),
     });

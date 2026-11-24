@@ -430,7 +430,7 @@ function useBuiltinWizardState() {
   const [use, setUse] = useState<DeclaredUse>('personal');
   const [realtimeModeOverride, setRealtimeModeOverride] = useState<RealtimeMode | null>(null);
   const [optionValues, setOptionValues] = useState<BuiltinOptionValues>({});
-  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
+  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: true });
   const [error, setError] = useState<string | null>(null);
   const [createdId, setCreatedId] = useState('');
   /** Selects a built-in row and resets use, realtime override, options (default section) and error. */

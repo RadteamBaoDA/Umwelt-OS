@@ -133,6 +133,15 @@ describe('useConnectorEditor draft', () => {
     expect(result.current.draftVersion.current).toBe(1);
   });
 
+  it('new drafts index for RAG by default, while a saved source keeps its stored switch', async () => {
+    const fresh = mount();
+    await waitFor(() => expect(fresh.result.current.catalog.length).toBeGreaterThan(0));
+    expect(fresh.result.current.aiOptions).toEqual({ graph_enabled: false, rag_index_enabled: true });
+    const saved = mount(existing('telegram'));
+    await waitFor(() => expect(saved.result.current.catalog.length).toBeGreaterThan(0));
+    expect(saved.result.current.aiOptions).toEqual({ graph_enabled: false, rag_index_enabled: false });
+  });
+
   it('changeConfiguration edits one field, bumps the draft version and drops the validation', async () => {
     const { result } = mount();
     act(() => result.current.setValidation({ at: 'now', generation: 1, revision: 0 }));

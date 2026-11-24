@@ -154,7 +154,7 @@ describe('StarterPackWizard', () => {
     await waitFor(() => expect(within(screen.getByTestId('starter-row-hn_top')).getByText('Already added')).toBeTruthy());
     const call = api.enableBuiltinSource.mock.calls.find((args) => args[0] === 'vn_stock')!;
     expect(call[1]).toBe('personal');
-    expect(call[4]).toMatchObject({ vn_symbols: ['FPT', 'VCB'], name: 'My stocks' });
+    expect(call[4]).toMatchObject({ vn_symbols: ['FPT', 'VCB'], name: 'My stocks', rag_index_enabled: true, graph_enabled: false });
   });
 
   it('sends editable job keywords with the default Ho Chi Minh city and blocks more than five', async () => {

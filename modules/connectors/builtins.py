@@ -724,7 +724,8 @@ async def _ensure_active_source(
 ) -> ConnectorSource:
     """Reuse the oldest Source (un-pausing it and applying explicit switches) or create it.
 
-    Steps 1-2 of the enable flow. Rolls back after the lookup, so the found ORM row is
+    A new Source gets ``rag_index_enabled`` from the payload, defaulting to True; an existing
+    Source keeps its stored value unless the payload sends one. Steps 1-2 of the enable flow. Rolls back after the lookup, so the found ORM row is
     refreshed explicitly (lazy IO is illegal under asyncio). 409 when the resulting Source
     is not active.
     """
@@ -741,10 +742,9 @@ async def _ensure_active_source(
                 name=payload.name or spec.label,
                 provider=provider,
                 graph_enabled=bool(payload.graph_enabled),
+                # New collected data is RAG-indexed by default; an explicit owner value always wins.
                 rag_index_enabled=(
-                    payload.rag_index_enabled
-                    if payload.rag_index_enabled is not None
-                    else not spec.skip_embedding
+                    payload.rag_index_enabled if payload.rag_index_enabled is not None else True
                 ),
             ),
             scope=scope,

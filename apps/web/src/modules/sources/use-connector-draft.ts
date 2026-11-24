@@ -65,7 +65,8 @@ function useDraftFields(source: Source | null | undefined) {
   const [name, setName] = useState(source?.name ?? '');
   const [aiOptions] = useState<SourceAiOptions>({
     graph_enabled: source?.graph_enabled ?? false,
-    rag_index_enabled: source?.rag_index_enabled ?? false,
+    // New drafts index for RAG by default; an existing source always keeps its stored switch.
+    rag_index_enabled: source?.rag_index_enabled ?? true,
   });
   const [sourceId, setSourceId] = useState(source?.id ?? '');
   const [sourceGeneration, setSourceGeneration] = useState(source?.generation ?? 0);

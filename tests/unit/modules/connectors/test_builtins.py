@@ -53,6 +53,7 @@ class _World:
         self.source: ConnectorSource | None = None
         self.row: Any = None
         self.created_name: str | None = None
+        self.created_rag: bool | None = None
         self.eligible = eligible
         self.stack = ExitStack()
 
@@ -73,6 +74,7 @@ class _World:
 
         def created(*a: Any, **_k: Any) -> Any:
             self.created_name = a[1].name
+            self.created_rag = a[1].rag_index_enabled
             self.source = _source(self.provider)
             return orm()
 
@@ -367,6 +369,22 @@ async def test_enable_uses_spec_default_when_nothing_saved() -> None:
     cfg = world.row.desired_configuration
     assert cfg["schedule_interval_minutes"] == 30
     assert not {"max_items", "include_keywords", "exclude_keywords", "max_age_days"} & cfg.keys()
+
+
+async def test_new_builtin_source_indexes_for_rag_by_default() -> None:
+    """A new built-in Source is created with RAG indexing on when the owner sends no explicit value."""
+    with _World("world_bank") as world:
+        await _enable("world_bank")
+    assert world.created_rag is True
+
+
+async def test_explicit_rag_off_on_new_builtin_source_is_kept() -> None:
+    """An explicit rag_index_enabled=false from the owner still wins over the new default."""
+    with _World("world_bank") as world:
+        await builtins.enable_builtin(
+            "world_bank", _session(), _request(), SCOPE, _RAW(rag_index_enabled=False)
+        )  # type: ignore[arg-type]
+    assert world.created_rag is False
 
 
 async def test_enable_names_new_source() -> None:

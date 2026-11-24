@@ -92,7 +92,7 @@ describe('BuiltinWizard', () => {
     await waitFor(() =>
       expect(api.enableBuiltinSource).toHaveBeenCalledWith('world_bank', 'personal', 'c', undefined, {
         graph_enabled: false,
-        rag_index_enabled: false,
+        rag_index_enabled: true,
       }),
     );
     expect(await screen.findByText(/Test fetch succeeded/)).toBeTruthy();
