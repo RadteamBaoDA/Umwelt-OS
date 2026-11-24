@@ -89,10 +89,31 @@ def hybrid_env(env: Mapping[str, str]) -> HybridEnv | None:
     return HybridEnv(chat=chat, embed=embed, rerank=_endpoint(env, "E2E_REAL_RERANK"))
 
 
+class RedactedEnv(dict[str, str]):
+    """An env mapping that holds secrets but never renders them: ``repr`` and ``str`` are a placeholder.
+
+    Used for every mapping that carries endpoint keys, so a debugger, a traceback or a logged local cannot
+    print them. Lookups and iteration behave as a plain dict.
+    """
+
+    def __repr__(self) -> str:
+        """Placeholder instead of the mapping contents, so keys never reach a log or a traceback."""
+        return "<env redacted>"
+
+    def __str__(self) -> str:
+        """Same placeholder as ``repr``; ``str`` must not fall back to the dict's own rendering."""
+        return "<env redacted>"
+
+
 def mask_secrets(text: str, env: Mapping[str, str]) -> str:
-    """Replace every non-empty ``E2E_*API_KEY`` value found in ``env`` inside ``text`` with ``***`` (pure)."""
+    """Replace every non-empty secret value found in ``env`` inside ``text`` with ``***`` (pure).
+
+    A secret is a name starting with ``E2E_`` and ending with ``API_KEY``, or any name starting with
+    ``E2E_KEY_`` (judge and other tokens). Names are matched only; empty values are skipped.
+    """
     for name, value in env.items():
-        if name.startswith("E2E_") and name.endswith("API_KEY") and value:
+        is_key = name.startswith("E2E_") and name.endswith("API_KEY")
+        if (is_key or name.startswith("E2E_KEY_")) and value:
             text = text.replace(value, "***")
     return text
 
@@ -136,9 +157,14 @@ def _providers(h: HybridEnv) -> list[dict[str, Any]]:
     return providers
 
 
-def _key_env(h: HybridEnv) -> dict[str, str]:
-    """The endpoint keys of ``h`` under their ``E2E_*API_KEY`` names, so ``mask_secrets`` can scrub error text."""
-    env = {"E2E_REAL_API_KEY": h.chat.api_key, "E2E_REAL_EMBED_API_KEY": h.embed.api_key}
+def _key_env(h: HybridEnv) -> RedactedEnv:
+    """The endpoint keys of ``h`` under their ``E2E_*API_KEY`` names, so ``mask_secrets`` can scrub error text.
+
+    Returned as a ``RedactedEnv`` so the keys cannot be rendered by repr or str.
+    """
+    env = RedactedEnv(
+        {"E2E_REAL_API_KEY": h.chat.api_key, "E2E_REAL_EMBED_API_KEY": h.embed.api_key}
+    )
     if h.rerank is not None:
         env["E2E_REAL_RERANK_API_KEY"] = h.rerank.api_key
     return env

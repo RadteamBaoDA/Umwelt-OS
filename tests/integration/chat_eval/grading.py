@@ -90,15 +90,27 @@ def scope_leak(
     return bool(forbidden_versions & got_versions)
 
 
+def tool_used(leg: str, called: bool, retrieved_versions: set[str]) -> bool:
+    """True when the turn used collected data: a query-tool call, or on the hybrid leg any build_context evidence.
+
+    The hybrid leg has no tool; its evidence is supplied by ``build_context`` before the model runs, so
+    retrieved versions there count as using the data. Pure.
+    """
+    return called or (leg == "hybrid" and bool(retrieved_versions))
+
+
 def hidden_miss(
     criteria: Mapping[str, Any], retrieval_recall: float | None, answer_recall: float | None
 ) -> bool:
     """True when no existing criterion failed yet a recall leg fell short of 1.0.
 
     That is the case the answer passes on its face but missed gold data: it would look fine without the recall
-    columns. None recalls (no gold) are ignored.
+    columns. None recalls (no gold) are ignored. A ``scope_leak`` of True explains the miss, so it is never a
+    hidden miss; a ``scope_leak`` of False (no leak) is not a failed criterion and does not block it.
     """
-    if any(value is False for value in criteria.values()):
+    if criteria.get("scope_leak") is True:
+        return False
+    if any(value is False for key, value in criteria.items() if key != "scope_leak"):
         return False
     return any(r is not None and r < 1 for r in (retrieval_recall, answer_recall))
 

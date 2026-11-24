@@ -15,6 +15,7 @@ from tests.integration.chat_eval.grading import (
     scope_ids,
     scope_leak,
     summarize_recall,
+    tool_used,
 )
 from tests.integration.chat_eval.report import build_summaries
 
@@ -56,6 +57,21 @@ def test_hidden_miss() -> None:
     assert hidden_miss({"texts_ok": True, "grounded": True}, 0.5, 1.0) is True
     assert hidden_miss({"texts_ok": False}, 0.5, 0.5) is False
     assert hidden_miss({"texts_ok": True}, None, None) is False
+
+
+def test_hidden_miss_is_false_when_scope_leaked_but_not_for_a_clean_scope() -> None:
+    """A scope leak explains the miss, so it is not hidden; a scope_leak of False (no leak) does not block it."""
+    assert hidden_miss({"scope_leak": True, "texts_ok": True}, 0.5, 1.0) is False
+    assert hidden_miss({"scope_leak": False, "texts_ok": True}, 0.5, 1.0) is True
+
+
+def test_tool_used_counts_hybrid_evidence_as_collected_data() -> None:
+    """The hybrid leg has no tool; evidence from build_context counts as using collected data."""
+    assert tool_used("tool", False, {"v1"}) is False
+    assert tool_used("tool", True, set()) is True
+    assert tool_used("hybrid", False, {"v1"}) is True
+    assert tool_used("hybrid", False, set()) is False
+    assert tool_used("hybrid", True, set()) is True
 
 
 def test_summarize_recall_per_category() -> None:

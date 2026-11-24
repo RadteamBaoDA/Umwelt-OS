@@ -71,9 +71,11 @@ from tests.integration.chat_eval.grading import (
     recall,
     scope_ids,
     scope_leak,
+    tool_used,
 )
 from tests.integration.chat_eval.hybrid import (
     HybridEnv,
+    RedactedEnv,
     configure_ai,
     enable_search,
     hybrid_context,
@@ -112,7 +114,7 @@ SEED_ONLY_MODE = (
 
 def _load_env() -> dict[str, str]:
     """Parse ``.env.e2e-real`` into a dict (empty when absent). Values are never logged."""
-    return load_env_file(ENV_FILE)
+    return RedactedEnv(load_env_file(ENV_FILE))
 
 
 def _deadline_s() -> float:
@@ -453,10 +455,14 @@ def _grade(
     case: Case,
     out: dict[str, Any],
     rec: Recorder,
+    leg: str,
     key_map: Mapping[str, str] | None = None,
     scope: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply every criterion; ``None`` means not applicable. Pure.
+
+    ``leg`` is the retrieval leg (``tool`` or ``hybrid``). ``tool_called`` uses ``tool_used``: on the hybrid leg
+    the build_context evidence counts as using collected data, since that leg has no query tool.
 
     ``key_map`` resolves case keys (``gold_keys``, ``forbid_keys``) to document version id strings (the
     ``EvalSeed.key_map`` from ``eval_seed``). A key missing from the map is ignored, so the gold and
@@ -493,7 +499,7 @@ def _grade(
     if case.empty:
         empty_ok = bool(NODATA.search(answer)) and not out["unverified"]
     criteria: dict[str, Any] = {
-        "tool_called": bool(called),
+        "tool_called": tool_used(leg, bool(called), out["retrieved_versions"]),
         "numbers_correct": nums_ok,
         "texts_ok": texts_ok,
         "no_forbidden": forbidden_ok,
@@ -501,20 +507,21 @@ def _grade(
         "citations_valid": cite_ok,
         "empty_ok": empty_ok,
     }
-    # hidden_miss looks only at the criteria above: a recall leg is a diagnosis, not a pass/fail input.
+    # A pass/fail floor on retrieval; not in _DIAGNOSTIC, so a False fails the case and suppresses hidden_miss.
     retrieval_recall = recall(gold, retrieved_versions)
     answer_recall = recall(gold, out["cited_versions"])
-    # A pass/fail floor on retrieval; not in _DIAGNOSTIC, so a False fails the case and suppresses hidden_miss.
     criteria["min_recall_ok"] = min_recall_ok(case.min_recall, retrieval_recall)
-    criteria["hidden_miss"] = hidden_miss(criteria, retrieval_recall, answer_recall)
-    criteria["retrieval_recall"] = retrieval_recall
-    criteria["answer_recall"] = answer_recall
     allowed = set(scope) if scope is not None else None
+    # Computed before hidden_miss: a scope leak must suppress hidden_miss, which reads it from criteria.
     criteria["scope_leak"] = (
         scope_leak(retrieved_sources, allowed, forbidden, retrieved_versions)
         if case.forbid_keys or allowed is not None
         else None
     )
+    # hidden_miss looks only at the criteria above: a recall leg is a diagnosis, not a pass/fail input.
+    criteria["hidden_miss"] = hidden_miss(criteria, retrieval_recall, answer_recall)
+    criteria["retrieval_recall"] = retrieval_recall
+    criteria["answer_recall"] = answer_recall
     return criteria
 
 
@@ -818,6 +825,7 @@ def _outcome_entry(
             case,
             out,
             rec,
+            leg,
             key_map=eval_seed.key_map,
             scope=scope_ids(case, matrix.sources),
         ),

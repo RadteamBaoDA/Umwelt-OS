@@ -9,6 +9,8 @@ from arq.worker import Retry
 from modules.chat.schemas import AnswerContext, EvidenceItem
 from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.hybrid import (
+    RedactedEnv,
+    _key_env,
     drain_indexing,
     hybrid_env,
     local_only_blocked,
@@ -181,3 +183,23 @@ def _scripted_counts(values: list[int]) -> Callable[[], Awaitable[int]]:
         return queue.pop(0)
 
     return count
+
+
+def test_redacted_env_never_renders_its_values() -> None:
+    """The env mapping carries API keys, so repr and str show a placeholder instead of the contents."""
+    env = RedactedEnv({"E2E_REAL_API_KEY": "s3cret-value"})
+    assert repr(env) == "<env redacted>" and str(env) == "<env redacted>"
+    assert "s3cret-value" not in f"{env!r} {env}"
+    assert env["E2E_REAL_API_KEY"] == "s3cret-value"  # lookups still work
+
+
+def test_key_env_is_redacted_and_masks_its_keys() -> None:
+    hybrid = hybrid_env(EMBED)
+    assert hybrid is not None
+    key_env = _key_env(hybrid)
+    assert repr(key_env) == "<env redacted>"
+    assert mask_secrets("error embed-secret", key_env) == "error ***"
+
+
+def test_mask_secrets_covers_e2e_key_prefixed_names() -> None:
+    assert mask_secrets("a judge-token b", {"E2E_KEY_JUDGE": "judge-token"}) == "a *** b"
