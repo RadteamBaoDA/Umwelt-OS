@@ -490,5 +490,13 @@
   "taskDraft.notSaved": "Not saved yet",
   "taskDraft.review": "Review and create",
   "taskDraft.exists": "A Daily brief task already exists",
-  "taskDraft.open": "Open Scheduled tasks"
+  "taskDraft.open": "Open Scheduled tasks",
+  "sourceScope.label": "Only from",
+  "sourceScope.listLabel": "Sources with data",
+  "sourceScope.loading": "Loading sources…",
+  "sourceScope.error": "Couldn't load sources",
+  "sourceScope.noneYet": "No source has collected data yet",
+  "sourceScope.noMatch": "No source matches \"{query}\"",
+  "sourceScope.remove": "Remove {name}",
+  "sourceScope.unavailable": "The selected sources are no longer available. Remove them and try again."
 }

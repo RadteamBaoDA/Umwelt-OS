@@ -4,7 +4,8 @@ import { ApiError } from '@/core/api';
 export class LocalizedError extends Error {}
 
 /** Catalog keys (in the `chat` namespace) that a selection failure can resolve to. */
-export type SelectionErrorKey = 'context.selectionLocalOnly' | 'context.selectionUnavailable' | 'context.selectionTooLarge';
+export type SelectionErrorKey =
+  'context.selectionLocalOnly' | 'context.selectionUnavailable' | 'context.selectionTooLarge' | 'sourceScope.unavailable';
 
 /** Catalog keys a classified chat failure can resolve to, plus whatever fallback the caller passed. */
 export type ChatFailureKey = SelectionErrorKey | 'sessionExpired' | 'error.conflict' | 'error.rateLimited' | 'error.service';
@@ -15,6 +16,8 @@ export const SELECTION_ERROR_KEYS: Record<string, SelectionErrorKey> = {
   selection_unavailable: 'context.selectionUnavailable',
   selection_too_large: 'context.selectionTooLarge',
   selection_invalid: 'context.selectionTooLarge',
+  // 409 when none of the `@`-picked sources survives server-side validation (see the chat source scope).
+  source_scope_unavailable: 'sourceScope.unavailable',
 };
 
 /**

@@ -13,6 +13,7 @@ import { useChatModelPicker } from './model-picker';
 import { useChatProviderReady } from './provider-gate';
 import { useChatAgentRuns } from './use-chat-agent-runs';
 import { useChatComposerState } from './use-chat-composer-state';
+import { useSourceMention, type SourceMention } from './chat-source-picker';
 import { useChatSend } from './use-chat-send';
 import { useChatStream } from './use-chat-stream';
 import { useChatWebSearch } from './use-chat-web-search';
@@ -74,6 +75,7 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
   const profileBlocked = composer.selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
   const attachmentsUnavailable = areAttachmentsUnavailable(profileBlocked, effectiveEditingMessageId, chatCtrl.context);
   const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
+  const { sourceMention, sourceTextareaRef } = useComposerSourceMention(chatCtrl, mode, profileBlocked, attachments.items.length);
   const busy = live.isPending || live.isStreaming;
   const queryClient = useQueryClient();
   const { refetch: refetchDetail } = detail;
@@ -107,7 +109,46 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
     providerReady: useChatProviderReady(),
     webSearch: useChatWebSearch(mode, profileBlocked),
     attachments,
+    sourceMention,
+    sourceTextareaRef,
   };
+}
+
+/**
+ * The `@` source picker of the full composer. It is open only on the full Chat page, for the Assistant profile, outside
+ * selection and gadget contexts, and with no attachments.
+ *
+ * @param chatCtrl - Chat controller that owns the draft and the view context.
+ * @param mode - Host surface; the picker never opens in the drawer.
+ * @param profileBlocked - True while a specialist profile is selected or a specialist retry is pending.
+ * @param attachmentCount - Attachments on the draft (any attachment closes the picker).
+ * @returns The picker state and the textarea ref it needs to read the caret.
+ */
+function useComposerSourceMention(
+  chatCtrl: ReturnType<typeof useChatController>,
+  mode: 'drawer' | 'full',
+  profileBlocked: boolean,
+  attachmentCount: number,
+) {
+  const sourceTextareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const kind = chatCtrl.context?.kind;
+  const sourceMention = useSourceMention({
+    value: chatCtrl.draft,
+    setValue: chatCtrl.setDraft,
+    textareaRef: sourceTextareaRef,
+    enabled: mode === 'full' && !profileBlocked && kind !== 'selection' && kind !== 'gadget' && attachmentCount === 0,
+  });
+  return { sourceMention, sourceTextareaRef };
+}
+
+/**
+ * Send-side view of the picker: the chosen source ids and the clear command, or undefined when nothing is chosen.
+ *
+ * @param picker - The composer's source picker state.
+ * @returns The scope for the send hook, or undefined when no source is chosen.
+ */
+function sourceScopeOf(picker: SourceMention): { ids: string[]; clear: () => void } | undefined {
+  return picker.chips.length ? { ids: picker.chips.map((chip) => chip.id), clear: picker.clear } : undefined;
 }
 
 /** Whether files may be added: not mid-turn, attachments available for this send, and below the per-message limit. */
@@ -300,6 +341,7 @@ export function useChatSessionCommands(
     attachments: d.attachments,
     setActiveAgentRunId,
     streamResponseRun,
+    sourceScope: sourceScopeOf(d.sourceMention),
   });
   const handleStop = useStopCommand(d);
   const activeResponseId = live.activeResponseId;

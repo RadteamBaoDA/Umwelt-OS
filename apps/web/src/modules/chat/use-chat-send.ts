@@ -7,7 +7,16 @@ import { PendingMessageMutationConflictError, type PendingSpecialistRun, type us
 import { writeDraft } from '@/core/app-shell/chat-draft-storage';
 import { uuid7 } from '@/core/uuid7';
 import { startAgentRun, type AgentProfile } from '@/modules/agents/public-api';
-import { chatKeys, createConversation, deleteConversation, hashMessageContent, mutateMessage, sendMessage, type ChatMessage } from './api';
+import {
+  chatKeys,
+  createConversation,
+  deleteConversation,
+  hashMessageContent,
+  mutateMessage,
+  sendMessage,
+  type ChatContext,
+  type ChatMessage,
+} from './api';
 import { chatFailureKey, LocalizedError, SELECTION_ERROR_KEYS } from './chat-errors';
 import { MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { withAttachments, type useChatAttachments } from './chat-attachments';
@@ -45,6 +54,8 @@ export interface ChatSendDeps {
   profiles: AgentProfile[] | undefined;
   pendingProfileRun: PendingSpecialistRun | null;
   attachments: ReturnType<typeof useChatAttachments>;
+  /** Sources chosen with the `@` picker for this turn; the assistant send carries them and then clears them. */
+  sourceScope?: { ids: string[]; clear: () => void };
   setActiveAgentRunId: (id: string) => void;
   streamResponseRun: (responseId: string, conversationId: string, isCurrentView: IsCurrentView) => Promise<void>;
   queryClient: QueryClient;
@@ -187,6 +198,18 @@ interface SendAttempt {
   clientRequestId?: string;
   /** Conversation this very send created (not one it merely used); an empty one is deleted when the send fails. */
   createdConversationId?: string;
+}
+
+/**
+ * Attaches the `@`-picked source ids to a send's context. A send without a context gets a general one, so the server
+ * still receives the scope; any other context keeps its fields.
+ *
+ * @param ctx - Context the send would carry without the picker (client-only titles already stripped).
+ * @param ids - Chosen Gadget Source ids; an empty list leaves the context untouched.
+ * @returns The context with `sourceIds` set, or `ctx` unchanged when no source is chosen.
+ */
+export function withSourceScope(ctx: ChatContext | null, ids: string[]): ChatContext | null {
+  return ids.length ? { ...(ctx ?? { kind: 'general' }), sourceIds: ids } : ctx;
 }
 
 /** Resolves the day (date + timezone) of a day-context conversation before any await, so it stays bound to it. */
@@ -334,6 +357,8 @@ async function sendAssistantMessage(
     d.csrfToken,
   );
   attempt.accepted = true;
+  // The server took the turn with its scope, so the picker's chips are spent (a rejected send keeps them).
+  d.sourceScope?.clear();
   if (d.attachments.items.length && scope.isCurrent()) d.attachments.clear();
   attempt.selectionStage = false;
   if (!scope.isCurrent()) {
@@ -476,6 +501,18 @@ function assertSelectionWithinLimit(selItems: { documentId: string }[], attempt:
 }
 
 /**
+ * Builds the context a plain assistant send carries: the view context with ready attachments (full mode), client-only
+ * titles stripped, and the `@`-picked source scope applied.
+ *
+ * @param d - Session snapshot (controller context, attachments, mode and picker chips).
+ * @returns The context for the send body, or null when there is none.
+ */
+function outgoingContext(d: ChatSendDeps): ReturnType<typeof stripItemTitles> {
+  const base = d.mode === 'full' ? withAttachments(d.chatCtrl.context, d.attachments.items) : d.chatCtrl.context;
+  return withSourceScope(stripItemTitles(base), d.sourceScope?.ids ?? []);
+}
+
+/**
  * Runs the accepted send: selection precheck, conversation creation, then either a specialist run or an assistant
  * message with its stream. Failures are localized into the session error banner.
  *
@@ -493,7 +530,7 @@ async function executeSend(d: ChatSendDeps, scope: ViewScope, content: string): 
   // Day captured before any await: a day conversation is bound to it no matter where the user navigates.
   const day = captureDay(chatCtrl);
   // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
-  const sendContext = stripItemTitles(mode === 'full' ? withAttachments(chatCtrl.context, d.attachments.items) : chatCtrl.context);
+  const sendContext = outgoingContext(d);
   const selItems = sendContext?.kind === 'selection' ? (sendContext.items ?? []) : [];
   try {
     assertSelectionWithinLimit(selItems, attempt);

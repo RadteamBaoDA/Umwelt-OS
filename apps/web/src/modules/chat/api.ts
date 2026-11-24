@@ -118,6 +118,27 @@ export interface MessageSuggestions {
   suggestions: string[];
 }
 
+/** A source the `@` picker may scope a turn to: only sources that have collected data. */
+export interface ChatSourceOption {
+  id: string;
+  name: string;
+}
+
+/**
+ * Lists the owner's sources that can answer a scoped turn: active or paused, not local-only, with at least one successful
+ * collection. Uses the bounded gadget-sources list (first 100 rows); the eligibility filter runs client-side.
+ *
+ * @param signal - Aborts the request when the picker closes.
+ * @returns Eligible sources in server order.
+ * @throws ApiError when the list request fails.
+ */
+export async function listChatSourceOptions(signal?: AbortSignal): Promise<ChatSourceOption[]> {
+  const page = await apiRequest<ApiResponse<'/api/v1/gadget-sources'>>('/api/v1/gadget-sources?limit=100', { signal });
+  return page.items
+    .filter((source) => (source.status === 'active' || source.status === 'paused') && !source.local_only && source.last_success_at)
+    .map(({ id, name }) => ({ id, name }));
+}
+
 /**
  * Bounded client context linking a chat session to specific resources or filters.
  */
@@ -129,6 +150,10 @@ export interface ChatContext {
   gadgetId?: string;
   title?: string;
   renderer?: string;
+  /**
+   * Gadget Source ids that scope this turn's retrieval and data tool (set by the `@` picker). The server validates them and
+   * answers 409 `source_scope_unavailable` when none survive.
+   */
   sourceIds?: string[];
   scope?: Record<string, unknown>;
   items?: Array<{

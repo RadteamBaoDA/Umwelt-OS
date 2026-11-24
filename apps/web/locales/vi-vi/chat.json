@@ -490,5 +490,13 @@
   "taskDraft.notSaved": "Chưa lưu",
   "taskDraft.review": "Xem lại và tạo",
   "taskDraft.exists": "Đã có tác vụ Bản tin hằng ngày",
-  "taskDraft.open": "Mở Tác vụ định kỳ"
+  "taskDraft.open": "Mở Tác vụ định kỳ",
+  "sourceScope.label": "Chỉ từ",
+  "sourceScope.listLabel": "Nguồn có dữ liệu",
+  "sourceScope.loading": "Đang tải nguồn…",
+  "sourceScope.error": "Không tải được nguồn",
+  "sourceScope.noneYet": "Chưa có nguồn nào thu thập dữ liệu",
+  "sourceScope.noMatch": "Không có nguồn khớp \"{query}\"",
+  "sourceScope.remove": "Bỏ {name}",
+  "sourceScope.unavailable": "Các nguồn đã chọn không còn khả dụng. Hãy bỏ chúng và thử lại."
 }

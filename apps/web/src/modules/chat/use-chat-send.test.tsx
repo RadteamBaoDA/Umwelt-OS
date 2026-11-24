@@ -28,7 +28,7 @@ vi.mock('@/core/app-shell/chat-controller', () => ({
 
 import { PendingMessageMutationConflictError } from '@/core/app-shell/chat-controller';
 import { ChatSessionRuntime } from './chat-session-refs';
-import { useChatSend, type ChatSendDeps } from './use-chat-send';
+import { useChatSend, withSourceScope, type ChatSendDeps } from './use-chat-send';
 
 type Deps = Omit<ChatSendDeps, 'queryClient' | 't' | 'tAgents'>;
 
@@ -370,5 +370,22 @@ describe('useChatSend', () => {
     expect(h.mutateMessage).toHaveBeenCalledTimes(1);
     expect(h.mutateMessage.mock.calls[0][2]).toMatchObject({ action: 'edit', content: 'same text' });
     expect(chatCtrl.setDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe('withSourceScope', () => {
+  it('returns the context unchanged when no source is chosen', () => {
+    const ctx = { kind: 'day' as const, date: '2026-11-01', timezone: 'UTC' };
+    expect(withSourceScope(ctx, [])).toBe(ctx);
+    expect(withSourceScope(null, [])).toBeNull();
+  });
+
+  it('adds sourceIds to an existing context without dropping its fields', () => {
+    const ctx = { kind: 'day' as const, date: '2026-11-01', timezone: 'UTC' };
+    expect(withSourceScope(ctx, ['src-1'])).toEqual({ ...ctx, sourceIds: ['src-1'] });
+  });
+
+  it('starts a general context when there is none', () => {
+    expect(withSourceScope(null, ['src-1', 'src-2'])).toEqual({ kind: 'general', sourceIds: ['src-1', 'src-2'] });
   });
 });

@@ -52,13 +52,15 @@ export function useWebSearchToggle(data: ChatSessionData, full: boolean) {
  * selection can still grow.
  */
 function buildComposerMenu(data: ChatSessionData, attachmentsBlocked: boolean) {
-  const { chatCtrl, composer, attachments } = data;
-  const canAddContext = !chatCtrl.context || chatCtrl.context.kind === 'selection';
+  const { chatCtrl, composer, attachments, sourceMention } = data;
+  // Chosen `@` sources hold the turn to their scope, so adding context or attachments would widen it.
+  const hasSources = sourceMention.chips.length > 0;
+  const canAddContext = (!chatCtrl.context || chatCtrl.context.kind === 'selection') && !hasSources;
   return {
     onAddContext: canAddContext ? () => composer.setContextPickerOpen(true) : undefined,
     onTemplates: () => composer.setTemplatesOpen(true),
     onAttach: () => composer.fileInputRef.current?.click(),
-    attachDisabled: attachmentsBlocked || attachments.full,
+    attachDisabled: attachmentsBlocked || attachments.full || hasSources,
     share: { checked: attachments.shareWithModel, disabled: attachmentsBlocked, onChange: attachments.setShareWithModel },
   };
 }
@@ -178,6 +180,8 @@ export function SessionComposer({ data, profiles, mode, onSend, onStop, onCancel
         disabled={live.isPending}
         {...modelBinding(data)}
         {...fullExtras}
+        sourceMention={full ? data.sourceMention : undefined}
+        textareaRef={data.sourceTextareaRef}
         webSearch={webSearch}
         autoFocusKey={full ? (data.chatCtrl.activeConversationId ?? '') : undefined}
       />

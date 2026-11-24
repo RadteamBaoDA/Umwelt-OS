@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { COMPOSER_MENU_ID } from './chat-attachments';
 import { MODEL_LOCKED_HINT_ID, ModelPicker, type ChatModelPicker } from './model-picker';
+import { SourceMentionList, SourceScopeChips, type SourceMention } from './chat-source-picker';
 
 /** Actions behind the full composer's + menu; the session owns the picker dialog and file input they drive. */
 export interface ComposerMenuProps {
@@ -80,6 +81,10 @@ export interface ChatComposerProps {
   editing?: { onCancel: () => void };
   /** When defined, the textarea takes focus each time this value changes (opening/switching a conversation), on fine pointers only. */
   autoFocusKey?: string;
+  /** `@` source picker of the full composer; omitted when the picker is unavailable (drawer, other contexts). */
+  sourceMention?: SourceMention;
+  /** Textarea ref owned by the caller so the source picker can read the caret; defaults to an internal ref. */
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 /** Pieces of composer state shared by the drawer and full layouts. */
@@ -107,6 +112,7 @@ function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObj
     onAttachFiles,
     attachmentBusy = false,
     editing,
+    sourceMention,
   } = props;
 
   /** Submits the trimmed draft message if non-empty and not currently streaming. */
@@ -119,6 +125,8 @@ function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObj
   /** Enter submits, Shift+Enter inserts a newline. */
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // The source picker goes first: while its list is open Enter, Escape and arrows belong to it, not to send or edit.
+      if (sourceMention?.onKeyDown(e)) return;
       if (e.key === 'Escape' && editing && !e.nativeEvent.isComposing) {
         e.preventDefault();
         editing.onCancel();
@@ -130,7 +138,7 @@ function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObj
         handleSend();
       }
     },
-    [handleSend, editing],
+    [handleSend, editing, sourceMention],
   );
 
   /**
@@ -382,6 +390,20 @@ function EditBanner({ onCancel }: { onCancel: () => void }) {
 }
 
 /**
+ * Chips of the sources chosen for this turn plus the `@` list anchored above the composer box.
+ *
+ * @param props.mention - The source picker state of the composer.
+ */
+function SourceMentionSlot({ mention }: { mention: SourceMention }) {
+  return (
+    <>
+      <SourceScopeChips chips={mention.chips} onRemove={mention.remove} />
+      <SourceMentionList mention={mention} />
+    </>
+  );
+}
+
+/**
  * Full-page layout: the one floating element, a single bordered field with a 12px radius and the 720px measure
  * matching the transcript.
  */
@@ -401,15 +423,17 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
     disabled,
     modelLabel = null,
     sourcesCount = 0,
+    sourceMention,
   } = props;
   const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
   const t = useTranslations('chat');
   return (
     <div className="relative shrink-0 bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
+      <div className="relative mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
         {editing && <EditBanner onCancel={editing.onCancel} />}
         {contextBar}
         {attachments}
+        {sourceMention && <SourceMentionSlot mention={sourceMention} />}
         {textarea}
         <div className="flex items-center gap-2">
           {menu && (
@@ -447,14 +471,15 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
 export function ChatComposer(props: ChatComposerProps) {
   const { value, onStop, isStreaming, disabled = false, placeholder, sendBlockedBy = null, mode = 'drawer', modelPicker } = props;
   const t = useTranslations('chat');
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const ownTextareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const textareaRef = props.textareaRef ?? ownTextareaRef;
   const { handleSend, handleKeyDown, handlePaste, handleChange, canSend } = useComposerHandlers(props, textareaRef);
   const { autoFocusKey } = props;
   React.useEffect(() => {
     // Touch devices would pop the on-screen keyboard over the transcript, so only fine pointers auto-focus.
     if (autoFocusKey === undefined || !window.matchMedia?.('(pointer: fine)')?.matches) return;
     textareaRef.current?.focus({ preventScroll: true });
-  }, [autoFocusKey]);
+  }, [autoFocusKey, textareaRef]);
   const textarea = (
     <Textarea
       ref={textareaRef}
@@ -471,6 +496,7 @@ export function ChatComposer(props: ChatComposerProps) {
       // The surrounding box owns the border and focus ring in both layouts, so the field itself is borderless.
       className="block field-sizing-fixed max-h-[200px] min-h-9 w-full sm:min-h-14 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 text-base text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 aria-disabled:opacity-50 dark:bg-transparent"
       aria-label={t('composer.placeholder')}
+      {...props.sourceMention?.comboboxProps}
     />
   );
   const action = isStreaming ? (
