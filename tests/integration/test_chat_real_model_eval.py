@@ -45,7 +45,7 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat._worker import stream, tools
 from modules.chat._worker.finalize import _grounding_for, _validate_citations
-from modules.chat._worker.setup import _compose_system_text, _gadget_note
+from modules.chat._worker.setup import _compose_system_text
 from modules.chat._worker.state import _RunCtx, _StreamState
 from modules.chat._worker.stream import _query_rounds_used
 from modules.chat._worker.tools import _ToolEnv, _TurnState
@@ -61,6 +61,7 @@ from modules.chat.generative_ui import (
 )
 from modules.chat.schemas import AnswerContext
 from tests.integration.chat_eval.cases import ALL_CASES, Case
+from tests.integration.chat_eval.gadget_note import gadget_note_for_turn
 from tests.integration.chat_eval.grading import (
     RowIds,
     cited_version_ids,
@@ -283,7 +284,8 @@ async def _run_turn(
         fence = await workspaces.read_access_fence(
             session, scope=ws_scope, multi_workspace_enabled=FLAG
         )
-        providers = await active_collected_providers(
+        # ``(ids, overflow)``: the overflow count is passed on so the prompt hint matches production.
+        providers_lookup = await active_collected_providers(
             session, workspace_id=m.workspace_id, allow_local_only=False
         )
     sql_on = sql_mode_available()
@@ -313,7 +315,7 @@ async def _run_turn(
     )
     ui_system = (
         system_text
-        + _gadget_note(req_params, True, providers, sql_on)
+        + gadget_note_for_turn(req_params, providers_lookup, sql_on)
         + "\n\n"
         + build_generative_ui_system_prompt(
             locale=locale,

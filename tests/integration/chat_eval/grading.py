@@ -14,13 +14,18 @@ from uuid import UUID
 from tests.integration.chat_eval.cases import Case
 
 _ID_KEYS = ("observations", "documents", "rows")
-# Cue words that mark a figure as excluded, wrong or superseded (English and Vietnamese).
+# Phrases that mark a figure as excluded, wrong or superseded (English and Vietnamese). Matched per sentence
+# (see ``_SENTENCE_SPLIT``). Bare ``not``/``no``/``không``/``trước`` are deliberately absent: they occur in
+# ordinary sentences that merely mention another figure, so they excused unrelated forbidden numbers.
 _EXCLUSION_CUE = re.compile(
-    r"\b(?:not|no|never|n't|exclud\w*|outside|below|earlier|previous|wrong|correct\w*)\b|n't|"
-    r"không|chưa|ngoài|nhầm|sai|trước|đính chính|sửa",
+    r"không phải|không tính|không có trong|trước đó|đính chính|\bnhầm\b|\bsai\b|chưa đạt|"
+    r"\bnot on\b|\bnot in\b|\bexcluded\b|\bearlier answer\b|\bcorrect(?:ing|ion)\b|"
+    r"\bbelow the\b|\boutside\b",
     re.IGNORECASE,
 )
-_PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
+# Sentence boundaries: sentence punctuation followed by whitespace, or a newline. A figure such as "67.500"
+# or "M4.2" has no whitespace after its dot, so it never splits.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?;])\s+|\n+")
 
 
 @dataclass(frozen=True)
@@ -276,19 +281,20 @@ def forbidden_ok(answer: str, case: Case) -> bool:
     """True when the answer does not assert any of the case's forbidden facts (pure).
 
     ``forbid_texts`` are strict: any match fails. A forbidden figure is tolerated only when it is named as
-    excluded, wrong or superseded: every ``case.nums`` figure must be present in the answer, and every paragraph
-    (split on blank lines) that carries the figure must also match ``_EXCLUSION_CUE``. A bare mention with no
-    cue, or a figure that is the only result, still fails. Errors: none; never raises on odd text.
+    excluded, wrong or superseded: every ``case.nums`` figure must be present in the answer, and every sentence
+    (split on sentence punctuation or newlines) that carries the figure must itself match ``_EXCLUSION_CUE``.
+    A cue in a neighbouring sentence or an unrelated ``không`` elsewhere does not excuse it, and a bare mention
+    with no cue, or a figure that is the only result, still fails. Errors: none; never raises on odd text.
     """
     if any(re.search(t, answer, re.IGNORECASE) for t in case.forbid_texts):
         return False
     required_present = all(has_number(answer, n) for n in case.nums)
-    paragraphs = _PARAGRAPH_SPLIT.split(answer)
+    sentences = _SENTENCE_SPLIT.split(answer)
     for forbidden in case.forbid_nums:
         if not has_number(answer, forbidden):
             continue
-        # Cue must sit in the same paragraph as the forbidden figure; a correction elsewhere does not excuse it.
-        cued = all(_EXCLUSION_CUE.search(p) for p in paragraphs if has_number(p, forbidden))
+        # The cue must sit in the same sentence as the forbidden figure; a correction elsewhere does not excuse it.
+        cued = all(_EXCLUSION_CUE.search(s) for s in sentences if has_number(s, forbidden))
         if not (required_present and cued):
             return False
     return True

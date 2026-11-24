@@ -329,3 +329,26 @@ def test_forbidden_absent_number_passes() -> None:
     """A forbidden figure that does not appear in the answer never fails the case."""
     case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
     assert forbidden_ok("The magnitude 5.1 quake is the strongest.", case) is True
+
+
+def test_forbidden_figure_uncued_beside_unrelated_khong_fails() -> None:
+    """A bare ``không`` elsewhere in the paragraph is not a cue; the forbidden figure's own sentence needs one."""
+    case = Case("x", "c", "vi", "q", nums=(67500,), forbid_nums=(66000,))
+    answer = "BTCUSDT hiện là 67.500 USDT. Giá 66.000 USDT là mức cao nhất. Dữ liệu không đầy đủ."
+    assert forbidden_ok(answer, case) is False
+
+
+def test_bare_not_is_not_an_exclusion_cue() -> None:
+    """``not`` alone does not excuse a forbidden figure; only phrases such as ``not on`` / ``not in`` do."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    answer = (
+        "The magnitude 5.1 quake came first, and the 4.2 quake is a different event, not a rerun."
+    )
+    assert forbidden_ok(answer, case) is False
+
+
+def test_cue_in_neighbouring_sentence_of_same_paragraph_does_not_excuse_figure() -> None:
+    """The cue must sit in the sentence that carries the forbidden figure, not a sibling sentence."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    answer = "The 4.2 quake was the second strongest. This row is excluded from the table, see 5.1."
+    assert forbidden_ok(answer, case) is False
