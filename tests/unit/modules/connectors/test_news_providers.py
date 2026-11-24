@@ -311,3 +311,13 @@ def test_vietnamese_feeds_empty_malformed_and_oversized(provider):
     assert [r.metadata["title"] for r in map_feed(provider, mixed, NOW)] == ["ok"]
     with pytest.raises(ProviderPayloadError, match="too_large"):
         map_feed(provider, b"<rss>" + b"x" * (1024 * 1024) + b"</rss>", NOW)
+
+
+def test_hn_score_is_a_source_field_only_when_a_nonnegative_int():
+    raw = fixture("hn_item_story.json")
+    rec = map_hn_stories((41000001,), {41000001: raw}, NOW).records[0]
+    assert pr(rec)["source_fields"]["score"] == 321
+    for bad in (b'"score":-1', b'"score":true', b'"score":"9"'):
+        body = raw.replace(b'"score":321', bad)
+        rec = map_hn_stories((41000001,), {41000001: body}, NOW).records[0]
+        assert "score" not in pr(rec)["source_fields"]

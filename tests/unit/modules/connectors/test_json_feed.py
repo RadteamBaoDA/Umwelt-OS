@@ -162,3 +162,21 @@ def test_wiki_local_skip_covers_live_main_pages_and_namespaces():
         skips = localized_feed(feed, lang).skip_id_prefixes
         assert skips[: len(_WIKI_SKIP)] == _WIKI_SKIP
         assert all(any(i.startswith(p) for p in skips) for i in ids), lang
+
+
+def test_emsc_magnitude_and_depth_are_numeric_source_fields():
+    records = map_json_feed(JSON_FEEDS["emsc_quakes"], fixture("emsc_quakes.json"), NOW)
+    for rec in records:
+        fields = rec.metadata["provider_record"]["source_fields"]
+        assert type(fields["magnitude"]) is float and type(fields["depth_km"]) is float
+
+
+def test_json_feed_numeric_fields_skip_non_finite_bool_and_text():
+    feed = JSON_FEEDS["emsc_quakes"]
+    body = (
+        b'{"features":[{"id":"a","properties":{"flynn_region":"R","mag":true,"depth":"9"}},'
+        b'{"id":"b","properties":{"flynn_region":"R","mag":null,"depth":[1]}}]}'
+    )
+    for rec in map_json_feed(feed, body, NOW):
+        fields = rec.metadata["provider_record"]["source_fields"]
+        assert "magnitude" not in fields and "depth_km" not in fields

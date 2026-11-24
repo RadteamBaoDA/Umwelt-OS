@@ -251,3 +251,17 @@ def test_media_release_dates_accept_partial_dates_and_reject_invalid_calendar_va
     ):
         with pytest.raises(ValueError):
             _meta("anilist_anime", {"release_date": value})
+
+
+def test_bounded_float_fields_for_emsc_and_hn_score() -> None:
+    assert (
+        _meta("emsc_quakes", {"magnitude": 5.1, "depth_km": 10.0}).source_fields["magnitude"] == 5.1
+    )
+    assert _meta("emsc_quakes", {"magnitude": 10.0, "depth_km": -10}).source_fields
+    assert _meta("hn_top", {"score": 321}).source_fields["score"] == 321
+    for bad in (float("nan"), float("inf"), 11.0, -2.5, "5.1", True):
+        _rejects("emsc_quakes", {"magnitude": bad}, "Provider magnitude must be")
+    for bad in (801.0, -10.5, "3", False):
+        _rejects("emsc_quakes", {"depth_km": bad}, "Provider depth_km must be")
+    _rejects("hn_top", {"score": -1}, "Provider score must be a non-negative integer")
+    _rejects("hn_top", {"score": True}, "Provider score must be a non-negative integer")

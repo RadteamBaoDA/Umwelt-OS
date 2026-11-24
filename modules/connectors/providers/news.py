@@ -602,7 +602,8 @@ def map_hn_stories(
     """Map fetched items (``None`` body = not fetched/404). Removed/dead/non-story items are skipped and counted.
 
     The article ``url`` is kept as a citation only; Ask-HN style stories without one keep their own text.
-    Score/comment counts are volatile and excluded from the version.
+    Score/comment counts are volatile and excluded from the version; ``score`` is still stored as a source
+    field when a non-negative int (bool rejected), so existing rows refresh it only when content changes.
     """
     if len(ids) > min(
         limit, HN_HARD_MAX_ITEMS
@@ -636,12 +637,14 @@ def map_hn_stories(
             if type(when) is int and 946684800 <= when <= collected_at.timestamp() + 600
             else None
         )
+        score = item.get("score")
         fields: dict[str, Any] = {"title": title, "id": item_id, "type": "story"}
         for key, value in (
             ("url", url),
             ("text", text or None),
             ("by", by),
             ("time", int(posted.timestamp()) if posted else None),
+            ("score", score if type(score) is int and score >= 0 else None),
         ):
             if value is not None:
                 fields[key] = value

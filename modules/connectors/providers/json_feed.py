@@ -14,6 +14,7 @@ Conventions
   the version never includes the collection clock.
 """
 
+import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ class JsonFeed:
 
     ``url`` is a fixed https URL or a function of the collection instant (date-addressed endpoints).
     ``summary`` is a tuple of ``(label, path)`` pairs rendered as ``Label: value`` lines.
+    ``fields`` is a tuple of ``(source_field_key, path)`` pairs stored as finite floats in ``source_fields``.
     """
 
     provider: str
@@ -72,6 +74,7 @@ class JsonFeed:
         str, ...
     ] = ()  # non-content pages (Main_Page, Special:...) that top lists include
     accept: str = "application/json"
+    fields: tuple[tuple[str, str], ...] = ()  # numeric source fields (queryable as SQL attributes)
 
 
 def _get(node: Any, path: str) -> Any:
@@ -131,6 +134,8 @@ def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[I
     Raises ``ProviderPayloadError``: oversize or non-JSON body, item path missing or not a list, or no
     usable item (kind ``incomplete``). Malformed individual items are skipped; coverage is always
     ``returned_snapshot`` and the cap is applied by the caller. Pure; identity is the declared id parts, not list position.
+    ``feed.fields`` values are stored only when a finite non-bool number; they are excluded from the content
+    version, so existing rows keep their provenance until their content changes.
     """
     rows = _get(decode_json(body), feed.items)  # decode_json enforces the 2 MiB body bound
     if not isinstance(rows, list) or len(rows) > MAX_ROWS_SCANNED:
@@ -174,6 +179,11 @@ def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[I
         ):
             if value:
                 fields[key] = value
+        for key, path in feed.fields:
+            number = _get(item, path)
+            # decode_json yields Decimal for JSON numbers; bool is an int subclass and must not pass
+            if type(number) in (int, float, Decimal) and math.isfinite(number):
+                fields[key] = float(number)
         record = _record(
             provider=feed.provider,
             identity=identity,
@@ -327,6 +337,7 @@ JSON_FEEDS: dict[str, JsonFeed] = {
             ("id",),
             ("properties.flynn_region",),
             (("Magnitude", "properties.mag"), ("Depth (km)", "properties.depth")),
+            fields=(("magnitude", "properties.mag"), ("depth_km", "properties.depth")),
             time="properties.time",
             lonlat=("properties.lon", "properties.lat"),
         ),

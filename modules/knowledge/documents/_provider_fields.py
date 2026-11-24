@@ -326,7 +326,8 @@ _PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
         "source",
         "cited_by_count",
     },
-    "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
+    "emsc_quakes": _FEED_FIELDS | {"magnitude", "depth_km"},
+    "hn_top": {"title", "text", "url", "by", "time", "id", "type", "score", "deleted", "dead"},
     "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
     "topic_watch": set(),  # first-party search-and-summarise watch: envelope carries no source fields
 }
@@ -639,6 +640,26 @@ def _validate_bounded_string(key: str, value: Any) -> None:
         raise ValueError("Provider release_status is unsupported")
 
 
+# Inclusive bounds for finite float source fields (EMSC magnitude, depth in km).
+_FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
+    "magnitude": (-2.0, 10.0),
+    "depth_km": (-10.0, 800.0),
+}
+
+
+def _validate_numeric_field(key: str, value: Any) -> None:
+    """Validate a numeric source field: non-negative int, or a finite number inside ``_FLOAT_BOUNDS[key]``.
+
+    Bool and text values are rejected; NaN/inf fail the range comparison. Raises ``ValueError``.
+    """
+    if key not in _FLOAT_BOUNDS:
+        _validate_nonnegative_int(key, value)
+        return
+    low, high = _FLOAT_BOUNDS[key]
+    if type(value) not in (int, float) or not low <= value <= high:  # NaN fails the comparison
+        raise ValueError(f"Provider {key} must be a finite number between {low:g} and {high:g}")
+
+
 def _validate_source_field(key: str, value: Any) -> None:
     """Validate one allowlisted source field by its class; unknown keys are rejected.
 
@@ -659,8 +680,8 @@ def _validate_source_field(key: str, value: Any) -> None:
         _validate_media_genres(value)
     elif key in {"draft", "prerelease", "deleted", "dead"}:
         _validate_bool_field(key, value)
-    elif key in {"time", "id", "cited_by_count"}:
-        _validate_nonnegative_int(key, value)
+    elif key in {"time", "id", "cited_by_count", "score"} | _FLOAT_BOUNDS.keys():
+        _validate_numeric_field(key, value)
     elif key in _MEDIA_INT_BOUNDS:
         _validate_bounded_int(key, value)
     elif key == "rating":
