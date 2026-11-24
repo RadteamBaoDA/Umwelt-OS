@@ -1785,14 +1785,14 @@ wheels = [
 
 [[package]]
 name = "neo4j"
-version = "5.28.3"
+version = "6.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytz" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/83/f2/9e386c8e7243c285768ecd2b71e6796009d3f6f3b202310e9ef972acf526/neo4j-5.28.3.tar.gz", hash = "sha256:0625aaaf0963bc99a7231e946952f579792c3be22687192b20e0b74aa1233a2b", size = 232122, upload-time = "2026-01-12T10:42:43.842Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d1/d1/bc40a291c60b06738ce92d5f0259d348eee1f07ba10d569a881c848c8afe/neo4j-6.4.1.tar.gz", hash = "sha256:fac99b7cb9679b93ef97dc23f22a3f0e7c3feb2db223eddfd2521f27005cfeaf", size = 287897, upload-time = "2026-10-15T10:47:26.666Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/83/15b4ee7c081322ba3095e58bfa2c4214452fda9accaece68e25fc86a9bb4/neo4j-5.28.3-py3-none-any.whl", hash = "sha256:dbf6d9211b861bc3dd62dccbf8a74d1e33e0c602084dd123b753edf46e1fdfad", size = 313351, upload-time = "2026-01-12T10:42:40.507Z" },
+    { url = "https://files.pythonhosted.org/packages/07/69/3036bdcacfba561c6ef4b00fe72529e0a1b6241a6b2de82572a0940a276b/neo4j-6.4.1-py3-none-any.whl", hash = "sha256:f56a281c74355522fc2642df8919bec450115431531b8f3f6fe1cc17acb57a27", size = 390684, upload-time = "2026-10-15T10:47:25.236Z" },
 ]
 
 [[package]]
@@ -3190,7 +3190,7 @@ requires-dist = [
     { name = "langgraph-checkpoint", specifier = ">=4.3.0,<5" },
     { name = "langgraph-checkpoint-postgres", specifier = "==3.1.3" },
     { name = "mcp", specifier = "==2.3.0" },
-    { name = "neo4j", specifier = "==5.28.3" },
+    { name = "neo4j", specifier = "==6.4.1" },
     { name = "ofxtools", specifier = ">=0.9,<1" },
     { name = "openai", specifier = ">=2.20,<4" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.45,<2" },
