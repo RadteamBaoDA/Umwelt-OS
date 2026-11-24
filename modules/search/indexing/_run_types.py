@@ -146,13 +146,19 @@ class _RunContext:
 
 @dataclass
 class _RunState:
-    """Mutable loop bookkeeping: completed count, idle flag, claim keyset and event coalescing."""
+    """Mutable loop bookkeeping: completed count, idle flag, claim keyset, event coalescing and deferred build.
+
+    ``pending_build`` is set (to the generation's dimensions) when finalize leaves the generation running
+    because its HNSW index still has to be built. The build runs after the heavy slot is released, so it
+    is handed back to ``index_pending_chunks`` through this field rather than run inside the slot.
+    """
 
     completed: int = 0
     idle: bool = False
     last_chunk: UUID | None = None
     last_emit: float = float("-inf")
     unemitted: int = 0
+    pending_build: int | None = None
 
 
 @dataclass(frozen=True)

@@ -39,7 +39,7 @@ def _heavy_slot_users() -> set[str]:
 
 def test_every_heavy_slot_job_is_covered_by_the_retry_budget() -> None:
     # index_pending_chunks is cron-only: a dropped cron id is unique per tick, so it cannot block re-enqueue.
-    crons = {"index_pending_chunks"}
+    crons = {"index_pending_chunks", "_index_pending_chunks_in_slot"}
     assert _heavy_slot_users() - crons == HEAVY_SLOT_JOBS
 
 

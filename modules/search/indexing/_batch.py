@@ -128,7 +128,8 @@ async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> 
     list means the loop must stop (denial, Search disabled, generation gone, nothing above the keyset, or
     nothing pending, in which case ``state.idle``/finalize apply exactly as for a single claim). Creates
     the missing ``SearchIndexItem`` rows in one flush, advances ``state.last_chunk`` to the batch's last
-    id and publishes only the queued->running transition.
+    id and publishes only the queued->running transition. A finalize that defers the HNSW build sets
+    ``state.pending_build`` (see ``_finalize_exhausted_generation``).
     """
     async with ctx.factory() as session:
         try:
@@ -192,7 +193,9 @@ async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> 
                 await session.rollback()
                 state.idle = True
             else:
-                await _finalize_exhausted_generation(session, ctx, generation, before, access_fence)
+                state.pending_build = await _finalize_exhausted_generation(
+                    session, ctx, generation, before, access_fence
+                )
             return []
         state.last_chunk = rows[-1][0]
         known = await _ensure_index_items(session, ctx, rows)

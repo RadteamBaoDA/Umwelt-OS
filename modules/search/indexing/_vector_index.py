@@ -141,6 +141,24 @@ def async_engine_for_session(session: AsyncSession) -> AsyncEngine:
     raise TypeError("Concurrent index build requires an AsyncEngine-bound session")
 
 
+async def vector_index_is_valid(session: AsyncSession, generation_id: UUID) -> bool:
+    """Return True when the generation's HNSW index exists and is usable (``indisvalid`` and ``indisready``).
+
+    An index still being built by ``CREATE INDEX CONCURRENTLY`` or left invalid by a failed build
+    counts as not valid. Read-only; runs in the caller's transaction and takes no locks.
+    """
+    row = (
+        await session.execute(
+            text(
+                "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE c.relname = :name AND i.indisvalid AND i.indisready"
+            ),
+            {"name": vector_index_name(generation_id)},
+        )
+    ).first()
+    return row is not None
+
+
 async def activate_generation(
     session: AsyncSession,
     generation: IndexGeneration,
@@ -149,10 +167,10 @@ async def activate_generation(
 ) -> None:
     """Retire only the admitted workspace's active predecessor and mark ``generation`` active.
 
-    The generation's HNSW index must already exist: it is built before this call by
-    ``build_vector_index_concurrently`` (``CREATE INDEX CONCURRENTLY`` cannot run inside this transaction
-    and a transactional build would block writes to ``search_index_items``). Locks the predecessor row
-    ``FOR UPDATE`` inside the caller's transaction; the caller commits.
+    The generation's HNSW index must already exist and be valid (see ``vector_index_is_valid``). It is
+    built by the ``index_pending_chunks`` cron job after the heavy slot is released, never inside the
+    slot's transaction: ``CREATE INDEX CONCURRENTLY`` would wait on that same transaction. Locks the
+    predecessor row ``FOR UPDATE`` inside the caller's transaction; the caller commits.
     """
     if generation.dimensions is None or not 1 <= generation.dimensions <= MAX_VECTOR_DIMENSIONS:
         raise ValueError("Invalid generation dimensions")

@@ -23,8 +23,7 @@ from modules.search.indexing._common import (
 from modules.search.indexing._run_types import _RunContext
 from modules.search.indexing._vector_index import (
     activate_generation,
-    async_engine_for_session,
-    build_vector_index_concurrently,
+    vector_index_is_valid,
 )
 from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.settings import public as ai_settings
@@ -134,17 +133,20 @@ async def _finalize_exhausted_generation(
     generation: IndexGeneration,
     before: IndexProjection | None,
     access_fence: AccessFence,
-) -> None:
+) -> int | None:
     """Finalize a running generation whose first (unfiltered) claim probe found nothing pending.
 
     Runs in the caller's locked session: prunes items whose chunk is no longer eligible, then marks
-    the generation failed (``item_failed`` / ``no_indexable_chunks``) or activates it, and commits
-    through ``_commit_index_change`` (which publishes the status change). A non-running generation
-    is only committed (no state change). Activation first commits this transaction and builds the HNSW
-    index with ``CREATE INDEX CONCURRENTLY`` on a separate autocommit connection (see
-    ``_build_index_outside_transaction``); if the generation changed meanwhile the session is rolled back and
-    nothing is published.
+    the generation failed (``item_failed`` / ``no_indexable_chunks``), or activates it when its HNSW
+    index is already valid. Commits through ``_commit_index_change`` (which publishes the status change);
+    a non-running generation is only committed (no state change).
+
+    When the index is not valid yet, the generation stays ``running`` and this returns its dimensions
+    so the caller can build the index after the heavy slot is released (``CREATE INDEX CONCURRENTLY``
+    would wait on this transaction, and so on the slot itself). The next pass finds the index valid and
+    activates. Returns ``None`` otherwise. Errors from the commit propagate; nothing is built here.
     """
+    build: int | None = None
     if generation.status == "running":
         await session.execute(
             text(
@@ -175,11 +177,10 @@ async def _finalize_exhausted_generation(
         elif generation.dimensions is None:
             generation.status = "failed"
             generation.error_code = "no_indexable_chunks"
+        elif not await vector_index_is_valid(session, ctx.generation_id):
+            # Stays running: built after the heavy slot is released; the next pass activates it.
+            build = generation.dimensions
         else:
-            relocked = await _build_index_outside_transaction(session, ctx, generation)
-            if relocked is None:
-                return  # state changed during the build; the generation stays running and is re-finalized later
-            generation, access_fence = relocked
             await activate_generation(session, generation, scope=ctx.scope)
     await _commit_index_change(
         session,
@@ -189,6 +190,7 @@ async def _finalize_exhausted_generation(
         multi_workspace_enabled=ctx.multi_workspace_enabled,
         access_fence=access_fence,
     )
+    return build
 
 
 async def _drop_pending_item(
@@ -289,73 +291,3 @@ async def _fail_item(
             multi_workspace_enabled=settings.multi_workspace_enabled,
             access_fence=fence,
         )
-
-
-async def _build_index_outside_transaction(
-    session: AsyncSession,
-    ctx: _RunContext,
-    generation: IndexGeneration,
-) -> tuple[IndexGeneration, AccessFence] | None:
-    """Commit, build the generation's HNSW index concurrently, then re-lock and re-validate for activation.
-
-    Order: (1) commit the caller's transaction (releases the access-fence and generation locks and the
-    write locks the concurrent build would otherwise wait on forever), (2) ``CREATE INDEX CONCURRENTLY`` on a
-    separate autocommit connection, (3) new transaction: access fence (compared with the run's original
-    fence) then generation row ``FOR UPDATE`` -- the same lock order as a claim. Returns the re-locked
-    generation and fence, or ``None`` after a rollback when admission is denied, the generation is no longer
-    running with the same dimensions, or unfinished items appeared meanwhile (a later pass claims them and
-    finalizes again; the finished index is reused by ``IF NOT EXISTS``).
-    """
-    dimensions = generation.dimensions
-    if dimensions is None:
-        return None
-    engine = async_engine_for_session(
-        session
-    )  # resolve before commit so a misconfiguration fails without side effects
-    await session.commit()
-    await build_vector_index_concurrently(engine, ctx.generation_id, dimensions)
-    try:
-        access_fence = await _admit(
-            session,
-            scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled,
-            lock=True,
-            expected=ctx.original.fence,
-        )
-    except (DomainError, HTTPException) as exc:
-        await session.rollback()
-        if exc.status_code in {401, 403, 404, 409}:
-            return None
-        raise
-    # populate_existing: the commit above kept the old instance (expire_on_commit=False), so refresh it
-    # from the row we now hold the lock on instead of trusting pre-build attribute values.
-    current = await session.scalar(
-        select(IndexGeneration)
-        .where(
-            IndexGeneration.id == ctx.generation_id,
-            IndexGeneration.workspace_id == ctx.workspace_id,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    unfinished = (
-        await session.scalar(
-            select(func.count())
-            .select_from(SearchIndexItem)
-            .where(
-                SearchIndexItem.generation_id == ctx.generation_id,
-                SearchIndexItem.status != "succeeded",
-            )
-        )
-        if current is not None
-        else 0
-    )
-    if (
-        current is None
-        or current.status != "running"
-        or current.dimensions != dimensions
-        or unfinished
-    ):
-        await session.rollback()
-        return None
-    return current, access_fence

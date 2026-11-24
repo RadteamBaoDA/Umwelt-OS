@@ -54,7 +54,6 @@ from modules.search.indexing._generations import (
     create_generation_for_authority,
 )
 from modules.search.indexing._run_finalize import (
-    _build_index_outside_transaction,
     _drop_pending_item,
     _fail_item,
     _finalize_exhausted_generation,
@@ -71,6 +70,7 @@ from modules.search.indexing._run_types import (
 from modules.search.indexing._runner import (
     _candidate_page,
     _index_generation,
+    _index_pending_chunks_in_slot,
     index_pending_chunks,
 )
 from modules.search.indexing._single import (
@@ -85,6 +85,7 @@ from modules.search.indexing._vector_index import (
     async_engine_for_session,
     build_vector_index_concurrently,
     purge_version_embeddings,
+    vector_index_is_valid,
     vector_index_name,
     vector_index_statements,
 )
@@ -139,7 +140,6 @@ __all__ = [
     "_finalize_exhausted_generation",
     "_drop_pending_item",
     "_fail_item",
-    "_build_index_outside_transaction",
     "_claim_next_chunk",
     "_embed_claimed_chunk",
     "_publish_embedding",
@@ -156,7 +156,9 @@ __all__ = [
     "_process_claimed_batch",
     "_candidate_page",
     "index_pending_chunks",
+    "_index_pending_chunks_in_slot",
     "_index_generation",
+    "vector_index_is_valid",
     "read_cursor, write_cursor",
     "ai_settings",
     "sources",

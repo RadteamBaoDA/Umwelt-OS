@@ -440,7 +440,9 @@ async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyP
     async def page(_f: Any, statuses: tuple[str, ...], _after: Any) -> list[tuple[Any, Any]]:
         return [denied, eligible] if statuses == ("queued", "running") else []
 
-    async def index(_f: Any, _r: Any, _s: Any, generation_id: Any, _w: Any) -> int | None:
+    async def index(
+        _f: Any, _r: Any, _s: Any, generation_id: Any, _w: Any, **_k: Any
+    ) -> int | None:
         attempts.append(generation_id)
         return None if generation_id == denied[0] else 4
 
@@ -461,11 +463,7 @@ async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyP
         "settings": SETTINGS,
         "w2_cursor_state": {},
     }
-    done = (
-        await indexing.index_pending_chunks.__wrapped__(ctx)
-        if hasattr(indexing.index_pending_chunks, "__wrapped__")
-        else await indexing.index_pending_chunks(ctx)
-    )
+    done = await indexing._index_pending_chunks_in_slot.__wrapped__(ctx, [])  # type: ignore[attr-defined]
     assert done == 4
     assert attempts == [denied[0], eligible[0]]
     # cursor advanced to the processed subject and survives Redis loss in the shared state.
@@ -531,7 +529,7 @@ async def test_cursor_advances_across_arq_ctx_copies(
         "w2_cursor_state": {},
     }
     for _ in range(2):  # ARQ: every job runs on a shallow copy of the worker ctx
-        await indexing.index_pending_chunks.__wrapped__({**base})  # type: ignore[attr-defined]
+        await indexing._index_pending_chunks_in_slot.__wrapped__({**base}, [])  # type: ignore[attr-defined]
     assert afters[0] in (None, _STALE) and afters[1] == ids[1]
     state = base["w2_cursor_state"]
     assert isinstance(state, dict) and all(isinstance(v, str) for v in state.values())
@@ -625,7 +623,9 @@ async def test_queued_and_active_classes_both_served(monkeypatch: pytest.MonkeyP
     async def page(_f: Any, statuses: tuple[str, ...], _after: Any) -> list[tuple[Any, Any]]:
         return [queued] if statuses == ("queued", "running") else [active]
 
-    async def index(_f: Any, _r: Any, _s: Any, generation_id: Any, _w: Any) -> int | None:
+    async def index(
+        _f: Any, _r: Any, _s: Any, generation_id: Any, _w: Any, **_k: Any
+    ) -> int | None:
         served.append(generation_id)
         return 1
 
@@ -640,7 +640,7 @@ async def test_queued_and_active_classes_both_served(monkeypatch: pytest.MonkeyP
         "w2_cursor_state": {},
     }
     for _ in range(2):
-        await indexing.index_pending_chunks.__wrapped__(ctx)  # type: ignore[attr-defined]
+        await indexing._index_pending_chunks_in_slot.__wrapped__(ctx, [])  # type: ignore[attr-defined]
     assert served == [queued[0], active[0]]
 
 

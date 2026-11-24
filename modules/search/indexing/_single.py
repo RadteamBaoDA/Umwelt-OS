@@ -44,9 +44,9 @@ async def _claim_next_chunk(ctx: _RunContext, state: _RunState) -> _ClaimedChunk
 
     Lock order: access fence -> generation row. Returns ``None`` when the loop must stop: denial
     (401/403/404/409), Search disabled, generation gone/not claimable, nothing above the keyset,
-    or nothing pending (``state.idle`` set when the generation is not running; a running one is
-    finalized). Other admission errors propagate. Advances ``state.last_chunk`` and creates the
-    ``SearchIndexItem`` row; the queued->running claim is published, per-chunk progress is not.
+    or nothing pending (``state.idle`` if the generation is not running; a running one is
+    finalized, deferring any HNSW build to ``state.pending_build``). Admission errors propagate.
+    Advances ``state.last_chunk``, creates the ``SearchIndexItem`` row, publishes queued->running.
     """
     async with ctx.factory() as session:
         try:
@@ -103,9 +103,8 @@ async def _claim_next_chunk(ctx: _RunContext, state: _RunState) -> _ClaimedChunk
             claim = claim.where(DocumentChunk.id > state.last_chunk)
         row = (await session.execute(claim.order_by(DocumentChunk.id).limit(1))).first()
         if row is None and state.last_chunk is not None:
-            # Chunk ids are random UUIDs and items may remain pending, so "nothing above the
-            # keyset" does not mean "nothing pending": never finalize here; the next
-            # invocation's first (unfiltered) probe decides finalize/idle.
+            # Chunk ids are random UUIDs and items may stay pending, so "nothing above the keyset"
+            # is not "nothing pending": the next invocation's unfiltered first probe finalizes.
             await session.rollback()
             return None
         if row is None and generation.status != "running":
@@ -113,7 +112,9 @@ async def _claim_next_chunk(ctx: _RunContext, state: _RunState) -> _ClaimedChunk
             state.idle = True  # nothing pending: let the page scan move on
             return None
         if row is None:
-            await _finalize_exhausted_generation(session, ctx, generation, before, access_fence)
+            state.pending_build = await _finalize_exhausted_generation(
+                session, ctx, generation, before, access_fence
+            )
             return None
         chunk_id, content, source_id = row
         state.last_chunk = chunk_id

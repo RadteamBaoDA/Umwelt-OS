@@ -1,15 +1,14 @@
-"""HNSW activation builds its index CONCURRENTLY outside the activating transaction."""
+"""HNSW build is CONCURRENT and runs after the heavy slot is released; activation only flips status."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Self
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from core.errors import ConflictError
 from modules.search import indexing
 from tests.unit.split_patching import patch_split
 
@@ -126,26 +125,29 @@ _ENGINE = create_async_engine(
 )  # never connects; type is what matters
 
 
-class _Session:
-    """Session fake: records commit/rollback order and answers the re-lock selects from a script."""
+class _FinalizeSession:
+    """Session fake for finalize: the prune DELETE is a no-op and the failed-item count is zero."""
 
-    def __init__(self, log: list[str], generation: Any, unfinished: int = 0) -> None:
-        self.log, self.generation, self.unfinished = log, generation, unfinished
+    def __init__(self) -> None:
         self.bind = _ENGINE
 
-    async def commit(self) -> None:
-        self.log.append("commit")
+    async def execute(self, statement: Any, params: Any = None) -> None:
+        return None
 
-    async def rollback(self) -> None:
-        self.log.append("rollback")
+    async def scalar(self, statement: Any) -> int:
+        return 0
 
-    async def scalar(self, statement: Any) -> Any:
-        sql = str(statement)
-        if "count(" in sql:
-            self.log.append("count-unfinished")
-            return self.unfinished
-        self.log.append("lock-generation")
-        return self.generation
+
+class _EngineSession:
+    """Worker session factory product: an async context manager whose ``bind`` is an AsyncEngine."""
+
+    bind = _ENGINE
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
 
 
 def _ctx(generation_id: Any) -> Any:
@@ -158,86 +160,130 @@ def _ctx(generation_id: Any) -> Any:
     )
 
 
-async def test_commit_precedes_build_and_relock_follows(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_finalize_without_a_valid_index_defers_the_build_and_stays_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(a) No valid index yet: commit the prune, keep the generation running, hand dimensions back."""
     log: list[str] = []
-    generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3)
-    ctx = _ctx(generation.id)
+    generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3, error_code=None)
 
-    async def build(engine: Any, generation_id: Any, dimensions: int) -> None:
-        log.append(f"build:{type(engine).__name__}:{dimensions}")
+    async def not_valid(*_a: Any, **_k: Any) -> bool:
+        return False
 
-    async def admit(session: Any, **kwargs: Any) -> str:
-        log.append(f"admit:lock={kwargs['lock']}:expected={kwargs['expected']}")
-        return "NEW-FENCE"
+    async def commit(*_a: Any, **_k: Any) -> None:
+        log.append("commit")
 
+    async def activate(*_a: Any, **_k: Any) -> None:
+        log.append("activate")
+
+    patch_split(monkeypatch, "modules.search.indexing", "vector_index_is_valid", not_valid)
+    patch_split(monkeypatch, "modules.search.indexing", "_commit_index_change", commit)
+    patch_split(monkeypatch, "modules.search.indexing", "activate_generation", activate)
+    result = await indexing._finalize_exhausted_generation(
+        _FinalizeSession(),  # type: ignore[arg-type]
+        _ctx(generation.id),  # type: ignore[arg-type]
+        generation,  # type: ignore[arg-type]
+        None,
+        "FENCE",  # type: ignore[arg-type]
+    )
+    assert result == 3
+    assert generation.status == "running" and log == ["commit"]
+
+
+async def test_finalize_with_a_valid_index_activates_in_the_same_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) A valid index already exists (built after an earlier slot release): activate now, build nothing."""
+    log: list[str] = []
+    generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3, error_code=None)
+
+    async def valid(*_a: Any, **_k: Any) -> bool:
+        return True
+
+    async def commit(*_a: Any, **_k: Any) -> None:
+        log.append("commit")
+
+    async def activate(*_a: Any, **_k: Any) -> None:
+        log.append("activate")
+
+    async def build(*_a: Any) -> None:
+        log.append("build")
+
+    patch_split(monkeypatch, "modules.search.indexing", "vector_index_is_valid", valid)
+    patch_split(monkeypatch, "modules.search.indexing", "_commit_index_change", commit)
+    patch_split(monkeypatch, "modules.search.indexing", "activate_generation", activate)
     patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
-    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
-    session = _Session(log, generation)
+    result = await indexing._finalize_exhausted_generation(
+        _FinalizeSession(),  # type: ignore[arg-type]
+        _ctx(generation.id),  # type: ignore[arg-type]
+        generation,  # type: ignore[arg-type]
+        None,
+        "FENCE",  # type: ignore[arg-type]
+    )
+    assert result is None
+    assert log == ["activate", "commit"]
 
-    result = await indexing._build_index_outside_transaction(session, ctx, generation)  # type: ignore[arg-type]
 
-    assert result == (generation, "NEW-FENCE")
-    # The activating transaction is committed before the concurrent build; the access-fence then the
-    # generation row are locked again afterwards (same order as a claim).
+async def test_hnsw_build_runs_after_the_heavy_slot_is_released(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(c) REGRESSION: CREATE INDEX CONCURRENTLY must not run inside the heavy slot's transaction.
+
+    The slot-holding pass returns (releasing the slot) before the build; the build then wakes the
+    poller so the next pass activates the finished index.
+    """
+    log: list[str] = []
+    generation_id = uuid4()
+
+    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
+        log.append("inner-start")
+        builds.append((generation_id, 3))
+        log.append("inner-end")  # slot released once the bounded wrapper returns
+        return 0
+
+    async def build(_engine: Any, gid: UUID, dimensions: int) -> None:
+        log.append(f"build:{gid == generation_id}:{dimensions}")
+
+    async def wake(_redis: Any, name: str, **_k: Any) -> bool:
+        log.append(f"wake:{name}")
+        return True
+
+    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
+    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
+    assert await indexing.index_pending_chunks(ctx) == 0  # type: ignore[arg-type]
     assert log == [
-        "commit",
-        "build:AsyncEngine:3",
-        "admit:lock=True:expected=FENCE",
-        "lock-generation",
-        "count-unfinished",
+        "inner-start",
+        "inner-end",
+        "build:True:3",
+        "wake:index_pending_chunks",
     ]
 
 
-@pytest.mark.parametrize(
-    ("status", "dimensions", "unfinished"),
-    [("cancelled", 3, 0), ("running", 4, 0), ("running", 3, 2)],
-)
-async def test_state_change_during_build_rolls_back_without_activating(
-    monkeypatch: pytest.MonkeyPatch,
-    status: str,
-    dimensions: int,
-    unfinished: int,
-) -> None:
-    log: list[str] = []
-    generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3)
-    changed = SimpleNamespace(id=generation.id, status=status, dimensions=dimensions)
-
-    async def build(*_a: Any) -> None:
-        return None
-
-    async def admit(*_a: Any, **_k: Any) -> str:
-        return "F"
-
-    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
-    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
-    session = _Session(log, changed, unfinished)
-    assert (
-        await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation)
-        is None
-    )  # type: ignore[arg-type]
-    assert log[-1] == "rollback"
-
-
-async def test_denied_admission_after_build_rolls_back_and_skips(
+async def test_pass_without_a_pending_build_neither_builds_nor_wakes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """(d) No generation finalized to a deferred build: no build, no wake."""
     log: list[str] = []
-    generation = SimpleNamespace(id=uuid4(), status="running", dimensions=3)
+
+    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
+        log.append("inner")
+        return 2
 
     async def build(*_a: Any) -> None:
-        return None
+        log.append("build")
 
-    async def admit(*_a: Any, **_k: Any) -> str:
-        raise ConflictError(detail="Workspace access changed")
+    async def wake(*_a: Any, **_k: Any) -> bool:
+        log.append("wake")
+        return True
 
+    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
     patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
-    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
-    session = _Session(log, generation)
-    assert (
-        await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation)
-        is None
-    )  # type: ignore[arg-type]
-    assert log == ["commit", "rollback"]
+    patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
+    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
+    assert await indexing.index_pending_chunks(ctx) == 2  # type: ignore[arg-type]
+    assert log == ["inner"]
 
 
 async def test_activate_generation_no_longer_creates_an_index_in_the_transaction() -> None:
