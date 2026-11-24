@@ -166,3 +166,28 @@ def passed(criteria: Mapping[str, Any]) -> bool:
     return all(v is not False for k, v in criteria.items() if k not in _DIAGNOSTIC) and not (
         criteria.get("scope_leak")
     )
+
+
+def cited_version_ids(citations: Iterable[Mapping[str, Any]]) -> set[str]:
+    """Document version ids of the validated citations, as strings (pure).
+
+    ``_validate_citations`` returns ``Citation.model_dump(by_alias=True)`` dicts. That dump keeps the field alias,
+    so the version id is ``document_version_id`` (snake_case), not ``documentVersionId``. Both spellings are read,
+    the same as ``modules.chat.citations``; reading only the camelCase key scored every answer's recall as 0.
+    """
+    ids: set[str] = set()
+    for citation in citations:
+        value = citation.get("documentVersionId", citation.get("document_version_id"))
+        if value is not None:
+            ids.add(str(value))
+    return ids
+
+
+def missed_keys(
+    gold_keys: Iterable[str], key_map: Mapping[str, str], retrieved: set[str]
+) -> list[str]:
+    """Sorted gold keys whose resolved version id is absent from ``retrieved`` (pure).
+
+    A key missing from ``key_map`` is ignored, as in ``_grade``, so an unseeded key is never reported as missed.
+    """
+    return sorted(k for k in set(gold_keys) if k in key_map and key_map[k] not in retrieved)

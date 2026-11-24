@@ -12,6 +12,11 @@ Seed-only verification: ``CHAT_EVAL_ONLY=__seed_only__`` seeds the matrix, every
 planted gold, then writes ``test-results/chat-eval/report-<timestamp>.json`` with ``mode: "seed_only"``, the
 ``not_seeded`` rows (including providers whose normalization failed) and ``key_map_size``. No case runs and no
 model is called. Any other ``CHAT_EVAL_ONLY`` value still selects case ids.
+
+Report shape: a header (``model``, ``legs_run``, ``rerank``, ``judge``, ``sql_mode``, ``deadline_s``,
+``not_seeded``, ``baseline``) then ``summary`` keyed by leg (``tool`` / ``hybrid``), each computed from that leg's
+own entries. ``CHAT_EVAL_DEADLINE_MIN`` (default 25) sets the run deadline in minutes; ``CHAT_EVAL_BASELINE`` names
+the tool baseline report that ``baseline_regressions`` compares against (default: the 2026-11-23 tool baseline).
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,14 +63,14 @@ from modules.chat.schemas import AnswerContext
 from tests.integration.chat_eval.cases import ALL_CASES, Case
 from tests.integration.chat_eval.grading import (
     RowIds,
+    cited_version_ids,
     extract_row_ids,
     hidden_miss,
     min_recall_ok,
-    passed,
+    missed_keys,
     recall,
     scope_ids,
     scope_leak,
-    summarize_recall,
 )
 from tests.integration.chat_eval.hybrid import (
     HybridEnv,
@@ -78,14 +83,9 @@ from tests.integration.chat_eval.hybrid import (
     mask_secrets,
     retrieval_request,
 )
-from tests.integration.chat_eval.judge import (
-    judge,
-    judge_config,
-    load_env_file,
-    summarize_judge,
-    to_record,
-)
+from tests.integration.chat_eval.judge import judge, judge_config, load_env_file, to_record
 from tests.integration.chat_eval.planted import PLANTED_PATH, load_planted, seed_planted
+from tests.integration.chat_eval.report import build_summaries
 from tests.integration.chat_eval.seed_all import seed_all
 from tests.integration.test_chat_collected_data_matrix import (  # noqa: F401  # fixture + seed helpers
     FLAG,
@@ -99,7 +99,12 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env.e2e-real"
 REPORT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "chat-eval"
 CONCURRENCY = 3
 CASE_TIMEOUT_S = 170.0
-DEADLINE_S = 25 * 60.0  # cases not started by then are reported as skipped
+DEFAULT_DEADLINE_MIN = (
+    25.0  # a full 101-case x 2-leg run needs about 75 minutes; set CHAT_EVAL_DEADLINE_MIN
+)
+BASELINE_DEFAULT = REPORT_DIR / "baseline-20261123T105143Z.json"  # the tool-leg baseline (45 cases)
+# Local-only guard outcomes that count as a pass: withholding local data is the expected behaviour there.
+LOCAL_ONLY_PASS_CATS = frozenset({"local_only", "scope_local_only"})
 SEED_ONLY_MODE = (
     "__seed_only__"  # CHAT_EVAL_ONLY value: seed everything, write the report, run no case
 )
@@ -108,6 +113,28 @@ SEED_ONLY_MODE = (
 def _load_env() -> dict[str, str]:
     """Parse ``.env.e2e-real`` into a dict (empty when absent). Values are never logged."""
     return load_env_file(ENV_FILE)
+
+
+def _deadline_s() -> float:
+    """Run deadline in seconds from ``CHAT_EVAL_DEADLINE_MIN`` (minutes; blank or unset means the default).
+
+    Cases not started by the deadline are reported as ``skipped_deadline``. Read at call time so the header
+    and the run agree on the same value.
+    """
+    return float(os.getenv("CHAT_EVAL_DEADLINE_MIN") or DEFAULT_DEADLINE_MIN) * 60.0
+
+
+def _load_baseline() -> tuple[str | None, list[dict[str, Any]] | None]:
+    """Path and cases of the tool baseline report, or ``(None, None)`` when the file is absent.
+
+    ``CHAT_EVAL_BASELINE`` names the file; blank falls back to ``BASELINE_DEFAULT``. A missing file is reported
+    as no baseline instead of failing the run, so ``baseline_regressions`` is then empty.
+    """
+    path = Path(os.getenv("CHAT_EVAL_BASELINE") or BASELINE_DEFAULT)
+    if not path.is_file():
+        return None, None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return str(path), list(data.get("cases", []))
 
 
 _ENV = _load_env()
@@ -407,11 +434,8 @@ async def _run_turn(
         # tools returned with a chunk) is the retrieval source for both modes.
         "retrieved_versions": {str(e.document_version_id) for e in answer_context.evidence},
         "retrieved_sources": {str(e.source_id) for e in answer_context.evidence},
-        "cited_versions": {
-            str(c["documentVersionId"])
-            for c in cited.valid_citations
-            if c.get("documentVersionId") is not None
-        },
+        # Validated citations are alias dumps (snake_case ``document_version_id``); see cited_version_ids.
+        "cited_versions": cited_version_ids(cited.valid_citations),
         "citations": len(cited.valid_citations),
         "rerank_status": answer_context.rerank_status,
         "context_warnings": list(answer_context.warnings),
@@ -600,6 +624,7 @@ async def test_real_model_eval(
         if hybrid is not None and "hybrid" in legs
         else None
     )
+    baseline_path, baseline_cases = _load_baseline()
     try:
         ordered = await _run_all(cases, legs, matrix, eval_seed, committed_engine, runtime)
     finally:
@@ -607,34 +632,32 @@ async def test_real_model_eval(
             await runtime.redis.aclose()
     report: dict[str, Any] = {
         "model": _ENV["E2E_REAL_MODEL"],
-        "judge": "on" if judge_config(_ENV) is not None else "off",
         "generated_at": datetime.now(UTC).isoformat(),
-        "clock_utc": datetime.now(UTC).isoformat(),
-        "summary": _summary([e for e in ordered if e["leg"] == "tool"]),
-        "cases": ordered,
+        "legs_run": list(legs),
+        "rerank": runtime.rerank if runtime is not None else "off",
+        "judge": "on" if judge_config(_ENV) is not None else "off",
+        "sql_mode": "on" if sql_mode_available() else "off",
+        "deadline_s": _deadline_s(),
         "not_seeded": eval_seed.not_seeded,
+        "baseline": baseline_path,
+        "summary": build_summaries(ordered, legs, baseline_cases=baseline_cases),
+        "cases": ordered,
     }
     if runtime is not None:
-        report |= {
-            "legs": list(legs),
-            "rerank": runtime.rerank,
-            "indexed_chunks": runtime.indexed,
-            "hybrid_summary": _hybrid_summary([e for e in ordered if e["leg"] == "hybrid"]),
-        }
+        report["indexed_chunks"] = runtime.indexed
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     path = REPORT_DIR / f"report-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     print(
         f"\nCHAT EVAL REPORT {path}\nCHAT EVAL SUMMARY {json.dumps(report['summary'], ensure_ascii=False)}"
     )
-    if runtime is not None:
-        print(f"CHAT EVAL HYBRID {json.dumps(report['hybrid_summary'], ensure_ascii=False)}")
     assert len(ordered) == len(cases) * len(legs)  # the run completed; scores live in the report
 
 
 def _legs(hybrid_on: bool) -> tuple[str, ...]:
     """Legs to run: ``tool`` always, ``hybrid`` only when its env is set. ``CHAT_EVAL_LEGS`` (comma list) narrows it."""
-    wanted = {leg.strip() for leg in os.getenv("CHAT_EVAL_LEGS", "tool,hybrid").split(",")}
+    # A blank CHAT_EVAL_LEGS (an env file that sets it empty) means the default, not "no legs".
+    wanted = {leg.strip() for leg in (os.getenv("CHAT_EVAL_LEGS") or "tool,hybrid").split(",")}
     return tuple(
         leg for leg in ("tool", "hybrid") if leg in wanted and (leg == "tool" or hybrid_on)
     )
@@ -708,6 +731,7 @@ async def _run_all(
 ) -> list[dict[str, Any]]:
     """Run every (leg, case) under the concurrency gate, the deadline and the per-case timeout; entries in order."""
     started = time.monotonic()
+    deadline_s = _deadline_s()
     gate = asyncio.Semaphore(CONCURRENCY)
     results: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -722,7 +746,7 @@ async def _run_all(
             results[key] = {"id": case.id, "leg": leg, "status": "skipped_no_sql"}
             return
         async with gate:
-            if time.monotonic() - started > DEADLINE_S:
+            if time.monotonic() - started > deadline_s:
                 results[key] = {"id": case.id, "leg": leg, "status": "skipped_deadline"}
                 return
             rec = Recorder()
@@ -778,14 +802,15 @@ def _outcome_entry(
 ) -> dict[str, Any]:
     """Report fields of one finished turn: a graded ``completed`` entry, or ``local_only_blocked`` (not sent).
 
-    A blocked turn passes only in the ``scope_local_only`` category, where withholding local data is the expected
-    behaviour. ``rerank_status`` is recorded for the hybrid leg only.
+    A blocked turn passes in the ``local_only`` and ``scope_local_only`` categories, where withholding local data is
+    the expected behaviour. A completed entry carries ``missed_keys``: the gold keys retrieval never surfaced, the
+    input to the report's ``miss_list``. ``rerank_status`` is recorded for the hybrid leg only.
     """
     if out.get("blocked"):
         return {
             "status": "local_only_blocked",
             "rerank_status": out["rerank_status"],
-            "passed": case.cat == "scope_local_only",
+            "passed": case.cat in LOCAL_ONLY_PASS_CATS,
         }
     fields: dict[str, Any] = {
         "status": "completed",
@@ -805,64 +830,12 @@ def _outcome_entry(
         "query_rounds": out["query_rounds"],
         "model_rounds": rec.model_rounds,
         "widgets": out["widgets"],
+        "missed_keys": missed_keys(
+            case.gold_keys, eval_seed.key_map, rec.version_ids | out["retrieved_versions"]
+        ),
     }
     if leg == "hybrid":
         fields["rerank_status"] = out["rerank_status"]
         # Why rerank or semantic search degraded for this case.
         fields["context_warnings"] = out["context_warnings"]
     return fields
-
-
-def _hybrid_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """The regular summary plus the local_only guard outcomes and rerank status counts (pure)."""
-    blocked = [e for e in entries if e.get("status") == "local_only_blocked"]
-    rerank_counts: dict[str, int] = {}
-    for e in entries:
-        if "rerank_status" in e:
-            rerank_counts[e["rerank_status"]] = rerank_counts.get(e["rerank_status"], 0) + 1
-    return _summary(entries) | {
-        "local_only_blocked": [e["id"] for e in blocked],
-        "local_only_failed": [e["id"] for e in blocked if not e["passed"]],
-        "rerank_status_counts": rerank_counts,
-    }
-
-
-def _pct(values: list[bool]) -> float | None:
-    """Percentage of true values (None when the list is empty)."""
-    return round(100 * sum(values) / len(values), 1) if values else None
-
-
-def _summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate scores over the completed cases (pure)."""
-    done = [e for e in entries if e.get("status") == "completed"]
-    crit: Callable[[str], list[bool]] = lambda k: [  # noqa: E731
-        bool(e["criteria"][k]) for e in done if e["criteria"][k] is not None
-    ]
-    by_cat: dict[str, dict[str, int]] = {}
-    for e in done:
-        ok = passed(e["criteria"])
-        slot = by_cat.setdefault(e["category"], {"pass": 0, "total": 0})
-        slot["total"] += 1
-        slot["pass"] += int(ok)
-    empties = crit("empty_ok")
-    return {
-        "cases": len(entries),
-        "completed": len(done),
-        "errors": [e["id"] for e in entries if e.get("status") == "error"],
-        "skipped": [e["id"] for e in entries if e.get("status") == "skipped_deadline"],
-        "skipped_no_sql": [e["id"] for e in entries if e.get("status") == "skipped_no_sql"],
-        "tool_called_pct": _pct(crit("tool_called")),
-        "numbers_correct_pct": _pct(crit("numbers_correct")),
-        "texts_ok_pct": _pct(crit("texts_ok")),
-        "no_forbidden_pct": _pct(crit("no_forbidden")),
-        "grounded_pct": _pct(crit("grounded")),
-        "fabricated_numbers_total": sum(len(e["unverified_numbers"]) for e in done),
-        "citation_validity_pct": _pct(crit("citations_valid")),
-        "empty_case_correct": f"{sum(empties)}/{len(empties)}",
-        "mean_query_rounds": round(sum(e["query_rounds"] for e in done) / max(len(done), 1), 2),
-        "mean_model_rounds": round(sum(e["model_rounds"] for e in done) / max(len(done), 1), 2),
-        "fully_passed": sum(passed(e["criteria"]) for e in done),
-        "by_category": by_cat,
-        **summarize_recall(done),
-        **summarize_judge(entries),
-    }
