@@ -868,7 +868,7 @@ class ModelGateway:
     ) -> Any:
         """Execute a chat, embedding, or rerank call with at most two attempts and normalize its response.
 
-        Each attempt re-runs the gateway-owned ``before_send`` plus the caller's fence and re-checks policy.
+        Each attempt re-runs the gateway-owned ``before_send`` plus the caller's fence (skipped when it equals the gateway hook under ``==``, so an equal hook runs once) and re-checks policy.
         A ``max_tokens`` 400 clamps once (mutating ``body``); transient statuses retry once via the shared
         breaker logic. The protocol-specific wire call is delegated to ``self.protocol``.
         """
@@ -880,7 +880,7 @@ class ModelGateway:
                     # Keep the gateway-owned settings check even when a scoped
                     # operation adds its own source/evidence freshness fence.
                     await self.before_send()
-                    if before_send is not None and before_send is not self.before_send:
+                    if before_send is not None and before_send != self.before_send:
                         await before_send()
                     if not self._policy_matches(policy) or not may_send(
                         policy, role, mapping, self.destination_id, bool(self.api_key), capability
@@ -1384,7 +1384,7 @@ class ModelGateway:
 
         ``tools`` (OpenAI function specs) require both ``streaming`` and ``tools`` capabilities to
         pass ``may_send``; stored ``unsupported`` tools evidence raises CapabilityUnsupported before any I/O.
-        Missing streaming/tools evidence never blocks.
+        Missing streaming/tools evidence never blocks; a caller ``before_send`` equal to the gateway hook runs once per attempt (see ``_send_with_retries``).
         ``tool_choice`` and ``max_tokens`` are forwarded only when not None. A configured ``reasoning_effort``
         (chat role) is sent as the OpenAI-compatible ``reasoning_effort`` parameter; if the provider answers
         400/422 naming it (or ``thinking``/``effort``, as Anthropic does) before any chunk, it is dropped once with
@@ -1408,7 +1408,7 @@ class ModelGateway:
                 while True:  # bounded: at most 3 opens (effort drop, then clamp, then success; otherwise one retry)
                     try:
                         await self.before_send()
-                        if before_send is not None and before_send is not self.before_send:
+                        if before_send is not None and before_send != self.before_send:
                             await before_send()
                         if not self._stream_allowed(policy, role, mapping, capabilities):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")

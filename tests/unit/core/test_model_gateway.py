@@ -1095,6 +1095,70 @@ class TestBodySentHook:
         assert body_sent.get() is None
 
 
+class _CountingHook:
+    """Owns a hook method whose calls are counted; each ``.hook`` read builds a new bound-method object."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def hook(self) -> None:
+        """Count one invocation of the egress hook."""
+        self.calls += 1
+
+
+class TestEgressHookRunsOncePerAttempt:
+    """A caller hook equal to the gateway's own hook runs once per attempt, not twice."""
+
+    @pytest.mark.asyncio
+    async def test_non_stream_equal_bound_hook_runs_once(self) -> None:
+        counter = _CountingHook()
+        gw = _loopback_gateway("https://x", before_send=counter.hook)
+        with (
+            patch(
+                "core.model_gateway.client.AsyncOpenAI",
+                side_effect=_fake_openai_with(AsyncMock(return_value={"ok": True})),
+            ),
+            patch.object(ModelGateway, "_http_client", return_value=MagicMock()),
+        ):
+            await gw.chat(
+                "chat",
+                _MAPPING,
+                _POLICY,
+                [],
+                before_send=counter.hook,
+                after_send=AsyncMock(),
+            )
+        assert counter.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_equal_bound_hook_runs_once(self) -> None:
+        counter = _CountingHook()
+
+        async def no_chunks():  # type: ignore[no-untyped-def]
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        async def create(**_: object) -> object:
+            return no_chunks()
+
+        gw = _loopback_gateway("https://x", before_send=counter.hook)
+        with (
+            patch(
+                "core.model_gateway.client.AsyncOpenAI",
+                side_effect=_fake_openai_with(create),
+            ),
+            patch.object(ModelGateway, "_http_client", return_value=MagicMock()),
+        ):
+            lines = [
+                x
+                async for x in gw.stream(
+                    "chat", _MAPPING, _POLICY, [], before_send=counter.hook, after_send=AsyncMock()
+                )
+            ]
+        assert lines == ["data: [DONE]"]
+        assert counter.calls == 1
+
+
 class TestG1GatewayTimeouts:
     """P2-1/P2-2: configurable slots, long stream lease wait, short connect and DNS bounds."""
 

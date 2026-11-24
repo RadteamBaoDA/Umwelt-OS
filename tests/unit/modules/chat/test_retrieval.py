@@ -591,3 +591,41 @@ def _item_with_url(url: str) -> EvidenceItem:
 def test_evidence_source_line_tolerates_bad_urls(url: str, expected: str) -> None:
     """Malformed or over-long hosts drop the Source part instead of breaking prompt construction."""
     assert retrieval._evidence_source_line(_item_with_url(url)) == expected
+
+
+class TestRerankEgressLock:
+    """_RerankEgressLock.before_send must never leave a previous lock session open."""
+
+    @pytest.mark.asyncio
+    async def test_repeated_before_send_closes_previous_session(self) -> None:
+        """A second before_send (per attempt) closes the first lock session before opening another."""
+        first = MagicMock()
+        first.close = AsyncMock()
+        second = MagicMock()
+        second.close = AsyncMock()
+        factory = MagicMock(side_effect=[first, second])
+        ref = MagicMock(document_version_id=uuid4(), chunk_id=uuid4(), source_generation=1)
+        ref.local_only = False
+        lock = retrieval._RerankEgressLock(
+            factory,
+            MagicMock(),
+            MagicMock(),
+            SCOPE,
+            MagicMock(),
+            MagicMock(),
+            [ref],
+            {},
+        )
+        locked = AsyncMock(return_value=[ref])
+        with (
+            patch("modules.chat.retrieval.ensure_ai_config_unchanged", new=AsyncMock()),
+            patch(
+                "modules.chat.retrieval.documents_public.lock_chat_evidence_chunks",
+                new=locked,
+            ),
+        ):
+            await lock.before_send()
+            await lock.before_send()
+        first.close.assert_awaited_once()
+        assert lock._send_session is second
+        assert factory.call_count == 2

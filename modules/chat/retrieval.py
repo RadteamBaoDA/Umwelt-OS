@@ -156,9 +156,15 @@ class _RerankEgressLock:
     async def before_send(self) -> None:
         """Lock and revalidate every exact chunk before sending copied text to a remote reranker.
 
+        Idempotent per attempt: any lock session left by an earlier call is closed first
+        (``after_send`` is a no-op when none is open), so at most one lock session is ever held.
+
         Raises:
             ModelGatewayError: when any chunk changed, lost its source, or became local-only.
         """
+        # Close a session left open by a previous attempt (a hook run twice, or a retry)
+        # before opening another; otherwise its row locks stay held until it is garbage-collected.
+        await self.after_send()
         await ensure_ai_config_unchanged(
             self._session_factory,
             self._settings,
