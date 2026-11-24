@@ -425,11 +425,17 @@ class _InlineBuildQueue:
         return object()
 
 
-_ACTIVATE_PAUSED_SQL = text("UPDATE sources SET status = 'active' WHERE status = 'paused'")
+# The web UI creates built-in, wizard and starter-pack sources with rag_index_enabled = false (the owner opts in
+# per source), and indexing reads rag_index_enabled = true only; the eval opts every restored source in, as the
+# owner would in the source's AI options, so the hybrid leg measures retrieval over the collected data.
+_ACTIVATE_PAUSED_SQL = text(
+    "UPDATE sources SET status = 'active', rag_index_enabled = true "
+    "WHERE status IN ('active', 'paused') AND local_only = false"
+)
 
 
 async def activate_paused_sources(engine: AsyncEngine) -> int:
-    """Set every paused source ``active`` on the disposable eval database; return how many rows changed.
+    """Set every paused source ``active`` and opt every non-local source into RAG indexing; return rows changed.
 
     Production indexing (``eligible_chunks``, automatic-generation discovery) and hybrid retrieval
     (``modules/search/public.py``) read ``Source.status == 'active'`` only, by design: a paused source is neither
