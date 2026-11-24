@@ -74,7 +74,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
     their own connections, because the build waits for every older transaction and would otherwise
     wait on the slot's own transaction until its deadline. After a build the poller is woken so the
     next pass finds the valid index and activates the generation. A build error propagates: the
-    generation stays ``running`` and the next scheduled tick retries. A busy-slot ``Retry`` from the
+    generation stays ``running`` (a WARNING naming its id is logged) and the next scheduled tick retries. A busy-slot ``Retry`` from the
     pass passes through unchanged and no build is attempted.
 
     Returns the pass's completed count.
@@ -86,7 +86,13 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
             engine = async_engine_for_session(session)
         for generation_id, dimensions in builds:
             # ponytail: bounded by the 180 s cron job_timeout; split out a long-timeout job if needed
-            await build_vector_index_concurrently(engine, generation_id, dimensions)
+            try:
+                await build_vector_index_concurrently(engine, generation_id, dimensions)
+            except BaseException:
+                # Cancellation and timeouts are BaseException-level here; log before re-raising so a
+                # generation left `running` by an interrupted build is visible. No secrets are logged.
+                logger.warning("hnsw build failed; generation %s left running", generation_id)
+                raise
         # A wake that meets the held cron lease sets the rerun flag, so the activating pass runs next.
         await wake(ctx["redis"], "index_pending_chunks")
     return done

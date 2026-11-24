@@ -349,3 +349,34 @@ async def test_reset_failure_does_not_mask_the_build_error() -> None:
 
 async def _noop() -> None:
     return None
+
+
+async def test_failed_build_logs_the_generation_and_propagates_without_waking(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """(e) A build that raises (incl. cancellation/timeout) leaves the generation running: it must be
+    logged with its id, the error must propagate, and the poller must not be woken."""
+    generation_id = uuid4()
+    log: list[str] = []
+
+    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
+        builds.append((generation_id, 3))
+        return 0
+
+    async def build(*_a: Any) -> None:
+        raise TimeoutError("statement timeout")
+
+    async def wake(*_a: Any, **_k: Any) -> bool:
+        log.append("wake")
+        return True
+
+    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
+    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
+    with caplog.at_level("WARNING", logger="modules.search.indexing"):
+        with pytest.raises(TimeoutError, match="statement timeout"):
+            await indexing.index_pending_chunks(ctx)  # type: ignore[arg-type]
+    assert log == []
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any(str(generation_id) in r.getMessage() for r in warnings)
