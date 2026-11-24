@@ -629,3 +629,66 @@ class TestRerankEgressLock:
         first.close.assert_awaited_once()
         assert lock._send_session is second
         assert factory.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rerank_failure_after_before_send_closes_the_lock_session() -> None:
+    """If the gateway raises after before_send opened the lock session, after_send still closes it."""
+    lock_session = MagicMock()
+    lock_session.close = AsyncMock()
+    session_factory = MagicMock(return_value=lock_session)
+    session = MagicMock()
+    session.commit = AsyncMock()
+
+    async def failing_rerank(**kwargs: object) -> object:
+        """Open the egress hold through before_send, then fail before any request is sent."""
+        await kwargs["before_send"]()  # type: ignore[operator]
+        raise ConnectionError("reranker unreachable")
+
+    gateway = MagicMock()
+    gateway.rerank = failing_rerank
+    config = MagicMock()
+    config.endpoint_policy_denied = False
+    config.defaults.resolve.return_value = MagicMock(model="m")
+    evidence = [
+        EvidenceItem(
+            source_id=uuid4(),
+            source_generation=1,
+            local_only=False,
+            document_id=uuid4(),
+            document_version_id=uuid4(),
+            version_number=1,
+            chunk_id=uuid4(),
+            content="x",
+            title="t",
+        )
+    ]
+    with (
+        patch.object(
+            retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
+        patch.object(retrieval.settings_public, "derive_for_role", lambda c, _a: c),
+        patch.object(retrieval, "RequestPolicy", lambda **k: MagicMock()),
+        patch.object(retrieval, "may_send", lambda *a, **k: True),
+        patch.object(retrieval, "ModelGateway", lambda **k: gateway),
+        patch.object(retrieval, "ensure_ai_config_unchanged", new=AsyncMock()),
+        patch.object(
+            retrieval.documents_public,
+            "lock_chat_evidence_chunks",
+            new=AsyncMock(
+                return_value=[
+                    MagicMock(
+                        document_version_id=evidence[0].document_version_id,
+                        chunk_id=evidence[0].chunk_id,
+                        source_generation=1,
+                        local_only=False,
+                    )
+                ]
+            ),
+        ),
+    ):
+        _, status, _ = await _apply_configured_reranking(
+            session, session_factory, MagicMock(), MagicMock(), "q", evidence, SCOPE
+        )
+    assert status == "unavailable"
+    lock_session.close.assert_awaited()

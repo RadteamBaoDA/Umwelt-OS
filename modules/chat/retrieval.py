@@ -293,8 +293,10 @@ async def _apply_configured_reranking(
 
     Ordering: config resolution, policy check, ``session.commit()`` (release the caller's
     snapshot before network egress), then the gateway call whose egress hooks lock evidence
-    in a separate session. ``TypeError`` is re-raised (programming error); every other
-    failure degrades to the original ranking.
+    in a separate session. The lock session is closed in a ``finally`` around the gateway call,
+    so a failure between ``before_send`` and the request cannot leak its row locks.
+    ``TypeError`` is re-raised (programming error); every other failure degrades to the
+    original ranking.
 
     Args:
         session: Active database session.
@@ -347,15 +349,20 @@ async def _apply_configured_reranking(
         # Release the outer session's snapshot/locks before the network call; the egress hook
         # uses its own send_session and this session is unused afterwards in this function.
         await session.commit()
-        raw_result = await gateway.rerank(
-            role="reranker",
-            mapping=rerank_mapping,
-            policy=policy,
-            query=query,
-            documents=documents,
-            before_send=egress.before_send,
-            after_send=egress.after_send,
-        )
+        try:
+            raw_result = await gateway.rerank(
+                role="reranker",
+                mapping=rerank_mapping,
+                policy=policy,
+                query=query,
+                documents=documents,
+                before_send=egress.before_send,
+                after_send=egress.after_send,
+            )
+        finally:
+            # The gateway may fail after before_send has opened the lock session but before it
+            # calls after_send; close it here too (after_send is a no-op when none is open).
+            await egress.after_send()
 
         indices = _extract_rerank_indices(raw_result)
         if indices:
