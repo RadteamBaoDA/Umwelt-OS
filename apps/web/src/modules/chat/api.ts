@@ -140,6 +140,19 @@ export async function listChatSourceOptions(signal?: AbortSignal): Promise<ChatS
 }
 
 /**
+ * Lists the owner's sources as id/name pairs with no eligibility filter, so a sent turn's `@` scope can still be named
+ * after its source was paused, archived or made local-only. Bounded to the first 100 rows like {@link listChatSourceOptions}.
+ *
+ * @param signal - Aborts the request when the message list unmounts.
+ * @returns Every listed source; ids missing from this list are shown as unavailable by the caller.
+ * @throws ApiError when the list request fails.
+ */
+export async function listChatSourceNames(signal?: AbortSignal): Promise<ChatSourceOption[]> {
+  const page = await apiRequest<ApiResponse<'/api/v1/gadget-sources'>>('/api/v1/gadget-sources?limit=100', { signal });
+  return page.items.map(({ id, name }) => ({ id, name }));
+}
+
+/**
  * Bounded client context linking a chat session to specific resources or filters.
  */
 export interface ChatContext {
@@ -200,6 +213,8 @@ export interface ChatMessage {
   uncited?: boolean;
   /** Follow-up question suggestions written after the answer settled; absent or empty when none. */
   suggestions?: string[];
+  /** Source ids the `@` picker scoped this user turn to (server `MessageRead.source_scope`); empty for other messages. */
+  source_scope?: string[];
   response_id: string | null;
   /** Allowlisted scheduled-task fields (server `MessageRead.task`); null/absent for ordinary messages. */
   task?: components['schemas']['DailyBriefMessageMeta'] | components['schemas']['TopicWatchMessageMeta'] | null;

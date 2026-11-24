@@ -20,6 +20,7 @@ import {
 import type { ChatMessage, Citation, ToolStatus, ToolStep, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
+import { MessageSourceScope } from './message-source-scope';
 import { focusCitations } from './chat-citation-focus';
 import { CitationPanel } from './citation-panel';
 import { isTaskBriefMessage } from './task-brief-message';
@@ -898,6 +899,9 @@ const TranscriptMessage = React.memo(function TranscriptMessage(props: Transcrip
         relationshipLabel={relationshipLabelFor(msg, revised, t)}
         onSelectCitation={onSelectCitation}
       />
+
+      {/* The `@` sources a user turn was scoped to; answers never carry a scope line. */}
+      {isUser ? <MessageSourceScope sourceIds={msg.source_scope} /> : null}
 
       {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
       {!isUser &&

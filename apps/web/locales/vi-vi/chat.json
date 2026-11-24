@@ -498,5 +498,6 @@
   "sourceScope.noneYet": "Chưa có nguồn nào thu thập dữ liệu",
   "sourceScope.noMatch": "Không có nguồn khớp \"{query}\"",
   "sourceScope.remove": "Bỏ {name}",
-  "sourceScope.unavailable": "Các nguồn đã chọn không còn khả dụng. Hãy bỏ chúng và thử lại."
+  "sourceScope.unavailable": "Các nguồn đã chọn không còn khả dụng. Hãy bỏ chúng và thử lại.",
+  "sourceScope.unknownSource": "Nguồn không còn khả dụng"
 }

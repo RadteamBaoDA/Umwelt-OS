@@ -37,6 +37,9 @@ MODEL_OVERRIDE_KEY = "_model_override"
 TITLE_SOURCE_KEY = "title_source"
 # Message.metadata_json key holding the 2-3 follow-up question suggestions of an assistant answer.
 SUGGESTIONS_KEY = "suggestions"
+# Message.metadata_json key on a user message: source ids of the `@` picker scope the turn was sent with.
+# Ids only (no names), so a renamed or deleted source never leaves a stale name in the history.
+SOURCE_SCOPE_META_KEY = "source_scope"
 
 
 class SelectedEvidenceRef(BaseModel):
@@ -551,6 +554,8 @@ class MessageRead(BaseModel):
     # True when the stored answer carries no verified citation; the text is kept as streamed and the UI
     # shows a "not based on your documents" label instead of a prefix inside the content.
     uncited: bool = False
+    # Source ids the `@` picker scoped this user turn to (ids only); empty for every other message.
+    source_scope: list[str] = Field(default_factory=list)
     # Scheduled-task posts only (allowlisted keys of metadata_json); None for ordinary messages.
     task: TaskMessageMeta | None = None
     # Model-proposed scheduled task awaiting the owner's confirmation in the editor; never saved server-side.

@@ -498,5 +498,6 @@
   "sourceScope.noneYet": "No source has collected data yet",
   "sourceScope.noMatch": "No source matches \"{query}\"",
   "sourceScope.remove": "Remove {name}",
-  "sourceScope.unavailable": "The selected sources are no longer available. Remove them and try again."
+  "sourceScope.unavailable": "The selected sources are no longer available. Remove them and try again.",
+  "sourceScope.unknownSource": "Unavailable source"
 }

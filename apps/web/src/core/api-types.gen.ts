@@ -13526,6 +13526,8 @@ export interface components {
             revision_of_message_id?: string | null;
             /** Role */
             role: string;
+            /** Source Scope */
+            source_scope?: string[];
             /** Suggestions */
             suggestions?: string[];
             /** Task */

@@ -20,6 +20,8 @@ from modules.chat._routes.guards import (
     _message_suggestions,
     _message_uncited,
     _run_context,
+    message_source_scope,
+    source_scope_metadata,
 )
 from modules.chat.models import (
     Conversation,
@@ -82,6 +84,7 @@ def _message_reads(
             reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
             suggestions=_message_suggestions(getattr(m, "metadata_json", None)),
             uncited=_message_uncited(getattr(m, "metadata_json", None)),
+            source_scope=message_source_scope(getattr(m, "metadata_json", None)),
             task=None if gone else task,
             task_draft=None if gone else parse_task_draft(getattr(m, "metadata_json", None)),
         )
@@ -232,6 +235,10 @@ async def _stage_mutation_branch(
         content=normalized_content if payload.action == "edit" else original_prompt.content,
         client_request_id=payload.client_request_id,
         revision_of_message_id=target.id,
+        # The revision reuses the original run's context, so it keeps the same picker scope.
+        metadata_json=source_scope_metadata(
+            message_source_scope(getattr(original_prompt, "metadata_json", None))
+        ),
     )
     session.add(user_message)
     await session.flush()

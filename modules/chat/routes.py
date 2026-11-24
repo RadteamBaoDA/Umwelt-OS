@@ -89,6 +89,9 @@ from modules.chat._routes.guards import (
 from modules.chat._routes.guards import (
     _validated_model_override as _validated_model_override,
 )
+from modules.chat._routes.guards import (
+    stamp_picker_scope as stamp_picker_scope,
+)
 from modules.chat._routes.mutation import (
     _load_mutation_originals as _load_mutation_originals,
 )
@@ -655,6 +658,7 @@ async def send_message(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled(),
     )
+    stamp_picker_scope(user_msg, resolved_context)  # ids only, same transaction
     response_run = ResponseRun(
         workspace_id=conv.workspace_id,
         actor_user_id=conv.actor_user_id,

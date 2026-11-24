@@ -21,6 +21,7 @@ from modules.chat import conversation_service
 from modules.chat import public as chat_public
 from modules.chat.models import (
     Conversation,
+    Message,
     ResponseRun,
     StreamEvent,
 )
@@ -28,6 +29,7 @@ from modules.chat.schemas import (
     DB_QUERY_KEY,
     GADGET_SCOPE_KEY,
     MODEL_OVERRIDE_KEY,
+    SOURCE_SCOPE_META_KEY,
     SUGGESTIONS_KEY,
     WEB_SEARCH_KEY,
     MessageMutationRequest,
@@ -255,6 +257,48 @@ def _message_suggestions(metadata: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [s for s in value if isinstance(s, str) and s][:3]
+
+
+def stamp_picker_scope(message: Message, resolved_context: dict[str, Any]) -> None:
+    """Merge the picker scope of a resolved send context into the user message's ``metadata_json`` (no commit).
+
+    Mutates the ORM object in place; the caller's transaction persists it. Other metadata keys are kept.
+    """
+    message.metadata_json = {
+        **(message.metadata_json or {}),
+        **picker_scope_metadata(resolved_context),
+    }
+
+
+def message_source_scope(metadata: Any) -> list[str]:
+    """Return the picker source ids stored on a user message, or ``[]`` when absent or malformed.
+
+    Only string entries survive, so a corrupt value reads as "no scope" instead of failing the transcript.
+    """
+    value = metadata.get(SOURCE_SCOPE_META_KEY) if isinstance(metadata, dict) else None
+    if not isinstance(value, list):
+        return []
+    return [sid for sid in value if isinstance(sid, str)]
+
+
+def source_scope_metadata(source_ids: list[str]) -> dict[str, list[str]]:
+    """Return the ``metadata_json`` patch that records a picker scope, or ``{}`` for an empty scope.
+
+    An empty scope writes no key at all, so ordinary user messages keep their metadata unchanged.
+    """
+    return {SOURCE_SCOPE_META_KEY: source_ids} if source_ids else {}
+
+
+def picker_scope_metadata(resolved_context: dict[str, Any]) -> dict[str, list[str]]:
+    """Return the user-message metadata patch for a turn resolved from the ``@`` picker, else ``{}``.
+
+    Only the server-written ``source_scope_origin == "picker"`` marks a picker turn; gadget, task-thread and
+    plain turns carry a scope too but must not show the "Only from" line, so they get no metadata.
+    """
+    scope = resolved_context.get("source_scope")
+    if resolved_context.get("source_scope_origin") != "picker" or not isinstance(scope, list):
+        return {}
+    return source_scope_metadata([str(sid) for sid in scope])
 
 
 def _message_mutation_digest(
