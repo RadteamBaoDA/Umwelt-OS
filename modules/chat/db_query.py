@@ -300,12 +300,15 @@ async def active_collected_providers(
     workspace_id: UUID,
     allow_local_only: bool,
     source_scope: list[str] | None = None,
-) -> list[str]:
-    """Sorted distinct provider ids of the active or paused collected sources this turn may query (bounded to 30).
+) -> tuple[list[str], int]:
+    """Sorted distinct provider ids this turn may query, capped at 30, and how many were cut.
 
-    Derived from :func:`_allowed_sources` so the hint can never name a provider outside the turn's scope
+    Returns ``(ids, overflow)``: ``ids`` is the first 30 provider ids in sorted order and ``overflow`` is the
+    number of further distinct providers left out of the prompt hint (0 when none). Derived from
+    :func:`_allowed_sources` so the hint can never name a provider outside the turn's scope
     (a gadget turn sees only its bound sources; an empty provided scope yields none). Read-only. Used to
-    tell the model the exact ids to pass as ``providers`` in its first call.
+    tell the model the exact ids to pass as ``providers`` in its first call; the overflow lets the hint say
+    that more providers exist, so a provider sorted past the cap is not silently invisible.
     """
     allowed = await _allowed_sources(
         session,
@@ -313,7 +316,9 @@ async def active_collected_providers(
         source_scope=source_scope,
         allow_local_only=allow_local_only,
     )
-    return sorted({str(p) for _i, p, _n in allowed[:_MAX_ALLOWED_SOURCES] if p})[:30]
+    # ponytail: overflow counts only providers among the newest _MAX_ALLOWED_SOURCES rows, not the whole scope.
+    distinct = sorted({str(p) for _i, p, _n in allowed[:_MAX_ALLOWED_SOURCES] if p})
+    return distinct[:30], max(0, len(distinct) - 30)
 
 
 async def has_collected_datasource(

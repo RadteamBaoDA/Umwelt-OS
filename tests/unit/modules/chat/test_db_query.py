@@ -394,11 +394,11 @@ async def test_active_collected_providers_follow_turn_scope() -> None:
 
     s = _S()
     kw = {"workspace_id": uuid4(), "allow_local_only": False}
-    assert await active_collected_providers(s, **kw) == ["emsc_quakes", "usgs"]  # type: ignore[arg-type]
+    assert await active_collected_providers(s, **kw) == (["emsc_quakes", "usgs"], 0)  # type: ignore[arg-type]
     assert "local_only" in s.sql[0]
     n = len(s.sql)
-    assert await active_collected_providers(s, source_scope=[], **kw) == []  # type: ignore[arg-type]
-    assert await active_collected_providers(s, source_scope=["nope"], **kw) == []  # type: ignore[arg-type]
+    assert await active_collected_providers(s, source_scope=[], **kw) == ([], 0)  # type: ignore[arg-type]
+    assert await active_collected_providers(s, source_scope=["nope"], **kw) == ([], 0)  # type: ignore[arg-type]
     assert len(s.sql) == n  # fail closed without touching the database
     await active_collected_providers(s, source_scope=[str(uuid4())], **kw)  # type: ignore[arg-type]
     assert len(s.sql) == n + 1 and "sources.id IN" in s.sql[-1]
@@ -792,3 +792,32 @@ def test_provider_hint_lists_bounded_metric_ids() -> None:
     assert cat[0] in _provider_hint([cat[0]])
     open_p = next(p for p, v in metric_catalog().items() if v.metrics_open)
     assert "(open)" in _metric_catalog_hint([open_p])
+
+
+@pytest.mark.asyncio
+async def test_active_collected_providers_reports_overflow_past_the_hint_cap() -> None:
+    """Past 30 distinct providers the hint keeps the first 30 sorted ids and reports how many were left out."""
+    from modules.chat.db_query import active_collected_providers
+
+    rows = [SimpleNamespace(id=uuid4(), provider=f"p{i:02d}", name="n") for i in range(34)]
+
+    class _S:
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            return SimpleNamespace(all=lambda: rows)
+
+    ids, overflow = await active_collected_providers(
+        _S(),  # type: ignore[arg-type]
+        workspace_id=uuid4(),
+        allow_local_only=False,
+    )
+    assert ids == [f"p{i:02d}" for i in range(30)]
+    assert overflow == 4
+
+
+def test_provider_hint_names_the_overflow_count() -> None:
+    """The overflow sentence appears only when providers were cut, and tells the model to omit the filter."""
+    from modules.chat._worker.setup import _gadget_note, _provider_hint
+
+    assert "more; omit providers" not in _provider_hint(["usgs"])
+    assert "…and 4 more; omit providers to search all" in _provider_hint(["usgs"], overflow=4)
+    assert "and 4 more" in _gadget_note({}, True, ["usgs"], overflow=4)

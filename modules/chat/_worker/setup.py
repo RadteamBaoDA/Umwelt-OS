@@ -745,17 +745,20 @@ def _metric_catalog_hint(providers: Sequence[str]) -> str:
     ]
 
 
-def _provider_hint(providers: Sequence[str]) -> str:
+def _provider_hint(providers: Sequence[str], overflow: int = 0) -> str:
     """Prompt sentence naming exact provider ids, the text_query limits and the query-round budget (pure).
 
     The round and per-round call counts come from ``MAX_DATA_QUERY_ROUNDS`` and ``MAX_SKILL_CALLS_PER_ROUND``
     so the prompt cannot drift from the enforced limits. Appends the metric catalog hint
-    (:func:`_metric_catalog_hint`). Empty when no provider is in scope.
+    (:func:`_metric_catalog_hint`). Empty when no provider is in scope. ``overflow`` is the count of in-scope
+    providers cut from ``providers`` by the hint cap; when positive the sentence says more exist and that
+    omitting the ``providers`` filter searches all of them.
     """
     if not providers:
         return ""
+    more = f"…and {overflow} more; omit providers to search all. " if overflow > 0 else ""
     return (
-        f" Active providers: {', '.join(providers)}. Filter with providers=[...] using these exact ids; "
+        f" Active providers: {', '.join(providers)}. {more}Filter with providers=[...] using these exact ids; "
         "text_query matches headline/body text only, not provider or topic names. "
         f"You have at most {MAX_DATA_QUERY_ROUNDS} rounds that query collected data and at most "
         f"{MAX_SKILL_CALLS_PER_ROUND} tool calls per round (extra calls get no data): "
@@ -787,10 +790,12 @@ def _gadget_note(
     db_query_on: bool,
     providers: Sequence[str] = (),
     sql_on: bool = True,
+    overflow: int = 0,
 ) -> str:
     """Prompt note about the Dashboard gadget scope or the enabled database query tool (pure).
 
-    ``providers`` are the in-scope provider ids appended to the tool note so round 1 can use exact ids.
+    ``providers`` are the in-scope provider ids appended to the tool note so round 1 can use exact ids;
+    ``overflow`` is how many in-scope providers the cap left out (see :func:`_provider_hint`).
     ``sql_on`` False drops the ``mode='sql'`` advice (the reader DSN is not configured). Both tool-note
     variants end with the follow-up rule: earlier answers about collected data may be stale, so re-query.
     """
@@ -805,7 +810,7 @@ def _gadget_note(
             f"(renderer={str(gadget_meta.get('renderer') or '')[:64]!r}, scope={_bounded_scope_json(gadget_meta.get('scope'))}). "
             f"Call `{TOOL_QUERY_COLLECTED_DATA}` when you need current or historical observations/records "
             f"from the gadget's bound data sources."
-            + _provider_hint(providers)
+            + _provider_hint(providers, overflow)
             + _FOLLOWUP_DATA_NOTE
         )
     if db_query_on:
@@ -818,7 +823,7 @@ def _gadget_note(
                 else "Use `mode='structured'` for filters/aggregations, and cite each row you use by its `citation` marker "
             )
             + "(a null url does not make a row uncitable)."
-            + _provider_hint(providers)
+            + _provider_hint(providers, overflow)
             + _FOLLOWUP_DATA_NOTE
         )
     return ""
@@ -857,10 +862,11 @@ async def _db_query_providers(
     c: _RunCtx,
     local_only_turn: bool,
     req_params: dict[str, Any] | None = None,
-) -> list[str]:
-    """In-scope provider ids for the prompt hint; a failed lookup yields none (the hint is optional).
+) -> tuple[list[str], int]:
+    """In-scope provider ids for the prompt hint and the count cut by its cap; a failed lookup yields none.
 
-    Scoped by the turn's ``source_scope`` (same fail-closed rule the tool itself applies).
+    Returns ``(ids, overflow)`` from :func:`active_collected_providers`. Scoped by the turn's
+    ``source_scope`` (same fail-closed rule the tool itself applies).
     """
     try:
         return await active_collected_providers(
@@ -871,7 +877,7 @@ async def _db_query_providers(
         )
     except Exception as exc:  # noqa: BLE001  # boundary: a prompt hint must never fail the turn
         logger.warning("Provider lookup failed for run %s (%s)", c.response_id, type(exc).__name__)
-        return []
+        return [], 0
 
 
 def _task_draft_offered(turn: _TurnInputs) -> bool:
@@ -912,10 +918,10 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         )
         # No user switch: the tool is offered whenever there is collected data to query (or on the gadget path).
         db_query_on = await _db_query_granted(session, c, turn, local_only_turn)
-        db_providers = (
+        db_providers, db_overflow = (
             await _db_query_providers(session, c, local_only_turn, turn.req_params)
             if db_query_on
-            else []
+            else ([], 0)
         )
         db_sql_on = sql_mode_available()
         task_draft_on = _task_draft_offered(turn)
@@ -933,7 +939,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         )
     ui_system_text = (
         system_text
-        + _gadget_note(turn.req_params, db_query_on, db_providers, db_sql_on)
+        + _gadget_note(turn.req_params, db_query_on, db_providers, db_sql_on, overflow=db_overflow)
         + "\n\n"
         + build_generative_ui_system_prompt(
             locale=ui_locale,
