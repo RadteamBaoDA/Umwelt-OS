@@ -186,3 +186,26 @@ def test_bounded_scope_value_limits_strings_and_lists() -> None:
     got = bounded_scope_value(["y" * 500] * 50 + [{"n": 1}])
     assert len(got) == 20 and all(len(i) == 200 for i in got)
     assert len(_bounded_scope_json({"k": "z" * 5000, "l": list(range(100))})) <= 1000
+
+
+def _window_sql(**bounds: object) -> str:
+    return _sql(
+        _document_filters(
+            _args(),
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            date_from=bounds.get("date_from"),  # type: ignore[arg-type]
+            date_to=bounds.get("date_to"),  # type: ignore[arg-type]
+        ),
+    )
+
+
+def test_date_window_has_release_branch_only_with_a_bound() -> None:
+    """A bound ORs the collection-date test with an EXISTS on current-version release_date."""
+    from datetime import UTC, datetime
+
+    assert "release_date" not in _window_sql()
+    lo = _window_sql(date_from=datetime(2026, 11, 27, tzinfo=UTC))
+    assert "EXISTS (SELECT" in lo and "release_date" in lo and ">=" in lo
+    hi = _window_sql(date_to=datetime(2026, 11, 20, tzinfo=UTC))
+    assert "EXISTS (SELECT" in hi and "release_date" in hi and "<" in hi

@@ -22,6 +22,7 @@ from sqlalchemy import (
     and_,
     desc,
     func,
+    or_,
     select,
     text,
 )
@@ -56,6 +57,7 @@ from modules.chat.schemas import GADGET_SCOPE_KEY, EvidenceItem
 from modules.chat.sql_guard import check_select_policy
 from modules.knowledge.documents.public import (
     MEASUREMENT_PROVIDER_IDS,
+    provenance_release_ts_expr,
 )
 from modules.knowledge.documents.public import (
     DocumentChunkReadProjection as DocumentChunk,
@@ -65,6 +67,9 @@ from modules.knowledge.documents.public import (
 )
 from modules.knowledge.documents.public import (
     DocumentVersionReadProjection as DocumentVersion,
+)
+from modules.knowledge.documents.public import (
+    NormalizedVersionProvenanceReadProjection as NormalizedVersionProvenance,
 )
 from modules.knowledge.observations.public import ObservationReadProjection as Observation
 from modules.sources.public import SourceReadProjection as Source
@@ -1138,6 +1143,31 @@ def _apply_aggregate_citations(
         row["citation"] = f"[{citation_map[ver_id]}]" if ver_id in citation_map else None
 
 
+def _document_date_window(date_from: datetime | None, date_to: datetime | None) -> Any:
+    """Window predicate: collection time in range OR current-version ``release_date`` in range.
+
+    ``date_from`` inclusive, ``date_to`` exclusive; at least one bound must be given. The release branch
+    is an EXISTS on the enclosing ``DocumentVersion``'s provenance, so it adds no rows and requires
+    ``DocumentVersion`` in the enclosing FROM.
+    """
+    collected = func.coalesce(Document.observed_at, Document.created_at)
+    released = provenance_release_ts_expr()
+    bounds_c: list[Any] = []
+    bounds_r: list[Any] = []
+    if date_from is not None:
+        bounds_c.append(collected >= date_from)
+        bounds_r.append(released >= date_from)
+    if date_to is not None:
+        bounds_c.append(collected < date_to)
+        bounds_r.append(released < date_to)
+    on_release = (
+        select(1)
+        .where(NormalizedVersionProvenance.document_version_id == DocumentVersion.id, *bounds_r)
+        .exists()
+    )
+    return or_(and_(*bounds_c), on_release)
+
+
 def _document_filters(
     args: QueryCollectedDataArgs,
     *,
@@ -1152,7 +1182,10 @@ def _document_filters(
     ``source_scopes`` adds :func:`document_scope_filter` (current version provenance must carry the source's
     current-scope discriminator).
 
-    Pure expression builder; ``date_to`` is an exclusive upper bound on ``coalesce(observed_at, created_at)``; the workspace and allowed-source predicates are always first. ``text_query``
+    Pure expression builder. A document is inside the date window when ``coalesce(observed_at, created_at)``
+    (collection time) is, OR the current version's provenance ``source_fields.release_date`` is (media
+    air/release dates, which differ from collection time), via one EXISTS so rows never duplicate;
+    ``date_to`` is an exclusive upper bound on both. The workspace and allowed-source predicates are always first. ``text_query``
     is accent-insensitive (see :func:`text_match_filter`): title or any chunk of the current version, served
     by the ``f_unaccent`` GIN index on ``document_chunks`` (no ``ILIKE`` over full content).
     Provider ids are stored lower-case, so the input is lower-cased and compared exactly.
@@ -1167,10 +1200,8 @@ def _document_filters(
         doc_filters.append(
             Source.provider.in_([p.strip().lower() for p in args.providers if p.strip()])
         )
-    if date_from is not None:
-        doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
-    if date_to is not None:
-        doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) < date_to)
+    if date_from is not None or date_to is not None:
+        doc_filters.append(_document_date_window(date_from, date_to))
     if args.text_query and args.text_query.strip():
         doc_filters.append(text_match_filter(args.text_query.strip(), DocumentVersion.id))
     return doc_filters

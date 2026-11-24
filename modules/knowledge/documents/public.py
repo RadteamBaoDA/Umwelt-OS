@@ -225,6 +225,7 @@ from modules.knowledge.documents._news import (
     set_gadget_document_interaction,
     validate_gadget_document_selection_fences,
 )
+from modules.knowledge.documents._news_media import provenance_release_ts_expr
 from modules.knowledge.documents._normalize import (
     _apply_normalized_document,
     _select_world_document_version,
@@ -476,6 +477,7 @@ __all__ = [
     "lock_review_version_evidence",
     "lock_source_documents_for_purge_in_uow",
     "news_current_scope_status",
+    "provenance_release_ts_expr",
     "news_projection_scope_unavailable",
     "news_retained_observation_allowed",
     "normalize_document_language",

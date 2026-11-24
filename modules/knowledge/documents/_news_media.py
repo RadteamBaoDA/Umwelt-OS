@@ -149,6 +149,17 @@ def _parsed_release_ts_expr(sf: Any) -> Any:
     )
 
 
+def provenance_release_ts_expr() -> Any:
+    """Read-only SQL expression: the parsed ``source_fields.release_date`` of a provenance row.
+
+    Evaluates against ``NormalizedVersionProvenance`` (correlate it in an EXISTS on the document version);
+    yields a timestamptz, or NULL when the date is absent or invalid. Never writes; no I/O.
+    """
+    return _parsed_release_ts_expr(
+        NormalizedVersionProvenance.provenance_json["provider_record"]["source_fields"]
+    )
+
+
 def _coalesced_release_ts(parsed: Any) -> Any:
     """Order timestamp: parsed release date, else the document's publication, else creation time."""
     return func.coalesce(parsed, Document.published_at, Document.created_at)
