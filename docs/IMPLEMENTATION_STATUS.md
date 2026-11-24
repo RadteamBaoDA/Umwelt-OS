@@ -1,4 +1,47 @@
 <!-- scheduled-tasks-phase1-status:start -->
+## 2026-11-24 (later) - Eval follow-ups, `@` source picker, dedicated HNSW build worker, branch enhance/chat-datasource
+
+Work done:
+- **`@` source picker in the full chat composer** (`8abfbeec`, `43b9f73e`, `be5ae3d7`, `3312f9a2`, `a6feb6af`):
+  - Lists sources with data through `GET /api/v1/gadget-sources`, filtered in the client, up to 100.
+  - The client sends `context.sourceIds`. The server validates them: UUID, workspace, active or paused, not `local_only`, at most 32. It writes `source_scope` and `source_scope_origin`. If no source survives, it returns 409 `source_scope_unavailable`.
+  - Security fix: client `source_scope`, `selected_refs` and `selection_fences` used to be passed through unchecked; they are now stripped.
+  - Web search is suppressed only on picker turns.
+- **Dedicated HNSW build worker** (`c2258f8c`, `d8bd119c`, `f31f7563`, `0c2aeb2b`):
+  - New `search-build-worker` service on queue `arq:search-build`, with `max_jobs=1`, a 2 h job timeout and one deduplicated job per generation.
+  - The build is skipped when the generation is no longer `running`.
+  - The main worker's in-progress timeout stays at about 190 s.
+  - Queue depth and health are wired in.
+- **Chat retrieval fixes** (`32480837`, `eefc2e3d`, `996e5fb5`, `37a83b9e`, `82a2100b`):
+  - The provider hint names the providers beyond the 30-provider cap.
+  - Grounding skips date ranges and grouped durations, and matches real month names only.
+  - Evidence lines show the time; date-only values stay date-only.
+  - The prompt now states that evidence is a sample, not the full set.
+  - The document date window also matches the media `release_date`, through a knowledge public helper.
+- **Connectors** (`d92e7722`, `58ff6ee3`): EMSC `magnitude` and `depth_km` and HN `score` are now validated source fields. Out-of-range values are dropped; the record is kept.
+- **Eval harness** (`68096e32`, `533d6320`, `608156fd`):
+  - `CHAT_EVAL_RERANK_RPM` paces rerank calls.
+  - The judge now sees the turn's evidence (bounded).
+  - Exclusion and correction figures are tolerated when a same-sentence cue is present.
+  - Expected refusals skip `tool_called`.
+
+Full run `test-results/chat-eval/report-20261124T093838Z.json` (rerank RPM 9; 202/202 completed; scope leaks 0 on both legs; no key values in the report or log):
+
+| Leg | Pass | Retrieval recall | Answer recall | Numbers correct | Hidden miss | Rerank |
+|---|---|---|---|---|---|---|
+| tool | 82/101 (was 71) | 0.746 | 0.710 | 85.7% | 10 | — |
+| hybrid | 92/101 (was 55) | 0.996 | 0.966 | 93.9% | 2 | applied 101/101 |
+
+Still open:
+- On the tool leg, gdp2024_en/vi and gdp2023_en make no tool call, even though the hint now names the overflow.
+- btc_yesterday_* fail because the relative date has drifted against the fixed seed dates.
+- volume_count_* on the hybrid leg do not use SQL count.
+- The wikipedia providers are not covered by the date window.
+- The judge still labels 39 hybrid answers "fabricated" and disagrees on 32, so it stays report-only.
+- Ceilings: picker search covers one page of 100 sources; `docker compose stop` can wait up to 2 h for a running build.
+
+Evidence: unit suites passed for chat 1051+, chat_eval 97, search, worker, core and connectors 2597, and web chat vitest 467; ruff, mypy, lint-imports and the size gates are clean. Opus wave review found 1 Critical and 3 Important issues, all fixed. Not run: Playwright and a browser check of the picker.
+
 ## 2026-11-24 - Chat retrieval eval and three search/rerank fixes, branch enhance/chat-datasource
 
 Spec `docs/superpowers/specs/2026-11-23-chat-retrieval-eval-design.md`, plan `docs/superpowers/plans/2026-11-23-chat-retrieval-eval.md`. The opt-in eval (`tests/integration/test_chat_real_model_eval.py`, `tests/integration/chat_eval/`) seeds 21 fixture providers plus planted rows (paraphrase, cross-lingual, volume, attribute, media time, injection, local-only). It runs 101 en/vi cases on two legs: `tool` (`query_collected_data`) and `hybrid` (`build_context`: lexical + pgvector + rerank, follow-up rewrite). It grades retrieval and answer recall against hand-authored gold, scope leaks and hidden misses, and runs a report-only JEV judge (`/api/alpha/decisions`). The spec's "no production change" was overridden by owner rulings for three bugs the eval exposed:
