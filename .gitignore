@@ -47,3 +47,5 @@ apps/web/coverage/
 # Python coverage output
 .coverage
 htmlcov/
+
+.env.eval-collect

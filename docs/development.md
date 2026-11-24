@@ -64,6 +64,24 @@ All user-facing strings are flat dotted JSON under `apps/web/locales/<locale>/<n
 - **No dynamic keys:** use a literal `as const` table for enum-like server values instead of building a key with a template string.
 - The one-off migration codemod that produced this layout is not part of the repo.
 
+## Real-data chat eval
+
+`scripts/eval-collect.ps1` runs an isolated, persistent compose project (`umwelt-evalcollect`, web 43300, API 48000, Postgres 45432) that collects public data for about 7 days; the snapshot later feeds the chat eval. It never touches the dev stack or the disposable test stacks.
+
+| Task | What it does |
+| --- | --- |
+| `up` | `up -d --build`. First run creates the git-ignored `.env.eval-collect` with two random credential-encryption keys (never printed; keep the file or stored credentials become unreadable). |
+| `bootstrap` | Playwright creates the owner (`auth.spec.ts`) and enables the built-ins and wizard providers (`eval-collect-bootstrap.spec.ts`, `EVAL_COLLECT=1`). Run once per stack; keyed providers join only when `E2E_KEY_<ID>` is set in `.env.e2e-real`. |
+| `status` | Per-source status, last error code, document/observation counts, last collection time, database size. |
+| `snapshot` | Stops the workers, dumps to `data/chat-eval-real/<UTC timestamp>/snapshot.dump` (credential tables and `auth_session` schema-only), then writes `meta.json`. Run `up` to resume collecting. |
+| `down` / `destroy` | `down` keeps the volumes; `destroy` deletes them after typed confirmation. |
+
+Operating notes:
+
+- The host must stay on and awake for the whole window, and Docker Desktop should start at sign-in (services use `restart: unless-stopped`).
+- Privacy: only public, keyless (or owner-keyed) sources are enabled; no calendar, email, files, Google or GitHub OAuth. `data/` and `.env.eval-collect` are git-ignored. Do not share the dump outside the repo owner.
+- Quotas (default intervals, checked 2026-11-24 against `provider_specs`): NewsAPI 360 min = 4 calls/day (free 100), Alpha Vantage 1440 min = 1/day per symbol (free 25), OpenWeatherMap 60 min = 24/day (free 1000), GDELT 60 min = 24/day (pilot cap 48; it still answers 429 after bursts, so a briefly rate-limited source is normal). At or beyond the 75% collector share of the pilot cap: `iss_position` (15 min = 96/day vs 96) and `ioda` (60 min = 24/day vs 24); the app's quota deferral skips calls rather than failing, so expect a few gaps there.
+
 ## Quality gates
 
 Formatting commit `ea870297` is a one-off mechanical `ruff format`; hide it from blame with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
