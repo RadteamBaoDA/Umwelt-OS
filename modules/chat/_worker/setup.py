@@ -197,7 +197,11 @@ async def _load_turn_inputs(session: AsyncSession, c: _RunCtx, claimed: _Claimed
     answer_request = AnswerContextRequest(
         query=user_prompt,
         source_scope=req_params.get("source_scope", []),
-        source_scope_enforced=task_thread or is_gadget_turn(req_params),
+        # A server-written source_scope list is a hard allow-list (matches turn_source_scope), even
+        # when empty; only anchored/plain turns omit the key and stay workspace-wide.
+        source_scope_enforced=task_thread
+        or is_gadget_turn(req_params)
+        or isinstance(req_params.get("source_scope"), list),
         entity_ids=req_params.get("entity_ids", []),
         date_context=req_params.get("date_context"),
         timezone=req_params.get("timezone"),

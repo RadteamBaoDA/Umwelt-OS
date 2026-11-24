@@ -161,6 +161,49 @@ def bounded_scope_value(value: _Any) -> _Any:
     return value
 
 
+async def _authorized_source_ids(
+    session: AsyncSession,
+    raw: _Any,
+    *,
+    statuses: tuple[str, ...],
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+) -> list[str]:
+    """Return the client-listed source IDs the caller may use, as deduplicated UUID strings.
+
+    Args:
+        session: Active asynchronous database session (read-only lookups).
+        raw: Untrusted client value; anything but a list yields ``[]``. Only the first 32 items
+            are examined; malformed UUIDs and duplicates are skipped.
+        statuses: Source statuses accepted (for example ``("active", "paused")``).
+        scope: Admitted workspace context; foreign or missing sources are dropped.
+        multi_workspace_enabled: Rollout flag for multi-workspace checks.
+
+    Returns:
+        Surviving IDs in request order. Local-only sources are always excluded.
+    """
+    from modules.sources import public as sources_public
+
+    valid: list[str] = []
+    if not isinstance(raw, list):
+        return valid
+    seen: set[UUID] = set()
+    for item in raw[:32]:
+        try:
+            sid = UUID(str(item))
+        except (ValueError, TypeError):
+            continue
+        if sid in seen:
+            continue
+        seen.add(sid)
+        src = await sources_public.get_source(
+            session, sid, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if src is not None and src.status in statuses and not src.local_only:
+            valid.append(str(sid))
+    return valid
+
+
 async def _resolve_gadget_instance_context(
     session: AsyncSession,
     context: dict[str, _Any],
@@ -180,30 +223,16 @@ async def _resolve_gadget_instance_context(
         Normalized retrieval context carrying ``kind``, ``gadget_id``, ``title``, ``renderer``,
         ``source_scope`` (always present, possibly empty), and ``gadget_scope``.
     """
-    from modules.sources import public as sources_public
-
     raw_sources = (
         context.get("sourceIds") or context.get("source_ids") or context.get("source_scope") or []
     )
-    valid_sources: list[str] = []
-    if isinstance(raw_sources, list):
-        seen: set[UUID] = set()
-        for item in raw_sources[:32]:
-            try:
-                sid = UUID(str(item))
-            except (ValueError, TypeError):
-                continue
-            if sid in seen:
-                continue
-            seen.add(sid)
-            src = await sources_public.get_source(
-                session,
-                sid,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if src is not None and src.status == "active" and not src.local_only:
-                valid_sources.append(str(sid))
+    valid_sources = await _authorized_source_ids(
+        session,
+        raw_sources,
+        statuses=("active",),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
 
     raw_scope_obj = context.get("scope")
     raw_scope: dict[_Any, _Any] = raw_scope_obj if isinstance(raw_scope_obj, dict) else {}
@@ -415,7 +444,11 @@ async def resolve_gadget_context(
     (whole workspace), like plain chat. Anchored selections store ``selection_fences`` only for the
     local-only refusal and web-search scoping; they are not used for exact read/stream revalidation,
     where only the source fence snapshot applies. Client-sent ``anchored`` and
-    ``selected_only`` keys are never copied through. Read-only; raises ``DomainError`` subclasses
+    ``selected_only`` keys are never copied through. A non-selection context may carry
+    ``sourceIds`` (the ``@`` picker): they are validated (UUID, workspace, active/paused, not
+    local-only, at most 32) into a server-written ``source_scope`` list, and a client
+    ``source_scope`` is always dropped; ids given but none usable raise 409
+    ``source_scope_unavailable``. Read-only; raises ``DomainError`` subclasses
     (422 invalid/too large/anchor with several items, 409 stale/unavailable).
     """
     if not context:
@@ -430,11 +463,30 @@ async def resolve_gadget_context(
     if context.get("kind") != "selection":
         # These server-derived flags are reserved for validated selections; a client cannot set them.
         # Strip server-reserved keys: "selected_only", "anchored" and every "_"-prefixed private key.
-        return {
+        # "source_scope" and "sourceIds" are stripped too: only the server writes source_scope.
+        out = {
             key: value
             for key, value in context.items()
-            if key not in ("selected_only", "anchored") and not key.startswith("_")
+            if key not in ("selected_only", "anchored", "source_scope", "sourceIds")
+            and not key.startswith("_")
         }
+        picked = context.get("sourceIds")
+        if isinstance(picked, list) and picked:
+            ids = await _authorized_source_ids(
+                session,
+                picked,
+                statuses=("active", "paused"),
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if not ids:
+                raise ConflictError(
+                    _selection_detail(
+                        "source_scope_unavailable", "The selected sources are unavailable"
+                    )
+                )
+            out["source_scope"] = ids
+        return out
     selections = _parse_selection_items(context.get("items"))
     # Anchor mode is a request for less restriction, so it is honoured only for one record.
     anchor = context.get("anchor") is True
