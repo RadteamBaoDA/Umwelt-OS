@@ -86,6 +86,7 @@ from tests.integration.chat_eval.grading import (
 from tests.integration.chat_eval.hybrid import (
     HybridEnv,
     RedactedEnv,
+    activate_paused_sources,
     configure_ai,
     enable_search,
     hybrid_context,
@@ -745,6 +746,9 @@ async def _prepare_hybrid(
     try:
         await configure_ai(client, h)
         await enable_search(client)
+        if _real_snapshot() is not None:
+            # Real mode: the restore paused every source; paused sources are neither indexed nor searched.
+            await activate_paused_sources(engine)
         indexed = await index_all(engine, settings, redis, mask=lambda t: mask_secrets(t, _ENV))
     except BaseException:
         await redis.aclose()

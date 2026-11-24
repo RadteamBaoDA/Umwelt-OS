@@ -421,6 +421,23 @@ class _InlineBuildQueue:
         return object()
 
 
+_ACTIVATE_PAUSED_SQL = text("UPDATE sources SET status = 'active' WHERE status = 'paused'")
+
+
+async def activate_paused_sources(engine: AsyncEngine) -> int:
+    """Set every paused source ``active`` on the disposable eval database; return how many rows changed.
+
+    Production indexing (``eligible_chunks``, automatic-generation discovery) and hybrid retrieval
+    (``modules/search/public.py``) read ``Source.status == 'active'`` only, by design: a paused source is neither
+    indexed nor searched. The real-data restore pauses every source, so without this no generation is created and
+    the drain fails with "no search index generation exists". Chat's own collected-data reads accept active and
+    paused, so the tool leg is unaffected. Call it only after the restore has stopped the collection scheduler
+    (``cron-worker``); it is not undone, because the database is thrown away after the run.
+    """
+    async with engine.begin() as conn:
+        return int((await conn.execute(_ACTIVATE_PAUSED_SQL)).rowcount)
+
+
 async def index_all(
     engine: AsyncEngine,
     settings: Settings,

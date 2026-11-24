@@ -93,6 +93,9 @@ try {
     Invoke-Checked 'docker' ($Compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE sources SET status = 'paused' WHERE status = 'active'"))
     Invoke-Checked 'docker' ($Compose + @('exec', '-T', 'redis', 'redis-cli', 'FLUSHALL'))
     Invoke-Checked 'docker' ($Compose + @('up', '-d'))
+    # The eval later re-activates the paused sources so they can be indexed and searched; the recurring-job
+    # scheduler must be down by then or it would collect live data into the snapshot.
+    Invoke-Checked 'docker' ($Compose + @('stop', 'cron-worker'))
     # Wait for the API to answer on the published test port (compose --wait is unreliable with one-shot services).
     $ready = $false
     for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
