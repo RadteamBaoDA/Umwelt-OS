@@ -13,7 +13,7 @@ planted gold, then writes ``test-results/chat-eval/report-<timestamp>.json`` wit
 ``not_seeded`` rows (including providers whose normalization failed) and ``key_map_size``. No case runs and no
 model is called. Any other ``CHAT_EVAL_ONLY`` value still selects case ids.
 
-Report shape: a header (``model``, ``legs_run``, ``rerank``, ``judge``, ``sql_mode``, ``deadline_s``,
+Report shape: a header (``model``, ``legs_run``, ``rerank``, ``rerank_rpm``, ``judge``, ``sql_mode``, ``deadline_s``,
 ``not_seeded``, ``baseline``) then ``summary`` keyed by leg (``tool`` / ``hybrid``), each computed from that leg's
 own entries. ``CHAT_EVAL_DEADLINE_MIN`` (default 25) sets the run deadline in minutes; ``CHAT_EVAL_BASELINE`` names
 the tool baseline report that ``baseline_regressions`` compares against (default: the 2026-11-23 tool baseline).
@@ -85,7 +85,14 @@ from tests.integration.chat_eval.hybrid import (
     mask_secrets,
     retrieval_request,
 )
-from tests.integration.chat_eval.judge import judge, judge_config, load_env_file, to_record
+from tests.integration.chat_eval.judge import (
+    evidence_from_result,
+    judge,
+    judge_config,
+    load_env_file,
+    to_record,
+)
+from tests.integration.chat_eval.pacing import StartPacer, rerank_rpm
 from tests.integration.chat_eval.planted import PLANTED_PATH, load_planted, seed_planted
 from tests.integration.chat_eval.report import build_summaries
 from tests.integration.chat_eval.seed_all import seed_all
@@ -237,6 +244,8 @@ class Recorder:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     version_ids: set[str] = field(default_factory=set)  # document versions in SQL rows (string ids)
     source_ids: set[str] = field(default_factory=set)  # sources in SQL rows (string ids)
+    # Tool-result row excerpts the judge may see (bounded by evidence_block).
+    evidence_texts: list[str] = field(default_factory=list)
 
 
 _REC: contextvars.ContextVar[Recorder] = contextvars.ContextVar("rec")
@@ -448,6 +457,11 @@ async def _run_turn(
         "grounding_ran": report is not None,
         "query_rounds": _query_rounds_used(ts),
         "widgets": len(ts.ui_parts),
+        # What the turn had, for the judge: retrieved chunk content first, then the query-tool row excerpts.
+        "evidence_texts": [
+            *(item.content for item in answer_context.evidence),
+            *_REC.get().evidence_texts,
+        ],
     }
 
 
@@ -591,6 +605,7 @@ async def test_real_model_eval(
         """Run the real query tool; record its arguments, whether it returned rows and the ids it carried."""
         result = await real_tool(session, raw, **kwargs)
         found = RowIds(set(), set())
+        texts = evidence_from_result(result)
         try:
             data = json.loads(result)
             rows = any(
@@ -604,6 +619,7 @@ async def test_real_model_eval(
         rec = _REC.get()
         rec.version_ids |= found.version_ids
         rec.source_ids |= found.source_ids
+        rec.evidence_texts.extend(texts)
         rec.tool_calls.append(
             {
                 "name": TOOL_QUERY_COLLECTED_DATA,
@@ -625,6 +641,9 @@ async def test_real_model_eval(
     legs = _legs(hybrid is not None)
     if not legs:
         pytest.skip("CHAT_EVAL_LEGS selects only hybrid, but E2E_REAL_EMBED_* is not set")
+    # Raises before indexing or any model call when the value is malformed.
+    rpm = rerank_rpm(os.environ)
+    pacer = StartPacer(rpm) if rpm is not None else None
     cases = _selected_cases()
     runtime = (
         await _prepare_hybrid(ready_owner_client, committed_engine, hybrid)
@@ -633,7 +652,7 @@ async def test_real_model_eval(
     )
     baseline_path, baseline_cases = _load_baseline()
     try:
-        ordered = await _run_all(cases, legs, matrix, eval_seed, committed_engine, runtime)
+        ordered = await _run_all(cases, legs, matrix, eval_seed, committed_engine, runtime, pacer)
     finally:
         if runtime is not None:
             await runtime.redis.aclose()
@@ -642,6 +661,7 @@ async def test_real_model_eval(
         "generated_at": datetime.now(UTC).isoformat(),
         "legs_run": list(legs),
         "rerank": runtime.rerank if runtime is not None else "off",
+        "rerank_rpm": rpm,  # None means unpaced
         "judge": "on" if judge_config(_ENV) is not None else "off",
         "sql_mode": "on" if sql_mode_available() else "off",
         "deadline_s": _deadline_s(),
@@ -735,8 +755,13 @@ async def _run_all(
     eval_seed: EvalSeed,
     engine: AsyncEngine,
     runtime: HybridRun | None,
+    pacer: StartPacer | None = None,
 ) -> list[dict[str, Any]]:
-    """Run every (leg, case) under the concurrency gate, the deadline and the per-case timeout; entries in order."""
+    """Run every (leg, case) under the concurrency gate, the deadline and the per-case timeout; entries in order.
+
+    ``pacer`` (from ``CHAT_EVAL_RERANK_RPM``) spaces the starts of hybrid cases, each of which may call the rerank
+    model once. It waits before the per-case timeout starts, so a paced wait never eats into a case's budget.
+    """
     started = time.monotonic()
     deadline_s = _deadline_s()
     gate = asyncio.Semaphore(CONCURRENCY)
@@ -767,13 +792,15 @@ async def _run_all(
             }
             t0 = time.monotonic()
             hybrid_arg = (runtime.settings, runtime.redis) if runtime and leg == "hybrid" else None
+            if pacer is not None and leg == "hybrid":
+                await pacer.acquire()
             try:
                 out = await asyncio.wait_for(
                     _run_turn(case, matrix, engine, hybrid=hybrid_arg), CASE_TIMEOUT_S
                 )
                 entry |= _outcome_entry(case, leg, out, rec, matrix, eval_seed)
                 if entry["status"] == "completed":
-                    await _add_judge(case, entry)
+                    await _add_judge(case, entry, out["evidence_texts"])
             except Exception as exc:  # noqa: BLE001  # a failing case is reported, never raised
                 entry |= {"status": "error", "error": _mask(f"{type(exc).__name__}: {exc}")[:400]}
             entry["seconds"] = round(time.monotonic() - t0, 1)
@@ -783,14 +810,15 @@ async def _run_all(
     return [results[(c.id, leg)] for leg in legs for c in cases]
 
 
-async def _add_judge(case: Case, entry: dict[str, Any]) -> None:
+async def _add_judge(case: Case, entry: dict[str, Any], evidence: list[str]) -> None:
     """Attach the report-only JEV verdict to a completed entry as ``entry["judge"]``.
 
-    Does nothing when the judge env is incomplete. Never raises: a judge failure is stored as an
-    ``invalid`` verdict with a masked error, so it cannot fail the case or the run.
+    ``evidence`` is the turn's retrieved text, shown to the judge as bounded excerpts. Does nothing when the
+    judge env is incomplete. Never raises: a judge failure is stored as an ``invalid`` verdict with a masked
+    error, so it cannot fail the case or the run.
     """
     try:
-        verdict = await judge(case, entry["answer"], _ENV)
+        verdict = await judge(case, entry["answer"], _ENV, evidence)
     except Exception as exc:  # noqa: BLE001  # report-only grader: a judge bug must not fail the case
         error = _mask(f"{type(exc).__name__}: {exc}")[:300]
         entry["judge"] = {"label": "", "probs": {}, "status": "invalid", "error": error}
@@ -838,6 +866,7 @@ def _outcome_entry(
         "query_rounds": out["query_rounds"],
         "model_rounds": rec.model_rounds,
         "widgets": out["widgets"],
+        "evidence_items": len(out["evidence_texts"]),
         "missed_keys": missed_keys(
             case.gold_keys, eval_seed.key_map, rec.version_ids | out["retrieved_versions"]
         ),

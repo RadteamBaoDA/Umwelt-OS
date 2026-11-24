@@ -12,8 +12,9 @@ sent only as a bearer header and is masked in any error text this module returns
 
 from __future__ import annotations
 
+import json
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -36,16 +37,28 @@ SUM_TOLERANCE = 0.02  # ragflow scoreSumTolerance: probabilities must sum to 1 w
 MARGIN = 0.15  # ragflow defaultMarginThreshold: top1 - top2 below this is uncertain
 TIMEOUT_S = 60.0
 NO_DATA_REFERENCE = "no data exists"
+NO_EVIDENCE = "(no evidence retrieved)"
+# Bounds on the evidence the judge sees: the rows or excerpts the turn actually had. Items beyond the count
+# are dropped, each item is cut to the item size, and the whole block stays within the total size.
+EVIDENCE_MAX_ITEMS = 12
+EVIDENCE_ITEM_CHARS = 400
+EVIDENCE_TOTAL_CHARS = 6000
+EVIDENCE_ROW_KEYS = ("observations", "documents", "rows", "observation_aggregates")
 CRITERIA: dict[str, str] = {
     "correct_complete": "True to the reference and states every fact in it.",
     "correct_partial": "True to the reference but misses one or more facts in it.",
     "wrong": "Contradicts the reference or gives a wrong fact or figure.",
-    "fabricated": "States facts or figures that are not in the reference.",
+    "fabricated": (
+        "States facts or figures that are neither in the reference nor supported by the evidence."
+    ),
     "correct_no_data": "Correctly says there is no data for the question.",
 }
 INSTRUCTIONS = (
     "You grade an answer to a question against a reference. Pick the one label that fits the answer. "
-    "Give a probability to every label; the probabilities must sum to 1. Judge only against the reference."
+    "Give a probability to every label; the probabilities must sum to 1. Grade the answer against the "
+    "reference. The evidence is what the answer was drawn from: 'fabricated' means a claim that is not "
+    "supported by the EVIDENCE. Figures derived arithmetically from the evidence (sums, averages, "
+    "differences) are supported."
 )
 
 
@@ -104,19 +117,75 @@ def decisions_url(base: str) -> str:
     return path + "/decisions"
 
 
+def evidence_from_result(result: str) -> list[str]:
+    """The evidence texts of one query-tool result (pure).
+
+    Each row under ``EVIDENCE_ROW_KEYS`` becomes one JSON item, so the per-item bound keeps whole rows instead
+    of the head of one large blob. A result that is not a JSON object, or has no row list, stays a single item
+    so the judge still sees what the model saw.
+    """
+    try:
+        data = json.loads(result)
+    except json.JSONDecodeError:
+        return [result]
+    if not isinstance(data, dict):
+        return [result]
+    rows = [
+        row for key in EVIDENCE_ROW_KEYS if isinstance(data.get(key), list) for row in data[key]
+    ]
+    if not rows:
+        return [result]
+    return [json.dumps(row, ensure_ascii=False, default=str) for row in rows]
+
+
+def evidence_block(evidence: Sequence[str]) -> str:
+    """The judge's evidence section: bounded excerpts of what the turn retrieved (pure).
+
+    At most ``EVIDENCE_MAX_ITEMS`` non-blank items, in order, each whitespace-collapsed to one line and cut to
+    ``EVIDENCE_ITEM_CHARS`` (a cut item ends with ``...``). Stops before any line would push the block past
+    ``EVIDENCE_TOTAL_CHARS``. No usable item gives ``NO_EVIDENCE``, so the judge is told the turn had none.
+    """
+    lines: list[str] = []
+    used = 0
+    for raw in evidence:
+        if len(lines) >= EVIDENCE_MAX_ITEMS:
+            break
+        text = " ".join(raw.split())
+        if not text:
+            continue
+        if len(text) > EVIDENCE_ITEM_CHARS:
+            text = text[: EVIDENCE_ITEM_CHARS - 3] + "..."
+        line = f"- {text}"
+        separator = 1 if lines else 0
+        if used + separator + len(line) > EVIDENCE_TOTAL_CHARS:
+            break
+        used += separator + len(line)
+        lines.append(line)
+    return "\n".join(lines) or NO_EVIDENCE
+
+
 def build_body(
-    model: str, question: str, gold_facts: tuple[str, ...], empty: bool, answer: str
+    model: str,
+    question: str,
+    gold_facts: tuple[str, ...],
+    empty: bool,
+    answer: str,
+    evidence: Sequence[str] = (),
 ) -> dict[str, Any]:
     """The decisions request body: one choice question with a criterion per label (pure).
 
-    Only the question, the hand-written reference and the final answer are sent; raw tool rows never are.
+    The state carries the question, the hand-written reference, the bounded evidence block (see
+    ``evidence_block``) and the final answer. Raw tool output is sent only as those bounded excerpts.
     For ``empty`` cases the reference is ``no data exists``.
     """
     if empty:
         reference = NO_DATA_REFERENCE
     else:
         reference = "\n".join(f"- {fact}" for fact in gold_facts) or "(no reference facts)"
-    state = f"Question:\n{question}\n\nReference:\n{reference}\n\nAnswer:\n{answer}"
+    state = (
+        f"Question:\n{question}\n\nReference:\n{reference}\n\n"
+        f"Evidence:\n{evidence_block(evidence)}\n\nAnswer:\n{answer}"
+    )
     return {
         "model": model,
         "state": state,
@@ -189,17 +258,20 @@ def _client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=TIMEOUT_S)
 
 
-async def judge(case: Case, answer: str, env: Mapping[str, str]) -> Verdict | None:
-    """Score one final answer against the case reference.
+async def judge(
+    case: Case, answer: str, env: Mapping[str, str], evidence: Sequence[str] = ()
+) -> Verdict | None:
+    """Score one final answer against the case reference, with the turn's evidence as context.
 
-    Returns None when the judge env is incomplete. A transport error, a non-2xx status or a non-JSON
-    body returns an ``invalid`` verdict whose error text is masked with the env key values, so a judge
-    failure never fails the case or the run.
+    ``evidence`` is the text the turn retrieved (tool rows and retrieved chunks); ``evidence_block`` bounds it
+    and the env keys are never included. Returns None when the judge env is incomplete. A transport error, a
+    non-2xx status or a non-JSON body returns an ``invalid`` verdict whose error text is masked with the env
+    key values, so a judge failure never fails the case or the run.
     """
     cfg = judge_config(env)
     if cfg is None:
         return None
-    body = build_body(cfg.model, case.q, case.gold_facts, case.empty, answer)
+    body = build_body(cfg.model, case.q, case.gold_facts, case.empty, answer, evidence)
     try:
         async with _client() as client:
             resp = await client.post(

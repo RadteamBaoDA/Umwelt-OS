@@ -10,11 +10,17 @@ import pytest
 from tests.integration.chat_eval import judge as judge_mod
 from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.judge import (
+    EVIDENCE_ITEM_CHARS,
+    EVIDENCE_MAX_ITEMS,
+    EVIDENCE_TOTAL_CHARS,
     LABELS,
+    NO_EVIDENCE,
     Verdict,
     build_body,
     decisions_url,
     disagreement,
+    evidence_block,
+    evidence_from_result,
     judge,
     judge_config,
     parse_verdict,
@@ -190,3 +196,65 @@ def test_summarize_judge_lists_ids() -> None:
         "judge_uncertain": ["b"],
         "judge_invalid": ["c"],
     }
+
+
+def test_build_body_carries_the_evidence_block() -> None:
+    body = build_body("m", "q?", ("fact",), False, "ans", ("row one", "row two"))
+    assert "Evidence:\n- row one\n- row two" in body["state"]
+    assert body["state"].index("Evidence:") < body["state"].index("Answer:")
+
+
+def test_build_body_without_evidence_says_so() -> None:
+    body = build_body("m", "q?", ("fact",), False, "ans")
+    assert "(no evidence retrieved)" in body["state"]
+
+
+def test_evidence_block_bounds_items_and_total() -> None:
+    items = [f"item {i} " + "x" * 1000 for i in range(20)]
+    block = evidence_block(items)
+    lines = block.split("\n")
+    assert len(lines) == EVIDENCE_MAX_ITEMS
+    assert all(len(line) <= EVIDENCE_ITEM_CHARS + 2 for line in lines)
+    assert all(line.endswith("...") for line in lines)
+    assert len(block) <= EVIDENCE_TOTAL_CHARS
+
+
+def test_evidence_block_collapses_whitespace_and_skips_blank_items() -> None:
+    assert evidence_block(["  a\n\tb  ", "   "]) == "- a b"
+
+
+def test_evidence_block_empty_is_explicit() -> None:
+    assert evidence_block([]) == NO_EVIDENCE
+    assert evidence_block(["  "]) == NO_EVIDENCE
+
+
+def test_judge_sends_the_evidence_to_the_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = json.loads(request.content)
+        payload = {
+            "answers": {
+                "verdict": {"type": "choice", "probabilities": _probs(correct_complete=1.0)}
+            }
+        }
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(
+        judge_mod, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    case = Case(id="c", cat="x", lang="en", q="q?", gold_facts=("g",))
+    asyncio.run(judge(case, "ans", ENV, ("retrieved row",)))
+    assert "retrieved row" in sent["body"]["state"]
+
+
+def test_evidence_from_result_splits_rows_into_items() -> None:
+    raw = json.dumps({"observations": [{"v": 1}, {"v": 2}], "status": "ok"})
+    items = evidence_from_result(raw)
+    assert [json.loads(item) for item in items] == [{"v": 1}, {"v": 2}]
+
+
+def test_evidence_from_result_keeps_unstructured_text_whole() -> None:
+    assert evidence_from_result("not json") == ["not json"]
+    raw = json.dumps({"error": "boom"})
+    assert evidence_from_result(raw) == [raw]
