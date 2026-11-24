@@ -205,3 +205,11 @@ def test_pipe_in_fact_or_regex_is_rejected() -> None:
 def test_unparseable_figure_is_rejected() -> None:
     reasons = reject_reasons(_draft(nums=(float("nan"),)), KEYS, NUMBERS)
     assert any("not in sampled rows" in r for r in reasons)
+
+
+def test_sample_sql_reads_every_non_local_only_source_not_only_evalc_prefix() -> None:
+    from tests.integration.chat_eval.draft_real import DOC_SQL, OBS_SQL
+
+    for sql in (DOC_SQL, OBS_SQL):
+        assert "evalc" not in sql
+        assert "s.local_only IS FALSE" in sql

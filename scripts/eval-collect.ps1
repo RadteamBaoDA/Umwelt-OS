@@ -10,11 +10,24 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $project = 'umwelt-evalcollect'
 $envFile = Join-Path $repo '.env.eval-collect'
-# Credential tables are left out of the dump (schema only): the stack's keys never leave it and test defaults are public.
+# Credential and secret-bearing tables are left out of the dump (schema only): the stack's keys never leave it and
+# test defaults are public. Every table with an encrypted_* / token_hash / secret column belongs here; the dump is
+# verified against this list after pg_dump, so a missing entry fails the snapshot instead of leaking data.
 $secretTables = @(
   'connector_managed_credentials', 'connector_native_credentials', 'connector_rest_credentials',
-  'connector_world_credentials', 'collector_credentials', 'automation_webhook_credentials', 'auth_session'
+  'connector_world_credentials', 'collector_credentials', 'automation_webhook_credentials', 'auth_session',
+  'connector_oauth_attempts', 'connector_oauth_grants', 'dashboard_live_credentials',
+  'github_oauth_attempts', 'github_oauth_grants', 'mcp_connections'
 )
+# ai_settings is needed by the app, so its rows are dumped; the snapshot refuses to run while any ciphertext
+# value is stored there (the eval stack never saves an AI or search key; a non-empty value means someone did).
+$aiSecretGuardSql = @"
+SELECT count(*) FROM ai_settings
+WHERE web_search_api_key_ciphertext IS NOT NULL
+   OR (providers::text ~ 'ciphertext"\s*:\s*"[^"]')
+   OR (n8n::text ~ 'ciphertext"\s*:\s*"[^"]')
+   OR (web_search_fallbacks::text ~ 'ciphertext"\s*:\s*"[^"]');
+"@
 Push-Location $repo
 try {
   function Invoke-Checked([string]$Program, [string[]]$Arguments) {
@@ -114,6 +127,21 @@ FROM sources s ORDER BY 1;
     Invoke-Psql "SELECT 'db_size', pg_size_pretty(pg_database_size('bbd_test'))"
   }
 
+  function Assert-NoSecretTableData {
+    <#
+    .SYNOPSIS
+    Fail when the dump in the container carries table data for any secret-bearing table.
+
+    .NOTES
+    Reads the archive's table of contents with `pg_restore -l` (no data is restored). A TABLE DATA entry matching a
+    name in $secretTables means --exclude-table-data was not applied, so the dump must not leave the container.
+    #>
+    $compose = Get-ComposeArgs
+    $toc = (Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'pg_restore', '-l', '/tmp/snap.dump'))) | Out-String
+    $leaked = @($secretTables | Where-Object { $toc -match "TABLE DATA\s+public\s+$([regex]::Escape($_))\s" })
+    if ($leaked.Count -gt 0) { throw "Snapshot refused: dump contains table data for: $($leaked -join ', ')" }
+  }
+
   function New-Snapshot {
     <#
     .SYNOPSIS
@@ -122,15 +150,20 @@ FROM sources s ORDER BY 1;
     .NOTES
     Stops the collecting workers first so the dump is a stable cut (resume with the `up` task). pg_dump writes inside
     the container and the file is copied out with `docker compose cp`; never pipe pg_dump through PowerShell redirection
-    because it re-encodes binary. Credential tables and auth_session are dumped schema-only.
+    because it re-encodes binary. Credential tables are dumped schema-only (see $secretTables).
+    Aborts before any dump when ai_settings holds a ciphertext value, and fails if the dump's TOC contains table data
+    for a secret table (checked with pg_restore -l inside the container).
     #>
     $compose = Get-ComposeArgs
+    $leaked = (Invoke-Psql $aiSecretGuardSql | Out-String).Trim()
+    if ($leaked -ne '0') { throw "Snapshot refused: ai_settings holds $leaked ciphertext value(s); clear them before dumping." }
     Invoke-Checked 'docker' ($compose + @('stop', 'cron-worker', 'worker', 'chat-worker', 'model-worker', 'search-build-worker'))
     $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
     $dir = Join-Path $repo "data/chat-eval-real/$stamp"
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $excludes = $secretTables | ForEach-Object { "--exclude-table-data=$_" }
     Invoke-Checked 'docker' ($compose + @('exec', '-T', 'postgres', 'pg_dump', '-U', 'bbd_test', '-d', 'bbd_test', '-Fc', '-f', '/tmp/snap.dump') + $excludes)
+    Assert-NoSecretTableData
     Invoke-Checked 'docker' ($compose + @('cp', 'postgres:/tmp/snap.dump', (Join-Path $dir 'snapshot.dump')))
     Invoke-Checked 'uv' @('run', 'python', '-m', 'tests.integration.chat_eval.snapshot_meta', $dir)
     Write-Host "Snapshot written to $dir"

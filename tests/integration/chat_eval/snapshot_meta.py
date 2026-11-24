@@ -3,8 +3,9 @@
 Usage: ``python -m tests.integration.chat_eval.snapshot_meta <snapshot-dir>``. The DSN comes from
 ``EVAL_COLLECT_DSN`` (default: the collection stack's Postgres on 127.0.0.1:45432).
 
-Only ``evalc-*`` sources (the collection stack's source names) are read, so the anchor and the counts
-never mix in rows created by any other workspace. Read-only: the script issues SELECTs only.
+Every source of the collection stack that is not ``local_only`` is read: the stack is single-purpose, so
+built-in sources (named by provider) and ``evalc-`` sources both count. ``local_only`` rows never reach
+the anchor, the counts or meta.json. Two sources that map to one source key raise. Read-only: SELECTs only.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TZ_NAME = "Asia/Ho_Chi_Minh"
-SOURCE_PREFIX = "evalc-"
+SOURCE_PREFIX = "evalc-"  # stripped from source names that have no provider value
 DEFAULT_DSN = "postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:45432/bbd_test"
 
 # Document collection time is the version row's ``created_at`` (documents carry no collected_at).
@@ -31,7 +32,7 @@ SELECT s.id::text AS source_id, s.name, s.provider, count(*) AS n,
 FROM documents d
 JOIN document_versions v ON v.document_id = d.id AND v.version_number = d.current_version
 JOIN sources s ON s.id = d.source_id
-WHERE s.name LIKE 'evalc-%'
+WHERE s.local_only IS FALSE
 GROUP BY s.id, s.name, s.provider
 """
 
@@ -40,7 +41,7 @@ SELECT s.id::text AS source_id, s.name, s.provider, count(*) AS n,
        min(o.collected_at) AS first_at, max(o.collected_at) AS last_at
 FROM observations o
 JOIN sources s ON s.id = o.source_id
-WHERE s.name LIKE 'evalc-%' AND o.is_current
+WHERE s.local_only IS FALSE AND o.is_current
 GROUP BY s.id, s.name, s.provider
 """
 
@@ -98,6 +99,8 @@ def _merge_stats(
 
     Returns ``(source_id by key, stats by key, every timestamp seen)``. Counts are kept per kind;
     first/last are the min/max across both kinds so one source reports one collection window.
+    Raises ValueError when two different source ids map to one source key: the gold keys and the
+    stats would silently merge two sources, so the snapshot is refused instead.
     """
     sources: dict[str, str] = {}
     stats: dict[str, dict[str, Any]] = {}
@@ -105,6 +108,11 @@ def _merge_stats(
     for kind, rows in (("documents", docs), ("observations", obs)):
         for row in rows:
             key = source_key(row.provider, row.name)
+            prior = sources.get(key)
+            if prior is not None and prior != row.source_id:
+                raise ValueError(
+                    f"source key {key!r} maps to two sources: {prior} and {row.source_id}"
+                )
             sources[key] = row.source_id
             entry = stats.setdefault(
                 key, {"source_id": row.source_id, "documents": 0, "observations": 0}

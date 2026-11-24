@@ -369,7 +369,7 @@ SELECT s.name, s.provider, d.external_id, d.title, left(v.content, 600) AS conte
 FROM documents d
 JOIN document_versions v ON v.document_id = d.id AND v.version_number = d.current_version
 JOIN sources s ON s.id = d.source_id
-WHERE s.name LIKE 'evalc-%' AND d.external_id IS NOT NULL
+WHERE s.local_only IS FALSE AND d.external_id IS NOT NULL
 """
 
 OBS_SQL = """
@@ -377,12 +377,12 @@ SELECT s.name, s.provider, o.external_id, o.metric, o.symbol, o.region, o.value,
        o.observed_at
 FROM observations o
 JOIN sources s ON s.id = o.source_id
-WHERE s.name LIKE 'evalc-%' AND o.is_current
+WHERE s.local_only IS FALSE AND o.is_current
 """
 
 
 async def load_samples(engine: AsyncEngine) -> list[Sample]:
-    """Every collected document and current observation of the collection sources (read-only I/O)."""
+    """Every collected document and current observation of the non-local_only sources (read-only I/O)."""
     out: list[Sample] = []
     async with engine.connect() as conn:
         for row in (await conn.execute(text(DOC_SQL))).all():
