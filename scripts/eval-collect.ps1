@@ -17,7 +17,8 @@ $secretTables = @(
   'connector_managed_credentials', 'connector_native_credentials', 'connector_rest_credentials',
   'connector_world_credentials', 'collector_credentials', 'automation_webhook_credentials', 'auth_session',
   'connector_oauth_attempts', 'connector_oauth_grants', 'dashboard_live_credentials',
-  'github_oauth_attempts', 'github_oauth_grants', 'mcp_connections'
+  'github_oauth_attempts', 'github_oauth_grants', 'mcp_connections',
+  'mcp_inbound_clients', 'workspace_invitations', 'browser_read_jobs'
 )
 # ai_settings is needed by the app, so its rows are dumped; the snapshot refuses to run while any ciphertext
 # value is stored there (the eval stack never saves an AI or search key; a non-empty value means someone did).
