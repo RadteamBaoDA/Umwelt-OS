@@ -277,6 +277,34 @@ def _create_rerank_gateway(
     )
 
 
+async def _send_rerank(
+    gateway: Any,
+    egress: _RerankEgressLock,
+    rerank_mapping: Any,
+    policy: RequestPolicy,
+    query: str,
+    documents: list[str],
+) -> Any:
+    """Call the reranker through ``gateway`` and always release the egress lock session afterwards.
+
+    The gateway may fail after ``before_send`` has opened the lock session but before it calls
+    ``after_send``; the ``finally`` closes it here too (``after_send`` is a no-op when none is open),
+    so the evidence-chunk row locks cannot outlive the call. Errors propagate unchanged.
+    """
+    try:
+        return await gateway.rerank(
+            role="reranker",
+            mapping=rerank_mapping,
+            policy=policy,
+            query=query,
+            documents=documents,
+            before_send=egress.before_send,
+            after_send=egress.after_send,
+        )
+    finally:
+        await egress.after_send()
+
+
 async def _apply_configured_reranking(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -349,20 +377,7 @@ async def _apply_configured_reranking(
         # Release the outer session's snapshot/locks before the network call; the egress hook
         # uses its own send_session and this session is unused afterwards in this function.
         await session.commit()
-        try:
-            raw_result = await gateway.rerank(
-                role="reranker",
-                mapping=rerank_mapping,
-                policy=policy,
-                query=query,
-                documents=documents,
-                before_send=egress.before_send,
-                after_send=egress.after_send,
-            )
-        finally:
-            # The gateway may fail after before_send has opened the lock session but before it
-            # calls after_send; close it here too (after_send is a no-op when none is open).
-            await egress.after_send()
+        raw_result = await _send_rerank(gateway, egress, rerank_mapping, policy, query, documents)
 
         indices = _extract_rerank_indices(raw_result)
         if indices:
