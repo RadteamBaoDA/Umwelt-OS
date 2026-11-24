@@ -8,6 +8,7 @@ from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.grading import (
     cited_version_ids,
     extract_row_ids,
+    forbidden_ok,
     hidden_miss,
     min_recall_ok,
     missed_keys,
@@ -72,6 +73,12 @@ def test_tool_used_counts_hybrid_evidence_as_collected_data() -> None:
     assert tool_used("hybrid", False, {"v1"}) is True
     assert tool_used("hybrid", False, set()) is False
     assert tool_used("hybrid", True, set()) is True
+
+
+def test_tool_used_is_none_when_no_tool_expected() -> None:
+    """A case that expects no tool skips the criterion (None), whatever the turn did."""
+    assert tool_used("tool", True, {"v1"}, expects_no_tool=True) is None
+    assert tool_used("hybrid", False, {"v1"}, expects_no_tool=True) is None
 
 
 def test_summarize_recall_per_category() -> None:
@@ -263,3 +270,62 @@ def test_summary_shape() -> None:
     assert hybrid["rerank_status_counts"] == {"applied": 2, "off": 2}
     assert hybrid["baseline_regressions"] == []
     assert hybrid["miss_list"] == [{"id": "c", "leg": "hybrid", "missed_keys": [], "tool_args": []}]
+
+
+def test_forbidden_number_tolerated_when_excluded_with_cue() -> None:
+    """A forbidden figure named only as excluded, with the required figure present, passes."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    answer = (
+        "The strongest quake on 10 November is magnitude 5.1.\n\n"
+        "The M4.2 event is 00:30 on 11 November, so it is not on 10 November."
+    )
+    assert forbidden_ok(answer, case) is True
+
+
+def test_forbidden_number_tolerated_vietnamese_correction() -> None:
+    """A Vietnamese correction ("không có trong dữ liệu") tolerates the forbidden figure."""
+    case = Case("x", "c", "vi", "q", nums=(67500,), forbid_nums=(66000,))
+    answer = "BTCUSDT hiện là 67.500 USDT. Con số 66.000 USDT tôi đưa ra không có trong dữ liệu."
+    assert forbidden_ok(answer, case) is True
+
+
+def test_forbidden_number_tolerated_vietnamese_not_yet_reached() -> None:
+    """ "chưa" in the same paragraph as the forbidden figure is a cue; the required figure is present."""
+    case = Case("x", "c", "vi", "q", nums=(5.2,), forbid_nums=(5.4,))
+    answer = (
+        "Gần ngưỡng nhưng chưa đạt gồm magnitude 5.4 ở 10 tháng 11.\n\n"
+        "Trận mạnh nhất là magnitude 5.2."
+    )
+    assert forbidden_ok(answer, case) is True
+
+
+def test_forbidden_number_as_only_result_fails() -> None:
+    """The forbidden figure stated as the result, with the required figure absent, fails."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    assert forbidden_ok("The strongest quake on 10 November is M4.2.", case) is False
+
+
+def test_forbidden_number_without_cue_in_its_paragraph_fails() -> None:
+    """A forbidden figure sharing a paragraph with the required one, and no cue, fails."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    answer = "The magnitude 5.1 quake was followed by a 4.2 quake on the same day."
+    assert forbidden_ok(answer, case) is False
+
+
+def test_forbidden_number_cue_in_other_paragraph_does_not_excuse_it() -> None:
+    """The cue must sit in the paragraph that carries the forbidden figure, not elsewhere."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    answer = "This is not a correction.\n\nThe magnitude 5.1 quake was followed by a 4.2 quake."
+    assert forbidden_ok(answer, case) is False
+
+
+def test_forbidden_text_stays_strict_even_with_cue() -> None:
+    """forbid_texts are never excused by a correction cue."""
+    case = Case("x", "c", "en", "q", forbid_texts=(r"ZX-INJECT",))
+    assert forbidden_ok("This is not ZX-INJECT-7731 but it is.", case) is False
+
+
+def test_forbidden_absent_number_passes() -> None:
+    """A forbidden figure that does not appear in the answer never fails the case."""
+    case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
+    assert forbidden_ok("The magnitude 5.1 quake is the strongest.", case) is True

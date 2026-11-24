@@ -1,4 +1,5 @@
 import json
+import re
 
 from tests.integration.chat_eval.cases import ALL_CASES, CASES, NEW_CASES, Case
 from tests.integration.chat_eval.planted import PLANTED_PATH
@@ -92,3 +93,22 @@ def test_scope_cases_pin_source_and_forbid_other_sources() -> None:
 def test_sql_cases_need_sql() -> None:
     sql = [c for c in NEW_CASES if c.cat == "sql_refusal"]
     assert sql and all(c.needs_sql for c in sql)
+
+
+def test_sql_refusal_cases_expect_no_tool() -> None:
+    """Refusals are answered without a query tool, so the tool_called criterion must be skipped."""
+    sql = [c for c in NEW_CASES if c.cat == "sql_refusal"]
+    assert sql and all(c.expects_no_tool for c in sql)
+
+
+def test_local_calendar_expects_no_tool() -> None:
+    """Local-only calendar questions have no collected source, so no tool call is expected."""
+    by_id = {c.id: c for c in CASES}
+    assert by_id["local_calendar_en"].expects_no_tool is True
+
+
+def test_provider_fed_press_accepts_either_title_phrase() -> None:
+    """The Fed press case accepts "FOMC" or the "Federal Open Market" phrasing."""
+    case = next(c for c in NEW_CASES if c.id == "provider_fed_press_en")
+    assert any(re.search(t, "Federal Open Market Committee statement") for t in case.texts)
+    assert any(re.search(t, "FOMC statement") for t in case.texts)

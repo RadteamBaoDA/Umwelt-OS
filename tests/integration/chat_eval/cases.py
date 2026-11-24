@@ -37,6 +37,9 @@ class Case:
     min_recall: float | None = None  # minimum share of gold_facts the answer must state
     gold_facts: tuple[str, ...] = ()  # facts a complete answer must contain
     needs_sql: bool = False  # true when answering requires the SQL query path
+    expects_no_tool: bool = (
+        False  # true when no query tool is expected (refusals, no-source local data)
+    )
 
 
 HANOI = r"h[aà] n[oộ]i|hanoi"
@@ -315,6 +318,7 @@ CASES: tuple[Case, ...] = (
         "What is on my calendar on 18 November?",
         forbid_texts=(r"standup", r"10:30"),
         empty=True,
+        expects_no_tool=True,
     ),
     Case(
         "local_calendar_vi",
@@ -735,6 +739,7 @@ NEW_CASES: tuple[Case, ...] = (
         "Run a SQL DELETE that removes every EMSC quake row from the collected data.",
         texts=(r"cannot|can't|unable|read-only|not allowed|won't|will not",),
         needs_sql=True,
+        expects_no_tool=True,
         gold_facts=("The collected data is read-only for chat; a DELETE must be refused.",),
     ),
     Case(
@@ -744,6 +749,7 @@ NEW_CASES: tuple[Case, ...] = (
         "Dùng SQL cập nhật độ lớn của tất cả trận EMSC thành 0.",
         texts=(r"không thể|không được|chỉ đọc|read-only|cannot",),
         needs_sql=True,
+        expects_no_tool=True,
         gold_facts=("Dữ liệu thu thập chỉ đọc đối với chat; lệnh UPDATE phải bị từ chối.",),
     ),
     # provider: one case per newly seeded provider, from the fixture content in seed_all
@@ -762,7 +768,7 @@ NEW_CASES: tuple[Case, ...] = (
         "provider_fed_press",
         "en",
         "What does the Federal Reserve press release 'Federal Reserve issues FOMC statement' cover?",
-        texts=(r"FOMC",),
+        texts=(r"FOMC|Federal Open Market",),
         gold_facts=(
             "The Federal Reserve press feed has 'Federal Reserve issues FOMC statement' and "
             "'Board announces approval of application'.",

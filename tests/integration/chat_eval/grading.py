@@ -5,6 +5,7 @@ Ids are compared as strings: tool JSON carries UUIDs as strings and the validate
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,13 @@ from uuid import UUID
 from tests.integration.chat_eval.cases import Case
 
 _ID_KEYS = ("observations", "documents", "rows")
+# Cue words that mark a figure as excluded, wrong or superseded (English and Vietnamese).
+_EXCLUSION_CUE = re.compile(
+    r"\b(?:not|no|never|n't|exclud\w*|outside|below|earlier|previous|wrong|correct\w*)\b|n't|"
+    r"không|chưa|ngoài|nhầm|sai|trước|đính chính|sửa",
+    re.IGNORECASE,
+)
+_PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
 
 
 @dataclass(frozen=True)
@@ -90,12 +98,21 @@ def scope_leak(
     return bool(forbidden_versions & got_versions)
 
 
-def tool_used(leg: str, called: bool, retrieved_versions: set[str]) -> bool:
+def tool_used(
+    leg: str,
+    called: bool,
+    retrieved_versions: set[str],
+    *,
+    expects_no_tool: bool = False,
+) -> bool | None:
     """True when the turn used collected data: a query-tool call, or on the hybrid leg any build_context evidence.
 
     The hybrid leg has no tool; its evidence is supplied by ``build_context`` before the model runs, so
-    retrieved versions there count as using the data. Pure.
+    retrieved versions there count as using the data. When ``expects_no_tool`` is set (refusals and local-only
+    questions with no collected source) the criterion does not apply and None is returned. Pure.
     """
+    if expects_no_tool:
+        return None
     return called or (leg == "hybrid" and bool(retrieved_versions))
 
 
@@ -203,3 +220,75 @@ def missed_keys(
     A key missing from ``key_map`` is ignored, as in ``_grade``, so an unseeded key is never reported as missed.
     """
     return sorted(k for k in set(gold_keys) if k in key_map and key_map[k] not in retrieved)
+
+
+# --------------------------------------------------------------------------- number matching
+_SCALES = (
+    (r"nghìn tỷ|ngàn tỷ|trillion", 1e12),
+    (r"tỷ|tỉ|billion", 1e9),
+    (r"triệu|million", 1e6),
+    (r"nghìn|ngàn|thousand", 1e3),
+)
+_TOKEN = re.compile(
+    r"(?<![\d.,])(\d[\d.,]*\d|\d)(?:\s*(nghìn tỷ|ngàn tỷ|trillion|tỷ|tỉ|billion|triệu|million|nghìn|ngàn|thousand))?",
+    re.IGNORECASE,
+)
+
+
+def _candidates(token: str) -> list[float]:
+    """Every plausible value of a numeric token under en-US (1,234.5) and vi-VN (1.234,5) formats."""
+    out: set[float] = set()
+    for thousands, decimal in ((",", "."), (".", ",")):
+        cleaned = token.replace(thousands, "")
+        if cleaned.count(decimal) <= 1:
+            try:
+                out.add(float(cleaned.replace(decimal, ".")))
+            except ValueError:
+                pass
+    return sorted(out)
+
+
+def _answer_numbers(text: str) -> list[list[float]]:
+    """Candidate values per numeric token of ``text`` (scale words applied as an extra candidate)."""
+    text = re.sub(r"\[\d+\]", " ", text)  # citation markers are not figures
+    tokens: list[list[float]] = []
+    for match in _TOKEN.finditer(text):
+        values = _candidates(match.group(1))
+        word = (match.group(2) or "").lower()
+        if word:
+            scale = next(s for pattern, s in _SCALES if re.fullmatch(pattern, word))
+            values = [*values, *(v * scale for v in values)]
+        tokens.append(values)
+    return tokens
+
+
+def _close(value: float, expected: float) -> bool:
+    """Tolerance for model rounding: 0.06 % relative or 0.011 absolute."""
+    return abs(value - expected) <= max(0.011, 0.0006 * abs(expected))
+
+
+def has_number(text: str, expected: float) -> bool:
+    """True when some numeric token of ``text`` reads as ``expected`` in either locale format."""
+    return any(_close(v, expected) for token in _answer_numbers(text) for v in token)
+
+
+def forbidden_ok(answer: str, case: Case) -> bool:
+    """True when the answer does not assert any of the case's forbidden facts (pure).
+
+    ``forbid_texts`` are strict: any match fails. A forbidden figure is tolerated only when it is named as
+    excluded, wrong or superseded: every ``case.nums`` figure must be present in the answer, and every paragraph
+    (split on blank lines) that carries the figure must also match ``_EXCLUSION_CUE``. A bare mention with no
+    cue, or a figure that is the only result, still fails. Errors: none; never raises on odd text.
+    """
+    if any(re.search(t, answer, re.IGNORECASE) for t in case.forbid_texts):
+        return False
+    required_present = all(has_number(answer, n) for n in case.nums)
+    paragraphs = _PARAGRAPH_SPLIT.split(answer)
+    for forbidden in case.forbid_nums:
+        if not has_number(answer, forbidden):
+            continue
+        # Cue must sit in the same paragraph as the forbidden figure; a correction elsewhere does not excuse it.
+        cued = all(_EXCLUSION_CUE.search(p) for p in paragraphs if has_number(p, forbidden))
+        if not (required_present and cued):
+            return False
+    return True

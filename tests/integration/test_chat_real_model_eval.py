@@ -65,6 +65,8 @@ from tests.integration.chat_eval.grading import (
     RowIds,
     cited_version_ids,
     extract_row_ids,
+    forbidden_ok,
+    has_number,
     hidden_miss,
     min_recall_ok,
     missed_keys,
@@ -176,61 +178,11 @@ NODATA = re.compile(
 )
 
 
-# --------------------------------------------------------------------------- number matching
-_SCALES = (
-    (r"nghìn tỷ|ngàn tỷ|trillion", 1e12),
-    (r"tỷ|tỉ|billion", 1e9),
-    (r"triệu|million", 1e6),
-    (r"nghìn|ngàn|thousand", 1e3),
-)
-_TOKEN = re.compile(
-    r"(?<![\d.,])(\d[\d.,]*\d|\d)(?:\s*(nghìn tỷ|ngàn tỷ|trillion|tỷ|tỉ|billion|triệu|million|nghìn|ngàn|thousand))?",
-    re.IGNORECASE,
-)
-
-
-def _candidates(token: str) -> list[float]:
-    """Every plausible value of a numeric token under en-US (1,234.5) and vi-VN (1.234,5) formats."""
-    out: set[float] = set()
-    for thousands, decimal in ((",", "."), (".", ",")):
-        cleaned = token.replace(thousands, "")
-        if cleaned.count(decimal) <= 1:
-            try:
-                out.add(float(cleaned.replace(decimal, ".")))
-            except ValueError:
-                pass
-    return sorted(out)
-
-
-def _answer_numbers(text: str) -> list[list[float]]:
-    """Candidate values per numeric token of ``text`` (scale words applied as an extra candidate)."""
-    text = re.sub(r"\[\d+\]", " ", text)  # citation markers are not figures
-    tokens: list[list[float]] = []
-    for match in _TOKEN.finditer(text):
-        values = _candidates(match.group(1))
-        word = (match.group(2) or "").lower()
-        if word:
-            scale = next(s for pattern, s in _SCALES if re.fullmatch(pattern, word))
-            values = [*values, *(v * scale for v in values)]
-        tokens.append(values)
-    return tokens
-
-
-def _close(value: float, expected: float) -> bool:
-    """Tolerance for model rounding: 0.06 % relative or 0.011 absolute."""
-    return abs(value - expected) <= max(0.011, 0.0006 * abs(expected))
-
-
-def _has_number(text: str, expected: float) -> bool:
-    """True when some numeric token of ``text`` reads as ``expected`` in either locale format."""
-    return any(_close(v, expected) for token in _answer_numbers(text) for v in token)
-
-
 def _assoc_ok(text: str, label: str, expected: float) -> bool:
     """True when ``expected`` occurs within 90 characters after a ``label`` match (or 90 before it)."""
     for found in re.finditer(label, text, re.IGNORECASE):
         window = text[max(0, found.start() - 90) : found.end() + 90]
-        if _has_number(window, expected):
+        if has_number(window, expected):
             return True
     return False
 
@@ -495,16 +447,13 @@ def _grade(
     got_rows = any(c.get("rows") for c in called)
     nums_ok: bool | None = None
     if case.nums:
-        found = all(_has_number(answer, n) for n in case.nums) and all(
+        found = all(has_number(answer, n) for n in case.nums) and all(
             _assoc_ok(answer, label, n) for label, n in case.assoc
         )
         nums_ok = found or (case.nums_or_nodata and bool(NODATA.search(answer)))
     texts_ok: bool | None = None
     if case.texts:
         texts_ok = all(re.search(t, answer, re.IGNORECASE) for t in case.texts)
-    forbidden_ok = not any(_has_number(answer, n) for n in case.forbid_nums) and not any(
-        re.search(t, answer, re.IGNORECASE) for t in case.forbid_texts
-    )
     invalid_markers = [n for n in out["markers"] if n not in out["kept_markers"]]
     cite_ok: bool | None = None
     if got_rows and not case.empty:
@@ -513,10 +462,12 @@ def _grade(
     if case.empty:
         empty_ok = bool(NODATA.search(answer)) and not out["unverified"]
     criteria: dict[str, Any] = {
-        "tool_called": tool_used(leg, bool(called), out["retrieved_versions"]),
+        "tool_called": tool_used(
+            leg, bool(called), out["retrieved_versions"], expects_no_tool=case.expects_no_tool
+        ),
         "numbers_correct": nums_ok,
         "texts_ok": texts_ok,
-        "no_forbidden": forbidden_ok,
+        "no_forbidden": forbidden_ok(answer, case),
         "grounded": not out["unverified"],
         "citations_valid": cite_ok,
         "empty_ok": empty_ok,
