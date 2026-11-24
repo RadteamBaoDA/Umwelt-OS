@@ -191,6 +191,42 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
+  search-build-worker:
+    # Runs only `build_search_vector_index` (HNSW CREATE INDEX CONCURRENTLY, up to the 2 h statement
+    # timeout) on queue arq:search-build, one job at a time. It is a separate service because arq's
+    # in-progress key lifetime is max(registered job timeout) + 10 s: on the main worker the 2 h job would
+    # stretch crash recovery of every job. The work happens inside PostgreSQL, so the process stays small.
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.SearchBuildWorkerSettings"]
+    # Not on the `storage` network: it reads one generation row and issues index DDL only.
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:search-build:health-check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits: {memory: 256M}
+        reservations: {memory: 96M}
+    stop_grace_period: 7270s  # >= job_completion_wait (HNSW_BUILD_JOB_TIMEOUT 7260 + 5): SIGTERM lets a running build finish
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
   web:
     build:
       context: .

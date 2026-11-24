@@ -105,6 +105,7 @@ from modules.observability.history import sample_system_health
 from modules.observability.maintenance import run_retention_maintenance
 from modules.search.indexing import (
     HNSW_BUILD_STATEMENT_TIMEOUT_MS,
+    SEARCH_BUILD_QUEUE,
     build_search_vector_index,
     index_pending_chunks,
 )
@@ -153,19 +154,22 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
 
 HEAVY_SLOT_JOBS = frozenset({"process_uploaded_file", "process_graph_operation"})
 # The HNSW build may legitimately run until its 2 h statement timeout; the arq timeout is that plus a
-# minute so the database error (and the job's cleanup) surfaces before arq cancels the task.
+# minute so the database error (and the job's cleanup) surfaces before arq cancels the task. It is
+# registered only on SearchBuildWorkerSettings: arq's in-progress key lifetime is max(function
+# timeout) + 10 s, so on the main worker it would stretch crash recovery of every job to ~2 h.
 HNSW_BUILD_JOB_TIMEOUT = HNSW_BUILD_STATEMENT_TIMEOUT_MS / 1000 + 60
 
 
 def _arq_options(name: str) -> dict[str, Any]:
     """Per-function arq options: outbox consumers drop their result, heavy-slot jobs get a long retry budget.
 
-    ``build_search_vector_index`` gets its own build-sized ``timeout``, three tries and no kept result
-    (its fixed ``search-hnsw-build:<generation>`` id must be re-enqueueable after a failed build).
+    ``build_search_vector_index`` (only on ``SearchBuildWorkerSettings``) gets its own build-sized
+    ``timeout`` and no kept result (its fixed ``search-hnsw-build:<generation>`` id must be re-enqueueable
+    after a failed build); arq only retries it on ``Retry``/cancellation.
     """
     options: dict[str, Any] = {}
     if name == "build_search_vector_index":
-        options.update(timeout=HNSW_BUILD_JOB_TIMEOUT, max_tries=3, keep_result=0)
+        options.update(timeout=HNSW_BUILD_JOB_TIMEOUT, keep_result=0)
     if name == "translate_content":
         options["keep_result"] = (
             0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
@@ -189,7 +193,13 @@ def _silence_cron_logs() -> None:
 # Offset added to METRICS_WORKER_PORT per worker process so all four can share one host / network
 # namespace; mirrored in docker-compose.monitoring.yml, infrastructure/monitoring/prometheus.yml and
 # docs/observability.md.
-METRICS_PORT_OFFSETS = {"worker": 0, "chat-worker": 1, "model-worker": 2, "cron-worker": 3}
+METRICS_PORT_OFFSETS = {
+    "worker": 0,
+    "chat-worker": 1,
+    "model-worker": 2,
+    "cron-worker": 3,
+    "search-build-worker": 4,
+}
 
 
 def _install_observability(
@@ -198,7 +208,7 @@ def _install_observability(
     """Start optional worker metrics and tracing; both are off unless configured and never block startup.
 
     The metrics HTTP server binds ``METRICS_WORKER_PORT + METRICS_PORT_OFFSETS[role]`` (worker 0, chat
-    worker 1, model worker 2, cron worker 3) so the worker processes can coexist on one host. The
+    worker 1, model worker 2, cron worker 3, search-build worker 4) so the worker processes can coexist on one host. The
     event-loop lag task is stored in ``ctx["metrics_tasks"]`` for cancellation in ``shutdown``. Tracing
     instruments this process's engine.
     """
@@ -403,6 +413,37 @@ async def model_startup(ctx: dict[str, object]) -> None:
     _install_observability(ctx, settings, engine, "model-worker")
 
 
+SEARCH_BUILD_DB_POOL = (
+    1 + 1,
+    1,
+)  # (pool_size = SearchBuildWorkerSettings.max_jobs + 1, max_overflow); counted as 3 in docs/deployment.md
+
+
+async def search_build_startup(ctx: dict[str, object]) -> None:
+    """Search-build worker startup: bounded one-job DB pool only (no agent registry, no worker-generation key).
+
+    The build opens its own autocommit connection from this engine and lifts the statement timeout itself,
+    so the pool's default statement timeout only bounds the short generation-status lookup.
+    """
+    _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
+    settings = Settings()
+    ctx["settings"] = settings
+    install_log_redaction()
+    set_process_role("search-build-worker")
+    pin_default_queue(cast(ArqRedis, ctx["redis"]))  # see _boot_runtime
+    engine, factory = make_session_factory_for_role(
+        settings,
+        pool_size=SEARCH_BUILD_DB_POOL[0],
+        max_overflow=SEARCH_BUILD_DB_POOL[1],
+        statement_timeout_ms=settings.db_worker_statement_timeout_ms,
+        direct_pool_size=1,  # no session leases on this role
+    )
+    ctx["session_factory"] = factory
+    ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, "search-build-worker")
+
+
 async def shutdown(ctx: dict[str, object]) -> None:
     """Release every worker process's runtime in dependency order (all four worker settings share this hook).
 
@@ -542,7 +583,6 @@ class WorkerSettings:
         instrument_job(process_graph_operation),
         instrument_job(process_news_document_ready),
         purge_expired_chat_runs,
-        build_search_vector_index,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"),
         instrument_job(process_automation_run),
     ]
@@ -575,9 +615,8 @@ class WorkerSettings:
     health_check_interval = 15
     # Graceful drain: on SIGTERM stop taking new jobs and let running ones finish for up to
     # job_timeout + 5 s before cancelling (cancelled jobs are retried). compose stop_grace_period must
-    # exceed this (240 s); see docs/deployment.md. build_search_vector_index has its own 2 h timeout but
-    # does not extend this wait: a drain cancels a running build after 185 s, its invalid index is dropped
-    # and arq re-runs the job on the next worker (the drain contract is unchanged).
+    # exceed this (240 s); see docs/deployment.md. The 2 h HNSW build is not registered here (it runs on
+    # SearchBuildWorkerSettings) so it cannot stretch this worker's in-progress key lifetime.
     job_completion_wait = job_timeout + 5
     on_startup = startup
     on_shutdown = shutdown
@@ -670,6 +709,41 @@ class ModelWorkerSettings:
         job_timeout + 5
     )  # compose stop_grace_period must exceed this; see docs/deployment.md
     on_startup = model_startup
+    on_shutdown = shutdown
+
+
+class SearchBuildWorkerSettings:
+    """Dedicated arq worker for the long ``build_search_vector_index`` (HNSW ``CREATE INDEX CONCURRENTLY``).
+
+    One slot on queue ``SEARCH_BUILD_QUEUE``: builds are DB-bound and run for up to the 2 h statement
+    timeout, so they must not share a worker whose other jobs need a short in-progress key lifetime for
+    crash recovery. The job id ``search-hnsw-build:<generation>`` dedupes enqueues; ``keep_result=0``
+    keeps it re-enqueueable after a failure (arq retries only on ``Retry``/cancellation, so a failed
+    build is re-enqueued by the next ``index_pending_chunks`` tick).
+    """
+
+    functions: ClassVar[list[Any]] = [
+        _register(
+            _gate_module_job(build_search_vector_index),
+            max_tries=1,
+            timeout=HNSW_BUILD_JOB_TIMEOUT,
+            queue=SEARCH_BUILD_QUEUE,
+        )
+    ]
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
+    queue_name = SEARCH_BUILD_QUEUE
+    max_jobs = 1
+    keep_result = 0
+    job_timeout = HNSW_BUILD_JOB_TIMEOUT
+    max_tries = 1
+    health_check_key = "arq:search-build:health-check"
+    health_check_interval = 15
+    # A drain may wait the whole build (compose stop_grace_period must exceed this; see docs/deployment.md);
+    # a build still cancelled by SIGKILL leaves an invalid index that the next attempt drops first.
+    job_completion_wait = job_timeout + 5
+    on_startup = search_build_startup
     on_shutdown = shutdown
 
 

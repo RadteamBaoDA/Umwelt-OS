@@ -82,14 +82,31 @@ def test_fixed_id_heavy_jobs_keep_no_result() -> None:
         assert registered[name].keep_result_s == 0, name
 
 
-def test_hnsw_build_job_is_registered_with_a_build_sized_timeout() -> None:
-    """The HNSW build job outlives the 2 h statement timeout and is not a heavy-slot job."""
-    from modules.search.indexing import HNSW_BUILD_STATEMENT_TIMEOUT_MS
+def test_main_worker_does_not_register_the_hnsw_build_so_its_crash_recovery_stays_short() -> None:
+    """arq's in-progress key lives max(function timeout) + 10 s; a 2 h build job there would stretch it for all jobs."""
+    names = {getattr(f, "name", None) for f in WorkerSettings.functions}  # type: ignore[attr-defined]
+    assert "build_search_vector_index" not in names
+    longest = max(
+        getattr(f, "timeout_s", None) or WorkerSettings.job_timeout
+        for f in WorkerSettings.functions  # type: ignore[attr-defined]
+    )
+    assert longest < 300
 
-    registered = {getattr(f, "name", None): f for f in WorkerSettings.functions}  # type: ignore[attr-defined]
-    job = registered["build_search_vector_index"]
-    assert job.timeout_s == HNSW_BUILD_STATEMENT_TIMEOUT_MS / 1000 + 60
-    assert job.timeout_s > WorkerSettings.job_timeout
-    assert job.max_tries == 3
+
+def test_hnsw_build_job_runs_on_its_own_worker_with_a_build_sized_timeout() -> None:
+    """The build job outlives the 2 h statement timeout on a dedicated one-slot queue."""
+    from apps.worker.main import SearchBuildWorkerSettings
+    from modules.search.indexing import HNSW_BUILD_STATEMENT_TIMEOUT_MS, SEARCH_BUILD_QUEUE
+
+    settings = SearchBuildWorkerSettings
+    assert settings.queue_name == SEARCH_BUILD_QUEUE == "arq:search-build"
+    assert settings.max_jobs == 1
+    assert settings.job_timeout == HNSW_BUILD_STATEMENT_TIMEOUT_MS / 1000 + 60
+    assert settings.keep_result == 0
+    assert settings.health_check_key == "arq:search-build:health-check"
+    assert settings.job_completion_wait > settings.job_timeout
+    (job,) = settings.functions  # type: ignore[attr-defined]
+    assert job.name == "build_search_vector_index"
+    assert job.timeout_s == settings.job_timeout
     assert job.keep_result_s == 0
     assert "build_search_vector_index" not in HEAVY_SLOT_JOBS

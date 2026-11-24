@@ -37,6 +37,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=15`, `job_timeout=600`, DB pool 10 + 10 |
 | cron-worker | 512 MiB / 192 MiB | 512 | queue `arq:cron`, `max_jobs=8`, `job_timeout=180`, DB pool 9 + 5; runs every recurring job (pollers, recovery, retention) so they never take ingestion `max_jobs` slots; each job is lease-guarded, extra replicas are safe |
 | model-worker | 768 MiB / 256 MiB | 512 | queue `arq:model`, `max_jobs=4`, `job_timeout=MODEL_WORKER_JOB_TIMEOUT_SECONDS` (900), DB pool 5 + 5; runs entity/timeline extraction and translation so remote model calls never hold main-worker slots or the heavy slot |
+| search-build-worker | 256 MiB / 96 MiB | 256 | queue `arq:search-build`, `max_jobs=1`, `job_timeout` 7260 s (HNSW build), DB pool 2 + 1; only runs `build_search_vector_index`, stop grace 7270 s |
 | web | 768 MiB / 256 MiB | 512 | `NODE_OPTIONS=--max-old-space-size=512`, `experimental.proxyTimeout=210000` (above the worst-case brief: lease wait + `request_timeout_seconds` up to 180 s; keep it larger than that setting) |
 | migrate | 512 MiB (one-shot, exits before the others start) | - | - |
 

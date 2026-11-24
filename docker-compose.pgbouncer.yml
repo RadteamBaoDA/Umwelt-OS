@@ -137,3 +137,13 @@ services:
     depends_on:
       pgbouncer:
         condition: service_healthy
+
+  search-build-worker:
+    # Shares the worker alias: one short status lookup per build; the build lifts its own statement timeout.
+    environment:
+      PGBOUNCER_ENABLED: "true"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-bbd}:${POSTGRES_PASSWORD}@pgbouncer:6432/bbd_worker
+      DATABASE_DIRECT_URL: *direct-url
+    depends_on:
+      pgbouncer:
+        condition: service_healthy

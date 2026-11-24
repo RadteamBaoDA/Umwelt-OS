@@ -10,6 +10,7 @@ services:
   chat-worker:  {deploy: {resources: {limits: {cpus: "0.4", memory: 1024M}}}}
   model-worker: {deploy: {resources: {limits: {cpus: "0.1", memory: 768M}}}}
   cron-worker:  {deploy: {resources: {limits: {cpus: "0.3", memory: 512M}}}}
+  search-build-worker: {deploy: {resources: {limits: {cpus: "0.1", memory: 256M}}}}
   # maxmemory stays below the 256M cgroup cap (base runs 512mb) so Redis rejects writes (noeviction) before the kernel
   # OOM-kills it; the rest of the base command is unchanged.
   redis:

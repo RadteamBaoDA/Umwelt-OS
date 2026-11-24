@@ -5,7 +5,6 @@ import time
 from typing import cast
 from uuid import UUID
 
-from arq.constants import default_queue_name
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -43,6 +42,9 @@ from modules.search.models import IndexGeneration
 logger = logging.getLogger("modules.search.indexing")
 
 BUILD_JOB_NAME = "build_search_vector_index"
+# Dedicated arq queue (own worker, one slot): the build's 2 h timeout must not raise the main worker's
+# arq in-progress key lifetime, which is derived from its longest registered job timeout.
+SEARCH_BUILD_QUEUE = "arq:search-build"
 
 
 async def _candidate_page(
@@ -74,8 +76,8 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
 
     The pass runs under the heavy-work slot (``_index_pending_chunks_in_slot``); the slot is released
     when that call returns. Only then is one ``build_search_vector_index`` arq job enqueued per deferred
-    (generation, dimensions), under the dedupe id ``search-hnsw-build:<generation>`` on arq's default
-    queue: a tick that finds the job queued or running gets ``None`` back from arq and does nothing.
+    (generation, dimensions), under the dedupe id ``search-hnsw-build:<generation>`` on
+    ``SEARCH_BUILD_QUEUE`` (the search-build worker): a tick that finds the job queued or running gets ``None`` back from arq and does nothing.
     The build itself runs there with its own long timeout, so the 180 s cron ceiling no longer cancels
     it. An enqueue failure is logged (generation id only) and swallowed: the generation stays
     ``running`` with no valid index, so the next tick defers and enqueues again. A busy-slot ``Retry``
@@ -93,8 +95,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
                 str(generation_id),
                 dimensions,
                 _job_id=f"search-hnsw-build:{generation_id}",
-                # The cron worker's pool defaults to its own queue; the build job lives on arq's default one.
-                _queue_name=default_queue_name,
+                _queue_name=SEARCH_BUILD_QUEUE,
             )
         except Exception:  # noqa: BLE001 - next tick re-enqueues; a lost enqueue must not fail the pass
             logger.warning("hnsw build enqueue failed; generation %s left running", generation_id)
@@ -110,11 +111,22 @@ async def build_search_vector_index(
     build runs ``CREATE INDEX CONCURRENTLY`` on its own autocommit connection, outside the heavy slot;
     concurrent builds of one index serialize on the per-name advisory lock and an invalid leftover is
     dropped first (see ``build_vector_index_concurrently``). Any failure, cancellation or timeout is
-    logged by generation id (no secrets) and re-raised so arq retries; the generation stays ``running``
-    and the wake is skipped. Registered on ``WorkerSettings`` with a build-sized timeout.
+    logged by generation id (no secrets) and re-raised; the generation stays ``running`` and the wake is
+    skipped. arq only retries on ``Retry``/cancellation, so after any other failure the next cron tick
+    re-enqueues. Runs on ``SearchBuildWorkerSettings`` (queue ``SEARCH_BUILD_QUEUE``) with a build-sized
+    timeout. A generation that no longer exists or is no longer ``running`` (deleted, superseded or
+    already activated while the job waited) is logged and skipped: nothing is built or woken.
     """
     async with worker_session_factory(ctx)() as session:
+        status = (
+            await session.execute(
+                select(IndexGeneration.status).where(IndexGeneration.id == UUID(generation_id))
+            )
+        ).scalar_one_or_none()
         engine = async_engine_for_session(session)
+    if status != "running":
+        logger.info("hnsw build skipped; generation %s is %s", generation_id, status or "missing")
+        return
     try:
         await build_vector_index_concurrently(engine, UUID(generation_id), dimensions)
     except BaseException:

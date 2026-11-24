@@ -142,6 +142,10 @@ class _EngineSession:
     """Worker session factory product: an async context manager whose ``bind`` is an AsyncEngine."""
 
     bind = _ENGINE
+    status: str | None = "running"  # what the generation-status lookup returns (None: row missing)
+
+    async def execute(self, *_a: Any, **_k: Any) -> Any:
+        return SimpleNamespace(scalar_one_or_none=lambda: type(self).status)
 
     async def __aenter__(self) -> Self:
         return self
@@ -263,8 +267,16 @@ async def test_pass_enqueues_one_deduplicated_build_job_per_generation_and_never
     assert await indexing.index_pending_chunks(ctx) == 0  # type: ignore[arg-type]
     assert log == []
     assert [(c[0], c[1]["_job_id"], c[1]["_queue_name"]) for c in queue.calls] == [
-        (("build_search_vector_index", str(first), 3), f"search-hnsw-build:{first}", "arq:queue"),
-        (("build_search_vector_index", str(second), 4), f"search-hnsw-build:{second}", "arq:queue"),
+        (
+            ("build_search_vector_index", str(first), 3),
+            f"search-hnsw-build:{first}",
+            indexing.SEARCH_BUILD_QUEUE,
+        ),
+        (
+            ("build_search_vector_index", str(second), 4),
+            f"search-hnsw-build:{second}",
+            indexing.SEARCH_BUILD_QUEUE,
+        ),
     ]
     # A second tick while the first job is queued/running re-enqueues under the same id: arq says None.
     assert await indexing.index_pending_chunks(ctx) == 0  # type: ignore[arg-type]
@@ -323,6 +335,34 @@ async def test_build_job_builds_then_wakes(monkeypatch: pytest.MonkeyPatch) -> N
     ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
     await indexing.build_search_vector_index(ctx, str(generation_id), 3)  # type: ignore[arg-type]
     assert log == ["build:True:3", "wake:index_pending_chunks"]
+
+
+@pytest.mark.parametrize("status", [None, "queued", "active", "failed", "retired"])
+async def test_build_job_skips_a_missing_or_non_running_generation(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: str | None
+) -> None:
+    """(e3) A generation deleted/superseded while the job queued is not built, woken or retried."""
+    generation_id = uuid4()
+    log: list[str] = []
+
+    async def build(*_a: Any) -> None:
+        log.append("build")
+
+    async def wake(*_a: Any, **_k: Any) -> bool:
+        log.append("wake")
+        return True
+
+    class _Session(_EngineSession):
+        pass
+
+    _Session.status = status
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
+    ctx: dict[str, object] = {"session_factory": _Session, "redis": object()}
+    with caplog.at_level("INFO", logger="modules.search.indexing"):
+        await indexing.build_search_vector_index(ctx, str(generation_id), 3)  # type: ignore[arg-type]
+    assert log == []
+    assert any(str(generation_id) in r.getMessage() for r in caplog.records)
 
 
 async def test_activate_generation_no_longer_creates_an_index_in_the_transaction() -> None:

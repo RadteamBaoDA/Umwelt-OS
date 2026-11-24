@@ -86,6 +86,7 @@ async def test_worker_roles_pass_explicit_statement_timeouts(
             worker_main.cron_startup,
             worker_main.model_startup,
             worker_main.chat_startup,
+            worker_main.search_build_startup,
         ):
             await hook({"redis": _FakeRedis()})
     finally:
@@ -95,6 +96,7 @@ async def test_worker_roles_pass_explicit_statement_timeouts(
     assert seen["cron-worker"]["direct_pool_size"] == worker_main.CronWorkerSettings.max_jobs
     assert seen["model-worker"]["statement_timeout_ms"] == 222_000
     assert seen["chat-worker"]["statement_timeout_ms"] == 60_000
+    assert seen["search-build-worker"]["statement_timeout_ms"] == 111_000
     assert all(
         kw["statement_timeout_ms"] > 0 for kw in seen.values()
     )  # nothing runs unbounded any more
@@ -280,6 +282,7 @@ def test_pgbouncer_overlay_routes_every_database_client_through_the_pooler() -> 
         "worker": "bbd_worker",
         "chat-worker": "bbd_chat",
         "model-worker": "bbd_model",
+        "search-build-worker": "bbd_worker",
     }
     for name, alias in aliases.items():
         env = services[name]["environment"]

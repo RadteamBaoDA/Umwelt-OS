@@ -34,6 +34,12 @@ services:
       - ./core:/app/core
       - ./modules:/app/modules
 
+  search-build-worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./core:/app/core
+      - ./modules:/app/modules
+
   web:
     build:
       target: dependencies

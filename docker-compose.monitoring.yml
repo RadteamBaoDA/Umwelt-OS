@@ -35,6 +35,10 @@ services:
     environment:
       METRICS_WORKER_PORT: "9100"
       METRICS_WORKER_BIND: "0.0.0.0"
+  search-build-worker:
+    environment:
+      METRICS_WORKER_PORT: "9100"
+      METRICS_WORKER_BIND: "0.0.0.0"
 
   prometheus:
     profiles: ["monitoring"]

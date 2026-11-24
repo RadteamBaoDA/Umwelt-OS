@@ -24,6 +24,7 @@ def _seconds(value: str) -> int:
         ("cron-worker", worker_main.CronWorkerSettings),
         ("chat-worker", worker_main.ChatWorkerSettings),
         ("model-worker", worker_main.ModelWorkerSettings),
+        ("search-build-worker", worker_main.SearchBuildWorkerSettings),
     ],
 )
 def test_stop_grace_covers_job_completion_wait(service: str, settings: type) -> None:
@@ -41,6 +42,7 @@ def test_worker_health_probes_match_arq_health_keys() -> None:
         ("cron-worker", worker_main.CronWorkerSettings),
         ("chat-worker", worker_main.ChatWorkerSettings),
         ("model-worker", worker_main.ModelWorkerSettings),
+        ("search-build-worker", worker_main.SearchBuildWorkerSettings),
     ):
         test = compose["services"][service]["healthcheck"]["test"]
         assert test == [

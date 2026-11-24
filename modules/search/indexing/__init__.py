@@ -68,6 +68,7 @@ from modules.search.indexing._run_types import (
     _SourceStale,
 )
 from modules.search.indexing._runner import (
+    SEARCH_BUILD_QUEUE,
     _candidate_page,
     _index_generation,
     _index_pending_chunks_in_slot,
@@ -122,6 +123,7 @@ __all__ = [
     "vector_index_name",
     "vector_index_statements",
     "HNSW_BUILD_STATEMENT_TIMEOUT_MS",
+    "SEARCH_BUILD_QUEUE",
     "build_vector_index_concurrently",
     "async_engine_for_session",
     "activate_generation",
