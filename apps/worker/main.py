@@ -103,7 +103,11 @@ from modules.news.backfill_attribution import backfill_news_attribution
 from modules.news.worker import process_news_document_ready, recover_news_work
 from modules.observability.history import sample_system_health
 from modules.observability.maintenance import run_retention_maintenance
-from modules.search.indexing import index_pending_chunks
+from modules.search.indexing import (
+    HNSW_BUILD_STATEMENT_TIMEOUT_MS,
+    build_search_vector_index,
+    index_pending_chunks,
+)
 from modules.sources.worker import (
     process_source_memory_coverage,
     process_source_purge,
@@ -148,11 +152,20 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
 
 
 HEAVY_SLOT_JOBS = frozenset({"process_uploaded_file", "process_graph_operation"})
+# The HNSW build may legitimately run until its 2 h statement timeout; the arq timeout is that plus a
+# minute so the database error (and the job's cleanup) surfaces before arq cancels the task.
+HNSW_BUILD_JOB_TIMEOUT = HNSW_BUILD_STATEMENT_TIMEOUT_MS / 1000 + 60
 
 
 def _arq_options(name: str) -> dict[str, Any]:
-    """Per-function arq options: outbox consumers drop their result, heavy-slot jobs get a long retry budget."""
+    """Per-function arq options: outbox consumers drop their result, heavy-slot jobs get a long retry budget.
+
+    ``build_search_vector_index`` gets its own build-sized ``timeout``, three tries and no kept result
+    (its fixed ``search-hnsw-build:<generation>`` id must be re-enqueueable after a failed build).
+    """
     options: dict[str, Any] = {}
+    if name == "build_search_vector_index":
+        options.update(timeout=HNSW_BUILD_JOB_TIMEOUT, max_tries=3, keep_result=0)
     if name == "translate_content":
         options["keep_result"] = (
             0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
@@ -445,6 +458,8 @@ def _register(
 ) -> Any:
     """Wrap a job with its dead-letter recorder and trace span, then apply per-function arq options.
 
+    A per-function ``timeout`` option overrides the worker-level ``timeout`` for the dead-letter record.
+
     ``traced_job`` is outermost so the producer's ``_trace_carrier`` kwarg is stripped before the
     dead-letter recorder hashes the arguments, and the failure bookkeeping runs inside the job span.
     The effective try limit is the per-function override (heavy-slot jobs) or the worker default
@@ -458,7 +473,7 @@ def _register(
             function,
             max_tries=int(options.get("max_tries", max_tries)),
             queue=queue,
-            timeout_seconds=timeout,
+            timeout_seconds=float(options.get("timeout", timeout)),
         )
     )
     return _arq_func(wrapped, **options) if options else wrapped
@@ -527,6 +542,7 @@ class WorkerSettings:
         instrument_job(process_graph_operation),
         instrument_job(process_news_document_ready),
         purge_expired_chat_runs,
+        build_search_vector_index,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"),
         instrument_job(process_automation_run),
     ]
@@ -559,7 +575,9 @@ class WorkerSettings:
     health_check_interval = 15
     # Graceful drain: on SIGTERM stop taking new jobs and let running ones finish for up to
     # job_timeout + 5 s before cancelling (cancelled jobs are retried). compose stop_grace_period must
-    # exceed this (240 s); see docs/deployment.md.
+    # exceed this (240 s); see docs/deployment.md. build_search_vector_index has its own 2 h timeout but
+    # does not extend this wait: a drain cancels a running build after 185 s, its invalid index is dropped
+    # and arq re-runs the job on the next worker (the drain contract is unchanged).
     job_completion_wait = job_timeout + 5
     on_startup = startup
     on_shutdown = shutdown

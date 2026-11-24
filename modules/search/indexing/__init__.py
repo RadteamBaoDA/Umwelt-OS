@@ -71,6 +71,7 @@ from modules.search.indexing._runner import (
     _candidate_page,
     _index_generation,
     _index_pending_chunks_in_slot,
+    build_search_vector_index,
     index_pending_chunks,
 )
 from modules.search.indexing._single import (
@@ -156,6 +157,7 @@ __all__ = [
     "_process_claimed_batch",
     "_candidate_page",
     "index_pending_chunks",
+    "build_search_vector_index",
     "_index_pending_chunks_in_slot",
     "_index_generation",
     "vector_index_is_valid",

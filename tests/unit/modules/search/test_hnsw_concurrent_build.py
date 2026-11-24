@@ -224,22 +224,92 @@ async def test_finalize_with_a_valid_index_activates_in_the_same_transaction(
     assert log == ["activate", "commit"]
 
 
-async def test_hnsw_build_runs_after_the_heavy_slot_is_released(
+class _Queue:
+    """arq-style redis double: duplicate job ids return None, failures can be injected."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        self.fail, self.seen = fail, set()
+
+    async def enqueue_job(self, *args: Any, **kwargs: Any) -> object | None:
+        self.calls.append((args, kwargs))
+        if self.fail:
+            raise ConnectionError("redis down")
+        job_id = kwargs["_job_id"]
+        if job_id in self.seen:
+            return None
+        self.seen.add(job_id)
+        return object()
+
+
+async def test_pass_enqueues_one_deduplicated_build_job_per_generation_and_never_builds_inline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(c) REGRESSION: CREATE INDEX CONCURRENTLY must not run inside the heavy slot's transaction.
-
-    The slot-holding pass returns (releasing the slot) before the build; the build then wakes the
-    poller so the next pass activates the finished index.
-    """
+    """(c) The cron pass only enqueues: one job per generation under a dedupe id, no inline build."""
+    first, second = uuid4(), uuid4()
     log: list[str] = []
+
+    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
+        builds.extend([(first, 3), (second, 4)])
+        return 0
+
+    async def build(*_a: Any) -> None:
+        log.append("build")
+
+    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    queue = _Queue()
+    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": queue}
+    assert await indexing.index_pending_chunks(ctx) == 0  # type: ignore[arg-type]
+    assert log == []
+    assert [(c[0], c[1]["_job_id"], c[1]["_queue_name"]) for c in queue.calls] == [
+        (("build_search_vector_index", str(first), 3), f"search-hnsw-build:{first}", "arq:queue"),
+        (("build_search_vector_index", str(second), 4), f"search-hnsw-build:{second}", "arq:queue"),
+    ]
+    # A second tick while the first job is queued/running re-enqueues under the same id: arq says None.
+    assert await indexing.index_pending_chunks(ctx) == 0  # type: ignore[arg-type]
+    assert len(queue.calls) == 4 and queue.seen == {
+        f"search-hnsw-build:{first}",
+        f"search-hnsw-build:{second}",
+    }
+
+
+async def test_enqueue_failure_is_logged_not_raised(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """(c2) A failing enqueue must not fail the pass: the generation stays running, next tick retries."""
     generation_id = uuid4()
 
     async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
-        log.append("inner-start")
         builds.append((generation_id, 3))
-        log.append("inner-end")  # slot released once the bounded wrapper returns
-        return 0
+        return 5
+
+    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
+    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": _Queue(fail=True)}
+    with caplog.at_level("WARNING", logger="modules.search.indexing"):
+        assert await indexing.index_pending_chunks(ctx) == 5  # type: ignore[arg-type]
+    assert any(str(generation_id) in r.getMessage() for r in caplog.records)
+
+
+async def test_pass_without_a_pending_build_enqueues_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(d) No generation finalized to a deferred build: nothing is enqueued."""
+
+    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
+        return 2
+
+    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
+    queue = _Queue()
+    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": queue}
+    assert await indexing.index_pending_chunks(ctx) == 2  # type: ignore[arg-type]
+    assert queue.calls == []
+
+
+async def test_build_job_builds_then_wakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(e1) The job builds on the session's engine, then wakes the poller so the next pass activates."""
+    generation_id = uuid4()
+    log: list[str] = []
 
     async def build(_engine: Any, gid: UUID, dimensions: int) -> None:
         log.append(f"build:{gid == generation_id}:{dimensions}")
@@ -248,42 +318,11 @@ async def test_hnsw_build_runs_after_the_heavy_slot_is_released(
         log.append(f"wake:{name}")
         return True
 
-    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
     patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
     patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
     ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
-    assert await indexing.index_pending_chunks(ctx) == 0  # type: ignore[arg-type]
-    assert log == [
-        "inner-start",
-        "inner-end",
-        "build:True:3",
-        "wake:index_pending_chunks",
-    ]
-
-
-async def test_pass_without_a_pending_build_neither_builds_nor_wakes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """(d) No generation finalized to a deferred build: no build, no wake."""
-    log: list[str] = []
-
-    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
-        log.append("inner")
-        return 2
-
-    async def build(*_a: Any) -> None:
-        log.append("build")
-
-    async def wake(*_a: Any, **_k: Any) -> bool:
-        log.append("wake")
-        return True
-
-    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
-    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
-    patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
-    ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
-    assert await indexing.index_pending_chunks(ctx) == 2  # type: ignore[arg-type]
-    assert log == ["inner"]
+    await indexing.build_search_vector_index(ctx, str(generation_id), 3)  # type: ignore[arg-type]
+    assert log == ["build:True:3", "wake:index_pending_chunks"]
 
 
 async def test_activate_generation_no_longer_creates_an_index_in_the_transaction() -> None:
@@ -351,17 +390,13 @@ async def _noop() -> None:
     return None
 
 
-async def test_failed_build_logs_the_generation_and_propagates_without_waking(
+async def test_failed_build_job_logs_the_generation_and_propagates_without_waking(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """(e) A build that raises (incl. cancellation/timeout) leaves the generation running: it must be
-    logged with its id, the error must propagate, and the poller must not be woken."""
+    logged with its id, the error must propagate (arq retry), and the poller must not be woken."""
     generation_id = uuid4()
     log: list[str] = []
-
-    async def inner(_ctx: Any, builds: list[tuple[UUID, int]]) -> int:
-        builds.append((generation_id, 3))
-        return 0
 
     async def build(*_a: Any) -> None:
         raise TimeoutError("statement timeout")
@@ -370,13 +405,12 @@ async def test_failed_build_logs_the_generation_and_propagates_without_waking(
         log.append("wake")
         return True
 
-    patch_split(monkeypatch, "modules.search.indexing", "_index_pending_chunks_in_slot", inner)
     patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
     patch_split(monkeypatch, "modules.search.indexing", "wake", wake)
     ctx: dict[str, object] = {"session_factory": _EngineSession, "redis": object()}
     with caplog.at_level("WARNING", logger="modules.search.indexing"):
         with pytest.raises(TimeoutError, match="statement timeout"):
-            await indexing.index_pending_chunks(ctx)  # type: ignore[arg-type]
+            await indexing.build_search_vector_index(ctx, str(generation_id), 3)  # type: ignore[arg-type]
     assert log == []
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert any(str(generation_id) in r.getMessage() for r in warnings)

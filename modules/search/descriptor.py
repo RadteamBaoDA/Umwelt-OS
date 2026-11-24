@@ -14,7 +14,7 @@ class SearchDescriptor(ModuleDescriptor):
     enabled: bool = True
     dependencies: tuple[str, ...] = ("knowledge.documents",)
     optional_dependencies: tuple[str, ...] = ("goals", "sources", "tasks")
-    scheduled_jobs: tuple[str, ...] = ("index_pending_chunks",)
+    scheduled_jobs: tuple[str, ...] = ("index_pending_chunks", "build_search_vector_index")
     provides: tuple[str, ...] = ("search",)
     requires: tuple[str, ...] = ("document_chunks",)
     routes: tuple[str, ...] = ("/api/v1/search",)

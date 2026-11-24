@@ -31,7 +31,7 @@ from modules.chat._worker.setup import _rewrite_for_retrieval
 from modules.chat._worker.state import _RunCtx, _TurnInputs
 from modules.chat.retrieval import build_context
 from modules.chat.schemas import AnswerContext, AnswerContextRequest
-from modules.search.indexing import index_pending_chunks
+from modules.search.indexing import build_search_vector_index, index_pending_chunks
 from tests.integration.chat_eval.cases import Case
 
 # Index passes before the run counts as not drained (about 2 minutes at the default pause below).
@@ -398,6 +398,29 @@ async def _session_and_lock_summary(engine: AsyncEngine) -> str:
     return f"sessions: [{session_text or 'none'}]; locks: [{lock_text or 'none'}]"
 
 
+class _InlineBuildQueue:
+    """Redis stand-in that runs the HNSW build job inline instead of queueing it for a worker.
+
+    ``index_pending_chunks`` enqueues ``build_search_vector_index`` through ``enqueue_job``; a plain
+    ``Redis`` has no such method and the eval must not depend on the compose worker picking the job up.
+    The build runs to completion inside the enqueue (so the drain's next pass finds the valid index);
+    every other enqueue (cron wakes) is dropped, and all other attributes delegate to the real client.
+    """
+
+    def __init__(self, redis: Redis, ctx: dict[str, object]) -> None:
+        self._redis, self._ctx = redis, ctx
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._redis, name)
+
+    async def enqueue_job(self, name: str, *args: Any, **_kwargs: Any) -> object | None:
+        """Run ``build_search_vector_index`` now (a failure is logged by the pass, the drain then times out); None for other jobs."""
+        if name != "build_search_vector_index":
+            return None
+        await build_search_vector_index(self._ctx, *args)
+        return object()
+
+
 async def index_all(
     engine: AsyncEngine,
     settings: Settings,
@@ -417,6 +440,7 @@ async def index_all(
         "settings": settings,
         STATE_KEY: {},
     }
+    ctx["redis"] = _InlineBuildQueue(redis, ctx)
 
     first_error: list[str] = []
     blockers: list[str] = []  # sessions seen blocking CREATE INDEX CONCURRENTLY

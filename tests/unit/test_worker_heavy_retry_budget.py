@@ -80,3 +80,16 @@ def test_fixed_id_heavy_jobs_keep_no_result() -> None:
     registered = {getattr(f, "name", None): f for f in WorkerSettings.functions}  # type: ignore[attr-defined]
     for name in HEAVY_SLOT_JOBS:
         assert registered[name].keep_result_s == 0, name
+
+
+def test_hnsw_build_job_is_registered_with_a_build_sized_timeout() -> None:
+    """The HNSW build job outlives the 2 h statement timeout and is not a heavy-slot job."""
+    from modules.search.indexing import HNSW_BUILD_STATEMENT_TIMEOUT_MS
+
+    registered = {getattr(f, "name", None): f for f in WorkerSettings.functions}  # type: ignore[attr-defined]
+    job = registered["build_search_vector_index"]
+    assert job.timeout_s == HNSW_BUILD_STATEMENT_TIMEOUT_MS / 1000 + 60
+    assert job.timeout_s > WorkerSettings.job_timeout
+    assert job.max_tries == 3
+    assert job.keep_result_s == 0
+    assert "build_search_vector_index" not in HEAVY_SLOT_JOBS
