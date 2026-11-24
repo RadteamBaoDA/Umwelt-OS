@@ -76,6 +76,8 @@ Known debt: `set_event_delivery` (`modules/ingestion/_outbox.py`) is an uncondit
 
 The per-generation HNSW index is built outside the heavy-work slot, so `CREATE INDEX CONCURRENTLY` never waits on the slot's own transaction. A pass that finalizes a generation whose index is not valid yet commits the pruning, leaves the generation `running`, and defers the build. When the pass returns, the slot is released and `index_pending_chunks` runs `CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_search_vector_<generation>` on a separate autocommit connection (`statement_timeout` 2 h via `HNSW_BUILD_STATEMENT_TIMEOUT_MS`, `lock_timeout` lifted), then wakes the poller. The next pass sees the valid index (`vector_index_is_valid`) and activates the generation in its locked transaction. The whole cron run is bounded by its 180 s `job_timeout`, so a build still running at that point is cancelled, its invalid index is dropped, and the next tick retries. A failed or cancelled build drops its own invalid index; a retry also drops any invalid leftover first. A crash at any point leaves the generation `running`, and the next pass re-finalizes it (idempotent).
 
+The build runs outside the heavy-work slot, so it is not capacity-bounded by that slot and can overlap ingestion.
+
 `CREATE INDEX CONCURRENTLY` waits for every transaction that was open when it started. A long `idle in transaction` session therefore stalls the build until it ends; after 2 h the build fails on the statement timeout, its invalid index is dropped and the next indexing pass retries. If builds time out repeatedly, find and end the idle session (`pg_stat_activity` where `state = 'idle in transaction'`).
 
 ## Cron worker, offsets and leases
