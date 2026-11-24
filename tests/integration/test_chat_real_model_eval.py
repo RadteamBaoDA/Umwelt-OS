@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import WorkspaceContext
-from modules.chat._worker import stream, tools
+from modules.chat._worker import setup, stream, tools
 from modules.chat._worker.finalize import _grounding_for, _validate_citations
 from modules.chat._worker.setup import _compose_system_text
 from modules.chat._worker.state import _RunCtx, _StreamState
@@ -61,6 +61,13 @@ from modules.chat.generative_ui import (
 )
 from modules.chat.schemas import AnswerContext
 from tests.integration.chat_eval.cases import ALL_CASES, Case
+from tests.integration.chat_eval.cases_real import (
+    anchor_from_meta,
+    ensure_fresh,
+    format_anchor,
+    load_real_cases,
+    seed_real,
+)
 from tests.integration.chat_eval.gadget_note import gadget_note_for_turn
 from tests.integration.chat_eval.grading import (
     RowIds,
@@ -506,15 +513,36 @@ class EvalSeed:
 _EVAL_SEED: EvalSeed | None = None  # per-session cache: committed rows persist between tests
 
 
+def _real_snapshot() -> Path | None:
+    """The restored snapshot directory when ``CHAT_EVAL_DATASET=real``, else None.
+
+    Raises RuntimeError when real mode is on without a valid ``CHAT_EVAL_SNAPSHOT`` directory.
+    """
+    if os.getenv("CHAT_EVAL_DATASET", "").strip() != "real":
+        return None
+    snap = Path(os.getenv("CHAT_EVAL_SNAPSHOT", "")).resolve()
+    if not (snap / "questions.csv").is_file() or not (snap / "meta.json").is_file():
+        raise RuntimeError(f"CHAT_EVAL_SNAPSHOT {snap} lacks questions.csv or meta.json")
+    return snap
+
+
 @pytest.fixture
 async def eval_seed(
-    matrix: Matrix,  # noqa: F811  # imported fixture
+    request: pytest.FixtureRequest,
     ready_owner_client: httpx.AsyncClient,
     committed_engine: AsyncEngine,
 ) -> EvalSeed:
-    """Seed every fixture provider and the planted gold once per session, after the matrix seed."""
+    """Seed once per session: the real snapshot's gold keys, or every fixture provider plus planted gold.
+
+    Real mode reads the restored database only (``seed_real``) and never requests the synthetic
+    ``matrix`` fixture, so no fixture sources are created in the restored data.
+    """
     global _EVAL_SEED
-    if _EVAL_SEED is None:
+    if _EVAL_SEED is None and (snap := _real_snapshot()) is not None:
+        matrix_real, key_map = await seed_real(committed_engine, snap, _selected_cases())
+        _EVAL_SEED = EvalSeed(matrix_real, key_map, [])
+    elif _EVAL_SEED is None:
+        matrix: Matrix = request.getfixturevalue("matrix")
         not_seeded = await seed_all(ready_owner_client, committed_engine, matrix)
         key_map = await seed_planted(
             ready_owner_client, committed_engine, matrix, load_planted(PLANTED_PATH)
@@ -525,7 +553,6 @@ async def eval_seed(
 
 # --------------------------------------------------------------------------- the run
 async def test_real_model_eval(
-    matrix: Matrix,  # noqa: F811  # imported fixture
     eval_seed: EvalSeed,
     committed_engine: AsyncEngine,
     ready_owner_client: httpx.AsyncClient,
@@ -550,8 +577,12 @@ async def test_real_model_eval(
         )
         print(f"\nCHAT EVAL SEED REPORT {seed_path}")
         return
-    # Paused sources stay readable by design; archive the paused distractor so "latest" has one right answer.
-    await _set(committed_engine, matrix, "bn_paused", "status = 'archived'")
+    snap = _real_snapshot()
+    if snap is None:
+        # Paused sources stay readable by design; archive the paused distractor so "latest" has one right answer.
+        await _set(committed_engine, eval_seed.matrix, "bn_paused", "status = 'archived'")
+    else:
+        _freeze_clock(monkeypatch, snap)
     real_tool = tools.execute_db_query_tool  # type: ignore[attr-defined]
 
     async def recording_tool(session: Any, raw: dict[str, Any], **kwargs: Any) -> str:
@@ -603,9 +634,11 @@ async def test_real_model_eval(
         if hybrid is not None and "hybrid" in legs
         else None
     )
-    baseline_path, baseline_cases = _load_baseline()
+    baseline_path, baseline_cases = _load_baseline() if snap is None else (None, None)
     try:
-        ordered = await _run_all(cases, legs, matrix, eval_seed, committed_engine, runtime, pacer)
+        ordered = await _run_all(
+            cases, legs, eval_seed.matrix, eval_seed, committed_engine, runtime, pacer
+        )
     finally:
         if runtime is not None:
             await runtime.redis.aclose()
@@ -620,6 +653,8 @@ async def test_real_model_eval(
         "deadline_s": _deadline_s(),
         "not_seeded": eval_seed.not_seeded,
         "baseline": baseline_path,
+        "dataset": "real" if snap is not None else "synthetic",
+        "snapshot": snap.name if snap is not None else None,
         "summary": build_summaries(ordered, legs, baseline_cases=baseline_cases),
         "cases": ordered,
     }
@@ -634,6 +669,17 @@ async def test_real_model_eval(
     assert len(ordered) == len(cases) * len(legs)  # the run completed; scores live in the report
 
 
+def _freeze_clock(monkeypatch: pytest.MonkeyPatch, snap: Path) -> None:
+    """Pin the chat prompt's "Current date and time" to the snapshot anchor.
+
+    Raises RuntimeError when the anchor is over 80 days old (the query tool's rolling aggregate window
+    is not frozen). The patch is undone by ``monkeypatch`` at test teardown.
+    """
+    anchor, tz = anchor_from_meta(snap)
+    ensure_fresh(anchor)
+    monkeypatch.setattr(setup, "_local_now_text", lambda _tz: format_anchor(anchor, tz))
+
+
 def _legs(hybrid_on: bool) -> tuple[str, ...]:
     """Legs to run: ``tool`` always, ``hybrid`` only when its env is set. ``CHAT_EVAL_LEGS`` (comma list) narrows it."""
     # A blank CHAT_EVAL_LEGS (an env file that sets it empty) means the default, not "no legs".
@@ -644,9 +690,14 @@ def _legs(hybrid_on: bool) -> tuple[str, ...]:
 
 
 def _selected_cases() -> tuple[Case, ...]:
-    """``ALL_CASES``, or only the ids in ``CHAT_EVAL_ONLY`` (comma list) for a targeted run such as an owner smoke."""
+    """The cases to run (``ALL_CASES``, or the snapshot's accepted questions in real mode), narrowed by ``CHAT_EVAL_ONLY``.
+
+    ``CHAT_EVAL_ONLY`` is a comma list of case ids for a targeted run such as an owner smoke.
+    """
     only = {cid.strip() for cid in os.getenv("CHAT_EVAL_ONLY", "").split(",") if cid.strip()}
-    return tuple(case for case in ALL_CASES if not only or case.id in only)
+    snap = _real_snapshot()
+    pool = ALL_CASES if snap is None else load_real_cases(snap / "questions.csv")
+    return tuple(case for case in pool if not only or case.id in only)
 
 
 @dataclass(frozen=True)

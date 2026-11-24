@@ -10,7 +10,7 @@ Timestamps are fixed; only ``media_time`` release dates depend on the run week (
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -199,6 +199,32 @@ def external_id_for(item: PlantedItem) -> str:
     return item.key
 
 
+async def resolve_doc_versions(
+    engine: AsyncEngine, targets: Mapping[str, tuple[str, str]]
+) -> dict[str, str]:
+    """Map each key to the current document version id of ``(source_id, external_id)``.
+
+    Read-only: one SELECT per target on a fresh connection. Targets with no document are left out;
+    the caller decides whether that is an error. Shared by the planted seed and the real-data seed.
+    """
+    out: dict[str, str] = {}
+    async with engine.connect() as conn:
+        for key, (source_id, external_id) in targets.items():
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT v.id FROM documents d JOIN document_versions v "
+                        "ON v.document_id = d.id AND v.version_number = d.current_version "
+                        "WHERE d.source_id = :s AND d.external_id = :k"
+                    ),
+                    {"s": source_id, "k": external_id},
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                out[key] = str(row)
+    return out
+
+
 async def _resolve_versions(
     engine: AsyncEngine, matrix: Matrix, items: Sequence[PlantedItem]
 ) -> dict[str, str]:
@@ -207,22 +233,10 @@ async def _resolve_versions(
     ``external_id`` is the record provider id as produced by the mapper (see ``external_id_for``).
     Items with no document are left out; the caller decides whether that is an error.
     """
-    out: dict[str, str] = {}
-    async with engine.connect() as conn:
-        for item in items:
-            row = (
-                await conn.execute(
-                    text(
-                        "SELECT v.id FROM documents d JOIN document_versions v "
-                        "ON v.document_id = d.id AND v.version_number = d.current_version "
-                        "WHERE d.source_id = :s AND d.external_id = :k"
-                    ),
-                    {"s": str(matrix.sources[item.source_key]), "k": external_id_for(item)},
-                )
-            ).scalar_one_or_none()
-            if row is not None:
-                out[item.key] = str(row)
-    return out
+    targets = {
+        item.key: (str(matrix.sources[item.source_key]), external_id_for(item)) for item in items
+    }
+    return await resolve_doc_versions(engine, targets)
 
 
 async def seed_planted(

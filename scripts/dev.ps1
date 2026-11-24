@@ -8,7 +8,8 @@ param(
   [ValidateSet('en-us', 'vi-vi')]
   [string]$E2eLocale,
   [string]$Workspace,
-  [string]$ConfirmFingerprint
+  [string]$ConfirmFingerprint,
+  [string]$EvalSnapshot
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,6 +60,48 @@ try {
   }
   if ($Workspace -and $Task -notin @('dev', 'stop', 'seed', 'reset-preview', 'reset')) {
     throw '-Workspace applies only to named development-workspace commands'
+  }
+
+  if ($EvalSnapshot -and ($Task -ne 'test' -or $PytestTarget -ne 'tests/integration/test_chat_real_model_eval.py')) {
+    throw '-EvalSnapshot applies only to: test -PytestTarget tests/integration/test_chat_real_model_eval.py'
+  }
+
+  function Restore-EvalSnapshot([string[]]$Compose, [string]$SnapshotDir) {
+    <#
+    .SYNOPSIS
+    Replace the disposable test database with a frozen real-data snapshot and restart the stack on it.
+
+    .PARAMETER Compose
+    Compose argument vector of the unique disposable project (docker compose -p bbd-os-test-... ...).
+
+    .PARAMETER SnapshotDir
+    Directory holding snapshot.dump (pg_dump -Fc from scripts/eval-collect.ps1 snapshot).
+
+    .NOTES
+    Stops every app service, drops and recreates bbd_test with pg_restore -C (keeps database ACLs for the chat SQL
+    login), runs migrate, pauses every active source so no collector fetches new data, flushes Redis and restarts
+    the services. Only call it inside the disposable test project; the caller verifies the project name.
+    #>
+    $dump = Join-Path $SnapshotDir 'snapshot.dump'
+    if (-not (Test-Path $dump)) { throw "Missing $dump" }
+    $services = @('api', 'worker', 'cron-worker', 'chat-worker', 'model-worker', 'search-build-worker', 'web')
+    Invoke-Checked 'docker' ($Compose + @('stop') + $services)
+    Invoke-Checked 'docker' ($Compose + @('cp', $dump, 'postgres:/tmp/s.dump'))
+    Invoke-Checked 'docker' ($Compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'DROP DATABASE bbd_test WITH (FORCE)'))
+    Invoke-Checked 'docker' ($Compose + @('exec', '-T', 'postgres', 'pg_restore', '-U', 'bbd_test', '-d', 'postgres', '-C', '--exit-on-error', '/tmp/s.dump'))
+    Invoke-Checked 'docker' ($Compose + @('run', '--rm', 'migrate'))
+    Invoke-Checked 'docker' ($Compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-v', 'ON_ERROR_STOP=1', '-c', "UPDATE sources SET status = 'paused' WHERE status = 'active'"))
+    Invoke-Checked 'docker' ($Compose + @('exec', '-T', 'redis', 'redis-cli', 'FLUSHALL'))
+    Invoke-Checked 'docker' ($Compose + @('up', '-d'))
+    # Wait for the API to answer on the published test port (compose --wait is unreliable with one-shot services).
+    $ready = $false
+    for ($i = 0; $i -lt 60 -and -not $ready; $i++) {
+      try { $ready = (Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:$($env:API_TEST_PORT)/api/v1/auth/setup-status" -TimeoutSec 5).StatusCode -eq 200 }
+      catch { Start-Sleep -Seconds 2 }
+    }
+    if (-not $ready) { throw 'API did not become ready after the snapshot restore' }
+    $identity = & docker @($Compose + @('exec', '-T', 'postgres', 'psql', '-U', 'bbd_test', '-d', 'bbd_test', '-At', '-c', "SELECT current_database() || '|' || current_user"))
+    if ($LASTEXITCODE -ne 0 -or ($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Restored database failed the bbd_test identity check' }
   }
 
   switch ($Task) {
@@ -133,6 +176,8 @@ try {
       $previousExternalServer = $env:PLAYWRIGHT_EXTERNAL_SERVER
       $previousAllowPublic = $env:E2E_ALLOW_PUBLIC_PROVIDERS
       $previousE2eLocale = $env:E2E_LOCALE
+      $previousEvalDataset = $env:CHAT_EVAL_DATASET
+      $previousEvalSnapshot = $env:CHAT_EVAL_SNAPSHOT
       # Owner UI locale for the browser specs (tests/e2e/fixtures.ts); -E2eLocale wins over an inherited E2E_LOCALE.
       if ($E2eLocale) { $env:E2E_LOCALE = $E2eLocale }
       $webPort = Get-FreePort
@@ -173,6 +218,11 @@ try {
           if ($LASTEXITCODE -ne 0) { throw 'Could not verify disposable PostgreSQL identity' }
           if (($identity -join '').Trim() -ne 'bbd_test|bbd_test') { throw 'Refusing integration tests against a non-test database' }
           Invoke-Checked 'uv' @('run', 'pytest', 'tests/integration/test_auth_race.py', '-q')
+          if ($EvalSnapshot) {
+            Restore-EvalSnapshot $compose (Resolve-Path $EvalSnapshot).Path
+            $env:CHAT_EVAL_DATASET = 'real'
+            $env:CHAT_EVAL_SNAPSHOT = (Resolve-Path $EvalSnapshot).Path
+          }
           if ($PytestTarget) {
             if ($PytestTarget -ne 'tests/integration/test_auth_race.py') {
               Invoke-Checked 'uv' @('run', 'pytest', $PytestTarget, '-q', '--ignore=tests/integration/test_auth_race.py')
@@ -241,6 +291,10 @@ try {
         Remove-Item Env:E2E_WEB_SEARCH_ALLOWED_CIDRS -ErrorAction SilentlyContinue
         if ($null -eq $previousE2eLocale) { Remove-Item Env:E2E_LOCALE -ErrorAction SilentlyContinue }
         else { $env:E2E_LOCALE = $previousE2eLocale }
+        if ($EvalSnapshot) {
+          if ($null -eq $previousEvalDataset) { Remove-Item Env:CHAT_EVAL_DATASET -ErrorAction SilentlyContinue } else { $env:CHAT_EVAL_DATASET = $previousEvalDataset }
+          if ($null -eq $previousEvalSnapshot) { Remove-Item Env:CHAT_EVAL_SNAPSHOT -ErrorAction SilentlyContinue } else { $env:CHAT_EVAL_SNAPSHOT = $previousEvalSnapshot }
+        }
       }
     }
     'load-test' {
