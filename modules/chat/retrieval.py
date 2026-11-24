@@ -1237,9 +1237,12 @@ def _local_date(when: datetime, timezone: str | None) -> str:
 def _local_stamp(when: datetime, timezone: str | None) -> str:
     """``YYYY-MM-DD`` in the owner's zone, plus ``HH:MM`` unless the local time is exactly midnight (pure).
 
-    Midnight is treated as "no time known" (a date-only publish stamp), so a date-only source keeps its
-    original short form. Seconds are dropped; the zone rules are those of :func:`_local_moment`.
+    A stored value at exactly UTC midnight is a date-only stamp: it renders as its own UTC date with no
+    zone conversion. Local midnight is also "no time known", so a date-only source keeps its short form. Seconds are dropped; the zone rules are those of :func:`_local_moment`.
     """
+    if when.hour == 0 and when.minute == 0 and when.second == 0 and when.microsecond == 0:
+        # Stored UTC midnight is a date-only value; zone conversion would invent a time or shift the day.
+        return when.date().isoformat()
     local = _local_moment(when, timezone)
     stamp = local.date().isoformat()
     if local.hour == 0 and local.minute == 0:

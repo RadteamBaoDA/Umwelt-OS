@@ -24,3 +24,18 @@ async def test_non_selection_context_drops_private_and_selected_only_keys() -> N
         AsyncMock(), context, scope=None, multi_workspace_enabled=False
     )  # type: ignore[arg-type]
     assert result == {"kind": "page", "page": "news"}
+
+
+@pytest.mark.asyncio
+async def test_non_selection_context_drops_client_selection_refs() -> None:
+    """Client-sent selected_refs and selection_fences never reach evidence retrieval."""
+    context: dict[str, Any] = {
+        "kind": "page",
+        "selected_refs": [{"document_version_id": "x"}],
+        "selection_fences": [{"source_id": "y"}],
+        "page": "news",
+    }
+    result = await resolve_gadget_context(
+        AsyncMock(), context, scope=None, multi_workspace_enabled=False
+    )  # type: ignore[arg-type]
+    assert result == {"kind": "page", "page": "news"}

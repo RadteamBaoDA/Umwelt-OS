@@ -134,3 +134,14 @@ async def test_demo_conversation_stamps_scope(monkeypatch):
     ) == (1, 0, 0)
     (conv,) = _added(session, Conversation)
     assert conv.workspace_id == WS and conv.actor_user_id == 1
+
+
+@pytest.mark.parametrize("zone", ["Asia/Ho_Chi_Minh", "America/New_York"])
+def test_local_stamp_date_only_utc_midnight_keeps_the_date(zone: str) -> None:
+    """A date-only value (UTC midnight) is not shifted into the owner's zone or given a time."""
+    from datetime import UTC, datetime
+
+    from modules.chat.retrieval import _local_stamp
+
+    assert _local_stamp(datetime(2026, 11, 3, tzinfo=UTC), zone) == "2026-11-03"
+    assert _local_stamp(datetime(2026, 11, 3, 8, 0, tzinfo=UTC), "UTC") == "2026-11-03 08:00"

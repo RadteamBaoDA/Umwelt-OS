@@ -68,7 +68,13 @@ _NUM_RE = re.compile(
     r"(?:\s?(?P<suf>%|k|mn|m|bn|b|million|billion|thousand|triệu|tỷ|nghìn|ngàn|tr)(?!\w))?",
     re.IGNORECASE,
 )
-_MONTHS = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+# Real month names only (a prefix match would swallow "decreased", "market", "separate"). Bare "may" is
+# also a verb, so it counts as a month only with a year or a day range after it ("May 2026", "May 20-24").
+_MONTHS = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|june?|july?|aug(?:ust)?"
+    r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r"|may(?=\s+(?:\d{4}|\d{1,2}\s*[–\-]|\d{1,2},\s*\d{4})))\.?(?![a-z])"
+)
 # Spans removed before number extraction: they hold digits that are not claims about data.
 _COMMON_SKIPS = [
     re.compile(p, re.IGNORECASE)

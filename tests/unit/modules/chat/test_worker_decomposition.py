@@ -473,6 +473,43 @@ async def test_followup_retrieval_uses_rewritten_query_and_keeps_original_contex
     assert seen == ["tell me more"]
 
 
+@pytest.mark.asyncio
+async def test_enforced_scope_turn_skips_web_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A turn with a hard source allow-list never starts the opted-in web search."""
+    from modules.chat._worker import setup as worker_setup
+
+    async def fake_build(_s: Any, _f: Any, _r: Any, _cfg: Any, request: Any, _scope: Any) -> Any:
+        return AnswerContext(query=request.query, evidence=[])
+
+    started = AsyncMock()
+    patch_worker(monkeypatch, "build_context", fake_build)
+    patch_worker(monkeypatch, "_rewrite_and_search", started)
+    patch_worker(monkeypatch, "_publish_status", AsyncMock())
+    patch_worker(monkeypatch, "_owner_locale_and_timezone", AsyncMock(return_value=("en-US", None)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    session = SimpleNamespace(commit=AsyncMock())
+    c = SimpleNamespace(
+        session_factory=None,
+        settings=None,
+        redis=None,
+        scope=None,
+        conversation_id=uuid4(),
+        access=None,
+        response_id=uuid4(),
+        seq=0,
+        privacy_fence=None,
+    )
+    turn = SimpleNamespace(
+        user_prompt="q",
+        prior_messages=[],
+        req_params={"_web_search": {"requested": True}},
+        answer_request=AnswerContextRequest(query="q", source_scope_enforced=True),
+    )
+    _context, web_run = await worker_setup._retrieve_with_web(session, c, turn)  # type: ignore[arg-type]
+    assert web_run is None
+    started.assert_not_called()
+
+
 def _hit(score: float) -> Any:
     """Search hit double with a score and fresh refs."""
     return SimpleNamespace(score=score, document_version_id=uuid4(), chunk_id=uuid4())

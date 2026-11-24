@@ -424,6 +424,17 @@ async def _resolve_selection_items(
     return sources, refs, selection_fences
 
 
+# Context keys only the server writes (selection/picker branches); a client copy is dropped.
+_SERVER_ONLY_CONTEXT_KEYS = (
+    "selected_only",
+    "anchored",
+    "source_scope",
+    "sourceIds",
+    "selected_refs",
+    "selection_fences",
+)
+
+
 async def resolve_gadget_context(
     session: AsyncSession,
     context: dict[str, _Any] | None,
@@ -464,11 +475,12 @@ async def resolve_gadget_context(
         # These server-derived flags are reserved for validated selections; a client cannot set them.
         # Strip server-reserved keys: "selected_only", "anchored" and every "_"-prefixed private key.
         # "source_scope" and "sourceIds" are stripped too: only the server writes source_scope.
+        # "selected_refs"/"selection_fences" are server-written by the selection branch only; a client
+        # copy would reach evidence outside the validated scope.
         out = {
             key: value
             for key, value in context.items()
-            if key not in ("selected_only", "anchored", "source_scope", "sourceIds")
-            and not key.startswith("_")
+            if key not in _SERVER_ONLY_CONTEXT_KEYS and not key.startswith("_")
         }
         picked = context.get("sourceIds")
         if isinstance(picked, list) and picked:

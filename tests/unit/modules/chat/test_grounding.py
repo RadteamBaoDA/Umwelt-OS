@@ -293,3 +293,12 @@ def test_date_ranges_and_grouped_durations_leave_no_stray_numbers(text: str) -> 
 def test_real_number_next_to_a_date_is_still_checked() -> None:
     """Skipping date forms must not hide a data value that sits beside them."""
     assert _unverified("price 24 USD on 20/11", _known({"rows": []})) == ["24"]
+
+
+def test_month_prefix_words_do_not_hide_real_numbers() -> None:
+    """Words that merely start like a month ("decreased", "market") keep their numbers checkable."""
+    from modules.chat import grounding as g
+
+    assert [n.raw for n in g.extract_numbers("Revenue decreased 12-15 percent.")] == ["12", "15"]
+    assert [n.raw for n in g.extract_numbers("The market 30-40 range held.")] == ["30", "40"]
+    assert g.extract_numbers("Held on Nov 16, 2026 and 16 November 2026.") == []
