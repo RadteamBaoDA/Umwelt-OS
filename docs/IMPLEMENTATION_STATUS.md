@@ -1,4 +1,31 @@
 <!-- scheduled-tasks-phase1-status:start -->
+## 2026-11-24 (evening) - Real-data chat eval pipeline, branch enhance/chat-datasource
+
+The owner chose to collect 7 days of public-source data, keyless providers only. The pipeline:
+- `scripts/eval-collect.ps1` runs a persistent, isolated compose project `umwelt-evalcollect` on ports 43300, 48000 and 45432, with random credential keys kept in the git-ignored `.env.eval-collect`. Tasks: `up`, `bootstrap`, `status`, `snapshot`, `down`, `destroy`.
+- `tests/e2e/eval-collect-bootstrap.spec.ts` enables the sources.
+- `snapshot` runs `pg_dump -Fc`, written under the git-ignored `data/chat-eval-real/<ts>/`:
+  - Data is excluded for every credential, OAuth, token-hash and MCP table.
+  - It refuses to run while `ai_settings` holds any ciphertext.
+  - It checks the dump's table of contents after writing.
+- `snapshot_meta.py` writes the anchor time and the sources.
+- `draft_real.py` has an LLM draft questions over sampled rows. Rows are shown to the LLM as aliases R1…Rn, because the router redacts digit runs. Validators check gold keys and figures, allowing aggregates, and enforce the opposite language for cross-lingual items. The output is `questions.csv` for owner review.
+- `dev.ps1 test -EvalSnapshot <dir>` restores the dump into the disposable test stack. `CHAT_EVAL_DATASET=real` loads the accepted cases, freezes the prompt clock at the anchor, opts the restored sources into RAG indexing and runs both legs.
+
+Commits: `cb7ee24e`, `48f3e93d`, `4708e63b`, `3105df68`, `0144e325`, `293cdd77`, `34cfc25d`, `d1824e8e`, `4a41ce11`, `ba70b455`.
+
+Collection started 2026-11-24 about 12:00Z with 53 sources; one test fetch failed at bootstrap (gdelt rate limit), but the source is active. It runs until about 2026-12-01 12:00Z, and the host must stay on.
+
+The end-to-end dry run passed: `report-20261124T125052Z.json`, dataset real, 2971 chunks indexed, rerank applied, 6/6 completed. The dry-run snapshot has been deleted.
+
+Product finding: the web UI creates built-in, wizard and starter-pack sources with `rag_index_enabled=false`, and the owner opts in per source. So hybrid (semantic) search never covers collected data by default; chat reaches it only through `query_collected_data`. Owner decision pending on the default.
+
+Runbook after 7 days:
+1. `./scripts/eval-collect.ps1 -Task snapshot`
+2. `uv run python -m tests.integration.chat_eval.draft_real data/chat-eval-real/<ts> --n 150`
+3. The owner reviews `questions.csv`, setting `decision` to accept or drop.
+4. Run with `INTEGRATION=1 CHAT_REAL_EVAL=1 CHAT_EVAL_RERANK_RPM=9`: `./scripts/dev.ps1 test -PytestTarget tests/integration/test_chat_real_model_eval.py -EvalSnapshot data/chat-eval-real/<ts>`
+
 ## 2026-11-24 (later) - Eval follow-ups, `@` source picker, dedicated HNSW build worker, branch enhance/chat-datasource
 
 Work done:
