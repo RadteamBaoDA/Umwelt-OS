@@ -475,7 +475,7 @@ async def test_followup_retrieval_uses_rewritten_query_and_keeps_original_contex
 
 @pytest.mark.asyncio
 async def test_enforced_scope_turn_skips_web_search(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A turn with a hard source allow-list never starts the opted-in web search."""
+    """A picker (``@``) turn with a hard source allow-list never starts the opted-in web search."""
     from modules.chat._worker import setup as worker_setup
 
     async def fake_build(_s: Any, _f: Any, _r: Any, _cfg: Any, request: Any, _scope: Any) -> Any:
@@ -502,7 +502,7 @@ async def test_enforced_scope_turn_skips_web_search(monkeypatch: pytest.MonkeyPa
     turn = SimpleNamespace(
         user_prompt="q",
         prior_messages=[],
-        req_params={"_web_search": {"requested": True}},
+        req_params={"_web_search": {"requested": True}, "source_scope_origin": "picker"},
         answer_request=AnswerContextRequest(query="q", source_scope_enforced=True),
     )
     _context, web_run = await worker_setup._retrieve_with_web(session, c, turn)  # type: ignore[arg-type]

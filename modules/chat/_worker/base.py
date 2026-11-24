@@ -228,6 +228,7 @@ _TASK_THREAD_DROPPED_KEYS = (
     "date_context",
     "timezone",
     "date",
+    "source_scope_origin",
 )
 
 
@@ -241,8 +242,9 @@ def _pin_task_thread_scope(context: dict[str, Any], metadata: dict[str, Any] | N
     Malformed entries are dropped. Plain conversations are untouched and return False.
 
     Every other client retrieval override is dropped too (``selected_refs``, ``selected_only``,
-    ``anchored``, ``selection_fences``, ``entity_ids``, ``date_context``, ``timezone`` and a client day ``date``), so the
-    thread retrieves only from the pinned sources. Call this before ``_day_scope`` or any other reader of
+    ``anchored``, ``selection_fences``, ``entity_ids``, ``date_context``, ``timezone``, a client day ``date`` and the
+    picker origin marker, so the thread retrieves only from the pinned sources and is never mistaken for a picker
+    scope. Call this before ``_day_scope`` or any other reader of
     ``context``; a day scope stored in conversation metadata may still apply afterwards.
     """
     meta = metadata or {}

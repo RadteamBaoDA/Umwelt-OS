@@ -115,3 +115,18 @@ async def test_turn_inputs_enforce_server_written_scope() -> None:
     ):
         turn = await _load_turn_inputs(session, c, claimed)
     assert turn.answer_request.source_scope_enforced is True
+
+
+@pytest.mark.asyncio
+async def test_picker_turn_is_marked_server_side() -> None:
+    """A valid ``@`` picker context carries the server-written picker origin marker."""
+    a = str(uuid4())
+    out = await _resolve({"kind": "general", "sourceIds": [a]}, {a: _src()})
+    assert out["source_scope_origin"] == "picker"
+
+
+@pytest.mark.asyncio
+async def test_client_sent_picker_marker_is_stripped() -> None:
+    """A client cannot set the picker origin marker on a plain (non-picker) context."""
+    out = await _resolve({"kind": "general", "source_scope_origin": "picker"}, {})
+    assert "source_scope_origin" not in out

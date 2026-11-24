@@ -432,6 +432,7 @@ _SERVER_ONLY_CONTEXT_KEYS = (
     "sourceIds",
     "selected_refs",
     "selection_fences",
+    "source_scope_origin",
 )
 
 
@@ -459,7 +460,8 @@ async def resolve_gadget_context(
     ``sourceIds`` (the ``@`` picker): they are validated (UUID, workspace, active/paused, not
     local-only, at most 32) into a server-written ``source_scope`` list, and a client
     ``source_scope`` is always dropped; ids given but none usable raise 409
-    ``source_scope_unavailable``. Read-only; raises ``DomainError`` subclasses
+    ``source_scope_unavailable``, and the server also writes ``source_scope_origin: "picker"`` so the
+    worker can tell a picker scope from a gadget or task-thread scope. Read-only; raises ``DomainError`` subclasses
     (422 invalid/too large/anchor with several items, 409 stale/unavailable).
     """
     if not context:
@@ -498,6 +500,8 @@ async def resolve_gadget_context(
                     )
                 )
             out["source_scope"] = ids
+            # Marks the scope as the owner's "@" picker choice; web search is suppressed only for it.
+            out["source_scope_origin"] = "picker"
         return out
     selections = _parse_selection_items(context.get("items"))
     # Anchor mode is a request for less restriction, so it is honoured only for one record.

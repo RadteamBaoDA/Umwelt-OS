@@ -260,3 +260,10 @@ async def test_create_drops_reserved_keys() -> None:
             SimpleNamespace(owner_id=1),  # type: ignore[arg-type]
         )
     assert session.add.call_args.args[0].metadata_json == {"ok": 1}
+
+
+def test_task_thread_pin_drops_client_picker_marker() -> None:
+    """A task thread never inherits the picker origin, so its web opt-in is not suppressed."""
+    params: dict[str, object] = {"source_scope_origin": "picker"}
+    assert _pin_task_thread_scope(params, {"scheduled_task": {}, "task_source_scope": [B]})
+    assert "source_scope_origin" not in params

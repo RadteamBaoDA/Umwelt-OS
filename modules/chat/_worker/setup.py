@@ -299,15 +299,16 @@ async def _retrieve_with_web(
     Follow-up turns retrieve with a names-keeping rewrite of the prompt (skipped for selected-only turns and
     for conversations with a model override); the retrieval step is published before it and a Stop that
     arrived during it ends the run before retrieval starts. The web search makes its own name-free rewrite.
-    The web search is skipped entirely when ``source_scope_enforced`` is set on the turn's request.
+    The web search is skipped only for a picker (``@``) source scope, marked server-side by
+    ``source_scope_origin == "picker"``; gadget and task-thread scopes keep the opt-in.
     """
     web_opt_in = turn.req_params.get(WEB_SEARCH_KEY)
-    # A hard source allow-list (picker, gadget, task thread) means the owner scoped the turn to chosen
-    # sources; web results would answer from outside that scope, so the opt-in is ignored there.
+    # A picker turn is the owner's explicit source choice; web results would answer from outside it, so
+    # the opt-in is ignored there. The marker is written by the server only (never a client key).
     web_requested = (
         isinstance(web_opt_in, dict)
         and web_opt_in.get("requested") is True
-        and not turn.answer_request.source_scope_enforced
+        and turn.req_params.get("source_scope_origin") != "picker"
     )
     if web_requested:
         await _publish_status(c, "web_search", "running")
