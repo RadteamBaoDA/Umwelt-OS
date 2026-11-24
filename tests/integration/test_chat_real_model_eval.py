@@ -414,6 +414,7 @@ async def _run_turn(
         },
         "citations": len(cited.valid_citations),
         "rerank_status": answer_context.rerank_status,
+        "context_warnings": list(answer_context.warnings),
         "markers": sorted({int(n) for n in re.findall(r"\[(\d+)\]", answer)}),
         "kept_markers": sorted(cited.number_map),
         "unverified": list(report.unverified) if report is not None else [],
@@ -807,6 +808,8 @@ def _outcome_entry(
     }
     if leg == "hybrid":
         fields["rerank_status"] = out["rerank_status"]
+        # Why rerank or semantic search degraded for this case.
+        fields["context_warnings"] = out["context_warnings"]
     return fields
 
 
