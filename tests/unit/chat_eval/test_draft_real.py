@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import csv
+import io
+import math
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,15 +14,22 @@ from tests.integration.chat_eval.draft_real import (
     CSV_COLUMNS,
     Draft,
     Sample,
+    aggregate_figures,
     build_prompt,
     extract_numbers,
     find_duplicates,
+    is_vietnamese,
+    language_reasons,
     number_matches,
     parse_drafts,
     reject_reasons,
+    resolve_gold,
+    row_aliases,
     seeded_rng,
     stratified_sample,
+    strip_question_numbers,
     to_row,
+    use_utf8_console,
     write_questions,
 )
 
@@ -132,8 +142,32 @@ def test_build_prompt_states_anchor_and_lists_sample_keys() -> None:
     messages = build_prompt("latest_value", "2026-11-24 09:00 (Asia/Ho_Chi_Minh)", [sample], 5)
     body = "\n".join(m["content"] for m in messages)
     assert "2026-11-24 09:00 (Asia/Ho_Chi_Minh)" in body
-    assert "bbc_world/abc-1" in body
+    assert "- R1 :: [bbc_world]" in body
+    assert "bbc_world/abc-1" not in body
     assert "5" in body
+
+
+def test_draft_rows_maps_aliases_back_to_real_keys() -> None:
+    import asyncio
+    from datetime import UTC, datetime
+
+    from tests.integration.chat_eval.draft_real import draft_rows
+
+    samples = [_obs("binance", 7, 67500.0), _obs("binance", 8, 67000.0)]
+    calls = 0
+
+    async def fake_complete(messages: list[dict[str, str]]) -> str:
+        nonlocal calls
+        calls += 1
+        return f'[{{"q": "Price {calls}?", "lang": "en", "gold_obs": ["R1"], "nums": [67500]}}]'
+
+    notes: list[str] = []
+    anchor = datetime(2026, 11, 24, tzinfo=UTC)
+    rows = asyncio.run(draft_rows(samples, 8, anchor, fake_complete, notes))
+    # R1 is whichever row the seeded sampler places first, so either real key is correct.
+    assert rows, notes
+    assert all(row["gold_obs"] in {"binance/7", "binance/8"} for row in rows)
+    assert not any(row["gold_obs"].startswith("R") for row in rows)
 
 
 def _sample(source: str, day: str, idx: int) -> Sample:
@@ -204,7 +238,124 @@ def test_pipe_in_fact_or_regex_is_rejected() -> None:
 
 def test_unparseable_figure_is_rejected() -> None:
     reasons = reject_reasons(_draft(nums=(float("nan"),)), KEYS, NUMBERS)
-    assert any("not in sampled rows" in r for r in reasons)
+    assert any("not a finite number" in r for r in reasons)
+
+
+def test_infinite_figure_is_rejected_and_never_matches() -> None:
+    reasons = reject_reasons(_draft(nums=(float("inf"),)), KEYS, NUMBERS)
+    assert any("not a finite number" in r for r in reasons)
+
+
+def test_parse_drafts_keeps_non_numeric_figures_for_the_validator() -> None:
+    # "n/a" and null must not crash the batch; the validator rejects them with a reason.
+    raw = '[{"q": "Q?", "lang": "en", "gold_obs": ["R1"], "nums": ["n/a", null, "21.5"]}]'
+    (draft,) = parse_drafts(raw, "latest_value")
+    assert draft.nums[2] == 21.5
+    assert math.isnan(draft.nums[0]) and math.isnan(draft.nums[1])
+    assert any("not a finite number" in r for r in reject_reasons(draft, KEYS, NUMBERS))
+
+
+def test_aliases_resolve_to_real_keys_and_unknown_alias_is_reported() -> None:
+    table = row_aliases([_sample("binance", "d1", 7), _sample("bbc_world", "d1", 3)])
+    draft = _draft(gold_obs=(" r1 ",), gold_keys=("R9",), gold_facts=())
+    resolved, reasons = resolve_gold(draft, table)
+    assert resolved.gold_obs == ("binance/7",)
+    assert resolved.gold_keys == ("R9",)
+    assert any("unknown alias 'R9'" in r for r in reasons)
+
+
+def test_build_prompt_labels_rows_with_aliases_not_external_ids() -> None:
+    sample = Sample(
+        key="alternative_me/fng:12345",
+        source_key="alternative_me",
+        day="2026-11-20",
+        kind="obs",
+        text="[alternative_me] fng = 21.5 @ 2026-11-20",
+        numbers=(21.5,),
+    )
+    messages = build_prompt("latest_value", "2026-11-24 09:00 (Asia/Ho_Chi_Minh)", [sample], 5)
+    body = "\n".join(m["content"] for m in messages)
+    assert "- R1 :: [alternative_me]" in body
+    assert "12345" not in body
+    assert "gold_keys" in body and "R1" in body
+
+
+def test_aggregate_figures_are_accepted_over_gold_rows() -> None:
+    rows = [
+        _obs("binance", 3, 4.0),
+        _obs("binance", 4, 6.0),
+        _obs("binance", 5, 7.0),
+    ]
+    keys = frozenset(s.key for s in rows)
+    draft = _draft(
+        gold_keys=(),
+        gold_obs=tuple(s.key for s in rows),
+        nums=(5.6667, 7.0, 17.0, 3.0),
+    )
+    numbers = (*(n for s in rows for n in s.numbers), *aggregate_figures(rows))
+    assert reject_reasons(draft, keys, numbers) == []
+
+
+def test_aggregate_figures_reject_unrelated_number() -> None:
+    rows = [_obs("binance", 3, 4.0), _obs("binance", 4, 6.0)]
+    assert number_matches(5.0, aggregate_figures(rows))
+    assert not number_matches(9.0, aggregate_figures(rows))
+
+
+def test_question_parameter_is_dropped_from_nums_not_rejected() -> None:
+    draft = _draft(q="What was the BTCUSDT price over the last 3 days?", nums=(3.0, 67500.0))
+    cleaned = strip_question_numbers(draft)
+    assert cleaned.nums == (67500.0,)
+    assert reject_reasons(cleaned, KEYS, NUMBERS) == []
+
+
+def test_is_vietnamese_detects_vietnamese_diacritics_only() -> None:
+    assert is_vietnamese("Giá BTC mới nhất")
+    assert is_vietnamese("Hà Nội")
+    assert not is_vietnamese("[binance] BTCUSDT price is 67500")
+
+
+def test_cross_lingual_must_ask_in_the_opposite_language() -> None:
+    en_rows = [_obs("binance", 3, 4.0)]
+    vi_rows = [
+        Sample(
+            key="vn/1",
+            source_key="vn",
+            day="d1",
+            kind="doc",
+            text="[vn] Thời tiết Hà Nội",
+            numbers=(),
+        )
+    ]
+    # Vietnamese rows are asked about in English; English rows in Vietnamese.
+    assert language_reasons(_draft(cat="cross_lingual", lang="en"), vi_rows) == []
+    assert language_reasons(_draft(cat="cross_lingual", lang="vi"), en_rows) == []
+    assert language_reasons(_draft(cat="cross_lingual", lang="vi"), vi_rows) != []
+    assert language_reasons(_draft(cat="cross_lingual", lang="en"), en_rows) != []
+    assert language_reasons(_draft(cat="cross_lingual", lang="en"), []) != []
+    assert language_reasons(_draft(cat="latest_value", lang="en"), en_rows) == []
+
+
+def test_console_is_switched_to_utf8_for_vietnamese_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    use_utf8_console()
+    assert sys.stdout.encoding == "utf-8"
+    assert sys.stderr.encoding == "utf-8"
+
+
+def _obs(source: str, idx: int, value: float) -> Sample:
+    """An observation sample with a numeric value, for aggregate checks."""
+    return Sample(
+        key=f"{source}/{idx}",
+        source_key=source,
+        day="d1",
+        kind="obs",
+        text=f"[{source}] v = {value}",
+        numbers=(value,),
+        value=value,
+    )
 
 
 def test_sample_sql_reads_every_non_local_only_source_not_only_evalc_prefix() -> None:

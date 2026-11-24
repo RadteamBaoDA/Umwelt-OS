@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import io
 import json
 import math
 import os
@@ -20,7 +21,7 @@ import random
 import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -99,7 +100,11 @@ class Draft:
 
 @dataclass(frozen=True)
 class Sample:
-    """One collected row shown to the model: its gold key, stratum, evidence text and numbers."""
+    """One collected row shown to the model: its gold key, stratum, evidence text and numbers.
+
+    ``value`` is the observation's own numeric value (None for documents); aggregate figures are
+    computed from it, not from every digit in the text.
+    """
 
     key: str
     source_key: str
@@ -107,6 +112,7 @@ class Sample:
     kind: str  # "doc" | "obs"
     text: str
     numbers: tuple[float, ...]
+    value: float | None = None
 
 
 def extract_numbers(text_value: str) -> tuple[float, ...]:
@@ -124,6 +130,104 @@ def number_matches(value: float, numbers: Sequence[float], rel_tol: float = REL_
     A NaN value (an unparseable figure from the model) never matches.
     """
     return any(abs(value - n) <= rel_tol * abs(n) for n in numbers)
+
+
+def aggregate_figures(rows: Sequence[Sample]) -> tuple[float, ...]:
+    """Figures a correct aggregate answer may state over ``rows``: count, and min, max, sum, mean
+    of their observation values when any row has one (pure).
+
+    The count is the number of rows, whatever their kind. Rows without a value contribute nothing
+    to min, max, sum or mean.
+    """
+    figures = [float(len(rows))]
+    values = [s.value for s in rows if s.value is not None]
+    if values:
+        figures += [min(values), max(values), sum(values), sum(values) / len(values)]
+    return tuple(figures)
+
+
+def strip_question_numbers(draft: Draft) -> Draft:
+    """``draft`` without the figures its own question text already contains (pure).
+
+    A question such as "the last 3 days" puts a parameter in ``nums``; that is not a figure the
+    answer states, so it is removed instead of failing the whole item.
+    """
+    asked = set(extract_numbers(draft.q))
+    return replace(draft, nums=tuple(v for v in draft.nums if abs(v) not in asked))
+
+
+VI_MARKS = frozenset("ăâđêôơưĂÂĐÊÔƠƯ")
+
+
+def is_vietnamese(text_value: str) -> bool:
+    """True when ``text_value`` carries a Vietnamese-only letter (pure).
+
+    Detects the marks that never occur in English: the Vietnamese letters with horn, circumflex,
+    breve or stroke, and the tone-marked letters in U+1EA0-U+1EF9. Plain acute or grave accents
+    (also used in French) do not count, so a Vietnamese text with only those is missed.
+    """
+    return any(c in VI_MARKS or "Ạ" <= c <= "ỹ" for c in text_value)
+
+
+def row_aliases(samples: Sequence[Sample]) -> dict[str, Sample]:
+    """Short prompt labels ``R1``, ``R2``... for ``samples`` in order (pure).
+
+    The model sees only these labels, never external ids: the LLM router redacts long digit runs,
+    which corrupts real keys such as ``alternative_me/fng:<digits>``.
+    """
+    return {f"R{i}": s for i, s in enumerate(samples, start=1)}
+
+
+def resolve_gold(draft: Draft, table: Mapping[str, Sample]) -> tuple[Draft, list[str]]:
+    """``draft`` with gold aliases replaced by real row keys, plus one reason per unknown alias.
+
+    An unknown alias is kept verbatim so the later key check also rejects it. Alias matching
+    ignores case and surrounding spaces. Real keys are not accepted in place of aliases.
+    """
+    reasons: list[str] = []
+
+    def mapped(aliases: tuple[str, ...]) -> tuple[str, ...]:
+        out: list[str] = []
+        for alias in aliases:
+            sample = table.get(alias.strip().upper())
+            if sample is None:
+                reasons.append(f"unknown alias {alias!r}")
+                out.append(alias)
+            else:
+                out.append(sample.key)
+        return tuple(out)
+
+    resolved = replace(draft, gold_keys=mapped(draft.gold_keys), gold_obs=mapped(draft.gold_obs))
+    return resolved, reasons
+
+
+def language_reasons(draft: Draft, gold_rows: Sequence[Sample]) -> list[str]:
+    """Why a cross_lingual ``draft`` asks in the wrong language; empty when it is fine (pure).
+
+    The gold language is the majority over ``gold_rows`` (a tie counts as English). The question
+    must then be in the other language. Other categories are not checked here.
+    """
+    if draft.cat != "cross_lingual":
+        return []
+    if not gold_rows:
+        return ["cross_lingual draft has no gold rows to contrast with"]
+    vi_count = sum(is_vietnamese(s.text) for s in gold_rows)
+    gold_lang = "vi" if vi_count * 2 > len(gold_rows) else "en"
+    want = "en" if gold_lang == "vi" else "vi"
+    if draft.lang != want:
+        return [f"cross_lingual must ask in {want}: gold rows are {gold_lang}"]
+    return []
+
+
+def use_utf8_console() -> None:
+    """Switch stdout and stderr to UTF-8 so Vietnamese text prints on Windows (side effect).
+
+    Windows consoles default to a legacy code page, which garbles diacritics in review output.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        # Only real text wrappers can be reconfigured; a replaced stream is left as it is.
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
 
 
 def find_duplicates(questions: Sequence[str]) -> set[int]:
@@ -155,7 +259,10 @@ def reject_reasons(draft: Draft, keys: frozenset[str], numbers: Sequence[float])
     if draft.empty and (draft.gold_keys or draft.gold_obs):
         reasons.append("empty draft must not carry gold keys")
     for value in draft.nums:
-        if not number_matches(value, numbers):
+        # NaN/inf come from unparseable model output ("n/a", null); they are never emitted.
+        if not math.isfinite(value):
+            reasons.append(f"figure {value} is not a finite number")
+        elif not number_matches(value, numbers):
             reasons.append(f"number {value:g} not in sampled rows")
     if any("|" in item for item in draft.gold_facts + draft.texts):
         reasons.append("'|' is the CSV separator and may not appear in facts or texts")
@@ -214,11 +321,18 @@ def parse_drafts(raw: str, cat: str) -> list[Draft]:
 
 CATEGORY_RULES = (
     "Reply with a JSON array only, no prose. Each item is an object with keys: "
-    '"q" (question text), "lang" ("en" or "vi"), "gold_keys" (row keys whose text answers it), '
-    '"gold_obs" (row keys of observation rows that answer it), "gold_facts" (short facts a correct '
-    'answer states), "nums" (figures a correct answer states), "texts" (always []), "empty" '
-    '(true only for no-data questions), "source_scope" (source keys the answer draws on). '
-    "Use only keys and figures that appear in the rows. Never use the character | in any string."
+    '"q" (question text), "lang" ("en" or "vi"), "gold_keys" (row labels such as R3 whose text '
+    'answers it), "gold_obs" (row labels of observation rows that answer it), "gold_facts" (short '
+    'facts a correct answer states), "nums" (ONLY the figures a correct answer states; never a '
+    "number that only appears in the question, such as 'last 3 days'), \"texts\" (always []), "
+    '"empty" (true only for no-data questions), "source_scope" (source keys the answer draws on). '
+    "Row labels are R1, R2... exactly as shown; never write row text or ids in gold fields. "
+    "Use only labels and figures that appear in the rows. Never use the character | in any string."
+)
+
+CROSS_LINGUAL_RULE = (
+    "Ask in the language opposite to the cited rows: Vietnamese rows get an English question "
+    "(lang en) and English rows get a Vietnamese question (lang vi)."
 )
 
 
@@ -231,10 +345,11 @@ def build_prompt(
     not the wall clock at drafting time.
     """
     hint = CATEGORIES[cat][1]
-    rows = "\n".join(f"- {s.key} :: {s.text}" for s in samples)
+    rows = "\n".join(f"- {label} :: {s.text}" for label, s in row_aliases(samples).items())
+    extra = f" {CROSS_LINGUAL_RULE}" if cat == "cross_lingual" else ""
     user = (
         f"Today is {anchor_local}. Category: {cat} ({hint}). Write {count} items, mixing "
-        f"English and Vietnamese only where the category asks for it.\n\nRows:\n{rows}"
+        f"English and Vietnamese only where the category asks for it.{extra}\n\nRows:\n{rows}"
     )
     return [{"role": "system", "content": CATEGORY_RULES}, {"role": "user", "content": user}]
 
@@ -354,6 +469,7 @@ def observation_sample(
         kind="obs",
         text=body,
         numbers=numbers,
+        value=None if value is None else float(value),
     )
 
 
@@ -439,19 +555,27 @@ def _accept(
 ) -> list[tuple[Draft, str]]:
     """Keep drafts that pass the batch validators; append one note per rejection (pure).
 
-    Returns ``(draft, evidence_text)`` pairs, where evidence is the first gold row's text.
+    Gold aliases are mapped to real keys first. A figure is valid when it matches a sampled number
+    or an aggregate over the draft's own gold rows. Returns ``(draft, evidence_text)`` pairs, where
+    evidence is the first gold row's text.
     """
     keys = frozenset(s.key for s in batch)
-    numbers = tuple(n for s in batch for n in s.numbers)
-    texts = {s.key: s.text for s in batch}
+    batch_numbers = tuple(n for s in batch for n in s.numbers)
+    table = row_aliases(batch)
+    by_key = {s.key: s for s in batch}
     kept: list[tuple[Draft, str]] = []
     for draft in drafts:
-        reasons = reject_reasons(draft, keys, numbers)
+        resolved, reasons = resolve_gold(draft, table)
+        resolved = strip_question_numbers(resolved)
+        gold_rows = [by_key[k] for k in resolved.gold_keys + resolved.gold_obs if k in by_key]
+        numbers = (*batch_numbers, *aggregate_figures(gold_rows))
+        reasons += reject_reasons(resolved, keys, numbers)
+        reasons += language_reasons(resolved, gold_rows)
         if reasons:
             notes.append(f"{draft.cat}: dropped {draft.q[:60]!r}: {'; '.join(reasons)}")
             continue
-        gold = next((k for k in draft.gold_keys + draft.gold_obs if k in texts), "")
-        kept.append((draft, texts.get(gold, "")))
+        evidence = gold_rows[0].text if gold_rows else ""
+        kept.append((resolved, evidence))
     return kept
 
 
@@ -510,6 +634,7 @@ async def run(snapdir: Path, n: int, dsn: str, env: Mapping[str, str]) -> Path:
 
 def main(argv: list[str]) -> int:
     """CLI entry: ``draft_real <snapshot-dir> [--n N]``; returns a process exit code."""
+    use_utf8_console()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("snapdir", type=Path)
     parser.add_argument("--n", type=int, default=150)
