@@ -107,8 +107,8 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
     profileBlocked,
     attachmentsUnavailable,
     busy,
-    /** True while files may be added (drop zone and attach controls share the rule). */
-    canAttachFiles: canAddFiles(busy, attachmentsUnavailable, attachments.full),
+    /** True while files may be added (drop zone, paste and attach controls share the rule). */
+    canAttachFiles: canAddFiles(busy, attachmentsUnavailable, attachments.full, sourceMention.chips.length > 0),
     // Plain Q&A (Assistant, no run pending) shows no agent or task chrome; only a specialist selection does.
     agentMode: mode === 'full' && profileBlocked,
     modelPicker: useChatModelPicker(),
@@ -146,6 +146,7 @@ function useComposerSourceMention(
     setValue: chatCtrl.setDraft,
     textareaRef: sourceTextareaRef,
     enabled: mode === 'full' && !profileBlocked && kind !== 'selection' && kind !== 'gadget' && attachmentCount === 0 && !editing,
+    scopeKey: chatCtrl.activeConversationId,
   });
   return { sourceMention, sourceTextareaRef };
 }
@@ -160,9 +161,19 @@ function sourceScopeOf(picker: SourceMention): { ids: string[]; clear: () => voi
   return picker.chips.length ? { ids: picker.chips.map((chip) => chip.id), clear: picker.clear } : undefined;
 }
 
-/** Whether files may be added: not mid-turn, attachments available for this send, and below the per-message limit. */
-function canAddFiles(busy: boolean, unavailable: boolean, full: boolean): boolean {
-  return !busy && !unavailable && !full;
+/**
+ * Whether files may be added: not mid-turn, attachments available for this send, below the per-message limit, and no
+ * `@` source chosen. A chosen source holds the turn to its scope, and attaching a file would disable the picker and
+ * silently drop the chips, so drop, paste and the attach control all share this block.
+ *
+ * @param busy - A turn is in flight.
+ * @param unavailable - Attachments cannot be used for this send.
+ * @param full - The per-message attachment limit is reached.
+ * @param hasSources - At least one `@` source chip is chosen for this turn.
+ * @returns True when a file may be attached now.
+ */
+export function canAddFiles(busy: boolean, unavailable: boolean, full: boolean, hasSources: boolean): boolean {
+  return !busy && !unavailable && !full && !hasSources;
 }
 
 /** Return type of {@link useChatSessionData}. */
@@ -356,16 +367,19 @@ export function useChatSessionCommands(
   const activeResponseId = live.activeResponseId;
 
   const { resetConversation } = chatCtrl;
+  const { clear: clearSources } = d.sourceMention;
   /** Starts a clean new conversation thread: orphans in-flight sends, clears live output and per-send toggles. */
   const handleNewChat = React.useCallback(() => {
     refs.bumpSendGeneration();
     resetConversation();
+    // Chips belong to the thread they were chosen in; a new chat must start with none.
+    clearSources();
     setEditingMessageId(null);
     actions.clearOutput();
     actions.patch({ error: null, cancelled: false, inputRequest: null, isStreaming: false, isPending: false });
     resetToggles();
     resetShareChoice();
-  }, [resetConversation, refs, actions, setEditingMessageId, resetToggles, resetShareChoice]);
+  }, [resetConversation, refs, actions, setEditingMessageId, resetToggles, resetShareChoice, clearSources]);
 
   /** Answers the pending user-input request so the paused run resumes (no new message or run). */
   const handleSubmitInput = React.useCallback(

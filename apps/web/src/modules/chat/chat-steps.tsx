@@ -143,7 +143,7 @@ export function ChatStepList({ steps: allSteps, streaming }: { steps: ToolStep[]
               {step.state === 'running' ? (
                 <Spinner className="size-3.5" />
               ) : isStepFailed(step) ? (
-                <AlertCircleIcon className="size-3.5 text-danger" aria-hidden="true" />
+                <AlertCircleIcon className="size-3.5 text-destructive" aria-hidden="true" />
               ) : (
                 <CheckIcon className="size-3.5" aria-hidden="true" />
               )}

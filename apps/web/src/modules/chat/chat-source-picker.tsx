@@ -140,6 +140,8 @@ function useSourceKeyboard({
  * @param params.setValue - Writes the draft after a token is removed.
  * @param params.textareaRef - The composer textarea; read for caret position and used to restore it after a pick.
  * @param params.enabled - False disables the trigger (selection/gadget context, attachments, another profile, edit mode).
+ * @param params.scopeKey - Identity of the conversation the chips belong to (null for a new chat). Any change clears the
+ * chosen chips, so New chat or switching threads never carries a previous thread's sources into the next send.
  * @returns The picker state, handlers and textarea aria props; see {@link SourceMention}.
  * @remarks The caret is tracked in state from `input` and `select` events so the token can be found on render. A
  * dismissed token (Escape) stays closed until the text before the caret changes. Chosen chips are cleared on the render
@@ -152,11 +154,13 @@ export function useSourceMention({
   setValue,
   textareaRef,
   enabled,
+  scopeKey = null,
 }: {
   value: string;
   setValue: (next: string) => void;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   enabled: boolean;
+  scopeKey?: string | null;
 }): SourceMention {
   const listId = React.useId();
   const [caret, setCaret] = React.useState(0);
@@ -164,6 +168,7 @@ export function useSourceMention({
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [chips, setChips] = React.useState<SourceChip[]>([]);
   const [wasEnabled, setWasEnabled] = React.useState(enabled);
+  const [seenScopeKey, setSeenScopeKey] = React.useState(scopeKey);
   // Caret to apply once the textarea shows the value that removed the token (a pick changes the value).
   const pendingCaretRef = React.useRef<number | null>(null);
 
@@ -171,6 +176,11 @@ export function useSourceMention({
   if (wasEnabled !== enabled) {
     setWasEnabled(enabled);
     if (!enabled) setChips([]);
+  }
+  // A different conversation (or New chat) must not inherit the previous thread's chosen sources.
+  if (seenScopeKey !== scopeKey) {
+    setSeenScopeKey(scopeKey);
+    setChips([]);
   }
 
   const before = value.slice(0, caret);
@@ -320,7 +330,7 @@ export function SourceMentionList({ mention }: { mention: SourceMention }) {
 function SourceListBody({ mention }: { mention: SourceMention }) {
   const t = useTranslations('chat');
   if (mention.listState === 'loading') return <p className="px-2 py-1.5 text-sm text-muted-foreground">{t('sourceScope.loading')}</p>;
-  if (mention.listState === 'error') return <p className="px-2 py-1.5 text-sm text-danger">{t('sourceScope.error')}</p>;
+  if (mention.listState === 'error') return <p className="px-2 py-1.5 text-sm text-destructive">{t('sourceScope.error')}</p>;
   if (mention.listState === 'empty') return <p className="px-2 py-1.5 text-sm text-muted-foreground">{t('sourceScope.noneYet')}</p>;
   if (mention.listState === 'nomatch') {
     return <p className="px-2 py-1.5 text-sm text-muted-foreground">{t('sourceScope.noMatch', { query: mention.query })}</p>;

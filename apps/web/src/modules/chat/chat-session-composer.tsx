@@ -162,7 +162,7 @@ function SessionTemplates({ data, onSend }: { data: ChatSessionData; onSend: (co
  * @param props - See {@link SessionComposerProps}.
  */
 export function SessionComposer({ data, profiles, mode, onSend, onStop, onCancelEdit }: SessionComposerProps) {
-  const { attachments, live } = data;
+  const { live } = data;
   const full = mode === 'full';
   const attachmentsBlocked = data.busy || data.attachmentsUnavailable;
   const webSearch = useWebSearchToggle(data, full);
@@ -175,7 +175,7 @@ export function SessionComposer({ data, profiles, mode, onSend, onStop, onCancel
         onSend={onSend}
         onStop={onStop}
         editing={full && data.effectiveEditingMessageId && !data.pendingMessageMutation ? { onCancel: onCancelEdit } : undefined}
-        attachmentBusy={attachmentsBlocked || attachments.full}
+        attachmentBusy={!data.canAttachFiles}
         isStreaming={live.isStreaming}
         disabled={live.isPending}
         {...modelBinding(data)}

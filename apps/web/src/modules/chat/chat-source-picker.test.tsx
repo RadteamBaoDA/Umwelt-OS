@@ -28,12 +28,14 @@ const SOURCES = [
 function Harness({
   initial = '',
   enabled = true,
+  scopeKey,
   onSend = vi.fn(),
   onCancel,
   onValue,
 }: {
   initial?: string;
   enabled?: boolean;
+  scopeKey?: string | null;
   onSend?: (content: string) => void;
   onCancel?: () => void;
   onValue?: (value: string) => void;
@@ -47,7 +49,7 @@ function Harness({
     },
     [onValue],
   );
-  const sourceMention = useSourceMention({ value, setValue, textareaRef, enabled });
+  const sourceMention = useSourceMention({ value, setValue, textareaRef, enabled, scopeKey });
   return (
     <ChatComposer
       mode="full"
@@ -174,7 +176,10 @@ describe('@ source picker list states', () => {
     renderHarness();
     await userEvent.click(textarea());
     await userEvent.keyboard('@');
-    expect(await screen.findByText("Couldn't load sources")).toBeTruthy();
+    const message = await screen.findByText("Couldn't load sources");
+    // The design system exposes `text-destructive` (not `text-danger`), so the error must use it.
+    expect(message.className).toContain('text-destructive');
+    expect(message.className).not.toContain('text-danger');
   });
 
   it('shows the empty state when no source has data yet', async () => {
@@ -224,6 +229,18 @@ describe('chip lifecycle in the composer', () => {
 });
 
 describe('source scope lifecycle', () => {
+  it('clears chosen chips when the conversation identity changes (New chat or switching threads)', async () => {
+    const view = renderHarness({ scopeKey: 'c1' });
+    await userEvent.click(textarea());
+    await userEvent.keyboard('@cal');
+    await screen.findByRole('option', { name: 'Calendar' });
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Remove Calendar' })).toBeTruthy();
+
+    view.rerender({ scopeKey: 'c2' });
+    expect(screen.queryByRole('button', { name: 'Remove Calendar' })).toBeNull();
+  });
+
   it('clears chosen chips and closes the list when the picker becomes disabled', async () => {
     const view = renderHarness();
     await userEvent.click(textarea());
