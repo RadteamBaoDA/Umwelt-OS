@@ -75,7 +75,13 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
   const profileBlocked = composer.selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
   const attachmentsUnavailable = areAttachmentsUnavailable(profileBlocked, effectiveEditingMessageId, chatCtrl.context);
   const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
-  const { sourceMention, sourceTextareaRef } = useComposerSourceMention(chatCtrl, mode, profileBlocked, attachments.items.length);
+  const { sourceMention, sourceTextareaRef } = useComposerSourceMention(
+    chatCtrl,
+    mode,
+    profileBlocked,
+    attachments.items.length,
+    effectiveEditingMessageId !== null,
+  );
   const busy = live.isPending || live.isStreaming;
   const queryClient = useQueryClient();
   const { refetch: refetchDetail } = detail;
@@ -115,13 +121,15 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
 }
 
 /**
- * The `@` source picker of the full composer. It is open only on the full Chat page, for the Assistant profile, outside
- * selection and gadget contexts, and with no attachments.
+ * The `@` source picker of the full composer. It is enabled only on the full Chat page, for the Assistant profile,
+ * outside selection and gadget contexts, with no attachments and outside edit mode. When it becomes disabled, the
+ * picker drops its chips (see `useSourceMention`), so a send can never carry a scope it cannot honour.
  *
  * @param chatCtrl - Chat controller that owns the draft and the view context.
- * @param mode - Host surface; the picker never opens in the drawer.
+ * @param mode - Host surface; the picker is never enabled in the drawer.
  * @param profileBlocked - True while a specialist profile is selected or a specialist retry is pending.
- * @param attachmentCount - Attachments on the draft (any attachment closes the picker).
+ * @param attachmentCount - Attachments on the draft (any attachment disables the picker).
+ * @param editing - True while a previous message is being edited; edit sends reuse the original run's context.
  * @returns The picker state and the textarea ref it needs to read the caret.
  */
 function useComposerSourceMention(
@@ -129,6 +137,7 @@ function useComposerSourceMention(
   mode: 'drawer' | 'full',
   profileBlocked: boolean,
   attachmentCount: number,
+  editing: boolean,
 ) {
   const sourceTextareaRef = React.useRef<HTMLTextAreaElement>(null);
   const kind = chatCtrl.context?.kind;
@@ -136,7 +145,7 @@ function useComposerSourceMention(
     value: chatCtrl.draft,
     setValue: chatCtrl.setDraft,
     textareaRef: sourceTextareaRef,
-    enabled: mode === 'full' && !profileBlocked && kind !== 'selection' && kind !== 'gadget' && attachmentCount === 0,
+    enabled: mode === 'full' && !profileBlocked && kind !== 'selection' && kind !== 'gadget' && attachmentCount === 0 && !editing,
   });
   return { sourceMention, sourceTextareaRef };
 }

@@ -62,16 +62,22 @@ function Harness({
   );
 }
 
-/** Renders the harness inside the intl and query providers the picker needs. */
-function renderHarness(props: Parameters<typeof Harness>[0] = {}) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+/** Harness wrapped in the intl and query providers the picker needs. */
+function harnessTree(props: Parameters<typeof Harness>[0], queryClient: QueryClient) {
+  return (
     <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
       <QueryClientProvider client={queryClient}>
         <Harness {...props} />
       </QueryClientProvider>
-    </NextIntlClientProvider>,
+    </NextIntlClientProvider>
   );
+}
+
+/** Renders the harness; `rerender` takes new props (for example a flipped `enabled`). */
+function renderHarness(props: Parameters<typeof Harness>[0] = {}) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const result = render(harnessTree(props, queryClient));
+  return { ...result, rerender: (next: Parameters<typeof Harness>[0]) => result.rerender(harnessTree(next, queryClient)) };
 }
 
 function textarea() {
@@ -214,5 +220,42 @@ describe('chip lifecycle in the composer', () => {
       option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     });
     expect(screen.getByRole('button', { name: 'Remove Calendar' })).toBeTruthy();
+  });
+});
+
+describe('source scope lifecycle', () => {
+  it('clears chosen chips and closes the list when the picker becomes disabled', async () => {
+    const view = renderHarness();
+    await userEvent.click(textarea());
+    await userEvent.keyboard('@cal');
+    await screen.findByRole('option', { name: 'Calendar' });
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Remove Calendar' })).toBeTruthy();
+
+    // A profile switch, selection/gadget context or an attachment all arrive as enabled=false.
+    view.rerender({ enabled: false });
+    expect(screen.queryByRole('button', { name: 'Remove Calendar' })).toBeNull();
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    view.rerender({ enabled: true });
+    expect(screen.queryByRole('button', { name: 'Remove Calendar' })).toBeNull();
+  });
+
+  it('hides chips and does not open on @ while editing a previous message', async () => {
+    const onCancel = vi.fn();
+    const view = renderHarness({ onCancel });
+    await userEvent.click(textarea());
+    await userEvent.keyboard('@cal');
+    await screen.findByRole('option', { name: 'Calendar' });
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Remove Calendar' })).toBeTruthy();
+
+    // Entering edit mode disables the picker for that send.
+    view.rerender({ enabled: false, onCancel });
+    expect(screen.queryByRole('button', { name: 'Remove Calendar' })).toBeNull();
+
+    await userEvent.keyboard('@');
+    expect(textarea().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 });

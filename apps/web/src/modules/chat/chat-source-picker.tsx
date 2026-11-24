@@ -139,10 +139,13 @@ function useSourceKeyboard({
  * @param params.value - Current draft text (controlled by the caller).
  * @param params.setValue - Writes the draft after a token is removed.
  * @param params.textareaRef - The composer textarea; read for caret position and used to restore it after a pick.
- * @param params.enabled - False disables the trigger (selection/gadget context, attachments, another profile).
+ * @param params.enabled - False disables the trigger (selection/gadget context, attachments, another profile, edit mode).
  * @returns The picker state, handlers and textarea aria props; see {@link SourceMention}.
  * @remarks The caret is tracked in state from `input` and `select` events so the token can be found on render. A
- * dismissed token (Escape) stays closed until the text before the caret changes.
+ * dismissed token (Escape) stays closed until the text before the caret changes. Chosen chips are cleared on the render
+ * where `enabled` turns false: chips chosen under one scope must never ride a send that cannot honour them (specialist
+ * runs, edit and regenerate reuse the original run's context). The reset happens during render, not in an effect, so
+ * no send can read stale chips in between.
  */
 export function useSourceMention({
   value,
@@ -160,8 +163,15 @@ export function useSourceMention({
   const [dismissedBefore, setDismissedBefore] = React.useState<string | null>(null);
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [chips, setChips] = React.useState<SourceChip[]>([]);
+  const [wasEnabled, setWasEnabled] = React.useState(enabled);
   // Caret to apply once the textarea shows the value that removed the token (a pick changes the value).
   const pendingCaretRef = React.useRef<number | null>(null);
+
+  // Adjust state while rendering (not in an effect) so the disabled render already has no chips.
+  if (wasEnabled !== enabled) {
+    setWasEnabled(enabled);
+    if (!enabled) setChips([]);
+  }
 
   const before = value.slice(0, caret);
   const match = MENTION_PATTERN.exec(before);
