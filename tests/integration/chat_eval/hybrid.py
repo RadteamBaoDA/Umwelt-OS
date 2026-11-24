@@ -26,12 +26,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from core.config import Settings
 from core.model_gateway.client import ModelGateway
 from core.worker_cursors import STATE_KEY
-from core.workspaces.schemas import AccessFence, WorkspaceContext
+from core.workspaces import public as workspaces
+from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.chat._worker.setup import _rewrite_for_retrieval
 from modules.chat._worker.state import _RunCtx, _TurnInputs
 from modules.chat.retrieval import build_context
 from modules.chat.schemas import AnswerContext, AnswerContextRequest
+from modules.knowledge.documents import public as documents
 from modules.search.indexing import build_search_vector_index, index_pending_chunks
+from modules.search.indexing._common import capture_authority, eligible_chunks
+from modules.settings import public as ai_settings
 from tests.integration.chat_eval.cases import Case
 
 # Index passes before the run counts as not drained (about 2 minutes at the default pause below).
@@ -438,6 +442,82 @@ async def activate_paused_sources(engine: AsyncEngine) -> int:
         return int((await conn.execute(_ACTIVATE_PAUSED_SQL)).rowcount)
 
 
+_BREAKDOWN_SQLS = {
+    "workspaces": "SELECT id::text, status FROM workspaces ORDER BY created_at LIMIT 5",
+    "sources(status,local_only,rag_index_enabled)": (
+        "SELECT status || '/' || local_only || '/' || rag_index_enabled, count(*) "
+        "FROM sources GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+    ),
+    "documents(extraction_status)": (
+        "SELECT extraction_status, count(*) FROM documents GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+    ),
+    "current_version_chunks(extraction_status)": (
+        "SELECT d.extraction_status, count(*) FROM document_chunks c "
+        "JOIN document_versions v ON v.id = c.document_version_id "
+        "JOIN documents d ON d.id = v.document_id AND d.current_version = v.version_number "
+        "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+    ),
+}
+
+
+async def _diagnose_no_generation(engine: AsyncEngine, settings: Settings, redis: Redis) -> str:
+    """Explain why automatic generation creation found nothing, mirroring ``_reconcile_automatic_generations``.
+
+    Read-only: each check runs in a rolled-back session. Reports counts, ids, booleans and denial flags only; no
+    credential value is read into the output (``gateway_api_key`` appears as a configured/not boolean).
+    """
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    parts: list[str] = []
+    async with engine.connect() as conn:
+        for label, sql in _BREAKDOWN_SQLS.items():
+            rows = (await conn.execute(text(sql))).all()
+            parts.append(f"{label}: {[tuple(r) for r in rows]}")
+        total: int = (await conn.execute(text("SELECT count(*) FROM document_chunks"))).scalar_one()
+    parts.append(f"total document_chunks={total}")
+    async with factory() as session:
+        ids = await documents.list_indexable_workspace_ids(session, limit=100)
+        await session.rollback()
+    parts.append(f"indexable_workspace_ids={len(ids)} {[str(i) for i in ids]}")
+    for wid in ids:
+        try:
+            async with factory() as session:
+                owner = await workspaces.resolve_workspace_owner_context(
+                    session, wid, multi_workspace_enabled=settings.multi_workspace_enabled
+                )
+                if owner is None:
+                    parts.append(f"ws {wid}: no owner context")
+                    continue
+                scope = InternalJobScope(
+                    workspace_id=wid,
+                    actor_user_id=owner.user_id,
+                    membership_revision=owner.membership_revision,
+                )
+                auth = await capture_authority(session, settings, redis, scope=scope)
+                enabled = await ai_settings.module_is_enabled(
+                    session,
+                    "search",
+                    scope=scope,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
+                )
+                n = len((await session.execute(eligible_chunks(workspace_id=wid))).all())
+                await session.rollback()
+            policy = auth.policy
+            parts.append(
+                f"ws {wid}: search_enabled={enabled} permitted={auth.permitted()} "
+                f"mapping={auth.mapping is not None} endpoint_policy_denied="
+                f"{auth.config.endpoint_policy_denied} credential_configured="
+                f"{bool(auth.config.gateway_api_key)} local_only={policy.local_only} "
+                f"destination={auth.config.endpoint_destination_id or 'remote'} "
+                f"in_permitted_destinations="
+                f"{(auth.config.endpoint_destination_id or 'remote') in policy.permitted_destinations} "
+                f"embedding_destinations={list(policy.embedding_destinations or [])} "
+                f"eligible_chunks={n}"
+            )
+        except Exception as exc:  # noqa: BLE001  # diagnostics must never mask the real failure
+            parts.append(f"ws {wid}: diagnosis failed {type(exc).__name__}: {str(exc)[:120]}")
+    return "; ".join(parts)
+
+
 async def index_all(
     engine: AsyncEngine,
     settings: Settings,
@@ -497,7 +577,9 @@ async def index_all(
             row = (await conn.execute(_LATEST_GENERATION_SQL)).one_or_none()
             items = (await conn.execute(_ITEM_ERRORS_SQL)).all()
         if row is None:
-            return "no search index generation exists"
+            return "no search index generation exists; " + mask(
+                await _diagnose_no_generation(engine, settings, redis)
+            )
         breakdown = ", ".join(f"{status}/{code}={n}" for status, code, n in items)
         cause = f"; first embed error: {first_error[0]}" if first_error else ""
         summary = await _session_and_lock_summary(engine)
