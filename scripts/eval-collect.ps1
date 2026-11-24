@@ -22,12 +22,13 @@ $secretTables = @(
 )
 # ai_settings is needed by the app, so its rows are dumped; the snapshot refuses to run while any ciphertext
 # value is stored there (the eval stack never saves an AI or search key; a non-empty value means someone did).
+# No double quotes in this SQL: PowerShell mangles them when passing arguments to docker.
 $aiSecretGuardSql = @"
-SELECT count(*) FROM ai_settings
-WHERE web_search_api_key_ciphertext IS NOT NULL
-   OR (providers::text ~ 'ciphertext"\s*:\s*"[^"]')
-   OR (n8n::text ~ 'ciphertext"\s*:\s*"[^"]')
-   OR (web_search_fallbacks::text ~ 'ciphertext"\s*:\s*"[^"]');
+SELECT count(*) FROM ai_settings a
+WHERE a.web_search_api_key_ciphertext IS NOT NULL
+   OR EXISTS (SELECT 1 FROM jsonb_path_query(coalesce(a.providers::jsonb, 'null'), 'strict $.**.ciphertext') v WHERE length(v #>> '{}') > 0)
+   OR EXISTS (SELECT 1 FROM jsonb_path_query(coalesce(a.n8n::jsonb, 'null'), 'strict $.**.ciphertext') v WHERE length(v #>> '{}') > 0)
+   OR EXISTS (SELECT 1 FROM jsonb_path_query(coalesce(a.web_search_fallbacks::jsonb, 'null'), 'strict $.**.ciphertext') v WHERE length(v #>> '{}') > 0);
 "@
 Push-Location $repo
 try {
