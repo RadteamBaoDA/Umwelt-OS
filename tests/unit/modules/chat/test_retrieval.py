@@ -692,3 +692,33 @@ async def test_rerank_failure_after_before_send_closes_the_lock_session() -> Non
         )
     assert status == "unavailable"
     lock_session.close.assert_awaited()
+
+
+def test_evidence_source_line_shows_the_owner_local_time_unless_midnight() -> None:
+    """P2: the line carries ``HH:MM`` in the owner zone so "when" questions can use the time; midnight stays date-only."""
+    from datetime import UTC, datetime
+
+    item = _item_with_url("https://example.com/x")
+    item.published_at = datetime(2026, 11, 23, 3, 30, tzinfo=UTC)
+    assert (
+        retrieval._evidence_source_line(item, "Asia/Ho_Chi_Minh")
+        == "Document: T | Published: 2026-11-23 10:30 | Source: example.com"
+    )
+    item.published_at = datetime(2026, 11, 23, 17, 0, tzinfo=UTC)
+    assert (
+        retrieval._evidence_source_line(item, "Asia/Ho_Chi_Minh")
+        == "Document: T | Published: 2026-11-24 | Source: example.com"
+    )
+    assert retrieval._evidence_source_line(item).startswith(
+        "Document: T | Published: 2026-11-23 17:00"
+    )
+
+
+def test_grounded_context_says_evidence_is_a_sample_not_a_total() -> None:
+    """P4: the prompt tells the model that retrieved evidence is a sample and points counts at aggregation."""
+    context = AnswerContext(query="how many", evidence=[_item_with_url("https://example.com/x")])
+    text = retrieval.format_grounded_context(context)
+    assert (
+        "Retrieved evidence is a top-ranked sample, not a complete set; for counts or totals use "
+        "query_collected_data aggregation." in text
+    )

@@ -421,7 +421,7 @@ def test_evidence_source_line_has_date_host_and_no_ids_and_entity_fields_are_neu
         ],
     )
     text = format_grounded_context(context)
-    assert "[1] Document: News ‹b› | Published: 2026-11-03 | Source: example.test" in text
+    assert "[1] Document: News ‹b› | Published: 2026-11-03 08:00 | Source: example.test" in text
     for ident in (item.source_id, item.document_id, item.document_version_id, item.chunk_id):
         assert str(ident) not in text
     assert text.count("</entity_context>") == 1 and text.count("</temporal_context>") == 1
