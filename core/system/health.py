@@ -14,6 +14,7 @@ ARQ_WORKER_HEALTH_KEY = "bbd:worker:health"
 ARQ_CHAT_WORKER_HEALTH_KEY = "arq:chat:health-check"
 ARQ_MODEL_WORKER_HEALTH_KEY = "arq:model:health-check"
 ARQ_CRON_WORKER_HEALTH_KEY = "arq:cron:health-check"
+ARQ_SEARCH_BUILD_WORKER_HEALTH_KEY = "arq:search-build:health-check"
 ARQ_WORKER_GENERATION_KEY = "bbd:worker:generation"
 PROBE_TIMEOUT_SECONDS = 1.0
 # Redis runs with ``noeviction``: at maxmemory every write (enqueue, session, rate-limit) fails with OOM instead of
@@ -85,6 +86,7 @@ async def system_health(session: AsyncSession, redis: Redis, settings: Settings)
             chat_heartbeat = await redis.get(ARQ_CHAT_WORKER_HEALTH_KEY)
             model_heartbeat = await redis.get(ARQ_MODEL_WORKER_HEALTH_KEY)
             cron_heartbeat = await redis.get(ARQ_CRON_WORKER_HEALTH_KEY)
+            search_build_heartbeat = await redis.get(ARQ_SEARCH_BUILD_WORKER_HEALTH_KEY)
             try:
                 memory = await redis.info("memory")
                 redis_memory = {
@@ -98,12 +100,16 @@ async def system_health(session: AsyncSession, redis: Redis, settings: Settings)
         chat_worker_status = "healthy" if chat_heartbeat is not None else "unavailable"
         model_worker_status = "healthy" if model_heartbeat is not None else "unavailable"
         cron_worker_status = "healthy" if cron_heartbeat is not None else "unavailable"
+        search_build_worker_status = (
+            "healthy" if search_build_heartbeat is not None else "unavailable"
+        )
     except (RedisError, TimeoutError):
         redis_status = "unavailable"
         worker_status = "unavailable"
         chat_worker_status = "unavailable"
         model_worker_status = "unavailable"
         cron_worker_status = "unavailable"
+        search_build_worker_status = "unavailable"
 
     gateway_configured, n8n_stored = await _stored_configuration(session, postgres)
     gateway_status = "configured" if gateway_configured else "unconfigured"
@@ -123,6 +129,7 @@ async def system_health(session: AsyncSession, redis: Redis, settings: Settings)
         "chat_worker": {"status": chat_worker_status},
         "model_worker": {"status": model_worker_status},
         "cron_worker": {"status": cron_worker_status},
+        "search_build_worker": {"status": search_build_worker_status},
         "model_gateway": {"status": gateway_status, "connectivity": "not_tested"},
         "graph": {"status": "not_installed"},
         # Optional sidecars: never part of `overall`; configured means a key/token is set, not reachable.
@@ -146,6 +153,7 @@ async def system_health(session: AsyncSession, redis: Redis, settings: Settings)
         chat_worker_status,
         model_worker_status,
         cron_worker_status,
+        search_build_worker_status,
     )
     healthy = (
         all(s == "healthy" for s in core_statuses) and queue_writable(redis_memory) is not False

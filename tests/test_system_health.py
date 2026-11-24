@@ -149,3 +149,35 @@ async def test_absent_optional_n8n_and_browser_do_not_degrade_overall(
     assert result["overall"] == "healthy"
     for name in ("n8n", "browser"):
         assert result["components"][name] == {"status": "not_configured", "optional": True}
+
+
+def test_search_build_worker_health_key_matches_worker_settings() -> None:
+    from apps.worker.main import SearchBuildWorkerSettings
+
+    assert (
+        health_module.ARQ_SEARCH_BUILD_WORKER_HEALTH_KEY
+        == SearchBuildWorkerSettings.health_check_key
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_search_build_heartbeat_degrades_health() -> None:
+    class FakeRedis:
+        async def ping(self):
+            return True
+
+        async def get(self, key):
+            return None if key == health_module.ARQ_SEARCH_BUILD_WORKER_HEALTH_KEY else b"1"
+
+        async def info(self, _section):
+            return {}
+
+    class OkSession:
+        async def execute(self, _statement):
+            return SimpleNamespace(first=lambda: None)
+
+    result = await system_health(
+        cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings()
+    )
+    assert result["components"]["search_build_worker"]["status"] == "unavailable"
+    assert result["overall"] == "degraded"

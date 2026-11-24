@@ -40,6 +40,7 @@ from modules.goals.tools import register_goal_tools
 from modules.mcp_widgets.server import RootPath
 from modules.mcp_widgets.server import create_http_app as create_widgets_mcp_app
 from modules.observability.metrics_sampler import build_api_samplers
+from modules.search.indexing import SEARCH_BUILD_QUEUE
 from modules.tasks.tools import register_task_tools
 from modules.tools.browser import register_browser_tool
 from modules.tools.builtins import register_builtin_tools
@@ -144,7 +145,7 @@ def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
     samplers = build_api_samplers(
         app.state.redis,
         app.state.session_factory,
-        (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE),
+        (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE, SEARCH_BUILD_QUEUE),
         outbox_retention_days=app_settings.outbox_retention_days,
     )
     return [
