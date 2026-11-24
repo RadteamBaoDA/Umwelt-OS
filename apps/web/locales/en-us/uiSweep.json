@@ -4,6 +4,7 @@
   "svc.worker": "Worker",
   "svc.chatWorker": "Chat worker",
   "svc.modelWorker": "Model worker",
+  "svc.searchBuildWorker": "Search index build worker",
   "svc.modelGateway": "Model gateway",
   "svc.graph": "Knowledge graph",
   "svc.n8n": "Connector workflows",

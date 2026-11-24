@@ -4,6 +4,7 @@
   "svc.worker": "Worker",
   "svc.chatWorker": "Worker trò chuyện",
   "svc.modelWorker": "Worker mô hình",
+  "svc.searchBuildWorker": "Worker dựng chỉ mục tìm kiếm",
   "svc.modelGateway": "Cổng mô hình",
   "svc.graph": "Đồ thị tri thức",
   "svc.n8n": "Quy trình kết nối",

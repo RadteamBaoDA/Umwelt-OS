@@ -27,6 +27,7 @@ export const serviceLabelKeys = {
   worker: 'svc.worker',
   chat_worker: 'svc.chatWorker',
   model_worker: 'svc.modelWorker',
+  search_build_worker: 'svc.searchBuildWorker',
   model_gateway: 'svc.modelGateway',
   graph: 'svc.graph',
   n8n: 'svc.n8n',

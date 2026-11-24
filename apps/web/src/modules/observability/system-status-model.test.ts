@@ -42,13 +42,14 @@ describe('system status model', () => {
         worker: { status: 'healthy' },
         chat_worker: { status: 'healthy' },
         model_worker: { status: 'unavailable' },
+        search_build_worker: { status: 'healthy' },
         graph: { status: 'not_installed' },
         n8n: { status: 'not_configured' },
         browser: { status: 'configured' },
         model_gateway: { status: 'configured', connectivity: 'not_tested' },
       },
     };
-    expect(summarizeHealth(health)).toEqual({ healthy: 4, total: 5, unconfigured: 2, coreOk: false });
+    expect(summarizeHealth(health)).toEqual({ healthy: 5, total: 6, unconfigured: 2, coreOk: false });
   });
   it('colours uptime bars including not-applicable buckets', () => {
     expect(barTone({ up: 3, total: 3 })).toBe('success');

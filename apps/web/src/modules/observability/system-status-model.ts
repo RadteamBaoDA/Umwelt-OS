@@ -1,7 +1,7 @@
 import type { HistoryBucket, HistoryComponent, ObservedRun, SystemHealth } from './api';
 
 /** Components whose health decides the overall verdict, in display order. */
-export const CORE_SERVICES = ['postgres', 'redis', 'worker', 'chat_worker', 'model_worker'] as const;
+export const CORE_SERVICES = ['postgres', 'redis', 'worker', 'chat_worker', 'model_worker', 'search_build_worker'] as const;
 /** Optional integrations that never affect the overall verdict, in display order. */
 export const OPTIONAL_SERVICES = ['model_gateway', 'graph', 'n8n', 'browser'] as const;
 
