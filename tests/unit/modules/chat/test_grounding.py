@@ -273,3 +273,23 @@ def test_prior_answer_number_without_a_correction_cue_stays_unverified() -> None
     )
     report = check_grounding("The rate today is 25,000 VND.", [], known, has_citation=False)
     assert report.unverified == ("25,000",) and report.restated == ()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Cho 17–24/11 thì không có dữ liệu",  # day/month range prefix
+        "Only the window (November 20–24, 2026) matters",  # month-first day range with year
+        "Total 19,375 minutes of audio",  # grouped-thousands duration
+        "It lasted 13.5 days in total",  # decimal duration
+        "Range 2026-11-23..29 was empty",  # ISO date range
+    ],
+)
+def test_date_ranges_and_grouped_durations_leave_no_stray_numbers(text: str) -> None:
+    """Ranges and durations are elapsed spans, not claims: no fragment ("17", "24", "19", "13") is left."""
+    assert g.extract_numbers(text) == []
+
+
+def test_real_number_next_to_a_date_is_still_checked() -> None:
+    """Skipping date forms must not hide a data value that sits beside them."""
+    assert _unverified("price 24 USD on 20/11", _known({"rows": []})) == ["24"]

@@ -76,20 +76,24 @@ _COMMON_SKIPS = [
         r"(?:https?://|www\.)[^\s<>)\]]+",  # URLs: ids, dates and ports in a link are not claims
         r"\[\d+(?:\s*[,\-–]\s*\d+)*\]",  # citation markers
         r"\d{4}-\d{1,2}-\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?",
-        r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}",
-        r"\b\d{1,2}/\d{1,2}(?![\d/])",  # day/month without a year: "17/11"
+        # An optional leading day range ("17–24/11", "17–24/11/2026") is part of the date, not a stray number.
+        r"(?:\b\d{1,2}\s*[–\-]\s*)?\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}",
+        r"\b(?:\d{1,2}\s*[–\-]\s*)?\d{1,2}/\d{1,2}(?![\d/])",  # day/month without a year: "17/11"
         r"\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]m)?",
         # Day-first before month-first so "16 November 2026" goes whole instead of leaving "16";
         # an optional leading day range takes "1–14 November" whole too.
         rf"\b(?:\d{{1,2}}\s*(?:[–\-]|and|or|to)\s*)?\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTHS}(?:\s+\d{{4}})?",
         # "Nov 16, 2026" / "November 2026": (?!\d) stops a 4-digit year splitting into day "20" + "26".
-        rf"\b{_MONTHS}\s+(?:\d{{1,2}}(?!\d)(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{4}})",
+        # The day may be a range ("November 20–24, 2026"); the range end must not run into a longer digit run.
+        rf"\b{_MONTHS}\s+(?:\d{{1,2}}(?:\s*[–\-]\s*\d{{1,2}})?(?!\d)(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?|\d{{4}})",
         r"(?:ngày|tháng|năm|quý)\s+\d{1,4}(?:\s*[/-]\s*\d{1,4})?",
         r"\b\d+(?:st|nd|rd|th)\b",
         # Last, after the time/date forms ("21:34 ngày 17/11" must not lose "34 ngày"): elapsed spans such
         # as "35 hours old" or "90 ngày" are worked out from timestamps or the query window, not read from
         # a row. ponytail: also skips a duration that IS a data value.
-        r"\b\d+[\s-]+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
+        # Grouped or decimal counts ("19,375 minutes", "13.5 days") are one span; the lookbehind keeps the
+        # match from starting in the middle of a longer number.
+        r"(?<![\d.,])\d+(?:[.,]\d+)*[\s-]+(?:minutes?|hours?|days?|weeks?|months?|years?|phút|giờ|ngày|tuần|tháng|năm)\b",
     )
 ]
 _PROSE_SKIPS = [
