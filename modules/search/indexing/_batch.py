@@ -23,6 +23,7 @@ from modules.search.indexing._common import (
     _admit,
     _commit_index_change,
     _index_projection,
+    _rate_limited,
     _vector_literal,
     eligible_chunks,
     embedding_values,
@@ -476,8 +477,10 @@ async def _process_claimed_batch(
 
     Authority changes and 401/403/404/409 admission denials stop (items stay pending). A stale Source or a
     malformed response degrades to the per-chunk path for this batch only, so one bad chunk cannot fail
-    its neighbours. Gateway/Redis errors fail every item of the batch (as the per-chunk path would, one
-    request at a time); other errors propagate.
+    its neighbours. A provider rate limit or open breaker stops the run with the items left pending, so
+    the next pass resumes this generation instead of failing the corpus. Other gateway/Redis errors fail
+    every item of the batch (as the per-chunk path would, one request at a time); other errors propagate. A provider rate limit or open breaker stops the run with
+    the items left pending, so the next pass resumes this generation instead of failing the corpus.
     """
     survivors = list(
         claimed
@@ -501,7 +504,9 @@ async def _process_claimed_batch(
             return True
     except ValueError:
         pass  # malformed response or dimension drift: isolate the offender chunk by chunk below
-    except (ModelGatewayError, RedisError):
+    except (ModelGatewayError, RedisError) as exc:
+        if _rate_limited(exc):
+            return False  # items stay pending; the next pass resumes this generation
         await _fail_batch(ctx, claimed)
         return True
     for (

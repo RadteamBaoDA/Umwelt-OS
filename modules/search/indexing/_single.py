@@ -17,6 +17,7 @@ from modules.search.indexing._common import (
     _admit,
     _commit_index_change,
     _index_projection,
+    _rate_limited,
     _vector_literal,
     eligible_chunks,
     embedding_values,
@@ -353,7 +354,8 @@ async def _process_claimed_chunk(
 
     Returns True to continue with the next chunk, False to stop the batch. Authority changes and
     401/403/404/409 admission denials stop (the item stays pending for a fresh invocation); a
-    stale Source drops the item; gateway/Redis/value errors fail the item; other errors propagate.
+    stale Source drops the item; a provider rate limit or open breaker stops the batch with the item
+    pending; other gateway/Redis/value errors fail the item; other errors propagate.
     """
     try:
         embedded = await _embed_claimed_chunk(ctx, claimed)
@@ -391,7 +393,9 @@ async def _process_claimed_chunk(
             item_id=claimed.item_id,
             workspace_id=ctx.workspace_id,
         )
-    except (ModelGatewayError, RedisError, ValueError):
+    except (ModelGatewayError, RedisError, ValueError) as exc:
+        if _rate_limited(exc):
+            return False  # rate limit / breaker open: item stays pending; resumed next pass
         await _fail_item(
             ctx.factory,
             scope=ctx.scope,

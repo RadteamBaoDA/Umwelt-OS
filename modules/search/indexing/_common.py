@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
 from core.errors import ConflictError, ForbiddenError
-from core.model_gateway.client import ModelGateway
+from core.model_gateway.client import ModelGateway, ModelGatewayUnavailable
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay, make_index_change
@@ -188,6 +188,20 @@ async def _commit_index_change(
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
+
+
+def _rate_limited(exc: BaseException) -> bool:
+    """Return True when an embedding failure is a provider rate limit or an open gateway breaker.
+
+    Both say nothing about the chunk: ``ModelGatewayUnavailable`` is raised while the per-upstream breaker
+    is open (or for a long 429 Retry-After), and a plain ``ModelGatewayError`` wraps the SDK status error
+    of a 429 that survived the single gateway retry. Callers leave such items pending instead of failing
+    them, so the same generation resumes on the next pass. Pure: inspects only the exception and its
+    ``__cause__``; no openai import, so modules do not depend on the SDK.
+    """
+    if isinstance(exc, ModelGatewayUnavailable):
+        return True
+    return getattr(exc.__cause__, "status_code", None) == 429
 
 
 def _vector_literal(values: list[float]) -> str:

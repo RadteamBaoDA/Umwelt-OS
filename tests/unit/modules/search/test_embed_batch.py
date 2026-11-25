@@ -7,9 +7,14 @@ from types import SimpleNamespace
 from typing import Any, Self
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
+from openai import APIStatusError
+from redis.exceptions import RedisError
 
+from core.model_gateway.client import ModelGatewayError, ModelGatewayUnavailable
 from modules.search import indexing
+from modules.search.indexing._common import _rate_limited
 from tests.unit.split_patching import patch_split
 
 pytestmark = pytest.mark.asyncio
@@ -48,6 +53,7 @@ class _World:
         self.stale: set[UUID] = set()
         self.recheck_order: list[UUID] = []
         self.bad_response = False
+        self.raise_once: BaseException | None = None  # raised by the next embed call, then cleared
 
     def factory(self) -> Any:
         world = self
@@ -104,6 +110,9 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
             before_send: Any,
         ) -> dict[str, Any]:
             w.embed_inputs.append(list(inputs))
+            if w.raise_once is not None:
+                err, w.raise_once = w.raise_once, None
+                raise err
             if w.bad_response:
                 return {"data": [], "model": "m"}
             # reversed order + explicit indexes proves rows are re-associated by index, not position
@@ -349,3 +358,89 @@ async def test_fallback_skips_chunks_dropped_as_stale(
     )
     assert gone.chunk_id not in seen and len(seen) == len(world.chunks) - 1
     assert gone.item_id in world.deleted
+
+
+def _rate_limit_error() -> ModelGatewayError:
+    """A gateway error wrapping the SDK 429, as the client raises after its single retry (no network)."""
+    response = httpx.Response(429, request=httpx.Request("POST", "https://x/v1/embeddings"))
+    err = ModelGatewayError("Model gateway error (HTTP 429)")
+    err.__cause__ = APIStatusError("Token rate limit exceeded", response=response, body=None)
+    return err
+
+
+def _server_error() -> ModelGatewayError:
+    """A gateway error wrapping a non-rate-limit SDK status error (HTTP 500)."""
+    response = httpx.Response(500, request=httpx.Request("POST", "https://x/v1/embeddings"))
+    err = ModelGatewayError("Model gateway error (HTTP 500)")
+    err.__cause__ = APIStatusError("Internal error", response=response, body=None)
+    return err
+
+
+async def test_rate_limited_batch_stays_pending_and_next_pass_completes(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed: list[UUID] = []
+
+    async def fail_item(_factory: Any, **kw: Any) -> None:
+        failed.append(kw["item_id"])
+
+    patch_split(monkeypatch, "modules.search.indexing", "_fail_item", fail_item)
+    world.raise_once = _rate_limit_error()
+    assert (
+        await indexing._process_claimed_batch(_ctx(world), indexing._RunState(), world.chunks)
+        is False
+    )
+    assert failed == []
+    assert all(item.status == "pending" for item in world.items.values())
+    assert (
+        await indexing._process_claimed_batch(_ctx(world), indexing._RunState(), world.chunks)
+        is True
+    )
+    assert failed == []
+    assert all(item.status == "succeeded" for item in world.items.values())
+    assert set(world.updates) == {c.item_id for c in world.chunks}
+
+
+async def test_breaker_open_leaves_batch_pending(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed: list[UUID] = []
+
+    async def fail_item(_factory: Any, **kw: Any) -> None:
+        failed.append(kw["item_id"])
+
+    patch_split(monkeypatch, "modules.search.indexing", "_fail_item", fail_item)
+    world.raise_once = ModelGatewayUnavailable(30.0)
+    assert (
+        await indexing._process_claimed_batch(_ctx(world), indexing._RunState(), world.chunks)
+        is False
+    )
+    assert failed == []
+    assert all(item.status == "pending" for item in world.items.values())
+
+
+async def test_non_rate_limit_gateway_error_still_fails_batch(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failed: list[UUID] = []
+
+    async def fail_item(_factory: Any, **kw: Any) -> None:
+        failed.append(kw["item_id"])
+
+    patch_split(monkeypatch, "modules.search.indexing", "_fail_item", fail_item)
+    for err in (_server_error(), ModelGatewayError("no cause")):
+        failed.clear()
+        world.raise_once = err
+        assert (
+            await indexing._process_claimed_batch(_ctx(world), indexing._RunState(), world.chunks)
+            is True
+        )
+        assert failed == [c.item_id for c in world.chunks]
+
+
+def test_rate_limited_classifies_only_rate_limit_and_breaker_errors() -> None:
+    assert _rate_limited(ModelGatewayUnavailable(5.0))
+    assert _rate_limited(_rate_limit_error())
+    assert not _rate_limited(_server_error())
+    assert not _rate_limited(ModelGatewayError("no cause"))
+    assert not _rate_limited(RedisError())

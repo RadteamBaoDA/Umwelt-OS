@@ -10,10 +10,13 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
+import httpx
 import pytest
+from openai import APIStatusError
 from sqlalchemy.dialects import postgresql
 
 from core.errors import ConflictError
+from core.model_gateway.client import ModelGatewayError, ModelGatewayUnavailable
 from modules.dashboard import briefs as dashboard_briefs
 from modules.goals import public as goals
 from modules.goals.schemas import PlanProposal
@@ -513,6 +516,22 @@ async def test_process_claimed_chunk_maps_outcomes(monkeypatch: pytest.MonkeyPat
         embedding_raises(ValueError("dims")),
     )
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is True  # type: ignore[arg-type]
+    assert failed == ["failed"]
+
+    # A provider 429 (wrapped SDK status error) and an open breaker leave the item pending, not failed.
+    response = httpx.Response(429, request=httpx.Request("POST", "https://x/v1/embeddings"))
+    rate_limited = ModelGatewayError("Model gateway error (HTTP 429)")
+    rate_limited.__cause__ = APIStatusError(
+        "Token rate limit exceeded", response=response, body=None
+    )
+    for exc in (rate_limited, ModelGatewayUnavailable(5.0)):
+        patch_split(
+            monkeypatch,
+            "modules.search.indexing",
+            "_embed_claimed_chunk",
+            embedding_raises(exc),
+        )
+        assert await indexing._process_claimed_chunk(ctx, state, claimed) is False  # type: ignore[arg-type]
     assert failed == ["failed"]
 
     async def nothing(*args: Any, **kwargs: Any) -> None:
