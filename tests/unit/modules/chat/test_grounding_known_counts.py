@@ -56,3 +56,22 @@ def test_list_lengths_in_tool_results_are_known() -> None:
     ok = g.check_grounding("15 documents matched.", [], known, has_citation=False)
     bad = g.check_grounding("16 documents matched.", [], known, has_citation=False)
     assert ok.unverified == () and len(bad.unverified) == 1
+
+
+def test_iso_date_parts_in_tool_rows_are_known() -> None:
+    result = json.dumps({"rows": [{"listing_date": "2026-05-20"}, {"listing_date": "2026-05-21"}]})
+    known = g.build_known([result], [], "q")
+    ok = g.check_grounding("Listed on May 20, 21.", [], known, has_citation=False)
+    bad = g.check_grounding("Listed on May 20, 23.", [], known, has_citation=False)
+    assert ok.unverified == () and bad.unverified == ("23",)
+
+
+def test_turn_local_date_is_known(monkeypatch: Any) -> None:
+    from modules.chat._worker import finalize
+
+    monkeypatch.setattr(finalize, "_today_text", lambda env: "2026-11-25")
+    env = _env([_item("t", "x", uuid4())])
+    ok, _ = _grounding_for(env, "None between November 12 and 25 [1].", [], [])
+    bad, _ = _grounding_for(env, "None between November 12 and 26 [1].", [], [])
+    assert ok is not None and ok.unverified == ()
+    assert bad is not None and "26" in bad.unverified

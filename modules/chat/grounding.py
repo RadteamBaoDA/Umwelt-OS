@@ -110,6 +110,7 @@ _PROSE_SKIPS = [
 ]
 # "10.82,106.63" / "10,82,106,63": a latitude,longitude label, which _NUM_RE reads as one unparseable token.
 _COORD_RE = re.compile(r"(?<![\w.,])(-?\d{1,3}[.,]\d+)\s*,\s*(-?\d{1,3}[.,]\d+)(?![\w.,])")
+_ISO_DATE_RE = re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)")
 _SENTENCES = re.compile(r"(?<=[.!?])\s+|\n+")
 _MARKER = re.compile(r"\[\d+\]")
 
@@ -424,6 +425,7 @@ def build_known(
 ) -> KnownNumbers:
     """Collect known numbers from tool-result JSON, evidence/web texts and the user's message.
 
+    Each ISO date (``YYYY-MM-DD``) in a tool result adds its year, month and day as known numbers.
     ``prior_answers`` (earlier assistant messages) fill ``known.prior`` only: they never verify a number,
     they just let ``check_grounding`` tell a retracted old figure from a new unverified one.
     """
@@ -432,6 +434,10 @@ def build_known(
         for answer in prior_answers:
             known.prior.add_text(_strip(answer, prose=True))
     for raw in tool_results:
+        # JSON walking strips ISO dates, but "May 20" in an answer is a claim read from one: keep each part.
+        for part in _ISO_DATE_RE.finditer(raw[:_MAX_TEXT]):
+            for value in part.groups():
+                known.add_value(float(value))
         try:
             known.add_json(json.loads(raw))
         except ValueError:

@@ -177,11 +177,11 @@ def test_prior_answers_and_misattribution_reach_report_and_metadata() -> None:
     env = _env(rows)
     env.turn.prior_messages = [
         {"role": "user", "content": "rate?"},
-        {"role": "assistant", "content": "It is 25,000 VND."},
+        {"role": "assistant", "content": "It is 47,000 VND."},
     ]
-    answer = "Eth is 67.500 [2]. I should correct my earlier answer of 25,000 VND."
+    answer = "Eth is 67.500 [2]. I should correct my earlier answer of 47,000 VND."
     report, _ = _grounding_for(env, answer, [{"c": 1}], [])
     assert report is not None and report.count == 0
-    assert report.restated == ("25,000",) and report.misattributed == ("67.500",)
+    assert report.restated == ("47,000",) and report.misattributed == ("67.500",)
     meta = _assistant_metadata(_StreamState(), [], None, False, report)["metadata_json"]
     assert meta["misattributed_numbers"] == ["67.500"] and "unverified_numbers" not in meta

@@ -14,6 +14,7 @@ from core import media_proxy, metrics
 from modules.chat._worker.base import (
     _next_event_seq,
 )
+from modules.chat._worker.setup import _local_now_text
 from modules.chat._worker.state import (
     _add_event,
     _evidence_still_valid,
@@ -440,6 +441,12 @@ def _assistant_metadata(
     }
 
 
+def _today_text(env: _ToolEnv) -> str:
+    """Return the turn's local ``YYYY-MM-DD`` (owner timezone, UTC when unset), the date the prompt states (pure)."""
+    zone = getattr(getattr(env, "setup", None), "owner_timezone", None)
+    return _local_now_text(zone)[:10]
+
+
 def _grounding_for(
     env: _ToolEnv,
     final_answer: str,
@@ -468,8 +475,12 @@ def _grounding_for(
         if not (results or evidence or web_texts):
             return None, generative_uis
         prior = [m.get("content", "") for m in turn.prior_messages if m.get("role") == "assistant"]
+        # The system prompt states today's date, so the answer may cite its year, month and day.
         known = build_known(
-            results, [*evidence, *evidence_counts, *web_texts], turn.user_prompt, prior
+            results,
+            [*evidence, *evidence_counts, *web_texts, _today_text(env)],
+            turn.user_prompt,
+            prior,
         )
         report = check_grounding(
             final_answer, generative_uis, known, has_citation=bool(valid_citations)
