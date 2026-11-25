@@ -429,6 +429,48 @@ async def test_aggregation_with_truncated_raw_rows_is_not_flagged_truncated(
     assert out["observations_truncated"] is True
 
 
+@pytest.mark.asyncio
+async def test_truncated_groups_still_report_exact_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    """More groups than ``limit``: the total comes from a separate COUNT and groups are flagged cut."""
+    calls: list[list[object]] = []
+
+    async def _aggs(*_a: object, **_k: object) -> list[dict[str, object]]:
+        return [{"symbol": f"CVE-{i}", "count": 1} for i in range(26)]  # limit + 1
+
+    async def _total(_session: object, filters: list[object]) -> int:
+        calls.append(filters)
+        return 36
+
+    class _Res:
+        def scalars(self) -> _Res:
+            return self
+
+        def all(self) -> list[object]:
+            return []
+
+    class _S:
+        async def execute(self, _stmt: object) -> _Res:
+            return _Res()
+
+    monkeypatch.setattr(db_query, "_observation_aggregates", _aggs)
+    monkeypatch.setattr(db_query, "_observation_total_count", _total)
+    out: dict[str, object] = {}
+    aggs, _rows, truncated = await db_query._collect_observations(
+        _S(),  # type: ignore[arg-type]
+        _args(target="observations", aggregation="count", limit=25, date_from="2026-01-01"),
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+        date_from=None,
+        date_to=None,
+        out=out,
+    )
+    assert len(aggs) == 25 and truncated is True and len(calls) == 1
+    assert out["aggregate_total_count"] == 36
+    assert out["groups_truncated"] is True
+    db_query._attach_aggregates(out, aggs, {})
+    assert out["aggregate_total_count"] == 36  # not overwritten by the 25-group sum
+
+
 def test_compact_date_is_a_whole_local_day() -> None:
     start = _parse_bound("20260305", _HCM, name="date_from", end=False)
     end = _parse_bound("20260305", _HCM, name="date_to", end=True)

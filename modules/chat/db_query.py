@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
-from modules.chat._db_aggregates import _observation_aggregates
+from modules.chat._db_aggregates import _observation_aggregates, _observation_total_count
 from modules.chat._db_attributes import (
     available_series,
     bound_attributes,
@@ -1154,11 +1154,12 @@ def _attach_aggregates(
 ) -> None:
     """Cite the aggregate groups and add them to ``out`` with ``aggregate_total_count``, their summed row count.
 
-    The scalar survives any later row cap (``cap_tool_output``), so a count over many groups (one per
-    symbol) stays exact; it is a lower bound when the groups were truncated. Mutates ``out`` and ``aggregates``.
+    The scalar survives any later row cap (``cap_tool_output``). An exact total already set by
+    ``_collect_observations`` (groups cut at ``limit``) is kept; otherwise the groups are complete and their
+    sum is exact. Mutates ``out`` and ``aggregates``.
     """
     _apply_aggregate_citations(aggregates, citation_map)
-    out["aggregate_total_count"] = sum(int(a.get("count") or 0) for a in aggregates)
+    out.setdefault("aggregate_total_count", sum(int(a.get("count") or 0) for a in aggregates))
     out["observation_aggregates"] = aggregates
 
 
@@ -1297,7 +1298,8 @@ async def _collect_observations(
     raw rows did. With aggregation the raw rows are only a sample alongside the groups, so their overflow is
     reported as ``out["observations_truncated"] = True`` without the hint. Aggregation without any date range
     is bounded to the last ``DEFAULT_AGGREGATION_WINDOW_DAYS`` days and says so in
-    ``out["aggregation_window"]``. ``out`` is the only mutation; read-only on ``session``.
+    ``out["aggregation_window"]``. When the groups were cut, ``out`` also gets the exact
+    ``aggregate_total_count`` (separate COUNT, same filters) and ``groups_truncated``. ``out`` is the only mutation; read-only on ``session``.
     """
     obs_from = date_from
     if args.aggregation != "none" and date_from is None and date_to is None:
@@ -1320,6 +1322,10 @@ async def _collect_observations(
         aggregates = await _observation_aggregates(session, obs_filters, args.limit)
         truncated = len(aggregates) > args.limit
         aggregates = aggregates[: args.limit]
+        if truncated:
+            # The groups are cut, so their summed counts undercount: ask the DB for the exact total.
+            out["aggregate_total_count"] = await _observation_total_count(session, obs_filters)
+            out["groups_truncated"] = True
     obs_rows = list(
         (
             await session.execute(
@@ -1402,8 +1408,8 @@ async def _execute_structured_mode(
     """Execute read-only parameterized queries for observations and/or documents; return the JSON payload.
 
     Documents are added when a requested provider is not a measurement provider (feeds store documents
-    only); with aggregation the payload also carries ``aggregate_total_count`` (sum of the returned groups'
-    row counts; a lower bound when ``truncated``); ``available_providers`` lets the model retry with a valid id. Order: aggregate, observation rows,
+    only); with aggregation the payload also carries ``aggregate_total_count`` (exact: a separate COUNT when
+    groups were cut, flagged ``groups_truncated``); ``available_providers`` lets the model retry with a valid id. Order: aggregate, observation rows,
     document rows, evidence, best-effort Redis hot cache. ``source_scopes`` fences rows and evidence to each
     source's current scope; ``source_names`` labels observation rows. No commit."""
     out: dict[str, Any] = {

@@ -12,6 +12,17 @@ from modules.knowledge.observations.public import ObservationReadProjection as O
 _GROUP_KEYS = ("provider", "metric", "symbol", "region", "unit", "currency")
 
 
+async def _observation_total_count(session: AsyncSession, obs_filters: list[Any]) -> int:
+    """Exact number of observation rows matching ``obs_filters`` (one read-only ``COUNT``).
+
+    Takes the very filter list the grouped query uses (workspace, allowed-source, scope, supersession,
+    date window), so it can never count rows the groups could not. It is the sum of every group's count,
+    independent of the group ``LIMIT``.
+    """
+    stmt = select(func.count(Observation.id)).where(*obs_filters)
+    return int((await session.execute(stmt)).scalar_one() or 0)
+
+
 async def _observation_aggregates(
     session: AsyncSession, obs_filters: list[Any], limit: int
 ) -> list[dict[str, Any]]:
