@@ -366,6 +366,9 @@ def test_cue_in_neighbouring_sentence_of_same_paragraph_does_not_excuse_figure()
         "That CVE is not in the CISA KEV data.",
         "The workspace has no XRPUSDT series.",
         "No BTCUSDT price was collected today.",
+        "The collected data does not give a casualty count.",
+        "The collected data has no CNN Fear and Greed Index reading.",
+        "Of the sources, none are dated today.",
     ],
 )
 def test_nodata_matches_quoted_answers(answer: str) -> None:

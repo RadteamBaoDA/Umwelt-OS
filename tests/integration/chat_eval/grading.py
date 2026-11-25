@@ -19,6 +19,8 @@ NODATA = re.compile(
     r"no (?:data|record|result|information|matching|observation|such|price|entry|entries|events?)|"
     r"(?:not|n't|cannot|can't|unable|couldn't).{0,40}(?:found|find|available|access|see|retriev|any)|"
     r"doesn't (?:have|contain|include)|does not (?:have|contain|include)|nothing|not (?:yet )?(?:published|reported|collected)|"
+    r"(?:does not|doesn't) (?:give|mention|state|show|report|list|provide)|"
+    r"(?:has|have|had|contains?|shows?) no|none (?:are|is|was|were|of)|"
     r"don't have|do not have|no .{0,30} (?:data|information)|"
     r"^\W*no\s*[.,]|found no\b|returned no (?:rows|results|matches)|is not (?:in|listed)|"
     r"has no .{0,30}(?:series|data|rows|records)|\bno .{0,30} (?:was|were) (?:found|collected)|"
