@@ -10,6 +10,8 @@ read projection, in ONE query per call, and bounds what reaches the model.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from contextlib import suppress
 from typing import Any, cast
 from uuid import UUID
@@ -221,6 +223,49 @@ def escape_like(raw: str) -> str:
     return raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+_VOWELS = "aeiou"
+_MIN_SKELETON_LETTERS = 5
+
+
+def phrase_skeleton_regex(query: str) -> str | None:
+    """Regex that matches ``query`` on a compacted title even when its words are abbreviated; ``None`` if unfit.
+
+    Providers such as BMKG compact region names ("MALUKUBRTDAYA" for "Maluku Barat Daya",
+    "PAPUABRTDY"). The title is compacted to ``[a-z]`` only (see :func:`phrase_title_match`); here every
+    query word becomes its first letter followed by its later consonants (``y`` counts as one), each
+    separated by ``[aeiou]*`` so dropped vowels are tolerated but dropped consonants are not.
+    "maluku barat daya" -> ``m[aeiou]*l[aeiou]*k[aeiou]*b...y[aeiou]*``: it matches MALUKUBRTDAYA and
+    "malukubaratdaya" but not "BaratDaya MALUKUTENGGARA". Words stay adjacent in order, which keeps it
+    from matching unrelated titles the way a loose letter subsequence does.
+
+    Only 2-6 word queries qualify (single words are already served by the keyword match), and the skeleton
+    needs at least 5 letters so short phrases cannot match everything. Accents are stripped; the result is
+    built solely from ``[a-z]`` and the fixed class, so it is safe to bind as a parameter.
+    """
+    folded = unicodedata.normalize("NFKD", query.lower().replace("đ", "d"))
+    words = [w for w in (re.sub(r"[^a-z]", "", t) for t in folded.split()) if w]
+    if not 2 <= len(words) <= 6:
+        return None
+    letters = [w[0] + "".join(c for c in w[1:] if c not in _VOWELS) for w in words]
+    if sum(len(x) for x in letters) < _MIN_SKELETON_LETTERS:
+        return None
+    return "".join(f"{c}[{_VOWELS}]*" for part in letters for c in part)
+
+
+def phrase_title_match(query: str) -> Any | None:
+    """Predicate: the compacted title matches :func:`phrase_skeleton_regex` of ``query``; ``None`` if unfit.
+
+    The title is accent-folded, lower-cased and stripped to ``[a-z]`` in SQL, and compared with the
+    regex as a bound parameter (no SQL is built from user text). A pure expression over
+    ``documents.title``; callers keep their own scope, permission and deletion predicates.
+    """
+    pattern = phrase_skeleton_regex(query)
+    if pattern is None:
+        return None
+    compact = func.regexp_replace(func.lower(_unaccent(Document.title)), "[^a-z]", "", "g")
+    return compact.op("~")(pattern)
+
+
 def text_match_filter(query: str, version_id_column: Any) -> Any:
     """Accent-insensitive keyword predicate: any chunk of the version, or the title, matches ``query``.
 
@@ -232,6 +277,9 @@ def text_match_filter(query: str, version_id_column: Any) -> Any:
     The chunk side is an uncorrelated ``IN`` subquery with a literal ``'simple'::regconfig`` so its
     expression is byte-identical to the index expression: a bound config parameter or a correlated
     ``EXISTS`` would make the planner recompute ``to_tsvector`` per chunk instead of using the GIN index.
+
+    For 2-6 word queries a third arm, :func:`phrase_title_match`, also matches abbreviated place names in
+    titles (recall only; ranking is done by the caller via the same predicate).
     """
     simple: Any = literal_column("'simple'::regconfig")
     ts_query = func.websearch_to_tsquery(simple, _unaccent(query))
@@ -241,7 +289,10 @@ def text_match_filter(query: str, version_id_column: Any) -> Any:
         )
     )
     title_match = _unaccent(Document.title).ilike(_unaccent(f"%{escape_like(query)}%"), escape="\\")
-    return or_(chunk_match, title_match)
+    phrase_match = phrase_title_match(query)
+    if phrase_match is None:
+        return or_(chunk_match, title_match)
+    return or_(chunk_match, title_match, phrase_match)
 
 
 async def hot_cache_snapshots(

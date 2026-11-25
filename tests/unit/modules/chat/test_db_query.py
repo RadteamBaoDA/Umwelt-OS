@@ -821,3 +821,22 @@ def test_provider_hint_names_the_overflow_count() -> None:
     assert "more; omit providers" not in _provider_hint(["usgs"])
     assert "…and 4 more; omit providers to search all" in _provider_hint(["usgs"], overflow=4)
     assert "and 4 more" in _gadget_note({}, True, ["usgs"], overflow=4)
+
+
+@pytest.mark.asyncio
+async def test_structured_documents_rank_phrase_matches_first_within_source() -> None:
+    """P6: a phrase rank expression leads the per-source ROW_NUMBER ordering, before recency."""
+    from modules.chat import db_query
+    from modules.chat._db_attributes import phrase_title_match
+
+    captured: list[str] = []
+
+    class _Session:
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            captured.append(str(stmt))
+            return SimpleNamespace(all=lambda: [])
+
+    rank = phrase_title_match("Maluku Barat Daya")
+    await db_query._select_structured_documents(_Session(), [], 25, phrase_rank=rank)  # type: ignore[arg-type]
+    over = captured[0].split("row_number() OVER (")[1].split(") AS source_rank")[0]
+    assert over.index("regexp_replace") < over.index("coalesce")

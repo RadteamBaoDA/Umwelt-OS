@@ -154,3 +154,50 @@ def test_serialize_observations_labels_rows_with_source_name() -> None:
     [out] = attrs.serialize_observations([row], {version: 2}, {}, {src: "Hà Nội"})
     assert out["source_name"] == "Hà Nội" and out["citation"] == "[2]"
     assert attrs.serialize_observations([row], {}, {})[0]["source_name"] is None
+
+
+def test_phrase_skeleton_regex_matches_abbreviated_region_titles() -> None:
+    """P6: "Maluku Barat Daya" matches the compacted BMKG title but not the other Maluku region."""
+    import re
+
+    from modules.chat._db_attributes import phrase_skeleton_regex
+
+    def compact(title: str) -> str:
+        return re.sub(r"[^a-z]", "", title.lower())
+
+    rx = phrase_skeleton_regex("Maluku Barat Daya")
+    assert rx is not None
+    assert re.search(rx, compact("43 km BaratLaut MALUKUBRTDAYA"))
+    assert re.search(rx, compact("Gempa di Maluku Barat Daya"))
+    assert not re.search(rx, compact("130 km BaratDaya MALUKUTENGGARA"))
+    papua = phrase_skeleton_regex("Papua Barat Daya")
+    assert papua is not None
+    assert re.search(papua, compact("241 km TimurLaut RAJAAMPAT-PAPUABRTDY"))
+    assert not re.search(papua, compact("75 km BaratLaut INTANJAYA-PAPUATENGAH"))
+
+
+def test_phrase_skeleton_regex_bounds() -> None:
+    """P6: single words, 7+ words and very short phrases yield no phrase arm."""
+    from modules.chat._db_attributes import phrase_skeleton_regex
+
+    assert phrase_skeleton_regex("Maluku") is None
+    assert phrase_skeleton_regex("a b c d e f g") is None
+    assert phrase_skeleton_regex("to do") is None
+    assert phrase_skeleton_regex("   ") is None
+
+
+def test_text_query_phrase_arm_is_parameterized_and_scoped() -> None:
+    """P6: the phrase arm binds its pattern as a parameter and sits behind the scope predicates."""
+    filters = _document_filters(
+        QueryCollectedDataArgs(text_query="Maluku Barat Daya'; DROP"),
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+        date_from=None,
+        date_to=None,
+    )
+    assert len(filters) == 3
+    compiled = filters[-1].compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert "regexp_replace" in sql and " ~ " in sql
+    assert "DROP" not in sql
+    assert any("[aeiou]*" in str(v) for v in compiled.params.values())

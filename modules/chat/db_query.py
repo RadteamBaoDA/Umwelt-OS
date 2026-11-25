@@ -39,6 +39,7 @@ from modules.chat._db_attributes import (
     bound_attributes,
     evidence_pairs,
     fetch_attributes,
+    phrase_title_match,
     serialize_documents,
     serialize_observations,
     text_match_filter,
@@ -1228,7 +1229,7 @@ def _document_filters(
 
 
 async def _select_structured_documents(
-    session: AsyncSession, doc_filters: list[Any], limit: int
+    session: AsyncSession, doc_filters: list[Any], limit: int, *, phrase_rank: Any = None
 ) -> list[Any]:
     """Select matching documents joined to source and current version (one SELECT), newest first per source.
 
@@ -1236,8 +1237,12 @@ async def _select_structured_documents(
     the outer query orders by that rank before recency, so a call spanning several feeds is interleaved
     round-robin: a fast feed (news) cannot push a slow one (quakes) out of the ``limit`` window. With a
     single source the order is plain newest-first. Fetches ``limit + 1`` rows; the caller trims and flags truncation.
+
+    ``phrase_rank`` (optional boolean expression from :func:`phrase_title_match`) ranks phrase-matching
+    rows first inside each source, so an abbreviation-tolerant phrase hit beats a loose word-only hit.
     """
     recency = func.coalesce(Document.observed_at, Document.created_at)
+    in_source_order = [desc(phrase_rank)] if phrase_rank is not None else []
     ranked = (
         select(
             Document.id.label("document_id"),
@@ -1252,7 +1257,7 @@ async def _select_structured_documents(
             func.left(DocumentVersion.content, 500).label("excerpt"),
             recency.label("recency"),
             func.row_number()
-            .over(partition_by=Document.source_id, order_by=desc(recency))
+            .over(partition_by=Document.source_id, order_by=[*in_source_order, desc(recency)])
             .label("source_rank"),
         )
         .join(
@@ -1365,7 +1370,9 @@ async def _collect_documents(
         date_to=date_to,
         source_scopes=source_scopes,
     )
-    rows = await _select_structured_documents(session, doc_filters, args.limit)
+    phrase = phrase_title_match(args.text_query.strip()) if args.text_query else None
+    extra = {} if phrase is None else {"phrase_rank": phrase}  # keeps the 3-arg call when unused
+    rows = await _select_structured_documents(session, doc_filters, args.limit, **extra)
     return rows[: args.limit], len(rows) > args.limit
 
 
