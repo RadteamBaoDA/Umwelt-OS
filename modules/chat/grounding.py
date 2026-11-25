@@ -111,6 +111,8 @@ _PROSE_SKIPS = [
 # "10.82,106.63" / "10,82,106,63": a latitude,longitude label, which _NUM_RE reads as one unparseable token.
 _COORD_RE = re.compile(r"(?<![\w.,])(-?\d{1,3}[.,]\d+)\s*,\s*(-?\d{1,3}[.,]\d+)(?![\w.,])")
 _ISO_DATE_RE = re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)")
+# snake_case identifier carrying digits ("temperature_2m", "wind_speed_10m", "pm25"): prose says "2 m".
+_IDENT_RE = re.compile(r"(?<![\w])[a-z][a-z_]*\d[a-z0-9_]*(?![\w])")
 _SENTENCES = re.compile(r"(?<=[.!?])\s+|\n+")
 _MARKER = re.compile(r"\[\d+\]")
 
@@ -417,6 +419,16 @@ def query_result_contents(messages: Sequence[Mapping[str, Any]]) -> list[str]:
     ]
 
 
+def _add_identifier_digits(known: KnownNumbers, raw: str) -> None:
+    """Add each digit run inside a snake_case identifier of ``raw`` to ``known`` (``temperature_2m`` -> 2).
+
+    Mutates ``known`` only; scans at most ``_MAX_TEXT`` characters. Prose writes such units apart ("2 m").
+    """
+    for ident in _IDENT_RE.findall(raw[:_MAX_TEXT]):
+        for digits in re.findall(r"\d+", ident):
+            known.add_value(float(digits))
+
+
 def build_known(
     tool_results: Iterable[str],
     texts: Iterable[str],
@@ -425,7 +437,8 @@ def build_known(
 ) -> KnownNumbers:
     """Collect known numbers from tool-result JSON, evidence/web texts and the user's message.
 
-    Each ISO date (``YYYY-MM-DD``) in a tool result adds its year, month and day as known numbers.
+    Each ISO date (``YYYY-MM-DD``) in a tool result adds its year, month and day as known numbers; each digit
+    run inside a lower-case snake_case identifier (``temperature_2m`` -> 2) is added the same way.
     ``prior_answers`` (earlier assistant messages) fill ``known.prior`` only: they never verify a number,
     they just let ``check_grounding`` tell a retracted old figure from a new unverified one.
     """
@@ -438,12 +451,14 @@ def build_known(
         for part in _ISO_DATE_RE.finditer(raw[:_MAX_TEXT]):
             for value in part.groups():
                 known.add_value(float(value))
+        _add_identifier_digits(known, raw)
         try:
             known.add_json(json.loads(raw))
         except ValueError:
             known.add_text(raw)
     for text in texts:
         known.add_text(text)
+        _add_identifier_digits(known, text)
     known.add_text(user_text)
     return known
 

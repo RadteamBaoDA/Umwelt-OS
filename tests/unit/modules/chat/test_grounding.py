@@ -302,3 +302,10 @@ def test_month_prefix_words_do_not_hide_real_numbers() -> None:
     assert [n.raw for n in g.extract_numbers("Revenue decreased 12-15 percent.")] == ["12", "15"]
     assert [n.raw for n in g.extract_numbers("The market 30-40 range held.")] == ["30", "40"]
     assert g.extract_numbers("Held on Nov 16, 2026 and 16 November 2026.") == []
+
+
+def test_digits_inside_identifier_metrics_are_known() -> None:
+    """``temperature_2m`` makes "2 m" grounded; an unrelated "3 m" stays unverified."""
+    known = _known({"rows": [{"metric": "temperature_2m", "value": 31.4}]})
+    assert _unverified("The temperature at 2 m was 31.4 degrees.", known) == []
+    assert _unverified("The temperature at 3 m was 31.4 degrees.", known) == ["3 m"]
