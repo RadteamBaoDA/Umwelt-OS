@@ -1,6 +1,7 @@
 """Chat worker finalization: citation validation, widget finalization and final message persistence."""
 
 import json
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -448,21 +449,28 @@ def _grounding_for(
     """Run the numeric grounding check and return ``(report, widgets)`` (pure apart from a metric increment).
 
     Runs only for a turn that called ``query_collected_data`` or had evidence/web results; otherwise
-    ``(None, generative_uis)`` unchanged. Known numbers come from this turn's query results, the evidence and
-    web snippets and the user's message. Non-sample table/chart parts holding an unmatched number come back
+    ``(None, generative_uis)`` unchanged. Known numbers come from this turn's query results, the evidence (title and content, plus the
+    item counts in total and per source), web snippets and the user's message. Non-sample table/chart parts holding an unmatched number come back
     relabelled with the "unverified" source; the answer text is never altered. Any failure of the check
     itself is swallowed (it must not fail a completed answer) and reported as "not run".
     """
     try:
         ts, turn = env.ts, env.turn
         results = query_result_contents(ts.messages_payload)
-        evidence = [e.content for e in cast(AnswerContext, turn.answer_context).evidence]
+        items = cast(AnswerContext, turn.answer_context).evidence
+        # The model sees each item's title in the grounded context, so a title (e.g. a CVE id) is retrieved
+        # data. Counts of items, in total and per source, are facts the model may state ("13 reports").
+        evidence = [f"{e.title}\n{e.content}" for e in items]
+        per_source = Counter(e.source_id for e in items)
+        evidence_counts = [str(len(items)), *(str(n) for n in per_source.values())]
         web = turn.web_run
         web_texts = [f"{r.title} {r.snippet}" for r in web.results] if web is not None else []
         if not (results or evidence or web_texts):
             return None, generative_uis
         prior = [m.get("content", "") for m in turn.prior_messages if m.get("role") == "assistant"]
-        known = build_known(results, [*evidence, *web_texts], turn.user_prompt, prior)
+        known = build_known(
+            results, [*evidence, *evidence_counts, *web_texts], turn.user_prompt, prior
+        )
         report = check_grounding(
             final_answer, generative_uis, known, has_citation=bool(valid_citations)
         )

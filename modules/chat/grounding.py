@@ -12,8 +12,8 @@ A number that is in the data but only in a row other than the one(s) its sentenc
 ``misattributed`` (a citation-level check; the meaning of the figure within its row is not judged).
 
 Known limits (a number that cannot be matched is reported as unverified even when it is right): other
-derivations (averages of many rows, rankings, rounded or low-precision results), unit conversions,
-spelled-out numbers; bare integers 0-10 and standalone years are not judged at all, and ambiguous
+derivations (averages of many rows, rankings, rounded or low-precision results, counts by complement such
+as "all but 2"), unit conversions, spelled-out numbers; bare integers 0-10 and standalone years are not judged at all, and ambiguous
 separators ("1.234") match either reading.
 """
 
@@ -30,6 +30,7 @@ from modules.chat.db_query import TOOL_QUERY_COLLECTED_DATA
 # Widget source label for a non-sample table/chart whose numbers are not in the retrieved data.
 UNVERIFIED_SOURCE = "Unverified figures (not found in retrieved data)"
 MAX_EXAMPLES = 10
+_COUNTED_LISTS = ("observations", "documents", "rows", "observation_aggregates")
 _MAX_KNOWN = 200_000  # bound on remembered values (tool results are already row-capped)
 _MAX_TEXT = 100_000  # bound on one scanned text
 _MAX_DERIVATION_BASE = 60  # numeric tool values tried pairwise for derived figures (60*59/2 pairs)
@@ -306,7 +307,8 @@ class KnownNumbers:
         Keys that hold identifiers, timestamps, URLs or citation bookkeeping (``_SKIP_KEYS``, ``*_id``,
         ``*_at``) are skipped entirely, so a UUID tail like ``...-000000000047`` or a ``10:30`` time cannot
         make a made-up 47 or 30 look verified. Other string leaves get the same date/time/code stripping as
-        prose before their numbers are read.
+        prose before their numbers are read. The length of each row list (``_COUNTED_LISTS``) is also
+        remembered, so "15 rows" verifies against a 15-row result.
         """
         if depth > 8:
             return
@@ -320,6 +322,10 @@ class KnownNumbers:
             self.add_text(_strip(node, prose=False))
         elif isinstance(node, Mapping):
             self._add_row(node, depth)
+            # A row list's length is a stated fact ("15 rows"); the model counts what the tool returned.
+            for key in _COUNTED_LISTS:
+                if isinstance(node.get(key), list):
+                    self.add_value(float(len(node[key])))
             for key, child in node.items():
                 if not _is_skipped_key(key):
                     self.add_json(child, depth=depth + 1)

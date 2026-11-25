@@ -25,7 +25,9 @@ def _env(tool_result: str | None, evidence: list[str] | None = None) -> Any:
             },
             {"role": "tool", "tool_call_id": "q", "content": tool_result},
         ]
-    ctx = SimpleNamespace(evidence=[SimpleNamespace(content=c) for c in evidence or []])
+    ctx = SimpleNamespace(
+        evidence=[SimpleNamespace(content=c, title="", source_id="s") for c in evidence or []]
+    )
     return SimpleNamespace(
         ts=SimpleNamespace(messages_payload=messages),
         turn=SimpleNamespace(
