@@ -45,6 +45,7 @@ from modules.chat.grounding import (
     GroundingReport,
     build_known,
     check_grounding,
+    query_call_arguments,
     query_result_contents,
     relabel_widgets,
 )
@@ -456,7 +457,7 @@ def _grounding_for(
     """Run the numeric grounding check and return ``(report, widgets)`` (pure apart from a metric increment).
 
     Runs only for a turn that called ``query_collected_data`` or had evidence/web results; otherwise
-    ``(None, generative_uis)`` unchanged. Known numbers come from this turn's query results, the evidence (title and content, plus the
+    ``(None, generative_uis)`` unchanged. Known numbers come from this turn's query results and the arguments of its query calls, the evidence (title and content, plus the
     item counts in total and per source), web snippets and the user's message. Non-sample table/chart parts holding an unmatched number come back
     relabelled with the "unverified" source; the answer text is never altered. Any failure of the check
     itself is swallowed (it must not fail a completed answer) and reported as "not run".
@@ -481,6 +482,8 @@ def _grounding_for(
             [*evidence, *evidence_counts, *web_texts, _today_text(env)],
             turn.user_prompt,
             prior,
+            tool_args=query_call_arguments(ts.messages_payload),
+            counts=[len(items), *per_source.values()],
         )
         report = check_grounding(
             final_answer, generative_uis, known, has_citation=bool(valid_citations)

@@ -419,6 +419,17 @@ def query_result_contents(messages: Sequence[Mapping[str, Any]]) -> list[str]:
     ]
 
 
+def query_call_arguments(messages: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Raw JSON argument strings of the turn's ``query_collected_data`` tool calls (pure, in call order)."""
+    return [
+        str(tc.get("function", {}).get("arguments") or "")
+        for m in messages
+        if m.get("role") == "assistant"
+        for tc in m.get("tool_calls") or ()
+        if tc.get("function", {}).get("name") == TOOL_QUERY_COLLECTED_DATA
+    ]
+
+
 def _add_identifier_digits(known: KnownNumbers, raw: str) -> None:
     """Add each digit run inside a snake_case identifier of ``raw`` to ``known`` (``temperature_2m`` -> 2).
 
@@ -429,11 +440,54 @@ def _add_identifier_digits(known: KnownNumbers, raw: str) -> None:
             known.add_value(float(digits))
 
 
+_MAX_COMPLEMENT = 3  # "the other N" is accepted for N = K - 1 .. K - 3 only
+
+
+def _collect_counts(node: Any, out: set[int], depth: int = 0) -> None:
+    """Add to ``out`` the row-list lengths (``_COUNTED_LISTS``) and ``aggregate_total_count`` of a decoded result.
+
+    Pure apart from mutating ``out``; depth-bounded like ``KnownNumbers.add_json``. Arbitrary numeric
+    fields are never counts, so a value like 15.0 in a ``magnitude`` column does not qualify.
+    """
+    if depth > 8:
+        return
+    if isinstance(node, Mapping):
+        for key in _COUNTED_LISTS:
+            if isinstance(node.get(key), list):
+                out.add(len(node[key]))
+        total = node.get("aggregate_total_count")
+        if isinstance(total, int) and not isinstance(total, bool):
+            out.add(total)
+        for child in node.values():
+            _collect_counts(child, out, depth + 1)
+    elif isinstance(node, list):
+        for child in node:
+            _collect_counts(child, out, depth + 1)
+
+
+def _add_tool_args(known: KnownNumbers, raw: str) -> None:
+    """Add the numbers in one tool call's JSON arguments (filters, bounds, limits, dates) to ``known``.
+
+    Parsed with the same id/timestamp key skipping as tool results, through a scratch instance so the
+    arguments never become derivation operands of ``known``. Invalid JSON is read as plain text.
+    """
+    scratch = KnownNumbers(track_rows=False)
+    try:
+        scratch.add_json(json.loads(raw[:_MAX_TEXT]))
+    except ValueError:
+        scratch.add_text(raw)
+    for value in scratch._values:
+        known.add_value(value)
+
+
 def build_known(
     tool_results: Iterable[str],
     texts: Iterable[str],
     user_text: str,
     prior_answers: Iterable[str] = (),
+    *,
+    tool_args: Iterable[str] = (),
+    counts: Iterable[int] = (),
 ) -> KnownNumbers:
     """Collect known numbers from tool-result JSON, evidence/web texts and the user's message.
 
@@ -441,8 +495,16 @@ def build_known(
     run inside a lower-case snake_case identifier (``temperature_2m`` -> 2) is added the same way.
     ``prior_answers`` (earlier assistant messages) fill ``known.prior`` only: they never verify a number,
     they just let ``check_grounding`` tell a retracted old figure from a new unverified one.
+
+    ``tool_args`` are the raw JSON arguments of the turn's own query-tool calls: their numbers (bounds,
+    limits, dates) are what the answer restates, so they count as known. ``counts`` are extra known
+    item counts (e.g. evidence totals). Every count K (those plus row-list lengths and
+    ``aggregate_total_count`` in the tool results) also makes K-1..K-3 known ("the other 13" of 15).
     """
     known = KnownNumbers()
+    count_set = {int(c) for c in counts}
+    for raw_args in tool_args:
+        _add_tool_args(known, raw_args)
     if known.prior is not None:
         for answer in prior_answers:
             known.prior.add_text(_strip(answer, prose=True))
@@ -453,9 +515,16 @@ def build_known(
                 known.add_value(float(value))
         _add_identifier_digits(known, raw)
         try:
-            known.add_json(json.loads(raw))
+            decoded = json.loads(raw)
         except ValueError:
             known.add_text(raw)
+        else:
+            known.add_json(decoded)
+            _collect_counts(decoded, count_set)
+    for total in count_set:
+        for k in range(1, _MAX_COMPLEMENT + 1):
+            if total - k >= 1:
+                known.add_value(float(total - k))
     for text in texts:
         known.add_text(text)
         _add_identifier_digits(known, text)
