@@ -364,3 +364,16 @@ def test_sample_sql_reads_every_non_local_only_source_not_only_evalc_prefix() ->
     for sql in (DOC_SQL, OBS_SQL):
         assert "evalc" not in sql
         assert "s.local_only IS FALSE" in sql
+
+
+def test_unknown_scope_key_rejects_non_empty_draft() -> None:
+    reasons = reject_reasons(_draft(source_scope=("cnn",)), KEYS, NUMBERS, frozenset({"binance"}))
+    assert any("source_scope key not in snapshot: cnn" in r for r in reasons)
+
+
+def test_accept_strips_unknown_scope_of_empty_draft() -> None:
+    from tests.integration.chat_eval.draft_real import _accept
+
+    draft = _draft(empty=True, gold_obs=(), gold_facts=(), nums=(), source_scope=("cnn", "binance"))
+    kept = _accept([draft], [], [], frozenset({"binance"}))
+    assert [d.source_scope for d, _ in kept] == [("binance",)]

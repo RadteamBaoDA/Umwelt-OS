@@ -258,3 +258,68 @@ def test_evidence_from_result_keeps_unstructured_text_whole() -> None:
     assert evidence_from_result("not json") == ["not json"]
     raw = json.dumps({"error": "boom"})
     assert evidence_from_result(raw) == [raw]
+
+
+CHAT_ENV = {**ENV, "E2E_JUDGE_CHAT_MODEL": "chat-y"}
+_OK_PROBS = {label: (1.0 if label == "correct_complete" else 0.0) for label in LABELS}
+
+
+def _mock(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    monkeypatch.setattr(
+        judge_mod, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+
+
+def test_judge_config_accepts_chat_model_only() -> None:
+    env = {k: v for k, v in CHAT_ENV.items() if k != "E2E_JUDGE_MODEL"}
+    cfg = judge_config(env)
+    assert cfg is not None and cfg.model == "" and cfg.chat_model == "chat-y"
+    assert judge_config({k: v for k, v in env.items() if k != "E2E_JUDGE_CHAT_MODEL"}) is None
+
+
+def test_chat_url_strips_trailing_slash() -> None:
+    assert judge_mod.chat_url("https://x/v1/") == "https://x/v1/chat/completions"
+
+
+def test_chat_payload_variants() -> None:
+    fenced = "```json\n" + json.dumps({"probabilities": _OK_PROBS}) + "\n```"
+    for content in (fenced, json.dumps(_OK_PROBS), json.dumps({"probabilities": _OK_PROBS})):
+        payload = judge_mod.chat_payload({"choices": [{"message": {"content": content}}]})
+        assert parse_verdict(payload).status == "ok"
+    assert judge_mod.chat_payload({"choices": [{"message": {"content": "garbage"}}]}) == {}
+    assert parse_verdict({}).status == "invalid"
+
+
+def test_build_chat_body_shape() -> None:
+    body = judge_mod.build_chat_body("m", "q?", ("g",), False, "ans")
+    assert body["temperature"] == 0
+    assert body["response_format"] == {"type": "json_object"}
+    assert body["messages"][1]["content"] == build_body("m", "q?", ("g",), False, "ans")["state"]
+    assert "correct_no_data" in body["messages"][0]["content"]
+
+
+def test_decisions_400_falls_back_to_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        if "decisions" in str(request.url):
+            return httpx.Response(400, text="Request path cannot be relayed")
+        content = json.dumps({"probabilities": _OK_PROBS})
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    _mock(monkeypatch, handler)
+    case = Case(id="c", cat="x", lang="en", q="q?", gold_facts=("g",))
+    verdict = asyncio.run(judge(case, "ans", CHAT_ENV))
+    assert verdict is not None and verdict.status == "ok" and verdict.via == "chat"
+    assert len(urls) == 2 and urls[1].endswith("/chat/completions")
+
+
+def test_decisions_400_without_chat_model_is_invalid_and_masked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock(monkeypatch, lambda r: httpx.Response(400, text="sk-judge-secret"))
+    case = Case(id="c", cat="x", lang="en", q="q?", gold_facts=("g",))
+    verdict = asyncio.run(judge(case, "ans", ENV))
+    assert verdict is not None and verdict.status == "invalid"
+    assert "sk-judge-secret" not in verdict.error

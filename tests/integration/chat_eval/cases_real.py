@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Collection
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -76,6 +78,30 @@ def load_real_cases(csv_path: Path) -> tuple[Case, ...]:
         rows = list(csv.DictReader(fh))
     return tuple(
         _case_from_row(r) for r in rows if (r.get("decision") or "").strip().lower() == "accept"
+    )
+
+
+def reconcile_scopes(cases: tuple[Case, ...], known: Collection[str]) -> tuple[Case, ...]:
+    """Drop source-scope keys the snapshot does not hold from the ``empty`` cases (pure).
+
+    An empty case about an uncollected provider asks whether the workspace holds that data, so it runs
+    unscoped (an empty scope) and expects no data. An unknown key on a non-empty case would silently widen
+    its scope, so it raises ValueError listing every offending case id and key.
+    """
+    bad = [
+        f"{case.id}: {key}"
+        for case in cases
+        if not case.empty
+        for key in case.source_scope
+        if key not in known
+    ]
+    if bad:
+        raise ValueError("source_scope key not in snapshot: " + "; ".join(bad))
+    return tuple(
+        replace(case, source_scope=tuple(k for k in case.source_scope if k in known))
+        if case.empty
+        else case
+        for case in cases
     )
 
 

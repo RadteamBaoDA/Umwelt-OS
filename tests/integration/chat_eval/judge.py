@@ -6,8 +6,10 @@ The request and response contract follows the ragflow ``ScoredSwitch`` component
 margin). The judge never changes a case's pass/fail result; it only adds a verdict that the
 report uses to list disagreements with the regex grader and cases to review by hand.
 
-Config comes from ``E2E_JUDGE_BASE_URL``, ``E2E_JUDGE_MODEL`` and ``E2E_JUDGE_API_KEY``. The key is
-sent only as a bearer header and is masked in any error text this module returns.
+Config comes from ``E2E_JUDGE_BASE_URL``, ``E2E_JUDGE_MODEL``, optional ``E2E_JUDGE_CHAT_MODEL`` and
+``E2E_JUDGE_API_KEY``. The key is sent only as a bearer header and is masked in any error text this module
+returns. When the decisions endpoint refuses (400/404) or only a chat model is set, the judge asks an
+OpenAI-compatible ``/chat/completions`` model for the same JSON probabilities.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -70,6 +72,7 @@ class Verdict:
     probs: dict[str, float]
     status: Literal["ok", "uncertain", "invalid"]
     error: str = ""
+    via: str = ""  # "decisions" or "chat": which endpoint graded
 
 
 @dataclass(frozen=True)
@@ -79,16 +82,22 @@ class JudgeConfig:
     base_url: str
     model: str
     api_key: str = field(repr=False)  # secret: kept out of reprs and pytest tracebacks
+    chat_model: str = ""
 
 
 def judge_config(env: Mapping[str, str]) -> JudgeConfig | None:
-    """The judge settings when all three ``E2E_JUDGE_*`` values are set, else None (pure)."""
+    """The judge settings, or None (pure).
+
+    Needs ``E2E_JUDGE_BASE_URL`` and ``E2E_JUDGE_API_KEY`` plus at least one of ``E2E_JUDGE_MODEL`` (decisions
+    endpoint) and ``E2E_JUDGE_CHAT_MODEL`` (chat-completions fallback or only path).
+    """
     base = env.get("E2E_JUDGE_BASE_URL", "").strip()
     model = env.get("E2E_JUDGE_MODEL", "").strip()
+    chat_model = env.get("E2E_JUDGE_CHAT_MODEL", "").strip()
     key = env.get("E2E_JUDGE_API_KEY", "").strip()
-    if not (base and model and key):
+    if not (base and key and (model or chat_model)):
         return None
-    return JudgeConfig(base, model, key)
+    return JudgeConfig(base, model, key, chat_model)
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -115,6 +124,11 @@ def decisions_url(base: str) -> str:
     if path.lower().endswith("/v1"):
         return path[: -len("/v1")] + "/alpha/decisions"
     return path + "/decisions"
+
+
+def chat_url(base: str) -> str:
+    """The OpenAI-compatible chat-completions endpoint for ``base`` (pure)."""
+    return base.strip().rstrip("/") + "/chat/completions"
 
 
 def evidence_from_result(result: str) -> list[str]:
@@ -199,6 +213,51 @@ def build_body(
     }
 
 
+def build_chat_body(
+    model: str,
+    question: str,
+    gold_facts: tuple[str, ...],
+    empty: bool,
+    answer: str,
+    evidence: Sequence[str] = (),
+) -> dict[str, Any]:
+    """The chat-completions request asking for the decisions probabilities as one JSON object (pure).
+
+    The user message is the same state text as ``build_body``; the system message carries ``INSTRUCTIONS``, one
+    line per label criterion and the exact JSON shape. Temperature 0 and ``json_object`` response format.
+    """
+    state = build_body(model, question, gold_facts, empty, answer, evidence)["state"]
+    criteria = "\n".join(f"{label}: {text}" for label, text in CRITERIA.items())
+    system = (
+        f"{INSTRUCTIONS}\n\n{criteria}\n\nReply with one JSON object only: "
+        '{"probabilities": {label: number}} covering exactly the labels ' + ", ".join(LABELS) + "."
+    )
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": state},
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+
+def chat_payload(resp_json: Any) -> dict[str, Any]:
+    """Wrap a chat-completions reply into the decisions shape for ``parse_verdict`` (pure).
+
+    Takes ``choices[0].message.content``, strips any code fence by slicing from the first ``{`` to the last
+    ``}``, and parses it. Any failure returns ``{}``, which ``parse_verdict`` reports as invalid.
+    """
+    try:
+        content = resp_json["choices"][0]["message"]["content"]
+        obj = json.loads(content[content.index("{") : content.rindex("}") + 1])
+        probabilities = obj.get("probabilities", obj)
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+        return {}
+    return {"answers": {QUESTION_ID: {"type": "choice", "probabilities": probabilities}}}
+
+
 def _invalid(error: str) -> Verdict:
     """An ``invalid`` verdict carrying a short reason (never a score)."""
     return Verdict("", {}, "invalid", error=error[:300])
@@ -271,21 +330,34 @@ async def judge(
     cfg = judge_config(env)
     if cfg is None:
         return None
-    body = build_body(cfg.model, case.q, case.gold_facts, case.empty, answer, evidence)
     try:
         async with _client() as client:
-            resp = await client.post(
-                decisions_url(cfg.base_url),
-                json=body,
-                headers={"Authorization": f"Bearer {cfg.api_key}"},
+            if cfg.model:
+                body = build_body(cfg.model, case.q, case.gold_facts, case.empty, answer, evidence)
+                try:
+                    payload = await _post(client, decisions_url(cfg.base_url), body, cfg)
+                except httpx.HTTPStatusError as exc:
+                    # Decisions refused the model/path: only then is the chat fallback worth a second call.
+                    if not (cfg.chat_model and exc.response.status_code in (400, 404)):
+                        raise
+                else:
+                    if not isinstance(payload, dict):
+                        return _invalid("response is not a JSON object")
+                    return replace(parse_verdict(payload), via="decisions")
+            chat_body = build_chat_body(
+                cfg.chat_model or cfg.model, case.q, case.gold_facts, case.empty, answer, evidence
             )
-            resp.raise_for_status()
-            payload = resp.json()
+            reply = await _post(client, chat_url(cfg.base_url), chat_body, cfg)
+            return replace(parse_verdict(chat_payload(reply)), via="chat")
     except (httpx.HTTPError, ValueError) as exc:
         return _invalid(mask_secrets(f"{type(exc).__name__}: {exc}", env))
-    if not isinstance(payload, dict):
-        return _invalid("response is not a JSON object")
-    return parse_verdict(payload)
+
+
+async def _post(client: httpx.AsyncClient, url: str, body: dict[str, Any], cfg: JudgeConfig) -> Any:
+    """POST ``body`` with the bearer key; returns the decoded JSON, raising ``httpx.HTTPError``/``ValueError``."""
+    resp = await client.post(url, json=body, headers={"Authorization": f"Bearer {cfg.api_key}"})
+    resp.raise_for_status()
+    return resp.json()
 
 
 def to_record(verdict: Verdict) -> dict[str, Any]:
@@ -295,6 +367,8 @@ def to_record(verdict: Verdict) -> dict[str, Any]:
         "probs": verdict.probs,
         "status": verdict.status,
     }
+    if verdict.via:
+        record["via"] = verdict.via
     if verdict.status == "invalid":
         record["error"] = verdict.error
     return record

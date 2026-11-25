@@ -20,7 +20,7 @@ import os
 import random
 import re
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
@@ -242,13 +242,24 @@ def find_duplicates(questions: Sequence[str]) -> set[int]:
     return dupes
 
 
-def reject_reasons(draft: Draft, keys: frozenset[str], numbers: Sequence[float]) -> list[str]:
+def reject_reasons(
+    draft: Draft,
+    keys: frozenset[str],
+    numbers: Sequence[float],
+    sources: Collection[str] = (),
+) -> list[str]:
     """Why ``draft`` must be dropped; an empty list means it is kept (pure).
 
     ``keys`` are the gold keys of the rows shown in the same batch and ``numbers`` every figure in
-    those rows. A question that fails any rule is dropped with its reason, never repaired.
+    those rows. ``sources`` are the snapshot's source keys; when given, a non-empty draft whose
+    ``source_scope`` names another key is dropped (an empty draft is normalised by ``_accept`` instead).
+    A question that fails any rule is dropped with its reason, never repaired.
     """
     reasons: list[str] = []
+    if sources and not draft.empty:
+        reasons += [
+            f"source_scope key not in snapshot: {k}" for k in draft.source_scope if k not in sources
+        ]
     if not draft.q.strip():
         reasons.append("empty question")
     if draft.lang not in ("en", "vi"):
@@ -325,7 +336,7 @@ CATEGORY_RULES = (
     'answers it), "gold_obs" (row labels of observation rows that answer it), "gold_facts" (short '
     'facts a correct answer states), "nums" (ONLY the figures a correct answer states; never a '
     "number that only appears in the question, such as 'last 3 days'), \"texts\" (always []), "
-    '"empty" (true only for no-data questions), "source_scope" (source keys the answer draws on). '
+    '"empty" (true only for no-data questions), "source_scope" (source keys of the rows shown only; [] for a question about a provider that is not collected). '
     "Row labels are R1, R2... exactly as shown; never write row text or ids in gold fields. "
     "Use only labels and figures that appear in the rows. Never use the character | in any string."
 )
@@ -551,11 +562,15 @@ Completer = Callable[[list[dict[str, str]]], Awaitable[str]]
 
 
 def _accept(
-    drafts: Sequence[Draft], batch: Sequence[Sample], notes: list[str]
+    drafts: Sequence[Draft],
+    batch: Sequence[Sample],
+    notes: list[str],
+    sources: Collection[str] = (),
 ) -> list[tuple[Draft, str]]:
     """Keep drafts that pass the batch validators; append one note per rejection (pure).
 
-    Gold aliases are mapped to real keys first. A figure is valid when it matches a sampled number
+    Gold aliases are mapped to real keys first. With ``sources`` given, an empty draft loses scope keys
+    outside it (it then runs unscoped) and a non-empty draft naming one is rejected. A figure is valid when it matches a sampled number
     or an aggregate over the draft's own gold rows. Returns ``(draft, evidence_text)`` pairs, where
     evidence is the first gold row's text.
     """
@@ -567,9 +582,13 @@ def _accept(
     for draft in drafts:
         resolved, reasons = resolve_gold(draft, table)
         resolved = strip_question_numbers(resolved)
+        if sources and resolved.empty:
+            resolved = replace(
+                resolved, source_scope=tuple(k for k in resolved.source_scope if k in sources)
+            )
         gold_rows = [by_key[k] for k in resolved.gold_keys + resolved.gold_obs if k in by_key]
         numbers = (*batch_numbers, *aggregate_figures(gold_rows))
-        reasons += reject_reasons(resolved, keys, numbers)
+        reasons += reject_reasons(resolved, keys, numbers, sources)
         reasons += language_reasons(resolved, gold_rows)
         if reasons:
             notes.append(f"{draft.cat}: dropped {draft.q[:60]!r}: {'; '.join(reasons)}")
@@ -585,11 +604,13 @@ async def draft_rows(
     anchor: datetime,
     complete: Completer,
     notes: list[str],
+    sources: Collection[str] = (),
 ) -> list[dict[str, str]]:
     """Run one batch per category and return accepted CSV rows, deduplicated across batches.
 
     The RNG is seeded from the anchor so the same snapshot always yields the same sample batches.
-    A category whose reply cannot be parsed contributes nothing and a note records why.
+    A category whose reply cannot be parsed contributes nothing and a note records why. ``sources`` are the
+    snapshot's source keys, used to validate each draft's ``source_scope`` (see ``_accept``).
     """
     rng = seeded_rng(anchor.isoformat())
     anchor_text = anchor_local_text(anchor)
@@ -601,7 +622,7 @@ async def draft_rows(
         except ValueError as exc:
             notes.append(f"{cat}: reply rejected: {exc}")
             continue
-        accepted.extend(_accept(drafts, batch, notes))
+        accepted.extend(_accept(drafts, batch, notes, sources))
     dupes = find_duplicates([d.q for d, _ in accepted])
     counters: dict[str, int] = {}
     rows: list[dict[str, str]] = []
@@ -625,7 +646,9 @@ async def run(snapdir: Path, n: int, dsn: str, env: Mapping[str, str]) -> Path:
     finally:
         await engine.dispose()
     notes: list[str] = []
-    rows = await draft_rows(samples, n, anchor, partial(complete_chat, env=env), notes)
+    rows = await draft_rows(
+        samples, n, anchor, partial(complete_chat, env=env), notes, meta["sources"].keys()
+    )
     for note in notes:
         print(note, file=sys.stderr)
     print(f"{len(rows)} accepted of about {n}; {len(notes)} note(s)", file=sys.stderr)

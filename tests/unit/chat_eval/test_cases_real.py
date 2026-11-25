@@ -6,14 +6,18 @@ import csv
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
+from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.cases_real import (
     anchor_from_meta,
     load_real_cases,
+    reconcile_scopes,
     split_gold_key,
 )
+from tests.integration.chat_eval.grading import scope_ids
 
 COLUMNS = (
     "decision,id,cat,lang,q,gold_keys,gold_obs,gold_facts,nums,texts,empty,source_scope,"
@@ -94,3 +98,24 @@ def test_anchor_from_meta(tmp_path: Path) -> None:
     anchor, tz = anchor_from_meta(tmp_path)
     assert anchor == datetime(2026, 11, 20, 3, 4, 5, tzinfo=UTC)
     assert tz == "Asia/Ho_Chi_Minh"
+
+
+def _case(cid: str, scope: tuple[str, ...], empty: bool) -> Case:
+    return Case(id=cid, cat="x", lang="en", q="q?", empty=empty, source_scope=scope)
+
+
+def test_reconcile_drops_unknown_keys_of_empty_cases() -> None:
+    cases = (_case("a", ("yahoo_finance",), True), _case("b", ("binance", "cnn"), True))
+    out = reconcile_scopes(cases, {"binance"})
+    assert out[0].source_scope == () and out[1].source_scope == ("binance",)
+
+
+def test_reconcile_rejects_unknown_key_on_non_empty_case() -> None:
+    with pytest.raises(ValueError, match="r_x_001_en.*cnn"):
+        reconcile_scopes((_case("r_x_001_en", ("cnn",), False),), {"binance"})
+
+
+def test_untracked_provider_empty_case_no_longer_raises_key_error() -> None:
+    row = _case("r_empty_006_en", ("yahoo_finance",), True)
+    (case,) = reconcile_scopes((row,), {"binance"})
+    assert scope_ids(case, {"binance": uuid4()}) is None

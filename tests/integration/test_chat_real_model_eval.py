@@ -66,6 +66,8 @@ from tests.integration.chat_eval.cases_real import (
     ensure_fresh,
     format_anchor,
     load_real_cases,
+    read_meta,
+    reconcile_scopes,
     seed_real,
 )
 from tests.integration.chat_eval.gadget_note import gadget_note_for_turn
@@ -133,6 +135,14 @@ SEED_ONLY_MODE = (
 def _load_env() -> dict[str, str]:
     """Parse ``.env.e2e-real`` into a dict (empty when absent). Values are never logged."""
     return RedactedEnv(load_env_file(ENV_FILE))
+
+
+def _judge_header() -> str:
+    """Report-header judge mode: ``off``, or ``on`` with the decisions and chat model ids (no keys)."""
+    cfg = judge_config(_ENV)
+    if cfg is None:
+        return "off"
+    return f"on (decisions={cfg.model or '-'}, chat={cfg.chat_model or '-'})"
 
 
 def _deadline_s() -> float:
@@ -650,7 +660,7 @@ async def test_real_model_eval(
         "rerank": runtime.rerank if runtime is not None else "off",
         "rerank_rpm": rpm,  # None means unpaced
         "embed_tpm": embed_tpm(os.environ),  # None means unpaced
-        "judge": "on" if judge_config(_ENV) is not None else "off",
+        "judge": _judge_header(),
         "sql_mode": "on" if sql_mode_available() else "off",
         "deadline_s": _deadline_s(),
         "not_seeded": eval_seed.not_seeded,
@@ -698,7 +708,13 @@ def _selected_cases() -> tuple[Case, ...]:
     """
     only = {cid.strip() for cid in os.getenv("CHAT_EVAL_ONLY", "").split(",") if cid.strip()}
     snap = _real_snapshot()
-    pool = ALL_CASES if snap is None else load_real_cases(snap / "questions.csv")
+    pool = (
+        ALL_CASES
+        if snap is None
+        else reconcile_scopes(
+            load_real_cases(snap / "questions.csv"), read_meta(snap)["sources"].keys()
+        )
+    )
     return tuple(case for case in pool if not only or case.id in only)
 
 
