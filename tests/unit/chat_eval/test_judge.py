@@ -323,3 +323,32 @@ def test_decisions_400_without_chat_model_is_invalid_and_masked(
     verdict = asyncio.run(judge(case, "ans", ENV))
     assert verdict is not None and verdict.status == "invalid"
     assert "sk-judge-secret" not in verdict.error
+
+
+def test_chat_via_real_uses_answer_router_and_skips_decisions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers["Authorization"]))
+        content = json.dumps({"probabilities": _OK_PROBS})
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    _mock(monkeypatch, handler)
+    env = {
+        **ENV,
+        "E2E_JUDGE_CHAT_VIA": "real",
+        "E2E_JUDGE_CHAT_MODEL": "m-chat",
+        "E2E_REAL_BASE_URL": "https://router.example/v1",
+        "E2E_REAL_API_KEY": "sk-real",
+    }
+    case = Case(id="c", cat="x", lang="en", q="q?", gold_facts=("g",))
+    verdict = asyncio.run(judge(case, "ans", env))
+    assert verdict is not None and verdict.status == "ok" and verdict.via == "chat"
+    assert seen == [("https://router.example/v1/chat/completions", "Bearer sk-real")]
+
+
+def test_chat_via_real_without_router_is_off() -> None:
+    env = {**ENV, "E2E_JUDGE_CHAT_VIA": "real", "E2E_JUDGE_CHAT_MODEL": "m-chat"}
+    assert judge_config(env) is None

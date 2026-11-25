@@ -83,18 +83,28 @@ class JudgeConfig:
     model: str
     api_key: str = field(repr=False)  # secret: kept out of reprs and pytest tracebacks
     chat_model: str = ""
+    chat_base_url: str = ""  # chat-completions base; the judge base when blank
+    chat_api_key: str = field(default="", repr=False)  # secret: the judge key when blank
 
 
 def judge_config(env: Mapping[str, str]) -> JudgeConfig | None:
     """The judge settings, or None (pure).
 
     Needs ``E2E_JUDGE_BASE_URL`` and ``E2E_JUDGE_API_KEY`` plus at least one of ``E2E_JUDGE_MODEL`` (decisions
-    endpoint) and ``E2E_JUDGE_CHAT_MODEL`` (chat-completions fallback or only path).
+    endpoint) and ``E2E_JUDGE_CHAT_MODEL`` (chat-completions fallback or only path). With
+    ``E2E_JUDGE_CHAT_VIA=real`` the chat judge goes through ``E2E_REAL_BASE_URL``/``E2E_REAL_API_KEY`` (the answer
+    router) and the decisions endpoint is skipped; then only ``E2E_JUDGE_CHAT_MODEL`` and those two are needed.
     """
     base = env.get("E2E_JUDGE_BASE_URL", "").strip()
     model = env.get("E2E_JUDGE_MODEL", "").strip()
     chat_model = env.get("E2E_JUDGE_CHAT_MODEL", "").strip()
     key = env.get("E2E_JUDGE_API_KEY", "").strip()
+    if env.get("E2E_JUDGE_CHAT_VIA", "").strip().lower() == "real":
+        real_base = env.get("E2E_REAL_BASE_URL", "").strip()
+        real_key = env.get("E2E_REAL_API_KEY", "").strip()
+        if not (chat_model and real_base and real_key):
+            return None
+        return JudgeConfig(real_base, "", real_key, chat_model, real_base, real_key)
     if not (base and key and (model or chat_model)):
         return None
     return JudgeConfig(base, model, key, chat_model)
@@ -347,15 +357,32 @@ async def judge(
             chat_body = build_chat_body(
                 cfg.chat_model or cfg.model, case.q, case.gold_facts, case.empty, answer, evidence
             )
-            reply = await _post(client, chat_url(cfg.base_url), chat_body, cfg)
+            reply = await _post(
+                client,
+                chat_url(cfg.chat_base_url or cfg.base_url),
+                chat_body,
+                cfg,
+                cfg.chat_api_key or cfg.api_key,
+            )
             return replace(parse_verdict(chat_payload(reply)), via="chat")
     except (httpx.HTTPError, ValueError) as exc:
         return _invalid(mask_secrets(f"{type(exc).__name__}: {exc}", env))
 
 
-async def _post(client: httpx.AsyncClient, url: str, body: dict[str, Any], cfg: JudgeConfig) -> Any:
-    """POST ``body`` with the bearer key; returns the decoded JSON, raising ``httpx.HTTPError``/``ValueError``."""
-    resp = await client.post(url, json=body, headers={"Authorization": f"Bearer {cfg.api_key}"})
+async def _post(
+    client: httpx.AsyncClient,
+    url: str,
+    body: dict[str, Any],
+    cfg: JudgeConfig,
+    api_key: str = "",
+) -> Any:
+    """POST ``body`` with the bearer key (``api_key``, else the judge key); returns the decoded JSON.
+
+    Raises ``httpx.HTTPError``/``ValueError``.
+    """
+    resp = await client.post(
+        url, json=body, headers={"Authorization": f"Bearer {api_key or cfg.api_key}"}
+    )
     resp.raise_for_status()
     return resp.json()
 

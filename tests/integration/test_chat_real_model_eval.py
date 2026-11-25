@@ -134,8 +134,16 @@ SEED_ONLY_MODE = (
 
 
 def _load_env() -> dict[str, str]:
-    """Parse ``.env.e2e-real`` into a dict (empty when absent). Values are never logged."""
-    return RedactedEnv(load_env_file(ENV_FILE))
+    """Parse ``.env.e2e-real`` into a dict (empty when absent). Values are never logged.
+
+    The non-secret chat-judge selectors ``E2E_JUDGE_CHAT_MODEL``/``E2E_JUDGE_CHAT_VIA`` may also come from the
+    process env, which wins, so a run can pick the judge without editing the secrets file.
+    """
+    values = load_env_file(ENV_FILE)
+    for name in ("E2E_JUDGE_CHAT_MODEL", "E2E_JUDGE_CHAT_VIA"):
+        if os.environ.get(name, "").strip():
+            values[name] = os.environ[name].strip()
+    return RedactedEnv(values)
 
 
 def _judge_header() -> str:
