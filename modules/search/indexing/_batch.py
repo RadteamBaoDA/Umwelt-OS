@@ -479,8 +479,7 @@ async def _process_claimed_batch(
     malformed response degrades to the per-chunk path for this batch only, so one bad chunk cannot fail
     its neighbours. A provider rate limit or open breaker stops the run with the items left pending, so
     the next pass resumes this generation instead of failing the corpus. Other gateway/Redis errors fail
-    every item of the batch (as the per-chunk path would, one request at a time); other errors propagate. A provider rate limit or open breaker stops the run with
-    the items left pending, so the next pass resumes this generation instead of failing the corpus.
+    every item of the batch (as the per-chunk path would, one request at a time); other errors propagate.
     """
     survivors = list(
         claimed
