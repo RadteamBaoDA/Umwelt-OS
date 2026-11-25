@@ -622,7 +622,9 @@ def cap_tool_output(raw: str) -> str:
     Pure. Under the bound the string is returned unchanged. Otherwise rows are popped one at a time from
     the longest row list (``rows``/``observations``/``documents``/``observation_aggregates``) until it
     fits, ``"truncated": true`` is set and ``row_count`` (SQL mode) is corrected, so the model knows the
-    list is partial. Dropped rows may still have registered evidence; that is harmless (unused numbers).
+    list is partial. When aggregate groups are present the sample ``observations`` shed first: the groups
+    are the answer to a count/average question and a model that counts a trimmed group list under-reports.
+    Dropped rows may still have registered evidence; that is harmless (unused numbers).
     """
     if len(raw) <= MAX_TOOL_OUTPUT_CHARS:
         return raw
@@ -640,7 +642,11 @@ def cap_tool_output(raw: str) -> str:
         keys = [k for k in keys if data[k]]
         if len(out) <= MAX_TOOL_OUTPUT_CHARS or not keys:
             return out
-        data[max(keys, key=lambda k: len(data[k]))].pop()
+        # Sample rows go before aggregate groups; otherwise the longest list loses its trailing row.
+        shed = (
+            [k for k in keys if k == "observations"] if data.get("observation_aggregates") else []
+        )
+        data[shed[0] if shed else max(keys, key=lambda k: len(data[k]))].pop()
 
 
 async def execute_db_query_tool(
@@ -1143,6 +1149,19 @@ def _apply_aggregate_citations(
         row["citation"] = f"[{citation_map[ver_id]}]" if ver_id in citation_map else None
 
 
+def _attach_aggregates(
+    out: dict[str, Any], aggregates: list[dict[str, Any]], citation_map: dict[UUID, int]
+) -> None:
+    """Cite the aggregate groups and add them to ``out`` with ``aggregate_total_count``, their summed row count.
+
+    The scalar survives any later row cap (``cap_tool_output``), so a count over many groups (one per
+    symbol) stays exact; it is a lower bound when the groups were truncated. Mutates ``out`` and ``aggregates``.
+    """
+    _apply_aggregate_citations(aggregates, citation_map)
+    out["aggregate_total_count"] = sum(int(a.get("count") or 0) for a in aggregates)
+    out["observation_aggregates"] = aggregates
+
+
 def _document_date_window(date_from: datetime | None, date_to: datetime | None) -> Any:
     """Window predicate: collection time in range OR current-version ``release_date`` in range.
 
@@ -1383,7 +1402,8 @@ async def _execute_structured_mode(
     """Execute read-only parameterized queries for observations and/or documents; return the JSON payload.
 
     Documents are added when a requested provider is not a measurement provider (feeds store documents
-    only); ``available_providers`` lets the model retry with a valid id. Order: aggregate, observation rows,
+    only); with aggregation the payload also carries ``aggregate_total_count`` (sum of the returned groups'
+    row counts; a lower bound when ``truncated``); ``available_providers`` lets the model retry with a valid id. Order: aggregate, observation rows,
     document rows, evidence, best-effort Redis hot cache. ``source_scopes`` fences rows and evidence to each
     source's current scope; ``source_names`` labels observation rows. No commit."""
     out: dict[str, Any] = {
@@ -1442,8 +1462,7 @@ async def _execute_structured_mode(
         [o.document_version_id for o in obs_rows] + [d.document_version_id for d in doc_rows_raw],
     )
     if args.aggregation != "none" and want_obs:
-        _apply_aggregate_citations(aggregates, citation_map)
-        out["observation_aggregates"] = aggregates
+        _attach_aggregates(out, aggregates, citation_map)
     if want_obs:
         out["observations"] = serialize_observations(
             obs_rows, citation_map, attributes, source_names

@@ -488,3 +488,50 @@ async def test_fence_cleanup_runs_when_rollback_raises(monkeypatch: pytest.Monke
             max_rows=1,
         )
     assert db_query._DELETE_FENCE in deleted and db_query._DELETE_FENCE_SCOPE in deleted
+
+
+def test_cap_keeps_aggregate_groups_and_sheds_sample_rows_first() -> None:
+    """A 36-group aggregate plus 36 sample rows over the bound loses sample rows, not groups."""
+    aggs = [{"symbol": f"CVE-{i}", "count": 1, "note": "a" * 300} for i in range(36)]
+    obs = [{"symbol": f"CVE-{i}", "attributes": {"b": "x" * 500}} for i in range(36)]
+    raw = json.dumps({"observation_aggregates": aggs, "observations": obs})
+    data = json.loads(db_query.cap_tool_output(raw))
+    assert data["truncated"] is True
+    assert len(data["observation_aggregates"]) == 36
+    assert len(data["observations"]) < 36
+
+
+@pytest.mark.asyncio
+async def test_structured_aggregation_reports_total_row_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Aggregation adds ``aggregate_total_count`` (sum of group counts) as a scalar the row cap cannot drop."""
+    aggs = [
+        {"symbol": f"CVE-{i}", "count": 1, "_document_id": None, "_version_id": None}
+        for i in range(36)
+    ]
+
+    async def _collect(*_a: object, **_k: object) -> tuple[list[object], list[object], bool]:
+        return aggs, [], False
+
+    async def _register(*_a: object, **_k: object) -> dict[object, int]:
+        return {}
+
+    async def _attrs(*_a: object, **_k: object) -> dict[object, dict[str, object]]:
+        return {}
+
+    monkeypatch.setattr(db_query, "_collect_observations", _collect)
+    monkeypatch.setattr(db_query, "_register_evidence_for_versions", _register)
+    monkeypatch.setattr(db_query, "fetch_attributes", _attrs)
+    out = json.loads(
+        await db_query._execute_structured_mode(
+            None,  # type: ignore[arg-type]
+            _args(target="observations", aggregation="count"),
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            date_from=None,
+            date_to=None,
+            evidence_list=[],
+        )
+    )
+    assert out["aggregate_total_count"] == 36
