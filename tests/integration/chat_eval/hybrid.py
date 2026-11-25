@@ -37,6 +37,7 @@ from modules.search.indexing import build_search_vector_index, index_pending_chu
 from modules.search.indexing._common import capture_authority, eligible_chunks
 from modules.settings import public as ai_settings
 from tests.integration.chat_eval.cases import Case
+from tests.integration.chat_eval.pacing import TokenPacer, estimate_tokens
 
 # Index passes before the run counts as not drained (about 2 minutes at the default pause below).
 INDEX_PASS_BOUND = int(os.getenv("CHAT_EVAL_INDEX_PASSES", "60"))
@@ -529,8 +530,12 @@ async def index_all(
     settings: Settings,
     redis: Redis,
     mask: Callable[[str], str] = lambda text_: text_,
+    embed_tpm: int | None = None,
 ) -> int:
     """Index every pending chunk of the eval workspace; return how many succeeded in the active generation.
+
+    ``embed_tpm`` (``CHAT_EVAL_EMBED_TPM``) paces each embed call so the estimated tokens sent per rolling minute
+    stay under the provider limit; None means unpaced. Without it a large corpus trips the provider's 429.
 
     The context matches the worker's (session factory, Redis, Settings and the cursor state dict that ARQ keeps
     across job copies). The cron worker indexes the same rows every 60 s, so the result is read from the database
@@ -548,9 +553,14 @@ async def index_all(
     first_error: list[str] = []
     blockers: list[str] = []  # sessions seen blocking CREATE INDEX CONCURRENTLY
     real_embed = ModelGateway.embed
+    token_pacer = TokenPacer(embed_tpm) if embed_tpm else None
 
     async def recording_embed(self: ModelGateway, *args: Any, **kwargs: Any) -> Any:
-        """The real gateway call; remembers the first failure (masked) so a timeout can name it."""
+        """The real gateway call, paced by the token budget; remembers the first failure (masked)."""
+        if token_pacer is not None:
+            # embed(role, mapping, policy, inputs, ...): inputs is the 4th positional or a keyword.
+            inputs = kwargs["inputs"] if "inputs" in kwargs else args[3]
+            await token_pacer.acquire(estimate_tokens(list(inputs)))
         try:
             return await real_embed(self, *args, **kwargs)
         except Exception as exc:

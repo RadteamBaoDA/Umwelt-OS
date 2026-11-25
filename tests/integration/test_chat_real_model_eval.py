@@ -13,7 +13,7 @@ planted gold, then writes ``test-results/chat-eval/report-<timestamp>.json`` wit
 ``not_seeded`` rows (including providers whose normalization failed) and ``key_map_size``. No case runs and no
 model is called. Any other ``CHAT_EVAL_ONLY`` value still selects case ids.
 
-Report shape: a header (``model``, ``legs_run``, ``rerank``, ``rerank_rpm``, ``judge``, ``sql_mode``, ``deadline_s``,
+Report shape: a header (``model``, ``legs_run``, ``rerank``, ``rerank_rpm``, ``embed_tpm``, ``judge``, ``sql_mode``, ``deadline_s``,
 ``not_seeded``, ``baseline``) then ``summary`` keyed by leg (``tool`` / ``hybrid``), each computed from that leg's
 own entries. ``CHAT_EVAL_DEADLINE_MIN`` (default 25) sets the run deadline in minutes; ``CHAT_EVAL_BASELINE`` names
 the tool baseline report that ``baseline_regressions`` compares against (default: the 2026-11-23 tool baseline).
@@ -103,7 +103,7 @@ from tests.integration.chat_eval.judge import (
     load_env_file,
     to_record,
 )
-from tests.integration.chat_eval.pacing import StartPacer, rerank_rpm
+from tests.integration.chat_eval.pacing import StartPacer, embed_tpm, rerank_rpm
 from tests.integration.chat_eval.planted import PLANTED_PATH, load_planted, seed_planted
 from tests.integration.chat_eval.report import build_summaries
 from tests.integration.chat_eval.seed_all import seed_all
@@ -649,6 +649,7 @@ async def test_real_model_eval(
         "legs_run": list(legs),
         "rerank": runtime.rerank if runtime is not None else "off",
         "rerank_rpm": rpm,  # None means unpaced
+        "embed_tpm": embed_tpm(os.environ),  # None means unpaced
         "judge": "on" if judge_config(_ENV) is not None else "off",
         "sql_mode": "on" if sql_mode_available() else "off",
         "deadline_s": _deadline_s(),
@@ -749,7 +750,13 @@ async def _prepare_hybrid(
         if _real_snapshot() is not None:
             # Real mode: the restore paused every source; paused sources are neither indexed nor searched.
             await activate_paused_sources(engine)
-        indexed = await index_all(engine, settings, redis, mask=lambda t: mask_secrets(t, _ENV))
+        indexed = await index_all(
+            engine,
+            settings,
+            redis,
+            mask=lambda t: mask_secrets(t, _ENV),
+            embed_tpm=embed_tpm(os.environ),
+        )
     except BaseException:
         await redis.aclose()
         raise

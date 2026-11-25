@@ -4,7 +4,14 @@ import asyncio
 
 import pytest
 
-from tests.integration.chat_eval.pacing import WINDOW_S, StartPacer, rerank_rpm
+from tests.integration.chat_eval.pacing import (
+    WINDOW_S,
+    StartPacer,
+    TokenPacer,
+    embed_tpm,
+    estimate_tokens,
+    rerank_rpm,
+)
 
 
 class FakeClock:
@@ -88,3 +95,36 @@ def test_pacer_shares_the_window_across_concurrent_callers() -> None:
 def test_pacer_rejects_non_positive_rpm() -> None:
     with pytest.raises(ValueError):
         StartPacer(0)
+
+
+def test_embed_tpm_parsing() -> None:
+    assert embed_tpm({}) is None
+    assert embed_tpm({"CHAT_EVAL_EMBED_TPM": "0"}) is None
+    assert embed_tpm({"CHAT_EVAL_EMBED_TPM": "80000"}) == 80000
+    with pytest.raises(ValueError):
+        embed_tpm({"CHAT_EVAL_EMBED_TPM": "-1"})
+
+
+def test_estimate_tokens_is_len_over_three_min_one() -> None:
+    assert estimate_tokens(["a" * 30, ""]) == 11
+
+
+def test_token_pacer_waits_for_window_then_proceeds() -> None:
+    clock = FakeClock()
+    pacer = TokenPacer(100, clock=clock, sleep=clock.sleep)
+
+    async def run() -> None:
+        await pacer.acquire(60)
+        await pacer.acquire(30)  # fits: 90 <= 100, no wait
+        assert clock.sleeps == []
+        await pacer.acquire(30)  # 120 > 100: waits for the first entry to leave
+        assert clock.sleeps == [WINDOW_S]
+
+    asyncio.run(run())
+
+
+def test_token_pacer_lets_oversized_request_through_empty_window() -> None:
+    clock = FakeClock()
+    pacer = TokenPacer(10, clock=clock, sleep=clock.sleep)
+    asyncio.run(pacer.acquire(50))
+    assert clock.sleeps == []
