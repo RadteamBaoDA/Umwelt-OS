@@ -6,9 +6,11 @@ import pytest
 
 from tests.integration.chat_eval.cases import Case
 from tests.integration.chat_eval.grading import (
+    NODATA,
     cited_version_ids,
     extract_row_ids,
     forbidden_ok,
+    has_number,
     hidden_miss,
     min_recall_ok,
     missed_keys,
@@ -352,3 +354,38 @@ def test_cue_in_neighbouring_sentence_of_same_paragraph_does_not_excuse_figure()
     case = Case("x", "c", "en", "q", nums=(5.1,), forbid_nums=(4.2,))
     answer = "The 4.2 quake was the second strongest. This row is excluded from the table, see 5.1."
     assert forbidden_ok(answer, case) is False
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "No. The readings were 7.2 and 7.1, both below 7.5.",
+        "No, nothing matches that.",
+        "I found no earthquakes below magnitude 5.0.",
+        "The query returned no rows for that advisory.",
+        "That CVE is not in the CISA KEV data.",
+        "The workspace has no XRPUSDT series.",
+        "No BTCUSDT price was collected today.",
+    ],
+)
+def test_nodata_matches_quoted_answers(answer: str) -> None:
+    assert NODATA.search(answer)
+
+
+@pytest.mark.parametrize(
+    "answer", ["The price is 5.", "No problem, the price is 5.", "Bitcoin closed at 67,500."]
+)
+def test_nodata_ignores_plain_answers(answer: str) -> None:
+    assert NODATA.search(answer) is None
+
+
+@pytest.mark.parametrize(
+    ("answer", "value"),
+    [("Two readings", 2.0), ("five days", 5.0), ("hai trận", 2.0), ("Twenty-one", 21.0)],
+)
+def test_spelled_out_numbers_count(answer: str, value: float) -> None:
+    assert has_number(answer, value)
+
+
+def test_spelled_out_word_inside_a_longer_word_is_not_a_number() -> None:
+    assert not has_number("someone phone", 1.0)

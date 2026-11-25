@@ -13,6 +13,18 @@ from uuid import UUID
 
 from tests.integration.chat_eval.cases import Case
 
+# The answer says the data is absent (en/vi). Used for empty cases and ``nums_or_nodata``. A leading "No." or
+# "No," counts; "No problem" does not.
+NODATA = re.compile(
+    r"no (?:data|record|result|information|matching|observation|such|price|entry|entries|events?)|"
+    r"(?:not|n't|cannot|can't|unable|couldn't).{0,40}(?:found|find|available|access|see|retriev|any)|"
+    r"doesn't (?:have|contain|include)|does not (?:have|contain|include)|nothing|not (?:yet )?(?:published|reported|collected)|"
+    r"don't have|do not have|no .{0,30} (?:data|information)|"
+    r"^\W*no\s*[.,]|found no\b|returned no (?:rows|results|matches)|is not (?:in|listed)|"
+    r"has no .{0,30}(?:series|data|rows|records)|\bno .{0,30} (?:was|were) (?:found|collected)|"
+    r"không (?:có|tìm thấy|thấy|truy cập|thể|đủ|chứa)|chưa (?:có|được|công bố)|không có dữ liệu|trống|rỗng",
+    re.IGNORECASE,
+)
 _ID_KEYS = ("observations", "documents", "rows")
 # Phrases that mark a figure as excluded, wrong or superseded (English and Vietnamese). Matched per sentence
 # (see ``_SENTENCE_SPLIT``). Bare ``not``/``no``/``không``/``trước`` are deliberately absent: they occur in
@@ -240,6 +252,44 @@ _TOKEN = re.compile(
 )
 
 
+# Spelled-out numbers (en, plus vi 1..10) so "two readings" or "hai trận" counts as the figure 2. The vi word
+# "năm" also means "year"; that false positive is accepted.
+_UNITS = {
+    w: float(i)
+    for i, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+        "fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
+_TENS = {
+    w: float(10 * i)
+    for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split(), 2)
+}
+_VI_UNITS = {
+    w: float(i) for i, w in enumerate("một hai ba bốn năm sáu bảy tám chín mười".split(), 1)
+}
+_WORD_NUMBER = re.compile(
+    r"(?<!\w)(?:("
+    + "|".join(_TENS)
+    + r")(?:[-\s](one|two|three|four|five|six|seven|eight|nine))?|("
+    + "|".join([*_UNITS, *_VI_UNITS])
+    + r"))(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _word_numbers(text: str) -> list[list[float]]:
+    """Values of the spelled-out numbers in ``text`` (en zero..ninety-nine, vi 1..10), one list per token."""
+    out: list[list[float]] = []
+    for match in _WORD_NUMBER.finditer(text):
+        tens, unit, word = (g.lower() if g else None for g in match.groups())
+        if tens:
+            out.append([_TENS[tens] + (_UNITS[unit] if unit else 0.0)])
+        elif word:
+            out.append([_UNITS.get(word, _VI_UNITS.get(word, 0.0))])
+    return out
+
+
 def _candidates(token: str) -> list[float]:
     """Every plausible value of a numeric token under en-US (1,234.5) and vi-VN (1.234,5) formats."""
     out: set[float] = set()
@@ -254,7 +304,10 @@ def _candidates(token: str) -> list[float]:
 
 
 def _answer_numbers(text: str) -> list[list[float]]:
-    """Candidate values per numeric token of ``text`` (scale words applied as an extra candidate)."""
+    """Candidate values per numeric token of ``text`` (scale words applied as an extra candidate).
+
+    Spelled-out numbers (``_word_numbers``) follow the digit tokens as extra tokens.
+    """
     text = re.sub(r"\[\d+\]", " ", text)  # citation markers are not figures
     tokens: list[list[float]] = []
     for match in _TOKEN.finditer(text):
@@ -264,7 +317,7 @@ def _answer_numbers(text: str) -> list[list[float]]:
             scale = next(s for pattern, s in _SCALES if re.fullmatch(pattern, word))
             values = [*values, *(v * scale for v in values)]
         tokens.append(values)
-    return tokens
+    return tokens + _word_numbers(text)
 
 
 def _close(value: float, expected: float) -> bool:

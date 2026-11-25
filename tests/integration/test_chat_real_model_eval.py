@@ -72,6 +72,7 @@ from tests.integration.chat_eval.cases_real import (
 )
 from tests.integration.chat_eval.gadget_note import gadget_note_for_turn
 from tests.integration.chat_eval.grading import (
+    NODATA,
     RowIds,
     cited_version_ids,
     extract_row_ids,
@@ -186,15 +187,6 @@ pytestmark = [
 
 
 # --------------------------------------------------------------------------- cases
-
-NODATA = re.compile(
-    r"no (?:data|record|result|information|matching|observation|such|price|entry|entries|events?)|"
-    r"(?:not|n't|cannot|can't|unable|couldn't).{0,40}(?:found|find|available|access|see|retriev|any)|"
-    r"doesn't (?:have|contain|include)|does not (?:have|contain|include)|nothing|not (?:yet )?(?:published|reported|collected)|"
-    r"don't have|do not have|no .{0,30} (?:data|information)|"
-    r"không (?:có|tìm thấy|thấy|truy cập|thể|đủ|chứa)|chưa (?:có|được|công bố)|không có dữ liệu|trống|rỗng",
-    re.IGNORECASE,
-)
 
 
 def _assoc_ok(text: str, label: str, expected: float) -> bool:
